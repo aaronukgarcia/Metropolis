@@ -1869,7 +1869,13 @@ export interface LineUsage {
  * (Σ feederTrafficWeight × trafficActivity — road inc2's exact idiom) shared
  * across the drivable classes in proportion to each class's capacity.
  */
-export function lineUsageOf(s: SimState): LineUsage[] {
+// BUG-602 (integration-soak perf cliff, 2026-09-02): memoised on state
+// identity — advance()'s wellbeing chain, computeFlows, the congestion
+// counter, debugjson and the UI all pull line usage against the SAME state
+// object within one tick/render; the station-graph + per-building traffic
+// scan is the chain's heaviest leaf. Pure function of s, so memoOnState is
+// exact (same discipline as powerStats/serviceCapacityAggregates above).
+export const lineUsageOf: (s: SimState) => LineUsage[] = memoOnState((s) => {
   // Tile count per present line class (order-independent aggregate).
   const tilesBySpec = new Map<string, number>();
   for (const b of s.buildings) {
@@ -1951,7 +1957,7 @@ export function lineUsageOf(s: SimState): LineUsage[] {
   // Deterministic, spec-id-sorted output.
   out.sort((a, b) => (a.spec < b.spec ? -1 : a.spec > b.spec ? 1 : 0));
   return out;
-}
+});
 
 /**
  * FEAT-congestion-teeth-2026-09-02 (Q100057 A1 "congestion must have felt
@@ -2050,7 +2056,8 @@ export interface CongestionLine extends LineUsage {
   congestionFactor: number;
 }
 
-export function congestionLinesOf(s: SimState): CongestionLine[] {
+// BUG-602: memoised — see lineUsageOf. Pure derivation of s.
+export const congestionLinesOf: (s: SimState) => CongestionLine[] = memoOnState((s) => {
   const ticks = sanitizeCongestionTicksBySpec(s.congestionTicksBySpec);
   const { CONGESTION_PENALTY_THRESHOLD, CONGESTION_SUSTAINED_TICKS } = CONGESTION_CONSTANTS;
   const out: CongestionLine[] = [];
@@ -2067,7 +2074,7 @@ export function congestionLinesOf(s: SimState): CongestionLine[] {
     out.push({ ...u, sustainedTicks, isSustained, congestionFactor });
   }
   return out;
-}
+});
 
 /**
  * FEAT-congestion-teeth-2026-09-02 (AC-2/AC-3/AC-4/AC-9) — the city-wide
@@ -2147,7 +2154,7 @@ export function congestionFactorOf(s: SimState): number {
 // WeakMap entries are GC'd once a superseded state is no longer referenced
 // anywhere (journal/redux history included) — no unbounded-growth leak risk,
 // same reasoning as occupiedSetCache's.
-function memoOnState<T>(compute: (s: SimState) => T): (s: SimState) => T {
+export function memoOnState<T>(compute: (s: SimState) => T): (s: SimState) => T {
   const cache = new WeakMap<SimState, T>();
   return (s: SimState): T => {
     if (cache.has(s)) return cache.get(s) as T;
@@ -2558,7 +2565,10 @@ export function sanitizeCrimeRate(n: unknown): number {
  *    possible even though "crime lowers wellbeing" and "low wellbeing raises
  *    crime" are both modelled truths.
  */
-export function crimeRateOf(s: SimState): number {
+// BUG-602: memoised — wellbeingOf, the month-boundary snapshot, debugjson and
+// the UI all evaluate crime against the same state object; the body walks the
+// full building list and recomputes wellbeingCoreOf. Pure derivation of s.
+export const crimeRateOf: (s: SimState) => number = memoOnState((s) => {
   const {
     BASELINE_CRIME_RATE,
     CRIME_BREEDS_CRIME_FACTOR,
@@ -2612,7 +2622,7 @@ export function crimeRateOf(s: SimState): number {
     baseline + breedingTerm - policeReduction - eduReduction - parksReduction + wellbeingReduction;
 
   return Math.round(Math.max(0, Math.min(100, crime)));
-}
+});
 
 export function serviceDemandOf(
   s: SimState

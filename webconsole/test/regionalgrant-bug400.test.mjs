@@ -33,6 +33,7 @@ import {
   LEDGER_CAP,
 } from '../src/sim/engine.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
+import { MILESTONES } from '../src/sim/data.ts';
 
 // ── 1. GRANT IN FLOWS + FUNDS RECONCILES THROUGH THE FLOWS PATH (no side channel) ─
 test('BUG-400: grant is booked through computeFlows and the funds change routes through flows', () => {
@@ -126,7 +127,13 @@ test('BUG-400: real build events survive 100+ grant cycles (grant no longer evic
     label: `filler-${i}`,
     amount: -1,
   }));
-  s = { ...s, ledger: [...filler, ...genuine] };
+  // BUG-541 (milestone cash, 2026-09-02): milestone payouts write LEGITIMATE
+  // "Milestone Reward" ledger rows; over 120 months a growing city claims
+  // several, and each real row correctly evicts the oldest entry of an at-cap
+  // ledger — which is exactly where this test seeds its genuine events. That
+  // eviction is correct behaviour (milestone pays ARE real events), so mark
+  // every milestone already claimed to keep this test about GRANT rows only.
+  s = { ...s, ledger: [...filler, ...genuine], claimedMilestones: MILESTONES.map((m) => m.id) };
   assert.equal(s.ledger.length, LEDGER_CAP, 'ledger seeded exactly at cap with genuine events oldest');
 
   // Run 100+ grant cycles (well past the 200-cap; old code prepended one grant row per

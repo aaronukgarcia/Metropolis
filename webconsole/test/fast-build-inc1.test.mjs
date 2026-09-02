@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import {
   isFastBuildEnabled,
   scaleConstructionTicks,
+  resetFastBuildFlagCache,
   FAST_BUILD_FLAG_KEY,
   FAST_BUILD_CLASS_FACTORS,
   DEFAULT_FAST_BUILD_FACTOR,
@@ -106,12 +107,17 @@ describe('constructionTicks() SSOT seam — real shipped function', () => {
   test('ON (global localStorage flag): scaled per class', () => {
     const prior = globalThis.localStorage;
     globalThis.localStorage = fakeStorage({ [FAST_BUILD_FLAG_KEY]: '1' });
+    // BUG-602: the default-storage flag read is cached (1s TTL) — drop the
+    // cache after swapping the global so this test observes the flip
+    // immediately, the way a >1s-later real read would.
+    resetFastBuildFlagCache();
     try {
       assert.equal(constructionTicks(dwelling), 10); // 100 × 0.1
       assert.equal(constructionTicks(mega), 30); // 600 × 0.05
     } finally {
       if (prior === undefined) delete globalThis.localStorage;
       else globalThis.localStorage = prior;
+      resetFastBuildFlagCache();
     }
     // and after restore, back to unchanged
     assert.equal(constructionTicks(dwelling), 100);

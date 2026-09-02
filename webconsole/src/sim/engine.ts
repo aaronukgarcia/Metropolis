@@ -12,6 +12,7 @@ import {
   countByKindOnline,
   fits,
   isOnline,
+  memoOnState,
   occupiedSet,
   roadTileSetOf,
   isRoadOrTrunkSpec,
@@ -4035,7 +4036,13 @@ export function approvalOf(s: SimState): number {
  * cheap, pure call, not a cycle) to build the Crime part. See crimeRateOf's
  * doc comment (data.ts) for the full loop-breaking argument.
  */
-function buildWellbeingCoreParts(s: SimState): { label: string; value: number }[] {
+// BUG-602 (integration-soak perf cliff): memoised on state identity. Before
+// this, ONE wellbeingOf(s) call built this list TWICE (directly + via
+// crimeRateOf→wellbeingCoreOf), and advance()/UI/debugjson each rebuilt it
+// again for the same state — the soak measured ~700ms/tick at pop~700 from
+// exactly this multiplicity. Pure function of s, so memoOnState is exact.
+const buildWellbeingCoreParts: (s: SimState) => { label: string; value: number }[] =
+  memoOnState((s) => {
   const pop = s.population;
   // Early-game blend toward a 55 baseline while pop < 50 — same ramp as the
   // demand meters' earlyGameFactor so the two systems damp identically.
@@ -4154,7 +4161,7 @@ function buildWellbeingCoreParts(s: SimState): { label: string; value: number }[
     { label: 'Traffic/Commute', value: congestion },
   ];
   return parts;
-}
+});
 
 /**
  * FEAT-crime-mechanic-2026-09-02 — wellbeing overall WITHOUT the Crime part.
@@ -4168,10 +4175,13 @@ export function wellbeingCoreOf(s: SimState): number {
   return Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
 }
 
-export function wellbeingOf(s: SimState): {
+// BUG-602: memoised — advance() consumes this at least twice per tick
+// (moveOutRate + snapshot paths) and the UI/debugjson re-derive it per render
+// against the same state object. Pure derivation of s.
+export const wellbeingOf: (s: SimState) => {
   overall: number;
   parts: { label: string; value: number }[];
-} {
+} = memoOnState((s) => {
   const coreParts = buildWellbeingCoreParts(s);
 
   // Same blend/part shaping as buildWellbeingCoreParts uses internally
@@ -4195,7 +4205,7 @@ export function wellbeingOf(s: SimState): {
   // ⚠ BALANCE-NUMBER PLACEHOLDER: equal part weights, pending Aaron's pass.
   const overall = Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
   return { overall, parts };
-}
+});
 
 /**
  * Helper for BUG-393 testing: calculate the Utilities wellbeing part value

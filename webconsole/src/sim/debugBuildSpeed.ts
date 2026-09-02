@@ -74,14 +74,47 @@ export const DEFAULT_FAST_BUILD_FACTOR = 0.1;
 export function isFastBuildEnabled(storage?: {
   getItem(key: string): string | null;
 }): boolean {
-  const s =
-    storage ?? (typeof localStorage !== 'undefined' ? localStorage : undefined);
-  if (!s) return false;
-  try {
-    return s.getItem(FAST_BUILD_FLAG_KEY) === '1';
-  } catch {
-    return false;
+  // BUG-602 (integration-soak perf cliff): an explicit storage arg (tests)
+  // bypasses the cache; the default window.localStorage path is cached with a
+  // 1s TTL. Rationale: this is called via scaleConstructionTicks →
+  // constructionTicks → isOnline for EVERY building on EVERY aggregate pass —
+  // thousands of synchronous localStorage.getItem calls per tick, which the
+  // CPU profile measured at ~95% of total tick cost (Node 25 also ships a
+  // global localStorage, so the old typeof-guard no longer short-circuits in
+  // tests/harnesses). The flag has no UI toggle (devtools-set, dev-only), so
+  // a ≤1s staleness window is imperceptible and cannot affect normal play:
+  // OFF still returns lead-times byte-for-byte unchanged.
+  if (storage) {
+    try {
+      return storage.getItem(FAST_BUILD_FLAG_KEY) === '1';
+    } catch {
+      return false;
+    }
   }
+  const now = Date.now();
+  if (flagCache !== null && now - flagCacheAt < FLAG_CACHE_TTL_MS) return flagCache;
+  const s = typeof localStorage !== 'undefined' ? localStorage : undefined;
+  let v = false;
+  if (s) {
+    try {
+      v = s.getItem(FAST_BUILD_FLAG_KEY) === '1';
+    } catch {
+      v = false;
+    }
+  }
+  flagCache = v;
+  flagCacheAt = now;
+  return v;
+}
+
+let flagCache: boolean | null = null;
+let flagCacheAt = 0;
+const FLAG_CACHE_TTL_MS = 1000;
+
+/** Test seam: drop the cached default-storage flag read (BUG-602). */
+export function resetFastBuildFlagCache(): void {
+  flagCache = null;
+  flagCacheAt = 0;
 }
 
 /**
