@@ -371,7 +371,37 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .decline-screen h2 { margin: 0 0 6px; color: var(--danger); font-size: 17px; }
 .decline-cause { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; }
 .decline-stats { list-style: none; margin: 0 0 16px; padding: 0; text-align: left; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
-.decline-screen-actions { display: flex; gap: 10px; justify-content: center; }
+.decline-screen-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+/* FEAT-2326609723 (Play Mode) — the escape-hatch button, deliberately styled
+   distinct from Start Over/Load Save so it never reads as a normal recovery
+   option: this is a sandbox choice, not gameplay. */
+.btn-playmode {
+  background: rgba(214, 122, 255, 0.16);
+  border: 1px solid #d67aff;
+  color: #d67aff;
+}
+
+/* FEAT-2326609723 (Play Mode) — the PERSISTENT, unmissable "not a simulation"
+   badge. Pinned above even the decline screen's z-index (2000) so it is never
+   accidentally buried by a future overlay, and never disappears once latched
+   (SimState.playModeLatched is a one-way, session-lifetime flag). */
+.playmode-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3000;
+  background: #d67aff;
+  color: #1a0722;
+  text-align: center;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  pointer-events: none;
+}
 
 /* BUG-497 (2): the "SIMULATION ENDED" HUD badge — a frozen clock is otherwise
    indistinguishable from a hang. */

@@ -140,6 +140,14 @@ export function isStateAffecting(action: Action): boolean {
     case 'hydrate':
       return false;
 
+    // FEAT-2326609723: Play Mode's one-way latch mutates funds/insolvency
+    // overlays — state-affecting, must journal + replay identically (mirrors
+    // enterAdministration above). See genesisReplay.ts's
+    // canUseAsReplayReference for why a LATCHED session is nonetheless
+    // excluded from being used as a determinism reference.
+    case 'enterPlayMode':
+      return true;
+
     // Exhaustiveness check (TypeScript will error if Action gains a new case).
     default: {
       const _exhaustive: never = action;

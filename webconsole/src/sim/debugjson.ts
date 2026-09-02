@@ -243,6 +243,14 @@ export interface DebugJson {
     pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
     /** FEAT-2326609711 inc1 (AC-1) — external power cover toggle. */
     gridImportEnabled: boolean;
+    /** BUG-504 Option A — how many FRESH first bailouts used so far (capped). */
+    firstBailoutCount: number;
+    /** BUG-506 (AC-506-1/2) — consecutive-tick sustained-recovery counter. */
+    recoveryStreak: number;
+    /** BUG-506 (AC-506-3/4) — rolling window of the last N ticks' funds. */
+    recentFundsWindow: number[];
+    /** FEAT-2326609723 (Play Mode) — the one-way sandbox latch. */
+    playModeLatched: boolean;
   };
   flows: {
     inflows: FlowItem[];
@@ -512,6 +520,11 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   arrivalsByModeHistory: 'arrivalsByMode.monthlyHistory',
   // FEAT-2326609711 inc1 (AC-1).
   gridImportEnabled: 'sim.gridImportEnabled',
+  // BUG-504 Option A / BUG-506 / FEAT-2326609723 (FEAT-endgame-ladder).
+  firstBailoutCount: 'sim.firstBailoutCount',
+  recoveryStreak: 'sim.recoveryStreak',
+  recentFundsWindow: 'sim.recentFundsWindow',
+  playModeLatched: 'sim.playModeLatched',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -751,6 +764,12 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       // FEAT-2326609711 inc1 (AC-1): backward tolerance for a legacy state
       // predating this field, mirrors insolvencyState/bailoutState above.
       gridImportEnabled: s.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT,
+      // BUG-504 Option A / BUG-506 / FEAT-2326609723: backward tolerance for a
+      // legacy state predating these fields, mirrors the fields above.
+      firstBailoutCount: s.firstBailoutCount ?? 0,
+      recoveryStreak: s.recoveryStreak ?? 0,
+      recentFundsWindow: s.recentFundsWindow ?? [],
+      playModeLatched: s.playModeLatched ?? false,
     },
     flows: {
       inflows: s.lastFlows.inflows,

@@ -117,11 +117,17 @@ test('BUG-496: a GENUINE re-entry (solvent -> crisis again, later) DOES re-stamp
   const admin = enterAdministration();
   const dismissed = reducer(admin, { type: 'dismissInsolvencyPopup' });
   // Ride administration out to its year-end WITH FUNDS RECOVERED — reverts to 'solvent'.
+  // BUG-504 Option A (2026-09-02): the administration-covered first-bailout
+  // year-end "still broke" test now uses BAILOUT_CLEAN_END_THRESHOLD (real
+  // solvency, funds >= 0), not the old crisis-line bar — forcing funds to
+  // EXACTLY 0 is a razor's edge that one tick's own upkeep/interest can tip
+  // back under 0 (a genuine, intended behavior change, not a test weakening).
+  // Use a comfortably positive margin, matching the sibling AC-506 fixtures.
   let s = dismissed;
   for (let i = 0; i < ADMINISTRATION_DURATION_TICKS - 1; i++) {
-    s = tickAtFunds(s, 0);
+    s = tickAtFunds(s, 5_000_000);
   }
-  const recovered = tickAtFunds(s, 0);
+  const recovered = tickAtFunds(s, 5_000_000);
   assert.equal(recovered.administrationState, null, 'precondition: administration must have ended');
   assert.equal(recovered.insolvencyState, 'solvent', 'precondition: must have genuinely recovered to solvent');
   assert.equal(recovered.insolvencyPopup, null, 'precondition: no stale popup once solvent');

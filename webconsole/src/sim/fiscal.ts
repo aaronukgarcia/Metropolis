@@ -477,3 +477,105 @@ export const BAILOUT_SECOND_INJECTION_LABEL = 'IMF Second Bailout Injection (Wor
  * decline bar independently of the bailout-entry bar.
  */
 export const FINAL_DECLINE_FUNDS_THRESHOLD = 0;
+
+/**
+ * BUG-504 Option A (Aaron ruling Q100045, 2026-09-02, FEAT-endgame-ladder):
+ * the first-bailout CLEAN-END bar is raised from the crisis line
+ * (DEBT_THRESHOLD_FOR_BAILOUT, -1.5M) to REAL SOLVENCY. A city that merely
+ * climbed back above the crisis floor while still deep in the red used to
+ * clear the bailout and could re-enter crisis + re-collect a fresh
+ * BAILOUT_INCOME_INJECTION every year forever (a city draining less than
+ * 750k/yr never stayed below the OLD bar for a full year) — that was
+ * BUG-504's unbounded free-rescue loop. Numerically identical to
+ * FINAL_DECLINE_FUNDS_THRESHOLD today (both "truly solvent" = funds >= 0),
+ * but kept as an INDEPENDENT named constant (not a re-export) so the balance
+ * pass can diverge the two later — a test asserts they start equal.
+ * Strictly ABOVE DEBT_THRESHOLD_FOR_BAILOUT by construction (0 > -1.5M),
+ * which also closes BUG-505's dead-stuck window: a clean-end can never
+ * leave the raw funds band in 'crisis' (crisis is funds <= -1.5M).
+ * ⚠ PLACEHOLDER-balance (Aaron's row-by-row pass pending).
+ */
+export const BAILOUT_CLEAN_END_THRESHOLD = 0;
+
+/**
+ * BUG-504 Option A — a city may receive at MOST this many FRESH first
+ * bailouts across a single playthrough. Once exhausted, a fresh crisis entry
+ * is FORCED straight to the (worse-terms) second bailout instead of
+ * re-issuing a free BAILOUT_INCOME_INJECTION grant — closing the unbounded
+ * re-arm loop for good, independent of how slowly a city drains.
+ * ⚠ PLACEHOLDER-balance (Aaron's row-by-row pass pending; "e.g. N = 2" per
+ * the FEAT-endgame-ladder spec).
+ */
+export const MAX_FIRST_BAILOUTS = 2;
+
+/**
+ * BUG-506 (AC-506-1/2) — number of CONSECUTIVE ticks of funds >= 0 required,
+ * while a bailout (first or second) is active, to trigger an EARLY exit that
+ * clears the bailout state before its year-end checkpoint. Named N in the
+ * acceptance doc ("suggested N = 30 ticks = 1 month, matching the monthly UI
+ * cadence"). Deliberately NOT a re-export of engine.ts's TICKS_PER_MONTH (30)
+ * — fiscal.ts cannot import from engine.ts, see TICKS_PER_MONTH_REF's own
+ * comment above — a test asserts the two stay numerically equal.
+ * ⚠ PLACEHOLDER-balance.
+ */
+export const SUSTAINED_RECOVERY_TICKS = 30;
+
+/**
+ * BUG-506 (AC-506-3/4) — the decline year-end decision reads the MEAN of a
+ * rolling window of the last N ticks' funds (SimState.recentFundsWindow,
+ * updated every tick), not a single-tick sample — so one bad tick in an
+ * otherwise-solvent year no longer forces a hard game-over, and a single
+ * lucky tick in an otherwise-insolvent year no longer buys a reprieve.
+ * Independent constant from SUSTAINED_RECOVERY_TICKS (same default value
+ * today) so the balance pass can retune the two separately later.
+ * ⚠ PLACEHOLDER-balance.
+ */
+export const DECLINE_AVERAGING_WINDOW_TICKS = 30;
+
+/**
+ * BUG-504 Option A — SSOT label for the per-tick standing cost (a credit-
+ * rating / interest surcharge) charged while EITHER bailout is actively in
+ * force, so a bailout is a felt lifeline rather than a free tap. Booked as a
+ * normal labelled outflow (mirrors BAILOUT_INJECTION_LABEL on the inflow
+ * side) so conservation (fundsAtTickEnd === fundsAtTickStart + Σinflows −
+ * Σoutflows) traces it exactly, and consistency.ts's upkeep-total
+ * reconciliation excludes it (it is not per-building upkeep) exactly like
+ * Overdraft Interest / Wages.
+ */
+export const BAILOUT_STANDING_COST_LABEL = 'Bailout Standing Cost (Credit Rating Surcharge)';
+
+/**
+ * BUG-504 Option A — base per-tick standing cost of an active bailout, before
+ * the re-arm multiplier in bailoutStandingCostPerTick() below.
+ * ⚠ PLACEHOLDER-balance (Aaron's row-by-row pass pending).
+ */
+export const BAILOUT_STANDING_COST_PER_TICK = 500;
+
+/**
+ * BUG-504 Option A — pure per-tick standing-cost formula: the base cost times
+ * the number of first-bailout re-arms used so far this playthrough (minimum
+ * 1x, so the very first bailout still carries the base charge; a SECOND
+ * re-arm — up to MAX_FIRST_BAILOUTS — costs proportionally more, a genuinely
+ * worse credit hit on repeat). Deterministic, no Date/random (GR#21).
+ */
+export function bailoutStandingCostPerTick(firstBailoutCount: number): number {
+  return BAILOUT_STANDING_COST_PER_TICK * Math.max(1, firstBailoutCount);
+}
+
+/**
+ * FEAT-2326609723 (Play Mode — Aaron ruling Q100045's escape-hatch companion,
+ * 2026-09-02): the ONE-WAY sandbox injection credited the tick the player
+ * engages Play Mode from the Decline / game-over screen. Deliberately many
+ * orders of magnitude above STARTING_TREASURY (1.5M) — this is EXPLICITLY
+ * sandbox money, never mistaken for a real economy event. Booked as a normal
+ * labelled inflow (see PLAY_MODE_INJECTION_LABEL) so the conservation
+ * invariant still holds exactly even in Play Mode — no bypass flag needed.
+ */
+export const PLAY_MODE_INJECTION_AMOUNT = 1_000_000_000_000;
+
+/**
+ * FEAT-2326609723 — SSOT label for the Play Mode sandbox injection, so the
+ * ledger/lastFlows entry can never be confused with a real bailout/grant
+ * inflow (GR#3: distinct, unambiguous labels for distinct concepts).
+ */
+export const PLAY_MODE_INJECTION_LABEL = 'Play Mode Sandbox Injection (not a simulation)';

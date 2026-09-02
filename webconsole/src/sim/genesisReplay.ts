@@ -57,6 +57,21 @@ export function replayFromGenesis(journal: Journal): SimState {
 }
 
 /**
+ * FEAT-2326609723 (Play Mode) — a LATCHED (playModeLatched === true) session
+ * is a deliberate sandbox deviation (a trillion-unit non-economy injection),
+ * not a valid economy run — it must never be treated as a genesis-replay/AB
+ * determinism REFERENCE (a "golden" state other runs are compared against).
+ * The replay CORE itself still replays a play-mode journal faithfully
+ * (determinism is unaffected — the latch and injection are ordinary
+ * deterministic state transitions, no rand/time), so this is a guard for
+ * CALLERS deciding whether a given end-state is fit to serve as a comparison
+ * baseline, not a restriction on replayFromGenesis itself. Pure, no I/O.
+ */
+export function canUseAsReplayReference(state: SimState): boolean {
+  return !state.playModeLatched;
+}
+
+/**
  * Deterministic stable serialization: JSON with object keys sorted recursively,
  * so two structurally-equal states compare byte-identical regardless of key
  * insertion order. Used as the determinism-self-test oracle (brief §4.5).

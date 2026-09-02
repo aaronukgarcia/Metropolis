@@ -59,7 +59,7 @@ import type {
   BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, MAX_FIRST_BAILOUTS, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -403,6 +403,14 @@ function rawState(): SimState {
     // advance min()'s it to funds, but it must honour the one-constant promise).
     minFundsEver: STARTING_TREASURY,
     totalSpending: 0,
+    // BUG-504 Option A: no first-bailout re-arm used yet.
+    firstBailoutCount: 0,
+    // BUG-506 (AC-506-1/2): no sustained-recovery streak at game start.
+    recoveryStreak: 0,
+    // BUG-506 (AC-506-3/4): the rolling funds window starts empty.
+    recentFundsWindow: [],
+    // FEAT-2326609723: Play Mode's one-way latch — never engaged at game start.
+    playModeLatched: false,
   };
 }
 
@@ -1302,37 +1310,109 @@ function advance(s: SimState): SimState {
   // because the plain-bailout year-end branch below may auto-trigger it.
   const prevBailoutSecondState = s.bailoutSecondState ?? null;
   let bailoutSecondState = prevBailoutSecondState;
+
+  // BUG-506 (AC-506-3/4): rolling window of the last DECLINE_AVERAGING_WINDOW_TICKS
+  // ticks' funds, updated EVERY tick regardless of insolvency state, so an
+  // averaged decline decision at any year-end checkpoint reads the mean of the
+  // FINAL window ticks of whatever period just elapsed — the window naturally
+  // holds exactly those ticks because checkpoints land on fixed tick
+  // arithmetic (BAILOUT_DURATION_TICKS/SECOND_BAILOUT_DURATION_TICKS).
+  // Deterministic, no Date/random (GR#21).
+  const recentFundsWindow = [...(s.recentFundsWindow ?? []), sanitizeFunds(funds)].slice(
+    -DECLINE_AVERAGING_WINDOW_TICKS,
+  );
+  const meanRecentFunds =
+    recentFundsWindow.length > 0
+      ? recentFundsWindow.reduce((a, b) => a + b, 0) / recentFundsWindow.length
+      : funds;
+
+  // BUG-506 (AC-506-1/2): consecutive-tick counter of SUSTAINED recovery
+  // (funds >= 0) while EITHER bailout is active, resetting to 0 the instant
+  // funds dip below 0 or no bailout was active last tick. Reaching
+  // SUSTAINED_RECOVERY_TICKS triggers an EARLY exit below, ahead of either
+  // bailout's own year-end checkpoint.
+  const wasInAnyBailout = prevBailoutState !== null || prevBailoutSecondState !== null;
+  const recoveryStreak = wasInAnyBailout ? (funds >= 0 ? (s.recoveryStreak ?? 0) + 1 : 0) : 0;
+
+  // BUG-506 (AC-506-1/2): EARLY EXIT — sustained recovery clears the active
+  // bailout before its year-end checkpoint. Checked FIRST (before the
+  // fresh-trigger / year-end branches below) so a bailout cleared early this
+  // tick is never also processed by its own year-end logic the same tick.
+  let firstBailoutEarlyExit = false;
+  if (prevBailoutState !== null && recoveryStreak >= SUSTAINED_RECOVERY_TICKS) {
+    bailoutState = null;
+    firstBailoutEarlyExit = true;
+  }
+  let secondBailoutEarlyExit = false;
+  if (
+    !firstBailoutEarlyExit &&
+    prevBailoutSecondState !== null &&
+    recoveryStreak >= SUSTAINED_RECOVERY_TICKS
+  ) {
+    bailoutSecondState = null;
+    secondBailoutEarlyExit = true;
+  }
+
+  // BUG-504 Option A: re-arm counter — how many FRESH first bailouts this
+  // playthrough has used. Capped at MAX_FIRST_BAILOUTS below.
+  const firstBailoutCountBefore = s.firstBailoutCount ?? 0;
+  let firstBailoutCount = firstBailoutCountBefore;
+
   // FEAT-1972079923 inc3 (AC-7): a crisis-band re-read caused by ADMINISTRATION
   // ENDING still-broke must NOT re-fire a fresh bailout (a still-broke
   // administration ending auto-triggers the SECOND bailout instead — inc4,
   // handled in the administration block below — never a fresh FIRST bailout).
   // Guarded by `prevInsolvencyState !== 'administration'` — a genuine NEW
   // crossing into crisis always arrives from 'solvent'/'warning', never from
-  // 'administration'.
+  // 'administration'. Each branch is also guarded by `!firstBailoutEarlyExit`
+  // so an early exit resolved above is never immediately re-triggered or
+  // re-escalated on the SAME tick.
   if (
+    !firstBailoutEarlyExit &&
     insolvencyState === 'crisis' &&
     prevInsolvencyState !== 'crisis' &&
     prevInsolvencyState !== 'administration' &&
     prevBailoutState === null &&
     prevBailoutSecondState === null
   ) {
-    bailoutState = { enteredAt: tick };
-    funds += BAILOUT_INCOME_INJECTION;
-    inflows = [...inflows, { label: BAILOUT_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION }];
+    if (firstBailoutCountBefore < MAX_FIRST_BAILOUTS) {
+      // Fresh grant — a genuinely NEW crisis, a re-arm slot is still available.
+      bailoutState = { enteredAt: tick };
+      firstBailoutCount = firstBailoutCountBefore + 1;
+      funds += BAILOUT_INCOME_INJECTION;
+      inflows = [...inflows, { label: BAILOUT_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION }];
+    } else {
+      // BUG-504 Option A: re-arm cap exhausted — FORCED escalation straight
+      // to the (worse-terms) second bailout. Never re-collects a fresh
+      // first-bailout grant once MAX_FIRST_BAILOUTS has been used.
+      bailoutSecondState = { enteredAt: tick };
+      funds += BAILOUT_INCOME_INJECTION_SECOND;
+      inflows = [
+        ...inflows,
+        { label: BAILOUT_SECOND_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION_SECOND },
+      ];
+    }
   } else if (
+    !firstBailoutEarlyExit &&
     prevBailoutState !== null &&
     tick >= prevBailoutState.enteredAt + BAILOUT_DURATION_TICKS
   ) {
-    if (funds >= DEBT_THRESHOLD_FOR_BAILOUT) {
-      // Solvency restored by the year-end checkpoint — bailout ends cleanly.
+    if (funds >= BAILOUT_CLEAN_END_THRESHOLD) {
+      // BUG-504 Option A / BUG-505: clean-end requires REAL solvency (funds
+      // >= 0), not merely climbing back above the OLD crisis-line bar — that
+      // old bar let a slow-draining city clear a bailout while still deep in
+      // the red, then re-enter crisis and re-collect a fresh grant every
+      // year forever (BUG-504). Raising the bar strictly ABOVE the crisis
+      // threshold also closes BUG-505's dead-stuck window: a clean-end can
+      // never leave the raw funds band in 'crisis' (crisis is funds <=
+      // DEBT_THRESHOLD_FOR_BAILOUT, strictly below 0).
       bailoutState = null;
     } else {
-      // FEAT-1972079923 inc4 (AC-10) — Aaron's round-2 ruling OVERRIDES the BA
-      // criteria doc's stale "user-initiated" text: still broke at the FIRST
-      // bailout year-end AUTO-TRIGGERS the second bailout, no button, no
-      // player action required. Worse terms: a SMALLER one-time injection
-      // (BAILOUT_INCOME_INJECTION_SECOND < BAILOUT_INCOME_INJECTION), booked
-      // as its own labelled inflow so conservation still traces it exactly.
+      // Still not solvent at the FIRST bailout year-end — AUTO-TRIGGERS the
+      // second bailout. Unconditional escalation (the MAX_FIRST_BAILOUTS cap
+      // above only governs a FRESH bailout entry, never this escalation) —
+      // per the FEAT-endgame-ladder spec's assumption 7, admission to the
+      // second bailout must remain automatic so the ladder never stalls.
       bailoutState = null;
       bailoutSecondState = { enteredAt: tick };
       funds += BAILOUT_INCOME_INJECTION_SECOND;
@@ -1368,7 +1448,12 @@ function advance(s: SimState): SimState {
   ) {
     const origin: BailoutOrigin = prevAdministrationState.origin ?? 'bailout';
     administrationState = null;
-    if (origin === 'bailout' && funds < DEBT_THRESHOLD_FOR_BAILOUT) {
+    // BUG-504 Option A: this "still broke" test now uses the SAME real-
+    // solvency bar as the plain (non-administration) first-bailout year-end
+    // branch above (BAILOUT_CLEAN_END_THRESHOLD, not the old crisis-line
+    // DEBT_THRESHOLD_FOR_BAILOUT) — otherwise Administration Mode would be a
+    // silent loophole back into the unbounded-rescue class BUG-504 closed.
+    if (origin === 'bailout' && funds < BAILOUT_CLEAN_END_THRESHOLD) {
       // Still broke after an administration-covered FIRST bailout year — auto
       // second bailout (same trigger as the plain-bailout branch above).
       bailoutSecondState = { enteredAt: tick };
@@ -1377,7 +1462,7 @@ function advance(s: SimState): SimState {
         ...inflows,
         { label: BAILOUT_SECOND_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION_SECOND },
       ];
-    } else if (origin === 'bailout_second' && funds < FINAL_DECLINE_FUNDS_THRESHOLD) {
+    } else if (origin === 'bailout_second' && meanRecentFunds < FINAL_DECLINE_FUNDS_THRESHOLD) {
       // Still broke after an administration-covered SECOND bailout year — hard
       // game-over. Stats captured NOW from the trackers below (computed just
       // before this return), never fabricated defaults (GR#15).
@@ -1400,11 +1485,17 @@ function advance(s: SimState): SimState {
   // was just entered (prevBailoutSecondState, not the local var, which may have
   // just been set above).
   if (
+    !secondBailoutEarlyExit &&
     declineState === null &&
     prevBailoutSecondState !== null &&
     tick >= prevBailoutSecondState.enteredAt + SECOND_BAILOUT_DURATION_TICKS
   ) {
-    if (funds < FINAL_DECLINE_FUNDS_THRESHOLD) {
+    // BUG-506 (AC-506-3/4): the decline decision reads the AVERAGED window
+    // (meanRecentFunds), not this single tick's funds — a lone bad tick at
+    // the very end of an otherwise-solvent year no longer forces game-over,
+    // and a lone lucky tick at the end of an otherwise-insolvent year no
+    // longer buys a reprieve. See DECLINE_AVERAGING_WINDOW_TICKS.
+    if (meanRecentFunds < FINAL_DECLINE_FUNDS_THRESHOLD) {
       bailoutSecondState = null;
       declineState = {
         enteredAt: tick,
@@ -1414,11 +1505,29 @@ function advance(s: SimState): SimState {
         totalSpending: (s.totalSpending ?? 0) + expense,
       };
     } else {
-      // Recovered (funds >= FINAL_DECLINE_FUNDS_THRESHOLD) — second bailout
-      // ends cleanly, no decline, no third bailout ever offered.
+      // Recovered (mean funds >= FINAL_DECLINE_FUNDS_THRESHOLD) — second
+      // bailout ends cleanly, no decline, no third bailout ever offered.
       bailoutSecondState = null;
     }
   }
+
+  // BUG-504 Option A: STANDING COST — a felt lifeline, not a free tap.
+  // Charged every tick either bailout is ACTIVELY in force (post all of the
+  // transitions/early-exits resolved above for THIS tick), scaling with how
+  // many first-bailout re-arms have been used so far (a worse credit hit on
+  // repeat). Booked as a normal labelled outflow so conservation traces it
+  // exactly like the injections above.
+  if (bailoutState !== null || bailoutSecondState !== null) {
+    const bailoutStandingCost = bailoutStandingCostPerTick(firstBailoutCount);
+    funds -= bailoutStandingCost;
+    outflows = [...outflows, { label: BAILOUT_STANDING_COST_LABEL, value: bailoutStandingCost }];
+  }
+
+  // BUG-504 Option A: the running spend tracker below must count the standing
+  // cost outflow just added — `expense` (captured earlier, before this
+  // block) would silently under-report a tick with an active bailout.
+  // Recomputed once from the FINAL outflows array, after every mutation.
+  const expenseFinal = outflows.reduce((a, b) => a + b.value, 0);
 
   // FEAT-1972079923 inc4 (AC-11): running decline-stat trackers, updated EVERY
   // tick regardless of insolvency state, so the eventual decline screen's
@@ -1428,7 +1537,7 @@ function advance(s: SimState): SimState {
   // early return at the top of this function).
   const peakPopulation = Math.max(s.peakPopulation ?? s.population, population);
   const minFundsEver = Math.min(s.minFundsEver ?? s.funds, funds);
-  const totalSpending = (s.totalSpending ?? 0) + expense;
+  const totalSpending = (s.totalSpending ?? 0) + expenseFinal;
 
   // TICK-BOUNDARY INVARIANT: Record funds at tick end for conservation checking
   // (captured AFTER any bailout injection this tick, so it's a real inflow).
@@ -1486,7 +1595,7 @@ function advance(s: SimState): SimState {
     // roadMonitors has expired entries dropped (both == the inputs off a non-monthly tick).
     buildings: scaledBuildings,
     roadMonitors,
-    history: [...s.history, { tick, funds, income, expense, population }].slice(-HISTORY_CAP),
+    history: [...s.history, { tick, funds, income, expense: expenseFinal, population }].slice(-HISTORY_CAP),
     // FEAT-1972079925: per-tick demographic flows + the monthly aggregate ring.
     lastDemographics: demographics,
     demographicAccum: nextDemographicAccum,
@@ -1514,6 +1623,13 @@ function advance(s: SimState): SimState {
     peakPopulation,
     minFundsEver,
     totalSpending,
+    // BUG-504 Option A: how many FRESH first-bailout re-arms this playthrough
+    // has used (capped by MAX_FIRST_BAILOUTS).
+    firstBailoutCount,
+    // BUG-506 (AC-506-1/2): consecutive-tick sustained-recovery counter.
+    recoveryStreak,
+    // BUG-506 (AC-506-3/4): rolling window of the last N ticks' funds.
+    recentFundsWindow,
   };
 }
 
@@ -2568,7 +2684,10 @@ export type Action =
   | { type: 'dismissInsolvencyPopup' }
   | { type: 'unlockAll' }
   | { type: 'reset' }
-  | { type: 'hydrate'; state: SimState };
+  | { type: 'hydrate'; state: SimState }
+  // FEAT-2326609723: Play Mode's one-way sandbox escape hatch, reachable from
+  // the Decline screen (and idempotent thereafter — see the reducer case).
+  | { type: 'enterPlayMode' };
 
 // FEAT-1972079891 inc1 (AC-12): the internal reducer. `reducer` (below) wraps it
 // to keep roadConnectivity consistent with buildings after every action.
@@ -2580,7 +2699,17 @@ function reduceCore(state: SimState, action: Action): SimState {
   // wipe path) and 'hydrate' (Load Save, same GR#27 path) can move the game
   // past decline — both replace the ENTIRE state, so they are exempted here
   // rather than trying to enumerate every action decline should still allow.
-  if (state.declineState && action.type !== 'reset' && action.type !== 'hydrate') {
+  // FEAT-2326609723: 'enterPlayMode' is the THIRD exemption from the decline
+  // freeze (alongside reset/hydrate) — it is specifically the escape hatch
+  // OFFERED FROM the Decline screen, so it must be reachable while declineState
+  // is set. Its own reducer case below clears declineState as part of engaging
+  // the sandbox.
+  if (
+    state.declineState &&
+    action.type !== 'reset' &&
+    action.type !== 'hydrate' &&
+    action.type !== 'enterPlayMode'
+  ) {
     return state;
   }
 
@@ -3373,6 +3502,41 @@ function reduceCore(state: SimState, action: Action): SimState {
 
     case 'hydrate':
       return sanitizeTreasury(action.state);
+
+    // FEAT-2326609723 (Play Mode) — the ONE-WAY sandbox escape hatch offered
+    // from the Decline screen. Idempotent once already latched (no re-
+    // injection, no way back — the latch never sets back to false, by
+    // construction: this is the ONLY writer of playModeLatched, and it
+    // always writes `true`). Credits PLAY_MODE_INJECTION_AMOUNT as a
+    // clearly-labelled, non-disguised inflow (booked exactly like a bailout
+    // injection) so the conservation invariant (fundsAtTickEnd ===
+    // fundsAtTickStart + Σinflows − Σoutflows) still holds exactly even in
+    // Play Mode — no bypass flag needed. Clears every insolvency overlay
+    // (decline/administration/both bailouts) so the player can keep
+    // building; the raw band is forced to 'solvent' immediately (the next
+    // tick's advance() would recompute the SAME value anyway from the
+    // now-enormous funds, so this is not a second code path). Deterministic:
+    // no Date.now()/Math.random() — a fixed, named constant only (GR#21).
+    case 'enterPlayMode': {
+      if (state.playModeLatched) return state; // irreversible + idempotent — no re-injection.
+      const injection = PLAY_MODE_INJECTION_AMOUNT;
+      const inflows = [...state.lastFlows.inflows, { label: PLAY_MODE_INJECTION_LABEL, value: injection }];
+      return {
+        ...state,
+        playModeLatched: true,
+        funds: state.funds + injection,
+        fundsAtTickEnd: state.fundsAtTickEnd + injection,
+        insolvencyState: 'solvent',
+        insolvencyRawBand: 'solvent',
+        insolvencyPopup: null,
+        bailoutState: null,
+        bailoutSecondState: null,
+        administrationState: null,
+        declineState: null,
+        lastFlows: { ...state.lastFlows, inflows },
+        ...logEvent(state, PLAY_MODE_INJECTION_LABEL, injection),
+      };
+    }
   }
 }
 

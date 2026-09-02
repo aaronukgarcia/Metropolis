@@ -261,7 +261,13 @@ test('AC-7: administration ENDS at exactly N+ADMINISTRATION_DURATION_TICKS when 
   const enteredAt = admin.administrationState.enteredAt;
 
   const justBefore = tickN(admin, ADMINISTRATION_DURATION_TICKS - 1);
-  const solventAtYearEnd = tickAtFunds(justBefore, 0); // one more tick reaches enteredAt+360, funds solvent.
+  // BUG-504 Option A (2026-09-02): the administration-covered "still broke"
+  // test now uses BAILOUT_CLEAN_END_THRESHOLD (real solvency, funds >= 0),
+  // not the old crisis-line bar. Forcing funds to EXACTLY 0 is a razor's
+  // edge one tick's own upkeep/interest can tip back under 0 (an intended
+  // consequence of raising the bar, not a test weakening) — use a
+  // comfortably positive margin, matching the sibling AC-506 fixtures.
+  const solventAtYearEnd = tickAtFunds(justBefore, 5_000_000); // one more tick reaches enteredAt+360, funds solvent.
   assert.equal(solventAtYearEnd.tick, enteredAt + ADMINISTRATION_DURATION_TICKS);
   assert.equal(solventAtYearEnd.administrationState, null, 'administration must end at year-end');
   assert.notEqual(solventAtYearEnd.insolvencyState, 'administration', 'exposed state must revert to the funds band');

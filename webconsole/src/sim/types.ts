@@ -448,6 +448,51 @@ export interface SimState {
    * legacy state without it starts accumulating from zero.
    */
   totalSpending?: number;
+  /**
+   * BUG-504 Option A (FEAT-endgame-ladder, Aaron ruling Q100045, 2026-09-02) —
+   * how many FRESH first bailouts (engine.ts's fresh-trigger branch, NOT the
+   * automatic first->second escalation) this playthrough has used, capped at
+   * fiscal.MAX_FIRST_BAILOUTS before a fresh crisis is forced straight to the
+   * second bailout instead of re-issuing a free grant — closes BUG-504's
+   * unbounded yearly re-rescue loop. Optional for backward tolerance: a
+   * legacy state without it is treated as 0 (no re-arms used yet).
+   */
+  firstBailoutCount?: number;
+  /**
+   * BUG-506 (AC-506-1/2) — consecutive-tick counter of SUSTAINED recovery
+   * (funds >= 0) while EITHER bailout is active, reset to 0 the instant funds
+   * dip below 0 or no bailout is active. Reaching
+   * fiscal.SUSTAINED_RECOVERY_TICKS clears the active bailout EARLY, before
+   * its year-end checkpoint. Optional for backward tolerance: a legacy state
+   * without it starts the streak at 0.
+   */
+  recoveryStreak?: number;
+  /**
+   * BUG-506 (AC-506-3/4) — a rolling window of the last
+   * fiscal.DECLINE_AVERAGING_WINDOW_TICKS ticks' sanitized funds, updated
+   * EVERY tick regardless of insolvency state. The decline year-end decision
+   * reads the MEAN of this window rather than a single-tick sample, so one
+   * bad tick in an otherwise-solvent year no longer forces a hard game-over
+   * (and one lucky tick in an otherwise-insolvent year no longer buys a
+   * reprieve). Optional for backward tolerance: a legacy state without it
+   * starts the window empty (the very next tick begins filling it).
+   */
+  recentFundsWindow?: number[];
+  /**
+   * FEAT-2326609723 (Play Mode, Aaron ruling Q100045's escape-hatch
+   * companion, 2026-09-02) — a ONE-WAY, set-once latch: once true, no action
+   * ever sets it back to false (engine.ts's `enterPlayMode` reducer case is
+   * the ONLY writer, and it is idempotent once already latched). Engaging
+   * Play Mode credits fiscal.PLAY_MODE_INJECTION_AMOUNT (a deliberately
+   * implausible "trillion" sandbox sum) as a clearly-labelled inflow and
+   * clears every insolvency overlay so the player can keep building. A
+   * latched session is EXCLUDED from being used as a genesis-replay/AB
+   * determinism REFERENCE (see genesisReplay.ts's canUseAsReplayReference) —
+   * it is a deliberate sandbox deviation, not a valid economy run. Optional
+   * for backward tolerance: a legacy state without it is treated as `false`
+   * (never latched).
+   */
+  playModeLatched?: boolean;
 }
 
 /**

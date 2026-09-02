@@ -121,7 +121,12 @@ test('AC-10 MUTATION-PROVE target: a SOLVENT first-year-end must NOT trigger the
   const crisis = enterBailout();
   const enteredAt = crisis.bailoutState.enteredAt;
   const justBefore = tickN(crisis, BAILOUT_DURATION_TICKS - 1);
-  const solventAtYearEnd = tickAtFunds(justBefore, 0); // recovers exactly at year-end.
+  // BUG-504 Option A (2026-09-02): first-bailout clean-end now requires REAL
+  // solvency (BAILOUT_CLEAN_END_THRESHOLD = funds >= 0), not the old
+  // crisis-line bar — forcing funds to EXACTLY 0 is a razor's edge one tick's
+  // own upkeep/interest can tip back under 0 (an intended consequence of
+  // raising the bar, not a test weakening). Use a comfortable margin.
+  const solventAtYearEnd = tickAtFunds(justBefore, 5_000_000); // recovers comfortably at year-end.
   assert.equal(solventAtYearEnd.tick, enteredAt + BAILOUT_DURATION_TICKS);
   assert.equal(solventAtYearEnd.bailoutState, null, 'first bailout ends cleanly');
   assert.equal(solventAtYearEnd.bailoutSecondState, null, 'a RECOVERED city must never see the second bailout');
@@ -168,7 +173,9 @@ test('AC-10 MUTATION-PROVE target: a RECOVERED administration-covered first year
   const admin = reducer(crisis, { type: 'enterAdministration' });
   const enteredAt = admin.administrationState.enteredAt;
   const justBefore = tickN(admin, ADMINISTRATION_DURATION_TICKS - 1);
-  const solventAtYearEnd = tickAtFunds(justBefore, 0);
+  // BUG-504 Option A (2026-09-02): see the sibling MUTATION-PROVE test above —
+  // exactly 0 is a razor's edge; use a comfortable margin instead.
+  const solventAtYearEnd = tickAtFunds(justBefore, 5_000_000);
   assert.equal(solventAtYearEnd.tick, enteredAt + ADMINISTRATION_DURATION_TICKS);
   assert.equal(solventAtYearEnd.administrationState, null);
   assert.equal(solventAtYearEnd.bailoutSecondState, null, 'recovery must never trigger a second bailout');
@@ -223,7 +230,20 @@ test('AC-11: still-broke at the SECOND bailout year-end (plain path) transitions
 test('AC-11 MUTATION-PROVE target: a RECOVERED second bailout year-end does NOT decline — no game-over on solvency', () => {
   const s0 = rideFirstBailoutToSecond();
   const enteredAt = s0.bailoutSecondState.enteredAt;
-  const justBefore = tickN(s0, SECOND_BAILOUT_DURATION_TICKS - 1);
+  // BUG-506 (AC-506-3/4, 2026-09-02): the decline decision now AVERAGES the
+  // final DECLINE_AVERAGING_WINDOW_TICKS ticks (meanRecentFunds), not a
+  // single-tick sample — forcing solvency on only the VERY LAST tick after
+  // 359 ticks of deep crisis is exactly AC-506-4's "collapse then recovery"
+  // shape, which the spec says MUST still decline (bulk-period insolvency
+  // dominates a lone tail tick) — see the dedicated bug-504-505-506-endgame
+  // test for that scenario. A genuine "recovered, no decline" fixture must
+  // hold solvency for the WHOLE final averaging window, so force EVERY tick
+  // of the year comfortably solvent, not just the last.
+  let s = s0;
+  for (let i = 0; i < SECOND_BAILOUT_DURATION_TICKS - 1; i++) {
+    s = tickAtFunds(s, 5_000_000);
+  }
+  const justBefore = s;
   const solventAtYearEnd = tickAtFunds(justBefore, 5_000_000); // comfortably >= FINAL_DECLINE_FUNDS_THRESHOLD.
   assert.equal(solventAtYearEnd.tick, enteredAt + SECOND_BAILOUT_DURATION_TICKS);
   assert.equal(solventAtYearEnd.bailoutSecondState, null, 'second bailout ends cleanly');
@@ -248,7 +268,14 @@ test('AC-11 MUTATION-PROVE target: a RECOVERED administration-covered second yea
   const s0 = rideFirstBailoutToSecond();
   const admin = reducer(s0, { type: 'enterAdministration' });
   const enteredAt = admin.administrationState.enteredAt;
-  const justBefore = tickN(admin, ADMINISTRATION_DURATION_TICKS - 1);
+  // BUG-506 (AC-506-3/4, 2026-09-02): see the plain-path sibling test above —
+  // a genuine "recovered, no decline" fixture must hold solvency for the
+  // WHOLE final averaging window, not just the literal last tick.
+  let s = admin;
+  for (let i = 0; i < ADMINISTRATION_DURATION_TICKS - 1; i++) {
+    s = tickAtFunds(s, 5_000_000);
+  }
+  const justBefore = s;
   const solventAtYearEnd = tickAtFunds(justBefore, 5_000_000);
   assert.equal(solventAtYearEnd.tick, enteredAt + ADMINISTRATION_DURATION_TICKS);
   assert.equal(solventAtYearEnd.administrationState, null);

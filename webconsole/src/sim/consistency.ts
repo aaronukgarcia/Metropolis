@@ -22,6 +22,7 @@ import {
   applyOutflowPolicies,
   UPKEEP_BUCKET,
   GRID_IMPORT_OUTFLOW_LABEL,
+  BAILOUT_STANDING_COST_LABEL,
 } from './fiscal.ts';
 
 export interface ConsistencyCheck {
@@ -435,7 +436,12 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
       // Refuse Collection / Waste Disposal (both other tonnage/shortfall-based
       // operating costs). Without this, any tick with an active Grid Import
       // outflow would falsely diverge this check (upkeepBuckets never includes it).
-      flow.label !== GRID_IMPORT_OUTFLOW_LABEL
+      flow.label !== GRID_IMPORT_OUTFLOW_LABEL &&
+      // BUG-504 Option A: 'Bailout Standing Cost' is a credit-rating/interest
+      // surcharge keyed off active-bailout state, NOT per-building `upkeep` —
+      // exclude it from the upkeep-total reconciliation exactly like
+      // Overdraft Interest / Wages.
+      flow.label !== BAILOUT_STANDING_COST_LABEL
     ) {
       actualUpkeep += flow.value;
     }

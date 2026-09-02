@@ -961,6 +961,7 @@ export function MapView() {
       <InsolvencyPopup />
       <ForcedAssetSalesPanel />
       <DeclineScreen />
+      <PlayModeBanner />
       <div
         className={`advisor${advisorContent.go ? ' clickable' : ''}`}
         onClick={advisorContent.go}
@@ -1347,8 +1348,34 @@ function DeclineScreen() {
           <button className="btn" onClick={() => void loadGame()}>
             Load Save
           </button>
+          {/* FEAT-2326609723 (Play Mode) — the ONE-WAY sandbox escape hatch,
+              a deliberate player choice offered ONLY from this game-over
+              screen. 'enterPlayMode' is exempted from the decline freeze
+              (engine.ts reduceCore) specifically so this button works. */}
+          <button
+            className="btn btn-playmode"
+            onClick={() => dispatch({ type: 'enterPlayMode' })}
+            title="Sandbox mode: injects a trillion in play money. Not a simulation — a deliberate, irreversible choice to keep building."
+          >
+            Keep playing — sandbox
+          </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// FEAT-2326609723 (Play Mode) — the PERSISTENT, unmissable banner that stays
+// visible for the rest of the session once Play Mode is latched (the latch
+// never clears — see SimState.playModeLatched's doc). Rendered unconditionally
+// alongside the other insolvency-ladder banners so it survives Decline-screen
+// dismissal, save/load, and every subsequent tick.
+function PlayModeBanner() {
+  const { state } = useSim();
+  if (!state.playModeLatched) return null;
+  return (
+    <div className="playmode-banner" role="status">
+      PLAY MODE — not a simulation
     </div>
   );
 }
