@@ -42,6 +42,7 @@ import {
   RAIL_BRIDGE_COST_MULTIPLIER,
   MOTORWAY_JUNCTION_COST,
   residentsCapacity,
+  onlineResidentsCapacity,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -1109,15 +1110,16 @@ function advance(s: SimState): SimState {
     ].slice(0, LEDGER_CAP);
   }
 
-  const capacity = (() => {
-    let cap = 0;
-    for (const b of s.buildings) {
-      if (!isOnline(s, b)) continue;
-      const sp = SPECS[b.spec];
-      if (sp?.kind === 'residential') cap += sp.residents ?? 8;
-    }
-    return cap;
-  })();
+  // BUG-509: use the canonical tiered capacity (residential-only, isOnline-gated,
+  // same as evaluateBuildingMonitors' own utilization basis via capacityAtTier)
+  // instead of summing the flat per-spec base. The flat sum ignored
+  // building.capacityTier entirely, so a Building Auto-Scale upgrade (which DOES
+  // raise capacityTier and DOES charge the player, engine.ts evaluateBuildingMonitors)
+  // never raised the population ceiling the growth model below converges toward —
+  // the auto-scale spend bought nothing. onlineResidentsCapacity(s) mirrors this
+  // ceiling's prior semantics exactly (residential kind + isOnline gate) but reads
+  // capacityAtTier(sp, b.capacityTier ?? 0) instead of the tier-0 base.
+  const capacity = onlineResidentsCapacity(s);
   const t = s.taxRates;
   const avgTax = (t.residential + t.commercial + t.industrial) / 3;
   const demand = demandOf(s);
