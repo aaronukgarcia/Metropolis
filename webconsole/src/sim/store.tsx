@@ -999,7 +999,21 @@ export function SimProvider({ children }: { children: ReactNode }) {
   };
 
   const loadNamed = async (slug: string) => {
-    const save = readNamedSave(window.localStorage, slug);
+    let save: GameSave | null;
+    try {
+      save = readNamedSave(window.localStorage, slug);
+    } catch (e) {
+      // BUG-577: readNamedSave now validates structurally and throws the
+      // same registry-sourced MET-V850 as parseGameSave (File→Open) on a
+      // malformed named save — thread it through recordError/showCaptureError
+      // exactly like loadGame does above, instead of letting it reach
+      // applyLoadedSave as an uncaught throw.
+      const msg = e instanceof Error ? e.message : String(e);
+      const code = (e as { code?: string })?.code;
+      recordError(`Load refused: ${msg}`, { type: 'app', action: 'load', code });
+      showCaptureError(msg, 'load', code);
+      return;
+    }
     if (!save) {
       recordError(`Load refused: no city named ${slug}`, { type: 'app', action: 'load' });
       return;

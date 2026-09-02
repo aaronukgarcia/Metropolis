@@ -1,4 +1,5 @@
 import type { GameSave } from './gamesave.ts';
+import { validateGameSaveObject } from './gamesave.ts';
 import { DEVCITY1_NAME } from './devcity.ts';
 import { safeSetItem } from './safeStorage.ts';
 import { encode, decode } from './saveCodec.ts';
@@ -129,22 +130,53 @@ export interface NamedSaveCollision {
 export function checkNamedSaveCollision(storage: NamedSaveStorage, name: string): NamedSaveCollision | null {
   const proposed = displayCityName(name);
   const slug = cityNameToSlug(proposed);
-  const existing = readNamedSave(storage, slug);
+  let existing: GameSave | null;
+  try {
+    existing = readNamedSave(storage, slug);
+  } catch {
+    // BUG-577: readNamedSave now THROWS (MET-V850) on a structurally-corrupt
+    // existing slot rather than swallowing it. That corruption isn't this
+    // caller's problem to report — a Save As must not be blocked by an
+    // unrelated bad slot — so treat it as "no collision" here; the real
+    // MET-V850 surfaces properly the next time that slot is actually loaded.
+    return null;
+  }
   if (!existing) return null;
   const existingName = displayCityName(existing.name);
   if (existingName === proposed) return null;
   return { slug, existingName };
 }
 
+/**
+ * BUG-577: the named-save (Load → Saved cities) route is the player's
+ * MOST-USED load path but used to skip ALL shape validation — a bare
+ * `JSON.parse(decode(raw)) as GameSave` fed straight into applyLoadedSave,
+ * which dereferences `save.savepoint.camera` outside any try/catch. A
+ * corrupt named save threw an uncaught TypeError with no recordError, no
+ * MET-V850, no user-visible message. Now routes through the SAME
+ * structural validator File→Open uses (validateGameSaveObject, GR#3 SSOT):
+ * a malformed shape THROWS the identical registry-sourced MET-V850 instead
+ * of being silently accepted. A missing slot, or a value that isn't even
+ * decodable/parseable JSON, still returns null (there is nothing shaped to
+ * reject) — callers that need to distinguish "not found" from "corrupt"
+ * should wrap this call and inspect the thrown error's `code`.
+ */
 export function readNamedSave(storage: NamedSaveStorage, slug: string): GameSave | null {
+  let raw: string | null;
   try {
-    const raw = storage.getItem(slotKey(slug));
-    if (!raw) return null;
-    // FEAT-1972079935: decode() is a no-op on a legacy uncompressed value.
-    return JSON.parse(decode(raw)) as GameSave;
+    raw = storage.getItem(slotKey(slug));
   } catch {
     return null;
   }
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    // FEAT-1972079935: decode() is a no-op on a legacy uncompressed value.
+    parsed = JSON.parse(decode(raw));
+  } catch {
+    return null;
+  }
+  return validateGameSaveObject(parsed);
 }
 
 export function renameNamedSave(storage: NamedSaveStorage, oldSlug: string, newName: string): boolean {

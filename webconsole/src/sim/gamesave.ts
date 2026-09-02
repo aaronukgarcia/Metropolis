@@ -100,20 +100,19 @@ function validateBuildingElement(value: unknown, index: number): void {
 }
 
 /**
- * BUG-446: parses and structurally validates a saved-city JSON blob. On ANY
- * malformed shape — a non-object root, a missing/wrong-typed required field,
- * or a garbage element inside snapshot.buildings — this THROWS a
- * registry-sourced MET-V850 error (GR#1/GR#7) rather than returning a
- * partially-valid or silently-coerced GameSave. The only successful return
- * is `{ ok: true, save }` with a save whose shape has been fully verified.
+ * BUG-446/BUG-577: the structural-validation CORE shared by every entry
+ * point that turns an arbitrary parsed-JSON value into a GameSave —
+ * File→Open's parseGameSave AND the named-save (Load → Saved cities) path
+ * in namedsaves.ts. Extracted so the two callers can never drift (GR#3
+ * SSOT): a malformed shape rejects identically everywhere, via the SAME
+ * registry-sourced MET-V850 error (GR#1/GR#7), rather than one path
+ * validating and the other trusting a bare cast.
  */
-export function parseGameSave(text: string): ParseGameSaveResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    rejectSave('File is not JSON');
-  }
+function validateGameSaveShape(parsed: unknown): {
+  o: Record<string, unknown>;
+  savepoint: Savepoint;
+  journal: Journal;
+} {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     rejectSave('Save root must be an object');
   }
@@ -148,19 +147,48 @@ export function parseGameSave(text: string): ParseGameSaveResult {
   if (!Array.isArray(entries)) {
     rejectSave('Journal is missing entries');
   }
-  const savepoint = sp as Savepoint;
+  return { o, savepoint: sp as Savepoint, journal: { entries: entries as Journal['entries'] } };
+}
+
+/**
+ * BUG-577: validates an ALREADY-PARSED value (e.g. a named save decoded
+ * from localStorage) against the identical structural rules parseGameSave
+ * enforces on a File→Open text blob, and returns a fully-verified GameSave.
+ * Throws the same registry-sourced MET-V850 on any malformed shape — never
+ * returns a partially-valid object. Used by namedsaves.ts's readNamedSave so
+ * the "Load → Saved cities" route can no longer skip validation and hand an
+ * unchecked object straight to applyLoadedSave (which dereferences
+ * save.savepoint.camera outside any try/catch).
+ */
+export function validateGameSaveObject(parsed: unknown): GameSave {
+  const { o, savepoint, journal } = validateGameSaveShape(parsed);
   savepoint.snapshot = sanitizeTreasury(savepoint.snapshot);
   return {
-    ok: true,
-    save: {
-      format: GAME_SAVE_FORMAT,
-      name: o.name,
-      savedAt: o.savedAt,
-      buildVersion: o.buildVersion,
-      savepoint,
-      journal: { entries: entries as Journal['entries'] },
-    },
+    format: GAME_SAVE_FORMAT,
+    name: o.name as string,
+    savedAt: o.savedAt as string,
+    buildVersion: o.buildVersion as string,
+    savepoint,
+    journal,
   };
+}
+
+/**
+ * BUG-446: parses and structurally validates a saved-city JSON blob. On ANY
+ * malformed shape — a non-object root, a missing/wrong-typed required field,
+ * or a garbage element inside snapshot.buildings — this THROWS a
+ * registry-sourced MET-V850 error (GR#1/GR#7) rather than returning a
+ * partially-valid or silently-coerced GameSave. The only successful return
+ * is `{ ok: true, save }` with a save whose shape has been fully verified.
+ */
+export function parseGameSave(text: string): ParseGameSaveResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    rejectSave('File is not JSON');
+  }
+  return { ok: true, save: validateGameSaveObject(parsed) };
 }
 
 export function gameSaveText(save: GameSave): string {
