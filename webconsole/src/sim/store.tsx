@@ -578,11 +578,34 @@ export function SimProvider({ children }: { children: ReactNode }) {
    * least once every K+1 intervals under sustained contention, never a
    * freeze, and — now — never a runaway either.
    */
-  const issueTickRequest = () => {
+  /**
+   * Returns true when the caller (the tick-driver interval, below) should
+   * treat this fire as handled by the worker — either a request was
+   * actually posted, or one was already in flight and nothing more needs to
+   * happen this tick. Returns false ONLY on a postMessage failure, telling
+   * the caller to fall back to the ordinary synchronous tick for THIS
+   * interval instead of losing it.
+   *
+   * BUG-597 hardening (flag-gated path, defence-in-depth — the round-4
+   * follow-up round flagged this as a latent stranding, not reachable today
+   * since SimState is JSON-serialisable by design so postMessage's
+   * DataCloneError class never actually fires, but fails dead-and-silent
+   * the moment that stops being true): postMessage used to run with no
+   * try/catch AFTER beginTickRequest had already committed workerBusy=true
+   * and the tracker had already enqueue()'d — a throw there left both
+   * stranded for the rest of the session, since the ONLY caller (the
+   * interval below) did `issueTickRequest(); return;` on the worker branch
+   * and never fell through to the fallback dispatch. With workerBusy stuck
+   * true, beginTickRequest refuses every future request forever — the clock
+   * would then only ever advance via the K-supersede forced-sync-tick
+   * escape (shouldForceSyncTick), and freeze completely the moment input
+   * (which drives supersedes) stops arriving.
+   */
+  const issueTickRequest = (): boolean => {
     const worker = workerRef.current;
-    if (!worker) return;
+    if (!worker) return false;
     const begun = beginTickRequest(offloadControllerRef.current, stateRefForDispatch.current.tick);
-    if (!begun) return; // already pending — nothing to do.
+    if (!begun) return true; // already pending — nothing to do, no fallback needed.
     offloadControllerRef.current = begun.state;
     getGlobalWorkerQueueTracker().enqueue();
     const msg: MainToWorkerMessage = {
@@ -590,7 +613,32 @@ export function SimProvider({ children }: { children: ReactNode }) {
       state: stateRefForDispatch.current,
       requestId: begun.requestId,
     };
-    worker.postMessage(msg);
+    try {
+      worker.postMessage(msg);
+      return true;
+    } catch (err) {
+      // Unwind EXACTLY what beginTickRequest + enqueue() just committed,
+      // using the controller's own proper transitions rather than
+      // hand-rolling a new state shape here: invalidateInFlight clears
+      // pendingTick/activeRequestId/activeRequestTick (and bumps
+      // supersedeStreak, same accounting as any other request that never
+      // got its reply applied — this one never even left the building), and
+      // clearWorkerBusy frees the busy flag since the worker never actually
+      // started this computation, so there is nothing left outstanding in
+      // its mailbox to wait for. Order matches worker.onmessage's own
+      // clear-busy-first convention (see its BUG-592 comment).
+      offloadControllerRef.current = clearWorkerBusy(invalidateInFlight(offloadControllerRef.current));
+      // The tracker's enqueue() above must be un-enqueued too — this
+      // request was never actually sent, so it must never read as
+      // outstanding backlog.
+      getGlobalWorkerQueueTracker().drain();
+      const detail = err instanceof Error ? err.message : String(err);
+      recordError(`Worker tick offload failed to post (${detail}); falling back to synchronous tick.`, {
+        type: 'app',
+        action: 'worker-postmessage',
+      });
+      return false;
+    }
   };
 
   // Construct/tear down the worker exactly once per SimProvider lifetime
@@ -610,6 +658,28 @@ export function SimProvider({ children }: { children: ReactNode }) {
     const tracker = getGlobalWorkerQueueTracker();
     worker.onmessage = (ev: MessageEvent<WorkerToMainMessage>) => {
       const msg = ev.data;
+      // BUG-592/BUG-597 fix: ANY message the worker sends back — regardless
+      // of its type — means the worker has actually finished the ONE
+      // computation it was given. Clear workerBusy (and drain the tracker)
+      // HERE, unconditionally, BEFORE narrowing on msg.type at all — so the
+      // NEXT tick-driver interval fire is allowed to post again (see
+      // beginTickRequest's workerBusy guard) no matter what kind of reply
+      // this turns out to be. Order matters (round-4 follow-up finding): the
+      // previous code put the `msg.type !== 'tickResult'` early-return
+      // BEFORE this clear, which happened to be unreachable while
+      // 'tickResult' was the only WorkerToMainMessage variant, but would
+      // silently strand workerBusy=true forever — freezing all future
+      // worker ticks — the instant a second message type existed and this
+      // handler returned through the guard without ever reaching the clear
+      // below it. Previously this slot was freed at INVALIDATION time
+      // instead of at actual worker-completion time, letting main post a
+      // second (or third, ...) real ~1.77MB SimState clone into the
+      // worker's serial, uncancellable mailbox every interval the round
+      // trip outlasted — 501 queued / ~887MB measured over a 60s sustained
+      // drag at interval=100ms/rt=600ms.
+      offloadControllerRef.current = clearWorkerBusy(offloadControllerRef.current);
+      tracker.drain();
+      tracker.reportSupersedeStreak(offloadControllerRef.current.supersedeStreak);
       if (msg.type !== 'tickResult') return;
       // B2/B3 fix: ALL of "is this reply stale", "should it be applied",
       // and "what tick number (if any) to journal" are decided by the pure
@@ -623,19 +693,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         stateRefForDispatch.current.tick
       );
       const wasStaleMismatch = nextControllerState === offloadControllerRef.current;
-      // BUG-592 fix: ANY reply — matched or stale — means the worker has
-      // actually finished the ONE computation it was given. Clear
-      // workerBusy unconditionally, before branching on match/stale, so the
-      // NEXT tick-driver interval fire is allowed to post again (see
-      // beginTickRequest's workerBusy guard). Previously this slot was
-      // freed at INVALIDATION time instead of at actual worker-completion
-      // time, letting main post a second (or third, ...) real ~1.77MB
-      // SimState clone into the worker's serial, uncancellable mailbox
-      // every interval the round trip outlasted — 501 queued / ~887MB
-      // measured over a 60s sustained drag at interval=100ms/rt=600ms.
-      offloadControllerRef.current = clearWorkerBusy(nextControllerState);
-      tracker.drain();
-      tracker.reportSupersedeStreak(offloadControllerRef.current.supersedeStreak);
+      offloadControllerRef.current = nextControllerState;
       if (wasStaleMismatch) {
         // N2 fix (independent round 3 REJECT, 2026-09-02) / BUG-592: this
         // reply was already invalidated (a superseding action, or a
@@ -863,8 +921,13 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // and ONLY on the branch that actually applies the result, so a
         // discarded/rejected/errored tick is never journaled as having
         // happened (see recordTickInJournalOnly's header comment).
-        issueTickRequest();
-        return;
+        //
+        // BUG-597: issueTickRequest() now reports whether it actually
+        // handled this fire (posted, or already had one in flight) — only
+        // return in that case. A postMessage failure returns false, and
+        // this interval fire falls through to the fallback dispatch below
+        // instead of silently dropping the tick.
+        if (issueTickRequest()) return;
       }
       // Fallback path (AC-8): worker disabled/unavailable — exactly
       // today's untouched behaviour, same reducer module.

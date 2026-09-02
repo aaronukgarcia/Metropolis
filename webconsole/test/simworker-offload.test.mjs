@@ -10,6 +10,17 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { JSDOM } from 'jsdom';
+// store.tsx (and its own JSX-bearing imports, e.g. components/RebuildPrompt.tsx)
+// cannot be loaded by plain `node --test` on a .mjs file — Node's native TS
+// support strips TYPES but does not transform JSX, and this file's own
+// extension (.mjs) is what routes it to plain `node --test` rather than
+// `tsx --test` (see tools/test/scoped.mjs's extension-based dispatch). The
+// BUG-597 glue tests below need the real store.tsx, so they load it via tsx's
+// own programmatic API instead of a bare dynamic import — this stays scoped
+// to the one specifier that needs it; every other import in this file is
+// untouched, JSX-free .ts.
+import { tsImport } from 'tsx/esm/api';
 import { initialState, reducer, wellbeingOf } from '../src/sim/engine.ts';
 import { recordAction, emptyJournal } from '../src/sim/journal.ts';
 import { stableStringify } from '../src/sim/genesisReplay.ts';
@@ -1360,5 +1371,292 @@ test('BUG-592 RED PROOF: disabling the busy-skip (scratch legacy variant) reprod
     actionIntervalMs: 16,
   });
   assert.equal(restored.maxOutstanding, 1, 'the real (shipped) beginTickRequest, unmodified, caps peak outstanding at exactly 1 for the identical scenario — confirms the fix, not the scratch toggle, is what the shipped code relies on');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-597 hardening (flag-gated path, defence-in-depth) — two latent
+// strandings the round-4 follow-up round flagged in store.tsx's worker glue
+// itself, not in the pure controller module the tests above exercise.
+// Neither is reachable in the shipped Landing-2 build today (SimState is
+// JSON-serialisable by design, and there is only one WorkerToMainMessage
+// variant), but both fail dead-and-silent the moment either assumption
+// stops holding, so they need real regression coverage of the actual glue
+// code in store.tsx — not just the pure controller, which cannot see either
+// bug (both live in store.tsx's postMessage call and worker.onmessage
+// handler, neither of which the controller module touches).
+//
+// This is a DIFFERENT technique from every other test in this file: rather
+// than driving the pure controller/simulateOffloadTimed model, it mounts a
+// real SimProvider (react-dom/client + jsdom, the store-dispatch.test.tsx
+// idiom) with a hand-rolled FakeWorker standing in for the one thing
+// jsdom/node --test genuinely cannot construct (a real browser Worker
+// thread) — the fake satisfies `typeof Worker !== 'undefined'` so
+// webWorkerFlag.ts's gate opens, and the tick-loop's setInterval callback is
+// captured and invoked manually (same spy-and-capture idiom as
+// store-dispatch.test.tsx's BAR-2) so ticks are driven deterministically
+// instead of waiting on real SPEED_MS timers.
+// ---------------------------------------------------------------------------
+
+describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () => {
+  const TICK_LOOP_DELAY_MS = 900; // SPEED_MS[1] — engine.ts's default speed.
+
+  function installJsdomForWorkerTests() {
+    // Mirrors test/store-dispatch.test.tsx's installJsdom() exactly (same
+    // globals SimProvider's effects probe at module-eval/mount time).
+    const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+      url: 'http://localhost/',
+      pretendToBeVisual: true,
+    });
+    const { window } = dom;
+    globalThis.window = window;
+    globalThis.document = window.document;
+    Object.defineProperty(globalThis, 'navigator', {
+      value: window.navigator,
+      configurable: true,
+      writable: true,
+    });
+    globalThis.HTMLElement = window.HTMLElement;
+    globalThis.requestAnimationFrame = window.requestAnimationFrame.bind(window);
+    globalThis.cancelAnimationFrame = window.cancelAnimationFrame.bind(window);
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    // backend.ts's queueStorage() reads the BARE `localStorage` global (not
+    // `window.localStorage`) — Node 22+'s own experimental built-in global
+    // `localStorage` otherwise shadows jsdom's and is broken without
+    // `--localstorage-file`, which would make every recordError() call in
+    // these tests fail its persistErrorRing() write. Point the bare global
+    // at the real jsdom localStorage so recordError works exactly as it does
+    // in a real browser (where `localStorage` and `window.localStorage` are
+    // the same object).
+    globalThis.localStorage = window.localStorage;
+    // Opt into the worker-offload flag store.tsx's webWorkerFlag.ts reads.
+    window.localStorage.setItem('metropolis.webworker', '1');
+    return dom;
+  }
+
+  /** Spy on the global setInterval/clearInterval, capturing the tick-loop's
+   *  own callback by its distinctive delay (same isolation trick as
+   *  store-dispatch.test.tsx's BAR-2 — the autosave timer uses a different
+   *  delay and must not be confused with it). Returns {get, restore}. */
+  function captureTickLoopCallback() {
+    const g = globalThis;
+    const real = g.setInterval.bind(globalThis);
+    let captured = null;
+    g.setInterval = (...args) => {
+      const id = real(...args);
+      if (args[1] === TICK_LOOP_DELAY_MS) captured = args[0];
+      return id;
+    };
+    return {
+      get: () => captured,
+      restore: () => {
+        g.setInterval = real;
+      },
+    };
+  }
+
+  test('a postMessage-throwing worker: busy is cleared, the fallback tick runs (clock advances), the tracker shows no stuck backlog, an error is recorded, and the NEXT interval recovers', async () => {
+    const dom = installJsdomForWorkerTests();
+    const spy = captureTickLoopCallback();
+    try {
+      let postCount = 0;
+      let throwOnNextPost = true;
+      class FakeWorker {
+        postMessage(msg) {
+          postCount++;
+          if (throwOnNextPost) {
+            throwOnNextPost = false;
+            // Simulates the DataCloneError class postMessage would throw if
+            // SimState ever stopped being JSON-serialisable — see
+            // issueTickRequest's own header in store.tsx.
+            throw new Error('simulated postMessage failure (BUG-597)');
+          }
+          // A subsequent, successful post replies with a real tickResult —
+          // this is the "next interval works normally" recovery leg.
+          queueMicrotask(() => {
+            this.onmessage?.({
+              data: { type: 'tickResult', state: runTick(msg.state), requestId: msg.requestId },
+            });
+          });
+        }
+        terminate() {}
+      }
+      globalThis.Worker = FakeWorker;
+
+      const React = await import('react');
+      const { createRoot } = await import('react-dom/client');
+      const { act } = await import('react-dom/test-utils');
+      const { SimProvider, useSim } = await tsImport('../src/sim/store.tsx', import.meta.url);
+      // NOTE: deliberately NOT a second `tsImport`/`import` of backend.ts for
+      // recentErrors() here — each separate tsImport() call gets its OWN
+      // module registration, so a second load of backend.ts would carry an
+      // independent in-memory errorLog singleton that never sees what
+      // store.tsx's OWN internal `./backend` import records (confirmed by
+      // hand: recentErrors() from a second load read back 0 while the error
+      // was demonstrably recorded). backend.ts's recordError always persists
+      // to the real localStorage ring (persistErrorRing) as its last step, so
+      // reading that ring directly observes the actual recordError() call
+      // inside store.tsx's own module instance, independent of which loader
+      // loaded which copy of the module.
+      const ERROR_RING_STORAGE_KEY = 'metropolis.errorRing';
+      const readErrorRing = () => {
+        const raw = dom.window.localStorage.getItem(ERROR_RING_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+      };
+
+      getGlobalWorkerQueueTracker().reset();
+      const errorCountBefore = readErrorRing().length;
+
+      let latestState = null;
+      function Probe() {
+        const { state } = useSim();
+        latestState = state;
+        return null;
+      }
+
+      const container = dom.window.document.getElementById('root');
+      const root = createRoot(container);
+      try {
+        await act(async () => {
+          root.render(React.default.createElement(SimProvider, { children: React.default.createElement(Probe) }));
+        });
+
+        const tickCallback = spy.get();
+        assert.ok(tickCallback, 'the tick-loop interval must have been registered on mount');
+
+        const tickBefore = latestState.tick;
+
+        // Fire one interval: issueTickRequest() commits workerBusy/enqueue,
+        // then postMessage throws.
+        await act(async () => {
+          tickCallback();
+        });
+
+        assert.equal(postCount, 1, 'postMessage must have been attempted exactly once');
+        assert.equal(
+          latestState.tick,
+          tickBefore + 1,
+          'the interval must fall back to the synchronous tick for THIS fire — no tick may be lost to the postMessage failure'
+        );
+        assert.equal(
+          getGlobalWorkerQueueTracker().depth(),
+          0,
+          'the tracker slot enqueued before the throw must be un-enqueued — no stuck backlog'
+        );
+
+        const errorsAfterThrow = readErrorRing();
+        assert.equal(errorsAfterThrow.length, errorCountBefore + 1, 'exactly one new registry error must be recorded for the postMessage failure');
+        assert.match(
+          errorsAfterThrow[0].msg,
+          /falling back to synchronous tick/,
+          'the recorded error must describe the postMessage failure and the fallback'
+        );
+
+        // RECOVERY: the next interval fire must be able to post to the
+        // worker again — workerBusy must not be stuck true from the throw.
+        const tickBeforeRecovery = latestState.tick;
+        await act(async () => {
+          tickCallback();
+          await new Promise((resolve) => setTimeout(resolve, 0)); // flush the queued onmessage reply
+        });
+
+        assert.equal(postCount, 2, 'the NEXT interval must be able to post to the worker again (workerBusy correctly cleared by the unwind)');
+        assert.equal(latestState.tick, tickBeforeRecovery + 1, 'the recovered worker round-trip must still advance the clock exactly once');
+        assert.equal(getGlobalWorkerQueueTracker().depth(), 0, 'the tracker must read caught-up again after the successful recovery round-trip');
+
+        await act(async () => {
+          root.unmount();
+        });
+      } finally {
+        // no-op: container lives inside the jsdom window torn down below.
+      }
+    } finally {
+      spy.restore();
+      delete globalThis.Worker;
+      dom.window.close();
+    }
+  });
+
+  test('RED-PROOF pin: an unknown-message-type reply still clears workerBusy (guard-order matters)', async () => {
+    // Proves the guard-order fix in store.tsx's worker.onmessage: clearing
+    // workerBusy must happen BEFORE the `msg.type !== 'tickResult'`
+    // narrowing, not after — otherwise a reply of any type OTHER than
+    // 'tickResult' returns through the guard without ever reaching the
+    // clear, stranding workerBusy=true forever (beginTickRequest then
+    // refuses every future request). Reverting the fix (moving the clear
+    // back below the guard) must turn this test red.
+    const dom = installJsdomForWorkerTests();
+    const spy = captureTickLoopCallback();
+    try {
+      let postCount = 0;
+      class FakeWorker {
+        postMessage() {
+          postCount++;
+          // Reply with a message type the protocol does not define today —
+          // simulating the "second message type" scenario the round flagged.
+          queueMicrotask(() => {
+            this.onmessage?.({ data: { type: 'notAnActualProtocolMessage' } });
+          });
+        }
+        terminate() {}
+      }
+      globalThis.Worker = FakeWorker;
+
+      const React = await import('react');
+      const { createRoot } = await import('react-dom/client');
+      const { act } = await import('react-dom/test-utils');
+      const { SimProvider, useSim } = await tsImport('../src/sim/store.tsx', import.meta.url);
+
+      getGlobalWorkerQueueTracker().reset();
+
+      function Probe() {
+        useSim();
+        return null;
+      }
+
+      const container = dom.window.document.getElementById('root');
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(React.default.createElement(SimProvider, { children: React.default.createElement(Probe) }));
+      });
+
+      const tickCallback = spy.get();
+      assert.ok(tickCallback, 'the tick-loop interval must have been registered on mount');
+
+      // First fire: posts, gets the unknown-type reply back.
+      await act(async () => {
+        tickCallback();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      assert.equal(postCount, 1, 'precondition: the first interval must have posted once');
+      assert.equal(
+        getGlobalWorkerQueueTracker().depth(),
+        0,
+        'the tracker must show caught-up after the unknown-type reply — it must not read as still outstanding'
+      );
+
+      // Second fire: if workerBusy was correctly cleared by the unknown-type
+      // reply, beginTickRequest allows a new post. If the guard-order bug
+      // were present, workerBusy would still read true here and this post
+      // would never happen — postCount would stay stuck at 1 forever.
+      await act(async () => {
+        tickCallback();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      assert.equal(
+        postCount,
+        2,
+        'workerBusy must have been cleared by the FIRST (unknown-type) reply — a second real interval fire must be able to post again'
+      );
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      spy.restore();
+      delete globalThis.Worker;
+      dom.window.close();
+    }
+  });
 });
 
