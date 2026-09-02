@@ -82,15 +82,16 @@ function parseArgs(argv) {
 function runGroup(runner, targets, cwd, timeoutSec, reporter) {
   return new Promise((resolveGroup) => {
     const isNode = runner === 'node';
-    // tsx doesn't accept --test-reporter before v4; pass it only to node, and
-    // fall back to node's dot reporter env for tsx (NODE_TEST_CONTEXT unset).
-    const args = isNode
-      ? ['--test', `--test-reporter=${reporter}`, ...targets]
-      : ['--test', ...targets];
-    const bin = isNode ? process.execPath : (process.platform === 'win32' ? 'npx.cmd' : 'npx');
-    const spawnArgs = isNode ? args : ['tsx', ...args];
+    // Always spawn node directly (process.execPath). For .tsx/.ts targets, load
+    // tsx as a module hook (`node --import tsx`) instead of spawning `npx tsx` —
+    // on Windows `spawn('npx.cmd', …, {shell:false})` throws EINVAL, which broke
+    // every tsx run. Going through node also lets tsx targets use the same
+    // concise --test-reporter.
+    const testArgs = ['--test', `--test-reporter=${reporter}`, ...targets];
+    const spawnArgs = isNode ? testArgs : ['--import', 'tsx', ...testArgs];
+    const bin = process.execPath;
     const label = `${runner} --test (${targets.length} target${targets.length === 1 ? '' : 's'})`;
-    process.stdout.write(`\n▶ ${label}  [timeout ${timeoutSec}s, reporter ${isNode ? reporter : 'default'}]\n`);
+    process.stdout.write(`\n▶ ${label}  [timeout ${timeoutSec}s, reporter ${reporter}]\n`);
 
     const child = spawn(bin, spawnArgs, { cwd, stdio: ['ignore', 'inherit', 'inherit'], shell: false });
     let timedOut = false;
