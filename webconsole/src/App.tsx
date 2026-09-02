@@ -3,7 +3,6 @@ import { BusyProvider, BusyIndicator } from './components/Busy';
 import { TopBar, StartOverButton } from './components/TopBar';
 import { LeftDock } from './components/left/LeftDock';
 import { DemandDock } from './components/left/DemandDock';
-import { RightDock } from './components/right/RightDock';
 import { BottomBar } from './components/bottom/BottomBar';
 import { MapView } from './components/MapView';
 import { PerfHud } from './components/PerfHud';
@@ -12,10 +11,21 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { VersionUpgradeToast } from './sim/liveVersion';
 import { OverlayManagerProvider } from './components/overlayManager';
 
-// Layout (FEAT-1972079874): map stays centre; the docks are re-homed —
+// Layout (FEAT-1972079874, reworked FEAT-2326609720 inc2 D2): map stays
+// centre; the docks are re-homed —
 //   LEFT   : build palette (BottomBar) + Start Over button
-//   BOTTOM : information panel (RightDock)
-//   RIGHT  : demand (DemandDock) + fiscal (LeftDock)
+//   RIGHT  : demand (DemandDock) + city info (LeftDock, the six-group tree)
+//
+// D2 (independent round REJECT, fixed): the old BOTTOM row hosted RightDock,
+// which inc2 retired (every tab it carried now lives in LeftDock's tree —
+// see right/RightDock.tsx). RightDock's mount + the "bottom" grid row are
+// REMOVED here (not just left rendering null) so the map reclaims the space
+// instead of leaving a permanent blank 225px band. `left`/`right` already
+// spanned both rows before this change (see styles.css's grid-template-areas
+// history), so only the "map"/"bottom" split collapses into a single "map"
+// row — BottomBar/StartOverButton (left-col) and DemandDock/LeftDock/
+// QueueDepthHud (right-col) are UNCHANGED, still occupying the full column
+// height either side of the map.
 //
 // FEAT-2326609720 inc1: OverlayManagerProvider wraps the ENTIRE app (above
 // SimProvider) because it must be a common ancestor of every blocking
@@ -52,9 +62,6 @@ export default function App() {
                       targeting LeftDock specifically now that it is no longer the
                       literal last child. */}
                   <QueueDepthHud />
-                </div>
-                <div className="col-wrap bottom-col">
-                  <RightDock />
                 </div>
                 <PerfHud />
               </div>

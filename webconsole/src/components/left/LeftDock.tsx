@@ -1,138 +1,166 @@
-import { useState } from 'react';
-import { Histogram } from './Histogram';
-import { Sankey } from './Sankey';
-import { useSim } from '../../sim/simContext';
-import { LOAN_PRINCIPAL } from '../../sim/engine';
-import { Panel } from '../Tabs';
-import { fmtMoney, fmtPct, fmtSigned } from '../../sim/utils';
+import { useState, type ReactElement } from 'react';
+import { Panel, TabStrip } from '../Tabs';
+import {
+  FinanceOverviewTab,
+  FinanceFlowTab,
+  FinanceLedgerTab,
+  FinanceTrendTab,
+  TaxSettingsTab,
+  EarningsTab,
+  PoliciesTab,
+} from './tabs/financeTabs';
+import {
+  WellbeingTab,
+  HousingTab,
+  DemographicsTab,
+  EmploymentTab,
+  MigrationTab,
+} from './tabs/populationTabs';
+import { UtilitiesTab, EducationTab, HealthTab, SafetyTab } from './tabs/servicesTabs';
+import {
+  StructuresTab,
+  LinesNetworksTab,
+  UnlocksTab,
+  SpecialistsTab,
+  ReferenceTab,
+} from './tabs/buildZoningTabs';
+import { MilestonesTab, DemandForecastTab, RevenueForecastTab } from './tabs/projectionsTabs';
+import { AlertsCriticalTab, AlertsWarningTab, AlertsInfoTab } from './tabs/alertsTabs';
+import { DebugTab } from './tabs/debugTab';
 
-const TABS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'flow', label: 'Flow' },
-  { id: 'ledger', label: 'Ledger' },
-  { id: 'trend', label: 'Trend' },
+// LeftDock.tsx — FEAT-2326609720 inc2: the six-group tab-tree replan
+// (Aaron Q100059 = A1, plus the 2026-09-02 domain-split amendment for
+// Services). AC-1: renders exactly Finance / Services / Population /
+// Build & Zoning / Projections / Alerts as first-level tabs, each revealing a
+// second row of child tabs (§1's grouping table + the Services domain split).
+// Debug stays a separate tab OUTSIDE the six-group selector (§1 row 22 /
+// AC-1) — relocated here from RightDock (open question 3, recommendation
+// (a)) since RightDock is retired as a docked panel (AC-3). The Debug TAB
+// ENTRY is unconditional (parity with the old RightDock's TABS array); only
+// the state-mutating cheat BUTTONS inside DebugTab's body stay DEV-gated
+// (debugActions(import.meta.env?.DEV), in debugTab.tsx) — see the D1 fix
+// note in LeftDock() below.
+
+interface ChildTab {
+  id: string;
+  label: string;
+  Body: () => ReactElement;
+}
+
+interface TopGroup {
+  id: string;
+  label: string;
+  children: ChildTab[];
+}
+
+const GROUPS: TopGroup[] = [
+  {
+    id: 'finance',
+    label: 'Finance',
+    children: [
+      { id: 'overview', label: 'Overview', Body: FinanceOverviewTab },
+      { id: 'flow', label: 'Flow', Body: FinanceFlowTab },
+      { id: 'ledger', label: 'Ledger', Body: FinanceLedgerTab },
+      { id: 'trend', label: 'Trend', Body: FinanceTrendTab },
+      { id: 'taxSettings', label: 'Tax Settings', Body: TaxSettingsTab },
+      { id: 'earnings', label: 'Earnings', Body: EarningsTab },
+      { id: 'policies', label: 'Policies', Body: PoliciesTab },
+    ],
+  },
+  {
+    id: 'services',
+    label: 'Services',
+    // Aaron's domain-split amendment (2026-09-02): Utilities / Education /
+    // Health / Safety supersede the spec's single "Coverage Map" child.
+    children: [
+      { id: 'utilities', label: 'Utilities', Body: UtilitiesTab },
+      { id: 'education', label: 'Education', Body: EducationTab },
+      { id: 'health', label: 'Health', Body: HealthTab },
+      { id: 'safety', label: 'Safety', Body: SafetyTab },
+    ],
+  },
+  {
+    id: 'population',
+    label: 'Population',
+    children: [
+      { id: 'wellbeing', label: 'Wellbeing', Body: WellbeingTab },
+      { id: 'housing', label: 'Housing', Body: HousingTab },
+      { id: 'demographics', label: 'Demographics', Body: DemographicsTab },
+      { id: 'employment', label: 'Employment', Body: EmploymentTab },
+      { id: 'migration', label: 'Migration', Body: MigrationTab },
+    ],
+  },
+  {
+    id: 'buildZoning',
+    label: 'Build & Zoning',
+    children: [
+      { id: 'structures', label: 'Structures', Body: StructuresTab },
+      { id: 'lines', label: 'Lines & Networks', Body: LinesNetworksTab },
+      { id: 'unlocks', label: 'Unlocks', Body: UnlocksTab },
+      { id: 'specialists', label: 'Specialists', Body: SpecialistsTab },
+      { id: 'reference', label: 'Reference', Body: ReferenceTab },
+    ],
+  },
+  {
+    id: 'projections',
+    label: 'Projections',
+    children: [
+      { id: 'milestones', label: 'Milestones', Body: MilestonesTab },
+      { id: 'demand', label: 'Demand', Body: DemandForecastTab },
+      { id: 'revenue', label: 'Revenue', Body: RevenueForecastTab },
+    ],
+  },
+  {
+    id: 'alerts',
+    label: 'Alerts',
+    children: [
+      { id: 'critical', label: 'Critical', Body: AlertsCriticalTab },
+      { id: 'warning', label: 'Warning', Body: AlertsWarningTab },
+      { id: 'info', label: 'Info', Body: AlertsInfoTab },
+    ],
+  },
 ];
 
-function Tile({ n, l, cls }: { n: string; l: string; cls?: string }) {
-  return (
-    <div className={`tile ${cls ?? ''}`}>
-      <div className="n">{n}</div>
-      <div className="l">{l}</div>
-    </div>
-  );
-}
+const DEBUG_GROUP_ID = 'debug';
 
 export function LeftDock() {
-  const { state, dispatch } = useSim();
-  const [tab, setTab] = useState('overview');
-
-  const income = state.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
-  const expense = state.lastFlows.outflows.reduce((a, b) => a + b.value, 0);
-  const net = income - expense;
-
-  return (
-    <Panel title="Fiscal" tabs={TABS} active={tab} onSelect={setTab}>
-      {tab === 'overview' && (
-        <>
-          <div className="tiles">
-            <Tile n={fmtMoney(state.funds)} l="Treasury" cls="acc" />
-            <Tile n={fmtSigned(net)} l="Net / tick" cls={net >= 0 ? 'pos' : 'neg'} />
-            <Tile n={fmtMoney(income)} l="Income" cls="pos" />
-            <Tile n={fmtMoney(expense)} l="Expense" cls="neg" />
-            <Tile n={fmtMoney(state.loanBalance)} l="Loan owed" />
-          </div>
-          <div className="row-actions">
-            {state.loanBalance === 0 ? (
-              <button className="btn" onClick={() => dispatch({ type: 'loan' })}>
-                Take loan (+{fmtMoney(LOAN_PRINCIPAL)})
-              </button>
-            ) : (
-              <button
-                className="btn"
-                disabled={state.funds < state.loanBalance}
-                onClick={() => dispatch({ type: 'repay' })}
-              >
-                Repay loan (-{fmtMoney(state.loanBalance)})
-              </button>
-            )}
-          </div>
-          <p className="hint">
-            Margin {income > 0 ? fmtPct(net / income) : '—'} · {state.buildings.length} structures on the rate roll
-          </p>
-        </>
-      )}
-
-      {tab === 'flow' && (
-        <>
-          <Sankey state={state} />
-          <table className="table">
-            <thead>
-              <tr><th>Stream</th><th>Per tick</th><th>Share</th></tr>
-            </thead>
-            <tbody>
-              {state.lastFlows.inflows.map((f) => (
-                <tr key={f.label}>
-                  <td className="in">{f.label}</td>
-                  <td>{fmtMoney(f.value)}</td>
-                  <td>{income > 0 ? fmtPct(f.value / income) : '—'}</td>
-                </tr>
-              ))}
-              {state.lastFlows.outflows.map((f) => (
-                <tr key={f.label}>
-                  <td className="out">{f.label}</td>
-                  <td>{fmtMoney(-f.value)}</td>
-                  <td>{expense > 0 ? fmtPct(f.value / expense) : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-
-      {tab === 'ledger' && (
-        <table className="table ledger">
-          <thead>
-            <tr><th>Tick</th><th>Event</th><th>Amount</th></tr>
-          </thead>
-          <tbody>
-            {state.ledger.length === 0 && (
-              <tr><td colSpan={3} className="muted">No events yet — build or take a loan.</td></tr>
-            )}
-            {state.ledger.map((e) => (
-              <tr key={e.id}>
-                <td>{e.tick}</td>
-                <td>{e.label}</td>
-                <td className={e.amount >= 0 ? 'in' : 'out'}>{fmtSigned(e.amount)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {tab === 'trend' && (
-        <>
-          <Histogram history={state.history} />
-          <TrendSummary />
-        </>
-      )}
-    </Panel>
+  const [groupId, setGroupId] = useState(GROUPS[0].id);
+  const [childByGroup, setChildByGroup] = useState<Record<string, string>>(
+    () => Object.fromEntries(GROUPS.map((g) => [g.id, g.children[0].id])),
   );
-}
 
-function TrendSummary() {
-  const { state } = useSim();
-  const h = state.history.slice(-72);
-  if (h.length < 2) return null;
-  const avgNet = h.reduce((a, b) => a + b.income - b.expense, 0) / h.length;
-  const first = h[0];
-  const last = h[h.length - 1];
-  const fundGrowth = first.funds !== 0 ? (last.funds - first.funds) / Math.abs(first.funds) : 0;
-  const popGrowth = first.population > 0 ? (last.population - first.population) / first.population : 0;
+  const activeGroup = groupId === DEBUG_GROUP_ID ? null : GROUPS.find((g) => g.id === groupId) ?? GROUPS[0];
+  // D1 fix (independent round REJECT): the Debug tab ENTRY is unconditional —
+  // parity with the old RightDock, which declared its `debug` tab
+  // unconditionally in TABS and DEV-gated only the cheat ACTIONS inside
+  // DebugTab's body (debugActions(import.meta.env?.DEV), still true in
+  // debugTab.tsx unchanged). Gating the tab entry itself hid the entire
+  // dogfood bug-reporting surface (Download/Commit/Refresh debug.json, the
+  // "Errors captured" MET-code list — a GR#1 pillar) from every non-DEV
+  // (production/dogfood `vite build`) run.
+  const topTabs = [
+    ...GROUPS.map((g) => ({ id: g.id, label: g.label })),
+    { id: DEBUG_GROUP_ID, label: 'Debug' },
+  ];
+
+  const childTabs = activeGroup ? activeGroup.children.map((c) => ({ id: c.id, label: c.label })) : [];
+  const activeChildId = activeGroup ? (childByGroup[activeGroup.id] ?? activeGroup.children[0].id) : null;
+  const ActiveBody = activeGroup
+    ? activeGroup.children.find((c) => c.id === activeChildId)?.Body ?? activeGroup.children[0].Body
+    : DebugTab;
+
   return (
-    <div className="tiles">
-      <Tile n={fmtSigned(avgNet)} l="Avg net/tick" cls={avgNet >= 0 ? 'pos' : 'neg'} />
-      <Tile n={fmtPct(fundGrowth)} l={`Funds ×72t`} cls={fundGrowth >= 0 ? 'pos' : 'neg'} />
-      <Tile n={fmtPct(popGrowth)} l={`Pop ×72t`} cls="pos" />
-    </div>
+    <Panel title="City" tabs={topTabs} active={groupId} onSelect={setGroupId}>
+      {activeGroup && (
+        <TabStrip
+          tabs={childTabs}
+          active={activeChildId ?? activeGroup.children[0].id}
+          onSelect={(id) => setChildByGroup((m) => ({ ...m, [activeGroup.id]: id }))}
+        />
+      )}
+      <div className="dock-tab-content">
+        <ActiveBody />
+      </div>
+    </Panel>
   );
 }
