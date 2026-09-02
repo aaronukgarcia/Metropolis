@@ -448,3 +448,26 @@ func (a *AttractAPI) AWorld() float64 {
 	}
 	return a.world.AWorld()
 }
+
+// MigrantsAdmitted returns the cumulative COUNT of migrant citizens ever
+// admitted (a.nextMigrantID — see mintMigrantID's doc comment: it starts at
+// 0 and increments by exactly 1 per minted citizen, so this IS the count,
+// not an id). BUG-529/BUG-535: the composition root needs this to
+// reconstruct the exact set of migrant ids it should treat as live
+// residents for wage/employment/household-formation purposes
+// ([MigrantIDBase+1, MigrantIDBase+MigrantsAdmitted()], per
+// migrantIDHighBit's doc comment on the three-package disjoint id map) —
+// this is a LIVE read of attract's own already-correctly-persisted counter
+// (participant.go), never a value compose tracks or caches itself, so it
+// stays correct across a save/LoadAt round-trip with no new persisted
+// state of compose's own (a compose-side shadow counter was tried first
+// and found to desync from this one across a LoadAt boundary, since a
+// compose-tracked copy is not itself part of any snapshot payload).
+func (a *AttractAPI) MigrantsAdmitted() uint64 {
+	if err := a.checkNotCopied("MigrantsAdmitted"); err != nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.nextMigrantID
+}

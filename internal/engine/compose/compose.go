@@ -2084,14 +2084,80 @@ func (st *simState) environmentTerm() (float64, error) {
 }
 
 // residentIDs returns the citizen-id set eligible for personality-weighted
-// emigration: every sequentially-minted id (seed + births). Migrant ids
-// (minted by attract with a high-bit prefix) are not yet enumerated here —
-// a documented baseline-one limitation that only matters on the decline
-// branch (emigration), which baseline one does not reach.
+// emigration: every sequentially-minted id (seed + direct seeding). This is
+// deliberately left NARROW (never widened to migrants/fertility children —
+// see liveResidentIDs below for the wider set the wage/employment/
+// household-formation surface needs): a first cut of BUG-529/BUG-535
+// widened THIS function itself, which also feeds
+// attract.MigrationCommand.ResidentIDs (compose.go's applyMigration) — the
+// emigration-eligible set — and empirically produced a sawtooth
+// boom/bust population collapse every few months in a 48-month composed
+// run (a mass-emigration event repeatedly wiping out most of the newly
+// widened eligible pool), which is a materially worse regression than the
+// wage-pinning defect this ticket fixes. Emigration eligibility for
+// migrants/fertility children is therefore left as the SAME pre-existing,
+// documented baseline-one limitation it always was — flagged for a
+// follow-up ticket, not silently folded into this wiring fix.
 func (st *simState) residentIDs() []uint64 {
 	ids := make([]uint64, 0, st.nextCitizenID-1)
 	for id := uint64(1); id < st.nextCitizenID; id++ {
 		ids = append(ids, id)
+	}
+	return ids
+}
+
+// liveResidentIDs returns the FULL live-resident citizen-id set: residentIDs()
+// (the seed population) UNION every migrant id engine.attract has ever
+// admitted UNION every fertility-born child id engine.citizens has ever
+// minted. Used ONLY by the wage/employment-marking surface
+// (markEmploymentAndCount/distributeWagesToResidents/employedResidentCount,
+// moneycirc.go) and monthly household formation (formResidentHouseholds,
+// moneycirc.go) — NEVER for attract's emigration eligibility (residentIDs()
+// itself stays narrow for that, see its own doc comment for why).
+//
+// BUG-529/BUG-535 (2026-09-02): markEmploymentAndCount/formResidentHouseholds/
+// distributeWagesToResidents/employedResidentCount used to iterate
+// residentIDs() alone — the CLOSED, sequentially-minted seed/direct-seed
+// range compose.go's spawnCitizens mints once at Wire time, which never
+// grows again. Migrant ids (engine.attract, high-bit-prefixed) and
+// fertility-child ids (engine.citizens, FertilityChildIDBase-prefixed) were
+// NEVER enumerated, so: (a) the wage bill never counted a migrant's
+// employment regardless of its Employment.State, permanently pinning it at
+// monthlyWagesFloor as organic migration grew the city while the closed
+// seed cohort attrited via mortality (BUG-529's reported symptom), and (b)
+// formResidentHouseholds — the ONLY caller of citizens' LifeEventPartner —
+// never paired a migrant-or-fertility-child pair, so Household stayed 0 for
+// any resident whose partner also came from outside the seed range and
+// zero further household-linked events (e.g. births gated on a formed
+// household) could ever follow (BUG-535).
+//
+// Migrant and fertility-child ids are minted densely and gaplessly
+// (migration.go's mintMigrantID / fertility.go's nextFertilityChildID, both
+// simple "id = base + counter; counter++" schemes), so
+// [MigrantIDBase+1, MigrantIDBase+MigrantsAdmitted()] and
+// [FertilityChildIDBase+1, FertilityChildIDBase+FertilityChildrenBorn()]
+// are exactly the admitted/born sets at any point in the run. Both counts
+// are LIVE reads of attract's and citizens' own already-correctly-persisted
+// counters (AttractAPI.MigrantsAdmitted/CitizensAPI.FertilityChildrenBorn) —
+// deliberately NOT a compose-tracked shadow counter: an earlier version of
+// this fix tracked its own running total in simState and found it
+// desynced from the real counters across a save/LoadAt boundary (compose's
+// own fields are not part of any snapshot payload, so a monotonic counter
+// living only in simState silently resets to 0 on restore while the
+// continuously-running reference keeps counting) — reading the source of
+// truth live avoids that whole class of bug. A departed citizen in any of
+// the three ranges (death/emigration) is simply skipped by every consumer's
+// existing CitizenAt !ok check, exactly as it already was for the seed
+// range.
+func (st *simState) liveResidentIDs() []uint64 {
+	migrants := st.attract.MigrantsAdmitted()
+	children := st.citizens.FertilityChildrenBorn(st.cid)
+	ids := st.residentIDs()
+	for i := uint64(1); i <= migrants; i++ {
+		ids = append(ids, attract.MigrantIDBase+i)
+	}
+	for i := uint64(1); i <= children; i++ {
+		ids = append(ids, citizens.FertilityChildIDBase+i)
 	}
 	return ids
 }

@@ -335,8 +335,29 @@ func (a *AttractAPI) mintMigrantID() uint64 {
 // birthMigrant creates one migrant citizen via engine.citizens'
 // LifeEventBirth command — the only registered citizen-creation path. The
 // record is neutral (a documented v1 placeholder: neutral personality, no
-// wealth, unemployed — the world-pool personality distribution is a future
-// hook) and always passes citizens' validation.
+// wealth — the world-pool personality distribution is a future hook) and
+// always passes citizens' validation.
+//
+// BUG-529: Employment.State is minted EmploymentNone (the zero value, "not
+// yet decided" — same state the seed population starts in), NEVER
+// EmploymentUnemployed. compose.desiredEmployment (moneycirc.go) treats
+// Employed/Unemployed/OffMap as TERMINAL — once a citizen is in one of
+// those three states it is never redrawn — so minting a migrant directly
+// into EmploymentUnemployed permanently excluded every migrant from the
+// 75%-employed employmentDecision draw: only the ~55 seed citizens (minted
+// with a zero-value Employment{}, i.e. EmploymentNone) ever became
+// Employed, and the wage bill pinned at monthlyWagesFloor as the seed
+// cohort attrited and organic migration grew the population (probe: 41->1
+// employed over 24 months while population grew to 113). Option A over
+// Option B (a decided-vs-undecided-unemployed split in desiredEmployment):
+// EmploymentNone already IS citizens' "not yet decided" state for exactly
+// this purpose (every other reader of EmploymentNone treats it as "child OR
+// adult never worked" — see leisure.lifeStageFor's age fallback and
+// extcommute's own EmploymentNone doc comment — never as "must be a
+// newborn"), so redirecting migrants through the SAME undecided state the
+// seed population already uses is the lower-blast-radius fix: no new state,
+// no new branch in desiredEmployment, and every existing EmploymentNone
+// reader already handles an adult correctly by age, not by assuming child.
 func (a *AttractAPI) birthMigrant(cit *citizens.CitizensAPI, id uint64, month int64) error {
 	if err := a.checkNotCopied("birthMigrant"); err != nil {
 		return err
@@ -352,7 +373,7 @@ func (a *AttractAPI) birthMigrant(cit *citizens.CitizensAPI, id uint64, month in
 		Personality: neutralMigrantPersonality(),
 		HealthBand:  citizens.HealthGood,
 		Employment: citizens.Employment{
-			State:  citizens.EmploymentUnemployed,
+			State:  citizens.EmploymentNone,
 			Sector: citizens.SectorNone,
 		},
 		Fidelity: citizens.FidelityCold,

@@ -357,6 +357,27 @@ func (c *CitizensAPI) TotalPopulation(correlationID string) int {
 	return n
 }
 
+// FertilityChildrenBorn returns the cumulative COUNT of fertility-born
+// children ever minted (nextFertilityChildID — see fertility.go's
+// nextFertilityChildID doc comment: it starts at 0 and increments by
+// exactly 1 per minted child, so this IS the count, not an id).
+// BUG-529/BUG-535: the composition root needs this to reconstruct the
+// exact set of fertility-child ids it should treat as live residents for
+// wage/employment/household-formation purposes
+// ([FertilityChildIDBase+1, FertilityChildIDBase+FertilityChildrenBorn()]).
+// This is a LIVE read of citizens' own already-correctly-persisted counter
+// (participant.go's NextFertilityChildID field), never a value the caller
+// tracks or caches itself, so it stays correct across a save/LoadAt
+// round-trip.
+func (c *CitizensAPI) FertilityChildrenBorn(correlationID string) uint64 {
+	if err := c.checkNotCopied(correlationID, "FertilityChildrenBorn"); err != nil {
+		return 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.nextFertilityChildID
+}
+
 // BuildSample builds the A7 stratified rotating sample from the full cold
 // population (the single source of truth), independent of the viewport —
 // this is what makes cold-pass parameter estimates camera-invariant.

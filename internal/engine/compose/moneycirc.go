@@ -306,8 +306,14 @@ func desiredEmployment(seed, id uint64, age int64, cur citizens.Employment) (cit
 // count (the wage bill's basis — see financeHook.ApplyEffect), counted in
 // the SAME pass so the wage bill and the marking can never observe two
 // different snapshots of the same month.
+//
+// BUG-529: iterates liveResidentIDs() (compose.go), which enumerates the
+// FULL live population (seed + migrants + fertility children), not just the
+// closed seed cohort residentIDs() alone stays scoped to — see
+// liveResidentIDs' doc comment for why a migrant/child was previously
+// invisible to this pass regardless of its Employment.State.
 func (st *simState) markEmploymentAndCount(month int64) (employed int, err error) {
-	for _, id := range st.residentIDs() {
+	for _, id := range st.liveResidentIDs() {
 		cit, ok := st.citizens.CitizenAt(id, st.cid)
 		if !ok {
 			continue // departed — not a corruption, just skip
@@ -340,7 +346,7 @@ func (st *simState) markEmploymentAndCount(month int64) (employed int, err error
 // a tick has already run markEmploymentAndCount for that month).
 func (st *simState) employedResidentCount() int {
 	n := 0
-	for _, id := range st.residentIDs() {
+	for _, id := range st.liveResidentIDs() {
 		cit, ok := st.citizens.CitizenAt(id, st.cid)
 		if !ok {
 			continue
@@ -382,9 +388,16 @@ func (st *simState) monthlyRentForHouseholds(householdIDs []uint64) int64 {
 // month — a documented consequence of pairing being the only
 // household-formation primitive engine.citizens exposes (see
 // attract/migration.go's migrantHouseholdSize doc comment for the same
-// constraint on the immigration side).
+// constraint on the immigration side). Iterates the FULL liveResidentIDs()
+// (BUG-529/BUG-535: seed + migrants + fertility children, see that
+// function's doc comment) rather than residentIDs()'s seed-only range; a
+// migrant already has a household from admission (applyImmigration's own
+// LifeEventPartner call) so this is a no-op for them in practice, but a
+// fertility-born child (previously never in this loop at all) can now be
+// paired once one exists without a household — this is what unblocks
+// BUG-535's "births never happen because Partner stays 0" finding.
 func (st *simState) formResidentHouseholds(month int64) error {
-	ids := st.residentIDs()
+	ids := st.liveResidentIDs()
 	unpaired := make([]uint64, 0, len(ids))
 	for _, id := range ids {
 		cit, ok := st.citizens.CitizenAt(id, st.cid)
@@ -422,7 +435,7 @@ func (st *simState) formResidentHouseholds(month int64) error {
 // at the real per-capita wage figure is safe and does not affect
 // StockMoney's conservation check.
 func (st *simState) distributeWagesToResidents() error {
-	for _, id := range st.residentIDs() {
+	for _, id := range st.liveResidentIDs() {
 		cit, ok := st.citizens.CitizenAt(id, st.cid)
 		if !ok {
 			continue
