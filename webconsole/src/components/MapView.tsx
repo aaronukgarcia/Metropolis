@@ -70,6 +70,47 @@ function clampView(v: View, w: number, h: number): View {
   return { zoom: v.zoom, cx, cy };
 }
 
+/**
+ * BUG b2d31bc7 FIX 5 — overlay building-subset cache. The water/power/line
+ * overlay passes below (draw effect) each used to `for (const b of
+ * state.buildings)` and filter down to their own tiny subset (water tiles,
+ * pylons, line-class tiles) EVERY redraw — a full O(buildings) scan per
+ * overlay, per frame, on top of the 5-6 other full passes the draw effect
+ * already makes. Memoised on the buildings array reference (immutable per
+ * tick — same idiom as data.ts's roadTileSetOf/occupiedSet caches), one
+ * shared classification pass replaces three separate ones, and repeated
+ * redraws of an unchanged city (panning/zooming/hovering — no sim tick) hit
+ * the cache instead of re-scanning every building again.
+ */
+interface OverlayBuildingSubsets {
+  water: Building[];
+  pylonIds: Set<number>;
+  pylons: Building[];
+  lineSpecs: Building[];
+}
+const overlaySubsetsCache = new WeakMap<object, OverlayBuildingSubsets>();
+function overlaySubsetsOf(buildings: Building[]): OverlayBuildingSubsets {
+  const cached = overlaySubsetsCache.get(buildings);
+  if (cached) return cached;
+  const water: Building[] = [];
+  const pylonIds = new Set<number>();
+  const pylons: Building[] = [];
+  const lineSpecs: Building[] = [];
+  for (const b of buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    if (sp.kind === 'water') water.push(b);
+    if (sp.kind === 'pylon') {
+      pylonIds.add(b.id);
+      pylons.push(b);
+    }
+    if (isLineSpec(sp)) lineSpecs.push(b);
+  }
+  const result: OverlayBuildingSubsets = { water, pylonIds, pylons, lineSpecs };
+  overlaySubsetsCache.set(buildings, result);
+  return result;
+}
+
 export function MapView() {
   const { state, dispatch } = useSim();
   const { run } = useBusy();
@@ -102,6 +143,17 @@ export function MapView() {
   const panRef = useRef<{ sx: number; sy: number; cx: number; cy: number; moved: boolean; btn: number } | null>(null);
   const paintRef = useRef(false);
   const lastPaintRef = useRef<string | null>(null);
+  // BUG b2d31bc7 FIX 3: build-mode drag-paint buffer. The FIRST tile of a
+  // build-mode drag still dispatches an ordinary 'place' immediately at
+  // pointerdown (unchanged single-click behaviour — a plain click never
+  // touches this buffer at all). Every SUBSEQUENT tile touched while the
+  // pointer is held down and moving is buffered here instead of dispatching
+  // per-tile, and the whole buffer commits as ONE atomic 'placeMany' action
+  // on pointerup — mirrors placeRoadPath's atomic-dispatch pattern, turning
+  // an N-tile drag into 2 reducer round-trips (1 place + 1 placeMany) instead
+  // of N.
+  const dragTilesRef = useRef<{ x: number; y: number }[]>([]);
+  const dragSpecRef = useRef<string | null>(null);
   const selectionAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
@@ -361,9 +413,9 @@ export function MapView() {
 
     // optional water layer: service radii, abstraction/discharge pipes
     if (showWater) {
-      for (const b of state.buildings) {
+      for (const b of overlaySubsetsOf(state.buildings).water) {
         const sp = SPECS[b.spec];
-        if (!sp || sp.kind !== 'water') continue;
+        if (!sp) continue;
         const tier = state.pipeTier[b.id] ?? 0;
         const cxp = geom.ox + (b.x + sp.w / 2) * geom.s;
         const cyp = geom.oy + (b.y + sp.h / 2) * geom.s;
@@ -395,13 +447,13 @@ export function MapView() {
     // Dim the rest like water does: base alpha 0.4, full saturation on power tiles.
     if (showPower) {
       const powerColorMap = new Map(POWER_LINES.map((pc) => [pc.id, pc.color]));
-      // Classify buildings by their power class. Currently: pylon → localGrid only.
-      const pylonIds = new Set<number>();
-      for (const b of state.buildings) {
-        const sp = SPECS[b.spec];
-        if (sp?.kind === 'pylon') pylonIds.add(b.id);
-      }
-      // Dim pass: all non-power infrastructure at 0.4× alpha
+      // BUG b2d31bc7 FIX 5: pylonIds/pylons come from the shared cached
+      // classification (overlaySubsetsOf) instead of a fresh full-buildings
+      // scan every redraw.
+      const { pylonIds, pylons } = overlaySubsetsOf(state.buildings);
+      // Dim pass: all non-power infrastructure at 0.4× alpha. Still O(all
+      // buildings) by necessity (it dims everything that ISN'T a pylon), but
+      // no longer pays a SEPARATE full scan just to build pylonIds first.
       for (const b of state.buildings) {
         const sp = SPECS[b.spec];
         if (!sp || pylonIds.has(b.id)) continue;
@@ -414,10 +466,11 @@ export function MapView() {
         ctx.fillRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
       }
       ctx.globalAlpha = 1;
-      // Full-saturation pass: power infrastructure at native colour + full alpha
-      for (const b of state.buildings) {
+      // Full-saturation pass: power infrastructure at native colour + full
+      // alpha — iterates only the cached pylon subset, not the whole city.
+      for (const b of pylons) {
         const sp = SPECS[b.spec];
-        if (!sp || !pylonIds.has(b.id)) continue;
+        if (!sp) continue;
         const px = geom.ox + b.x * geom.s;
         const py = geom.oy + b.y * geom.s;
         const pw = sp.w * geom.s;
@@ -441,9 +494,9 @@ export function MapView() {
       for (const lu of lineUsageOf(state)) {
         satBySpec.set(lu.spec, { saturation: lu.saturation, over: lu.overCapacity });
       }
-      for (const b of state.buildings) {
+      for (const b of overlaySubsetsOf(state.buildings).lineSpecs) {
         const sp = SPECS[b.spec];
-        if (!isLineSpec(sp)) continue;
+        if (!sp) continue;
         const info = satBySpec.get(b.spec);
         const px = geom.ox + b.x * geom.s;
         const py = geom.oy + b.y * geom.s;
@@ -823,6 +876,11 @@ export function MapView() {
           if (state.tool.mode !== 'select' && state.tool.mode !== 'move' && e.button === 0) {
             paintRef.current = true;
             lastPaintRef.current = null;
+            // BUG b2d31bc7 FIX 3: (re)arm the drag-batch buffer for a fresh
+            // drag. Only 'build' mode with a (non-road — road uses its own
+            // roadTracker path above) spec ever populates it.
+            dragTilesRef.current = [];
+            dragSpecRef.current = state.tool.mode === 'build' ? state.tool.spec ?? null : null;
             e.currentTarget.setPointerCapture(e.pointerId);
             const t = tileFrom(e.clientX, e.clientY);
             if (t) {
@@ -879,7 +937,16 @@ export function MapView() {
             const k = t ? `${t.x},${t.y}` : null;
             if (t && k !== lastPaintRef.current) {
               lastPaintRef.current = k;
-              act(t);
+              // BUG b2d31bc7 FIX 3: build-mode tiles beyond the first (already
+              // placed at pointerdown) go into the drag buffer instead of
+              // dispatching immediately — flushed as one atomic 'placeMany'
+              // on pointerup. Bulldoze/other paint-capable modes are
+              // unaffected — they keep the original per-tile 'act' dispatch.
+              if (state.tool.mode === 'build' && dragSpecRef.current) {
+                dragTilesRef.current.push(t);
+              } else {
+                act(t);
+              }
             }
           }
         }}
@@ -932,6 +999,16 @@ export function MapView() {
             setCloneSelection(null);
             selectionAnchorRef.current = null;
           }
+          // BUG b2d31bc7 FIX 3: commit the whole build-mode drag buffer as ONE
+          // atomic 'placeMany' (the first tile of the drag already went
+          // through 'place' at pointerdown; this covers everything after it).
+          // Runs before the paint refs are reset below so it only fires for
+          // an actual build-mode drag that populated the buffer.
+          if (dragTilesRef.current.length > 0 && dragSpecRef.current) {
+            dispatch({ type: 'placeMany', spec: dragSpecRef.current, tiles: dragTilesRef.current });
+          }
+          dragTilesRef.current = [];
+          dragSpecRef.current = null;
           const p = panRef.current;
           panRef.current = null;
           paintRef.current = false;

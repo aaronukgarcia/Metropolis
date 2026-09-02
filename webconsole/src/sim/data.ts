@@ -315,6 +315,20 @@ export function isRoadSpec(sp: Spec | undefined): boolean {
 }
 
 /**
+ * True when this spec participates in the ROAD-CONNECTIVITY graph at all —
+ * either as a drivable road tile or as one of the trunk seed kinds
+ * (motorway/rail/station) computeRoadConnectivity treats as always-connected
+ * seeds (data.ts computeRoadConnectivity, ~line 546). Placing/removing a
+ * building of any OTHER kind can never change the connectivity graph, which
+ * is the basis for BUG b2d31bc7 FIX 2's reducer-wrapper recompute gate
+ * (engine.ts reducer()).
+ */
+export function isRoadOrTrunkSpec(sp: Spec | undefined): boolean {
+  if (!sp) return false;
+  return isRoadSpec(sp) || sp.kind === 'motorway' || sp.kind === 'rail' || sp.kind === 'station';
+}
+
+/**
  * FEAT-1972079878 inc1 (AC-5): get the capacity at a given tier for a spec.
  * If the spec has capacityTiers and tier < array length, returns capacityTiers[tier].
  * If tier >= array length, caps at the last tier. Supports auto-scale tier progression:
@@ -491,7 +505,7 @@ export function isOnline(s: SimState, b: SimState['buildings'][number]): boolean
 // reference (immutable per tick), so isOnline's road gates stay ~O(footprint)
 // instead of O(buildings) each. Pure: a function of buildings only.
 const roadTileSetCache = new WeakMap<object, Set<string>>();
-function roadTileSetOf(s: SimState): Set<string> {
+export function roadTileSetOf(s: SimState): Set<string> {
   const cached = roadTileSetCache.get(s.buildings);
   if (cached) return cached;
   const set = new Set<string>();
@@ -2535,9 +2549,32 @@ export function compostRevenueOf(s: SimState): number {
 
 // ---------- placement planner ----------
 
+// Per-state memo of the full-footprint occupied-tile Set, keyed on the
+// buildings array reference (immutable per tick) — same idiom as
+// roadTileSetOf (data.ts:494 above). BUG b2d31bc7 quick-win FIX 1: this was
+// rebuilt from scratch on every occupiedSet() call, and the single-placement
+// path calls it once per pointer-move tile-change during drag, making an
+// O(buildings) rebuild the dominant cost of the ~15ms reducer(place). Only
+// the no-`ignoreId` case (the overwhelmingly common one — plain placement)
+// is memoisable this way; the `ignoreId` case (used while dragging an
+// EXISTING building to a new spot) still computes fresh below since the
+// excluded id varies call to call and isn't part of the cache key.
+const occupiedSetCache = new WeakMap<object, Set<string>>();
+
 export function occupiedSet(s: SimState, ignoreId?: number): Set<string> {
+  if (ignoreId === undefined) {
+    const cached = occupiedSetCache.get(s.buildings);
+    if (cached) return cached;
+    const set = buildOccupiedSet(s.buildings, undefined);
+    occupiedSetCache.set(s.buildings, set);
+    return set;
+  }
+  return buildOccupiedSet(s.buildings, ignoreId);
+}
+
+function buildOccupiedSet(buildings: SimState['buildings'], ignoreId: number | undefined): Set<string> {
   const set = new Set<string>();
-  for (const b of s.buildings) {
+  for (const b of buildings) {
     if (b.id === ignoreId) continue;
     const sp = SPECS[b.spec];
     if (!sp) continue;

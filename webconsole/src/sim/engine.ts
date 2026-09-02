@@ -13,6 +13,8 @@ import {
   fits,
   isOnline,
   occupiedSet,
+  roadTileSetOf,
+  isRoadOrTrunkSpec,
   placementCost,
   serviceCoverageOf,
   earlyGameFactor,
@@ -2677,6 +2679,13 @@ export type Action =
   | { type: 'speed'; speed: SimState['speed'] }
   | { type: 'tool'; tool: Tool }
   | { type: 'place'; spec: string; x: number; y: number }
+  // BUG b2d31bc7 FIX 3 — atomic batch placement for drag-painting a run of
+  // non-road buildings (mirrors placeRoadPath's atomic-dispatch pattern below
+  // for the road case). Tiles are placed in ARRAY ORDER (the drag buffer's
+  // insertion order — deterministic, GR#21); a tile that no longer fits (e.g.
+  // the drag revisited a cell) is skipped, and placement stops the moment
+  // funds run out, same affordability rule as single 'place'.
+  | { type: 'placeMany'; spec: string; tiles: { x: number; y: number }[] }
   | { type: 'placeRoadPath'; spec: string; tiles: { x: number; y: number }[] }
   // FEAT-2326609728 — one-click demand fix: bulk-place demandFixPlan(state)'s
   // count for one service, via the existing single-tile 'place' path.
@@ -2709,6 +2718,18 @@ export type Action =
 
 // FEAT-1972079891 inc1 (AC-12): the internal reducer. `reducer` (below) wraps it
 // to keep roadConnectivity consistent with buildings after every action.
+// BUG b2d31bc7 FIX 2 — the reducer wrapper (reducer(), below reduceCore) used
+// to recompute computeRoadConnectivity (~1.8ms full BFS) on EVERY action that
+// changed `buildings`, even a placement that provably cannot have touched the
+// road graph (a residential lot dropped onto an already-connected block, no
+// autoConnect connector laid). Conservative default TRUE (recompute, today's
+// behaviour) — only the specific case handlers below that can PROVE no road/
+// trunk tile was added or removed set this to false for their own action, so
+// every action type not explicitly touched here keeps recomputing exactly as
+// before (no correctness risk from an un-audited case). Reset to true at the
+// top of every reducer() call so a stale false can never leak across actions.
+let roadTopologyMayHaveChanged = true;
+
 function reduceCore(state: SimState, action: Action): SimState {
   // FEAT-1972079923 inc4 (AC-11): the FINAL DECLINE screen is a HARD STOP on
   // the whole game, not just the tick clock — once declineState is set, EVERY
@@ -2799,13 +2820,34 @@ function reduceCore(state: SimState, action: Action): SimState {
       // FEAT-1972079907 inc1: auto-wire the building to the road network (lay a
       // fitting connector to the nearest road + upgrade-on-connect), or surface a
       // "no road access" notice. Deterministic; connectors journal via replay.
-      const connected = autoConnect(placedState, placedBuilding, sp);
+      // BUG b2d31bc7 FIX 1: build the occupied/road tile sets for placedState ONCE
+      // here (memoised — occupiedSet/roadTileSetOf cache on the buildings array
+      // ref) and hand them to autoConnect as prebuiltBoard, so the single-
+      // placement path no longer pays autoConnect's OWN from-scratch O(n) rebuild
+      // (engine.ts:1692-1698) on top of this one — same contents, one pass.
+      const connected = autoConnect(placedState, placedBuilding, sp, undefined, {
+        occupied: occupiedSet(placedState),
+        roads: roadTileSetOf(placedState),
+      });
       // FEAT-1972079902 inc3: if this is a GATEWAY (Ashford International /
       // International Airport), auto-lay deterministic branch lines to the nearest
       // slow-rail line AND the nearest HS1 line (routing around buildings), or
       // surface a "no rail route" notice. Deterministic; branch tiles journal via
       // the gateway `place` action through replay. Non-gateways just clear railNotice.
       let updated = autoBranchRail(connected, placedBuilding, sp);
+
+      // BUG b2d31bc7 FIX 2: the placed building itself is road/trunk kind, OR
+      // autoConnect/autoBranchRail appended extra tiles (a connector or branch
+      // rail run — always road/trunk specs) beyond just placedBuilding. If
+      // NEITHER happened, the buildings array grew by exactly the one non-road
+      // building and the road graph is provably unchanged — safe to skip the
+      // reducer wrapper's computeRoadConnectivity recompute for this action.
+      if (
+        !isRoadOrTrunkSpec(sp) &&
+        updated.buildings.length === placedState.buildings.length
+      ) {
+        roadTopologyMayHaveChanged = false;
+      }
 
       // FEAT-1972079878 inc1 (AC-6): Create a building monitor for scalable specs.
       // Monitor expires after 1 year (TICKS_PER_YEAR). Type is 'residents' or 'jobs'
@@ -2841,6 +2883,61 @@ function reduceCore(state: SimState, action: Action): SimState {
       };
     }
 
+    // BUG b2d31bc7 FIX 3 — atomic batch placement for drag-painting.
+    //
+    // MapView used to dispatch a separate 'place' action per pointer-move
+    // tile-change during a drag (once per tile touched), so a 10-tile drag
+    // meant 10 full reducer round-trips + 10 React re-renders + (pre-FIX2) 10
+    // computeRoadConnectivity BFS passes — the direct cause of "10 estates,
+    // ~3 land" at 68K pop. 'placeMany' collects the whole drag into ONE
+    // dispatch: places every tile through the SAME per-tile mutation path
+    // 'place' uses (reduceCore recursion, exactly like resolveDemand's bulk-
+    // place above), folding each success into `cur` so later tiles in the
+    // same drag see the earlier ones (road-adjacency, funds, monitors — all
+    // identical to N manual clicks), but the reducer WRAPPER only sees the
+    // buildings array change ONCE, so computeRoadConnectivity (FIX 2's gate)
+    // runs at most once for the whole drag instead of once per tile.
+    //
+    // Affordability: stops (does not place further tiles) the instant funds
+    // can no longer cover `cost` — mirrors resolveDemand's placeNotice
+    // "placed X of Y" report so a funds-starved drag is never a silent
+    // partial no-op. A tile that fails its own fits/validity check (e.g. the
+    // drag revisited an already-placed cell) is skipped, not fatal to the rest.
+    case 'placeMany': {
+      const sp = SPECS[action.spec];
+      if (!canEnterSim(sp) || !specUnlocked(state, sp)) return state;
+      const cost = placementCost(sp);
+
+      let cur = state;
+      let placed = 0;
+      // Aggregate FIX 2's recompute-gate across every tile in the batch: the
+      // whole placeMany only skips the wrapper's connectivity recompute if
+      // NOT ONE of its tiles touched the road/trunk graph (own spec is
+      // road/trunk, or autoConnect/autoBranchRail appended connector tiles
+      // for that placement). Each per-tile reduceCore('place') call below
+      // also flips the shared module flag as a side effect — this explicit
+      // final assignment (after the loop) is authoritative and overwrites it.
+      let anyRoadTopologyChange = isRoadOrTrunkSpec(sp);
+      for (const tile of action.tiles) {
+        if (cost > 0 && cur.administrationState) break;
+        if (cost > 0 && cur.funds < cost) break;
+        const beforeLen = cur.buildings.length;
+        const next = reduceCore(cur, { type: 'place', spec: action.spec, x: tile.x, y: tile.y });
+        if (next === cur) continue; // this tile declined (occupied/out of bounds/etc.) — try the rest
+        if (next.buildings.length > beforeLen + 1) anyRoadTopologyChange = true;
+        cur = next;
+        placed++;
+      }
+      roadTopologyMayHaveChanged = anyRoadTopologyChange;
+
+      if (placed === action.tiles.length) return cur;
+      const shortBy = cost > 0 && cur.funds < cost ? 'insufficient funds' : 'some tiles already occupied';
+      return {
+        ...cur,
+        placeNotice: `Placed ${placed} of ${action.tiles.length} ${sp.name}${action.tiles.length === 1 ? '' : 's'} — ${shortBy}`,
+      };
+    }
+
     // FEAT-2326609728 (engine core) — ONE-CLICK DEMAND FIX bulk-place.
     //
     // Walks demandFixPlan(state)'s count for `action.serviceKey`, placing ONE
@@ -2866,16 +2963,33 @@ function reduceCore(state: SimState, action: Action): SimState {
 
       let cur = state;
       let placed = 0;
+      // BUG-566 FIX (independent-round REJECT): resolveDemand bulk-places via
+      // the SAME recursive reduceCore('place') pattern placeMany uses, so it
+      // is exposed to the identical FIX-2 hazard — each inner 'place' call
+      // flips the shared module-level `roadTopologyMayHaveChanged` flag as a
+      // side effect, and without this aggregation the wrapper only sees the
+      // LAST iteration's verdict. A run where an EARLY building lays a road
+      // connector (flag -> true) but the FINAL building doesn't (flag -> false)
+      // would leave the flag false when the loop exits, so the wrapper skips
+      // computeRoadConnectivity even though the graph genuinely changed —
+      // roadConnectivity goes stale (connector tiles missing), and anything
+      // reachable only through that connector reads as disconnected -> wrongly
+      // offline. Aggregate with OR across every placement in the batch, same
+      // as placeMany: true if ANY iteration touched the road/trunk graph.
+      let anyRoadTopologyChange = isRoadOrTrunkSpec(sp);
       for (let i = 0; i < plan.count; i++) {
         if (cost > 0 && cur.administrationState) break;
         if (cost > 0 && cur.funds < cost) break;
         const spot = findSpot(cur, plan.specId);
         if (!spot) break; // out of buildable sites near the housing centroid
+        const beforeLen = cur.buildings.length;
         const next = reduceCore(cur, { type: 'place', spec: plan.specId, x: spot.x, y: spot.y });
         if (next === cur) break; // defensive: 'place' declined for a reason not checked above
+        if (next.buildings.length > beforeLen + 1) anyRoadTopologyChange = true;
         cur = next;
         placed++;
       }
+      roadTopologyMayHaveChanged = anyRoadTopologyChange;
 
       if (placed >= plan.count) return cur; // full shortfall cleared — 'place' already cleared placeNotice
       const shortBy = cost > 0 && cur.funds < cost ? 'insufficient funds' : 'no buildable site found';
@@ -3179,6 +3293,11 @@ function reduceCore(state: SimState, action: Action): SimState {
       });
       if (!target) return state;
       const def = SPECS[target.spec];
+      // BUG b2d31bc7 FIX 2: bulldoze removes exactly ONE known building — if
+      // it isn't road/trunk kind, the road graph provably can't have changed.
+      if (!isRoadOrTrunkSpec(def)) {
+        roadTopologyMayHaveChanged = false;
+      }
       // Refund 25% of what was actually PAID — a free zone refunds nothing, so
       // place-then-bulldoze cannot mint money.
       const refund = Math.round(placementCost(def) * 0.25);
@@ -3656,9 +3775,17 @@ export function sanitizeTreasury(s: SimState): SimState {
 
 export function reducer(state: SimState, action: Action): SimState {
   const s = sanitizeTreasury(state);
+  // BUG b2d31bc7 FIX 2: reset the recompute-gate flag before every action so a
+  // prior action's proof can never leak into this one; reduceCore's case
+  // handlers (currently 'place' and 'bulldoze') flip it to false only when
+  // THEY can prove the road/trunk graph is untouched.
+  roadTopologyMayHaveChanged = true;
   const next = reduceCore(s, action);
   if (isReplaying) return next; // BUG-460 FIX A — see setReplayMode doc above.
-  if (next.buildings !== s.buildings || !next.roadConnectivity) {
+  if (!next.roadConnectivity) {
+    return { ...next, roadConnectivity: computeRoadConnectivity(next) };
+  }
+  if (next.buildings !== s.buildings && roadTopologyMayHaveChanged) {
     return { ...next, roadConnectivity: computeRoadConnectivity(next) };
   }
   return next;

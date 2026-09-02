@@ -84,6 +84,10 @@ export function isStateAffecting(action: Action): boolean {
       return true;
     case 'placeRoadPath':
       return true;
+    // BUG b2d31bc7 FIX 3 — atomic drag-batch placement, same mutation path as
+    // 'place' (funds/buildings/xp change) — must journal + replay identically.
+    case 'placeMany':
+      return true;
     // FEAT-2326609728 — bulk-places via the same mutation path as 'place'
     // (funds/buildings/xp change) — must journal + replay identically.
     case 'resolveDemand':
