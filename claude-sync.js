@@ -1986,6 +1986,13 @@ module.exports = {
   cmdLoopSet, cmdLoopClear, cmdLoopShow, printLoopArmStatus,
   LOOP_MARKER, LOOP_STALE_MS,
   cmdUtil, printUtilSummary,
+  // ASM-734 test-only export: BOOT_ID was previously internal-only, so a pure
+  // fixture test of slotState's reboot-mismatch behaviour (AC-6) had no way to
+  // construct a row that matches THIS process's real boot id without
+  // reimplementing the (os.uptime()-based, inherently timing-sensitive)
+  // derivation formula itself. Exporting the already-computed value adds no
+  // new behaviour and changes nothing at runtime.
+  BOOT_ID,
 };
 
 // ── Entry ─────────────────────────────────────────────────────────────────────

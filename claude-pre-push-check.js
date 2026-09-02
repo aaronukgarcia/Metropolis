@@ -125,10 +125,18 @@ function isForcePush(command) {
   return tokens.some(t => t === '-f' || t === '--force' || t === '--force-with-lease' || /^--force-with-lease=/.test(t));
 }
 
-let input = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => { input += chunk; });
-process.stdin.on('end', () => {
+/** Wired to the real stdin listener only when this file is run directly (see
+ *  the require.main guard at the bottom) — ASM-735: previously this whole
+ *  block ran unconditionally at require time, so `require()`-ing this file
+ *  from a test would attach a real listener to the TEST PROCESS's own stdin.
+ *  Wrapping it in `main()` is a no-op for the real hook (Claude Code always
+ *  runs it as a direct script) and is what makes the pure helpers above
+ *  (tokenize/isForcePush/parsePushTarget/GIT_PUSH_RE) safely requirable. */
+function main() {
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { input += chunk; });
+  process.stdin.on('end', () => {
   try {
     if (process.env.CLAUDE_DISABLE_PUSH_CHECK === '1') {
       process.exit(0);
@@ -234,4 +242,11 @@ process.stdin.on('end', () => {
     // Any unexpected error — don't block
     process.exit(0);
   }
-});
+  });
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = { tokenize, isForcePush, parsePushTarget, GIT_PUSH_RE };
