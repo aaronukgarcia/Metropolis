@@ -42,14 +42,19 @@ func ckErr(t *testing.T, err error) {
 // the class this inc exists to prevent.
 func TestBuildAPIFieldsAllClassified(t *testing.T) {
 	excluded := map[string]string{
-		"mu":            "runtime lock, not state",
-		"correlationID": "per-instance error correlation, not simulation state",
-		"catalogue":     "immutable config, loaded from data/buildings.json",
-		"labourPerTick": "immutable config, loaded from data/buildings.json meta",
-		"world":         "injected dependency, re-wired by the composition root on load",
-		"season":        "injected dependency, re-wired by the composition root on load",
-		"logistics":     "injected dependency, re-wired by the composition root on load",
-		"self":          "SEC-020 copy-guard pointer, re-armed by Load",
+		"mu":               "runtime lock, not state",
+		"correlationID":    "per-instance error correlation, not simulation state",
+		"catalogue":        "immutable config, loaded from data/buildings.json",
+		"labourPerTick":    "immutable config, loaded from data/buildings.json meta",
+		"world":            "injected dependency, re-wired by the composition root on load",
+		"season":           "injected dependency, re-wired by the composition root on load",
+		"logistics":        "injected dependency, re-wired by the composition root on load",
+		"self":             "SEC-020 copy-guard pointer, re-armed by Load",
+		"catalogueEntries": "immutable config, loaded from data/buildings.json entries (FEAT-build-services-bridge-2026-09-02)",
+		"services":         "injected dependency, re-wired by the composition root on load (FEAT-build-services-bridge-2026-09-02)",
+		"serviceByOrder": "derived runtime index (order id -> registered ServiceID), rebuildable from queue+catalogueEntries+engine.services state; " +
+			"NOT part of the save schema per FEAT-build-services-bridge-2026-09-02's own scope notes (composition-root save wiring for engine.services " +
+			"is separate follow-up work) -- resetForLoad clears it to empty so a load never carries a stale order->service reference forward",
 	}
 	// Covered: serialized via buildMetaWire (scalars) or a per-item record
 	// (queue -> build.order, zoneState -> build.zone, structures ->
@@ -109,6 +114,7 @@ func TestBuildOrderWireCoversEveryMutableOrderField(t *testing.T) {
 		"tile":               "Tile",
 		"local":              "Local",
 		"zone":               "Zone",
+		"buildingID":         "BuildingID",
 		"materialsTotal":     "MaterialsTotal",
 		"materialsRemaining": "MaterialsRemaining",
 		"materialsDrawn":     "MaterialsDrawn",

@@ -770,6 +770,18 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 			return nil, errs.Wrap(ErrModuleFailed, cid, sErr, map[string]any{"module": "services"})
 		}
 	}
+	// FEAT-build-services-bridge-2026-09-02 (edge engine.build->
+	// engine.services): wire the completed-building -> service-registration
+	// bridge now that servicesAPI exists (buildAPI was constructed earlier,
+	// alongside world/season/logistics, before servicesAPI's own
+	// construction above) -- mirrors firmsAPI.SetBuild below: additive-only,
+	// an unwired *BuildAPI (e.g. a bare build.LoadDefault in an
+	// older/unrelated test) simply never attempts a service registration
+	// (Tick only consults b.services for an order whose catalogue entry
+	// declares a serviceKind).
+	if err := buildAPI.SetServices(servicesAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "build"})
+	}
 
 	firmsAPI := deps.Firms
 	if firmsAPI == nil {

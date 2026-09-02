@@ -166,6 +166,33 @@ type BuildingEntry struct {
 	AppealProfile []string `json:"appealProfile,omitempty"`
 
 	Notes string `json:"notes,omitempty"`
+
+	// ServiceKind names the engine.services.ServiceKind this building
+	// registers as when engine.build completes it (e.g. "fire",
+	// "healthcare", "education"), or empty when the building is not a
+	// service (FEAT-build-services-bridge-2026-09-02, spec Q1's
+	// recommendation: an explicit catalogue field rather than deriving
+	// kind from catalogueSection, so the coupling is visible and
+	// centralized here rather than re-derived by every consumer).
+	// Deliberately NOT validated against engine.services' kind registry in
+	// this package: foundation/data has no registered edge to
+	// engine.services (GR#20 — a foundation package stays generic), so an
+	// unknown/unregistered kind string is rejected downstream by
+	// engine.services.RegisterService's own ErrUnknownServiceKind check,
+	// not here.
+	ServiceKind string `json:"serviceKind,omitempty"`
+
+	// CoverageRadius is this service building's spatial reach in metres
+	// from its cell (spec Q3's recommendation: catalogue-sourced, never a
+	// per-kind hardcoded constant in Go — GR#15). Zero for a non-service
+	// entry (ServiceKind == "").
+	CoverageRadius float64 `json:"coverageRadius,omitempty"`
+
+	// StaffingNeed is this service building's benchmark staffing
+	// requirement — the demand it places on its kind's shared staffing
+	// pool (spec Q4's recommendation: catalogue-sourced like
+	// CoverageRadius). Zero for a non-service entry.
+	StaffingNeed float64 `json:"staffingNeed,omitempty"`
 }
 
 // Validate implements Validator. Errors are returned for the first

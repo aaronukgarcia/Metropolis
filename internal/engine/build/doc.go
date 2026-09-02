@@ -56,6 +56,28 @@
 // build-local seasonal curve: moving the winter multiplier is a
 // data/seasonal.json edit, never a code change in this package.
 //
+// # engine.services dependency (edge engine.build->engine.services, FEAT-build-services-bridge-2026-09-02)
+//
+// A completed building whose catalogue entry (data/buildings.json)
+// declares a non-empty serviceKind registers with engine.services via
+// ServicesAPI.RegisterService, wired through SetServices exactly like the
+// world/season/logistics dependencies above — so the service->wellbeing->
+// migration chain responds to player building instead of reading a
+// capacity that never moves once the composition root has wired
+// SetServices. The registration happens inside Tick's completion step
+// (build.go), BEFORE world.SetStructure lands the structure: a
+// registration failure (services not wired, an unregistered service kind,
+// or a non-finite location/coverage-radius input) leaves the order
+// incomplete and nothing lands on the map — a deliberate resolution of the
+// spec's AC-2 or AC-8 ordering tension in AC-8's favour (never land a
+// structure whose service failed to register), documented on the
+// registration call site. A building with no declared serviceKind (or no
+// BuildCommand.BuildingID at all — a plain §34 zone order) completes
+// exactly as before and registers nothing (AC-7). Demolition is the
+// mirror: SubmitDemolishCommand calls ServicesAPI.UnregisterService for a
+// tracked structure, so a demolished service's capacity/coverage
+// contribution disappears from the next CoverageSummary read.
+//
 // # Numeric safety (GR#16, FEAT-086)
 //
 // Every Money/int64 quantity in this package — materials quantities,

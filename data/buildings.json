@@ -1227,7 +1227,10 @@
       "consumptionRef": "clinic",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "+counselling room upgrade (mental)"
+      "notes": "+counselling room upgrade (mental)",
+      "serviceKind": "healthcare",
+      "coverageRadius": 600,
+      "staffingNeed": 8
     },
     {
       "id": "pharmacy",
@@ -1277,7 +1280,10 @@
       "consumptionRef": "hospital",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "waiting-list mechanics"
+      "notes": "waiting-list mechanics",
+      "serviceKind": "healthcare",
+      "coverageRadius": 1500,
+      "staffingNeed": 60
     },
     {
       "id": "general_hospital",
@@ -1302,7 +1308,10 @@
       "consumptionRef": "hospital",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "+mental-health unit upgrade"
+      "notes": "+mental-health unit upgrade",
+      "serviceKind": "healthcare",
+      "coverageRadius": 3000,
+      "staffingNeed": 220
     },
     {
       "id": "teaching_hospital",
@@ -1327,7 +1336,10 @@
       "consumptionRef": "hospital",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "boosts health citywide"
+      "notes": "boosts health citywide",
+      "serviceKind": "healthcare",
+      "coverageRadius": 5000,
+      "staffingNeed": 500
     },
     {
       "id": "ambulance_station",
@@ -1527,7 +1539,10 @@
       "consumptionRef": "school",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": ""
+      "notes": "",
+      "serviceKind": "education",
+      "coverageRadius": 400,
+      "staffingNeed": 3
     },
     {
       "id": "primary_school",
@@ -1552,7 +1567,10 @@
       "consumptionRef": "school",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "Sept intake"
+      "notes": "Sept intake",
+      "serviceKind": "education",
+      "coverageRadius": 800,
+      "staffingNeed": 12
     },
     {
       "id": "secondary_school",
@@ -1577,7 +1595,10 @@
       "consumptionRef": "school",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": ""
+      "notes": "",
+      "serviceKind": "education",
+      "coverageRadius": 1500,
+      "staffingNeed": 45
     },
     {
       "id": "sixth_form_college",
@@ -1802,7 +1823,10 @@
       "consumptionRef": "",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": ""
+      "notes": "",
+      "serviceKind": "fire",
+      "coverageRadius": 800,
+      "staffingNeed": 20
     },
     {
       "id": "regional_fire_hq",

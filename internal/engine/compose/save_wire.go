@@ -196,6 +196,32 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	// compose participant and these two mirrors recomputed, the full
 	// StateDigest round-trips exactly.
 	c.state.syncMoneyFromLedger()
+	// FEAT-build-services-bridge-2026-09-02 round remedy (b): engine.services
+	// is NOT itself a save.Participant above (it carries no durable state of
+	// its OWN worth persisting independently — its instance table is fully
+	// DERIVED from completed build orders), so a restore brings build's
+	// queue back with already-complete service orders but an empty services
+	// instance table. Re-drive registration for those orders here, right
+	// after both build (Participants(), above) and services (constructed
+	// once at Wire time and never rebuilt by Load) are in their
+	// post-restore state — this is the single choke point every restore
+	// path funnels through: bare Load, LoadAt, restoreFromSnapshotBytes
+	// (snapshot.go's walk-back branch), and therefore
+	// RestoreLatestSnapshotOrGenesis's snapshot branch, which is exactly
+	// cmd/metroserve's durable-host startup path (persist.go's
+	// wireAndRehydrate -> RestoreLatestSnapshotOrGenesis). The genesis-replay
+	// fallback (restoreGenesis, snapshot.go) does NOT go through Load at
+	// all — it re-executes the journaled SubmitBuildCommand/Tick commands
+	// from tick 0, which re-derives every registration naturally through
+	// Tick's own self-healing sweep (build.go's
+	// registerCompletedServicesLocked, now idempotent per remedy (a)), so
+	// calling it again here would be a harmless no-op for that path, not a
+	// gap. BuildAPI.RegisterCompletedServices is itself idempotent (a no-op
+	// over any order already tracked), so calling it unconditionally on
+	// every Load — not just a snapshot restore — is safe.
+	if err := c.state.buildAPI.RegisterCompletedServices(); err != nil {
+		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "build", "step": "register-completed-services"})
+	}
 	return nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
@@ -85,16 +86,22 @@ type buildMetaWire struct {
 // construction state of a single build order. Emitted in slice order, so no
 // key is carried: the queue is a slice and its order IS its identity.
 type buildOrderWire struct {
-	ID                 BuildOrderID    `json:"id"`
-	Tile               world.TileCoord `json:"tile"`
-	Local              world.CellLocal `json:"local"`
-	Zone               ZoneType        `json:"zone"`
-	MaterialsTotal     int64           `json:"materialsTotal"`
-	MaterialsRemaining int64           `json:"materialsRemaining"`
-	MaterialsDrawn     int64           `json:"materialsDrawn"`
-	LabourRemaining    int64           `json:"labourRemaining"`
-	LeadTimeRemaining  int64           `json:"leadTimeRemaining"`
-	Complete           bool            `json:"complete"`
+	ID    BuildOrderID    `json:"id"`
+	Tile  world.TileCoord `json:"tile"`
+	Local world.CellLocal `json:"local"`
+	Zone  ZoneType        `json:"zone"`
+	// BuildingID is the optional catalogue-entry id this order builds
+	// (FEAT-build-services-bridge-2026-09-02) — carried on the wire so a
+	// reloaded in-flight order still knows which catalogue building (and
+	// therefore which ServiceKind, if any) it completes as; omitted on the
+	// wire for the common empty (plain zone order) case.
+	BuildingID         string `json:"buildingID,omitempty"`
+	MaterialsTotal     int64  `json:"materialsTotal"`
+	MaterialsRemaining int64  `json:"materialsRemaining"`
+	MaterialsDrawn     int64  `json:"materialsDrawn"`
+	LabourRemaining    int64  `json:"labourRemaining"`
+	LeadTimeRemaining  int64  `json:"leadTimeRemaining"`
+	Complete           bool   `json:"complete"`
 }
 
 // buildZoneWire is one zoneState entry on the wire: the cell's world
@@ -222,6 +229,7 @@ func (b *BuildAPI) snapshotForSave() (buildSnapshot, error) {
 			Tile:               o.tile,
 			Local:              o.local,
 			Zone:               o.zone,
+			BuildingID:         o.buildingID,
 			MaterialsTotal:     o.materialsTotal,
 			MaterialsRemaining: o.materialsRemaining,
 			MaterialsDrawn:     o.materialsDrawn,
@@ -295,6 +303,12 @@ func (b *BuildAPI) resetForLoad() error {
 	b.zoneState = make(map[cellKey]ZoneType)
 	b.structures = make(map[cellKey]BuildOrderID)
 	b.demand = make(map[ZoneType]DemandInput)
+	// serviceByOrder is NOT part of the save schema (out of scope per
+	// FEAT-build-services-bridge-2026-09-02's "Composition root wiring"
+	// note — engine.services registration is not itself persisted here),
+	// so a load must not carry forward index entries naming orders the
+	// freshly-reset queue no longer has.
+	b.serviceByOrder = make(map[BuildOrderID]services.ServiceID)
 	return nil
 }
 
@@ -331,6 +345,7 @@ func (b *BuildAPI) applyLoadRecord(rec serialize.Record) error {
 			tile:               w.Tile,
 			local:              w.Local,
 			zone:               w.Zone,
+			buildingID:         w.BuildingID,
 			materialsTotal:     w.MaterialsTotal,
 			materialsRemaining: w.MaterialsRemaining,
 			materialsDrawn:     w.MaterialsDrawn,

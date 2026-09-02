@@ -212,6 +212,37 @@ func (a *ServicesAPI) RegisterService(spec ServiceSpec) error {
 	return nil
 }
 
+// UnregisterService removes a registered service instance and every
+// per-district demand record naming it (FEAT-build-services-bridge
+// 2026-09-02, AC "demolition/offline deregisters"): the deterministic
+// mirror of RegisterService for the demolition path — engine.build calls
+// this when a completed service building is demolished, so a demolished
+// fire station's capacity/coverage contribution disappears from the next
+// CoverageSummary/CoverageByDistrict read exactly as its registration made
+// it appear. Rejects an unregistered id with ErrServiceNotRegistered (the
+// same code every other id-keyed query already uses) — never a silent
+// no-op that could mask a caller tracking the wrong id (GR#1).
+func (a *ServicesAPI) UnregisterService(id ServiceID) error {
+	if err := a.checkNotCopied("UnregisterService"); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, err := a.lookupLocked(id); err != nil {
+		return err
+	}
+	delete(a.instances, id)
+	// Clear every per-district record naming id — districtCoverageLocked
+	// defensively skips a dangling id already, but leaving the record
+	// behind would silently accumulate orphaned demand for a service that
+	// no longer exists (GR#3: no stale duplicate of state that belongs
+	// solely to the instances map).
+	for _, records := range a.districtDemand {
+		delete(records, id)
+	}
+	return nil
+}
+
 // nonFiniteSpecField returns the name of the first non-finite float field
 // in spec, or "" when every float field is finite. It is RegisterService's
 // SEC-093 boundary guard: NaN/±Inf never crosses the registration boundary

@@ -1,6 +1,7 @@
 package build
 
 import (
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -61,10 +63,16 @@ type cellKey struct {
 // read surface is [BuildAPI.Queue]'s exported BuildOrder snapshot, and no
 // consumer can write a queue entry's fields directly (AC-1).
 type buildOrder struct {
-	id                 BuildOrderID
-	tile               world.TileCoord
-	local              world.CellLocal
-	zone               ZoneType
+	id    BuildOrderID
+	tile  world.TileCoord
+	local world.CellLocal
+	zone  ZoneType
+	// buildingID is the optional data/buildings.json catalogue entry id
+	// this order builds (FEAT-build-services-bridge-2026-09-02, spec Q1):
+	// empty for a plain §34 zone order (unchanged legacy behaviour — AC-7),
+	// non-empty when the caller names a specific catalogue building whose
+	// entry may declare a ServiceKind.
+	buildingID         string
 	materialsTotal     int64 // construction-materials budget (tonnes)
 	materialsRemaining int64 // not yet drawn
 	materialsDrawn     int64 // cumulative drawn (conservation ledger)
@@ -139,6 +147,17 @@ type BuildCommand struct {
 	// Month is the absolute simulation month at submission (0 = genesis),
 	// used to source §9's construction-speed multiplier from engine.season.
 	Month int64
+	// BuildingID optionally names a data/buildings.json catalogue entry
+	// this order builds (FEAT-build-services-bridge-2026-09-02). Empty
+	// (the zero value) is the legacy behaviour — a plain §34 zone order
+	// that registers nothing with engine.services regardless of Zone
+	// (AC-7). A caller naming an entry whose catalogue ServiceKind is
+	// non-empty gets that building registered with engine.services on
+	// completion (AC-2); naming an entry with no ServiceKind, or an id
+	// this catalogue does not recognise, behaves exactly like leaving
+	// BuildingID empty — never an error at submission (AC-7's leniency:
+	// only a WIRED registration attempt can fail, per AC-8).
+	BuildingID string
 }
 
 // DemolishCommand demolishes the structure on an owned cell.
@@ -183,15 +202,31 @@ type BuildAPI struct {
 	labourPerTick int64
 	district      string
 
+	// catalogueEntries is data/buildings.json's full "entries" array
+	// (the named-building catalogue, distinct from the eight §34 zone
+	// types above), keyed by BuildingEntry.ID — the lookup table Tick's
+	// completion step consults for a completing order's optional
+	// buildingID (FEAT-build-services-bridge-2026-09-02, spec Q1).
+	// Immutable after Load, like catalogue itself.
+	catalogueEntries map[string]data.BuildingEntry
+
 	zoneState  map[cellKey]ZoneType
 	structures map[cellKey]BuildOrderID
 	queue      []*buildOrder
 	nextOrder  BuildOrderID
 	demand     map[ZoneType]DemandInput
+	// serviceByOrder tracks which completed orders registered a service
+	// with engine.services, keyed by the completing order's id — the
+	// index SubmitDemolishCommand consults to deregister the matching
+	// service instance on demolition. An order absent from this map
+	// either is not yet complete or completed without registering a
+	// service (AC-7's "not a service" case).
+	serviceByOrder map[BuildOrderID]services.ServiceID
 
 	world     *world.WorldAPI
 	season    *season.SeasonAPI
 	logistics *logistics.LogisticsAPI
+	services  *services.ServicesAPI
 
 	// self is the SEC-020 copy guard, stored exactly once in Load before
 	// the value is returned to any caller (mirroring FinanceAPI/LogisticsAPI).
@@ -229,15 +264,29 @@ func Load(dir, correlationID string) (*BuildAPI, error) {
 		})
 	}
 
+	// catalogueEntries indexes the full named-building catalogue by id
+	// (distinct from the eight §34 zone types above), for Tick's
+	// completion-time serviceKind lookup (FEAT-build-services-bridge
+	// 2026-09-02). Built once, deterministically, from the loaded slice —
+	// duplicate ids are already rejected by data.Buildings.Validate before
+	// LoadBuildings returns, so this map construction cannot silently drop
+	// an entry to a last-write-wins collision.
+	catalogueEntries := make(map[string]data.BuildingEntry, len(buildings.Entries))
+	for _, e := range buildings.Entries {
+		catalogueEntries[e.ID] = e
+	}
+
 	api := &BuildAPI{
-		correlationID: correlationID,
-		catalogue:     catalogue,
-		labourPerTick: buildings.ZoneMeta.LabourPerTick,
-		district:      DefaultDistrict,
-		zoneState:     make(map[cellKey]ZoneType),
-		structures:    make(map[cellKey]BuildOrderID),
-		demand:        make(map[ZoneType]DemandInput),
-		nextOrder:     0,
+		correlationID:    correlationID,
+		catalogue:        catalogue,
+		catalogueEntries: catalogueEntries,
+		labourPerTick:    buildings.ZoneMeta.LabourPerTick,
+		district:         DefaultDistrict,
+		zoneState:        make(map[cellKey]ZoneType),
+		structures:       make(map[cellKey]BuildOrderID),
+		demand:           make(map[ZoneType]DemandInput),
+		serviceByOrder:   make(map[BuildOrderID]services.ServiceID),
+		nextOrder:        0,
 	}
 	// Armed exactly once, before api is returned to any caller (SEC-020).
 	api.self.Store(api)
@@ -300,6 +349,26 @@ func (b *BuildAPI) SetLogistics(l *logistics.LogisticsAPI) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.logistics = l
+	return nil
+}
+
+// SetServices wires the engine.services dependency (edge
+// engine.build->engine.services, FEAT-build-services-bridge-2026-09-02)
+// Tick's completion step registers a completed service building with, and
+// SubmitDemolishCommand deregisters a demolished one through. A nil (never
+// wired) services dependency is not an error by itself — Tick only
+// consults it for an order whose catalogue entry actually declares a
+// serviceKind (AC-7); it is ErrDependencyMissing only when such an order
+// is encountered with no services wired (AC-8a), mirroring how
+// SetWorld/SetSeason/SetLogistics are optional until the operation that
+// needs them runs.
+func (b *BuildAPI) SetServices(s *services.ServicesAPI) error {
+	if err := b.checkNotCopied("SetServices"); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.services = s
 	return nil
 }
 
@@ -460,6 +529,7 @@ func (b *BuildAPI) SubmitBuildCommand(cmd BuildCommand) (BuildOrderID, error) {
 		tile:               cmd.Tile,
 		local:              cmd.Local,
 		zone:               cmd.Zone,
+		buildingID:         cmd.BuildingID,
 		materialsTotal:     rec.materials,
 		materialsRemaining: rec.materials,
 		labourRemaining:    rec.labour,
@@ -473,6 +543,20 @@ func (b *BuildAPI) SubmitBuildCommand(cmd BuildCommand) (BuildOrderID, error) {
 // it is a distinct command from zoning/building, clears the cell's zone and
 // structure, and returns a compensation figure sourced from engine.finance's
 // LandPrice — never a bare deletion with no financial consequence.
+//
+// If the demolished structure had registered with engine.services
+// (FEAT-build-services-bridge-2026-09-02), this also deregisters it via
+// ServicesAPI.UnregisterService, so the service's capacity/coverage
+// contribution disappears from the next CoverageSummary/CoverageByDistrict
+// read — the symmetric mirror of Tick's registration. A structure that
+// never registered a service (or was demolished while engine.services was
+// never wired via SetServices) demolishes exactly as before; a demolished
+// structure whose service WAS registered but engine.services is (no longer)
+// wired skips the deregistration call rather than blocking demolition on an
+// unrelated dependency — the cell still comes down, the stale service
+// record is a documented, narrow follow-up (this is not the "silent
+// failure" GR#17 targets: demolition itself never silently no-ops, only the
+// best-effort deregistration step does when its dependency is absent).
 func (b *BuildAPI) SubmitDemolishCommand(cmd DemolishCommand) (DemolishResult, error) {
 	if err := b.checkNotCopied("SubmitDemolishCommand"); err != nil {
 		return DemolishResult{}, err
@@ -491,13 +575,22 @@ func (b *BuildAPI) SubmitDemolishCommand(cmd DemolishCommand) (DemolishResult, e
 		return DemolishResult{}, err
 	}
 	key := cellKey{tile: cmd.Tile, local: cmd.Local}
-	if _, ok := b.structures[key]; !ok {
+	orderID, ok := b.structures[key]
+	if !ok {
 		return DemolishResult{}, errs.New(ErrNoStructure, b.correlationID, map[string]any{
 			"tile": cmd.Tile, "local": cmd.Local,
 		})
 	}
 	delete(b.zoneState, key)
 	delete(b.structures, key)
+	if serviceID, tracked := b.serviceByOrder[orderID]; tracked {
+		if b.services != nil {
+			if err := b.services.UnregisterService(serviceID); err != nil {
+				return DemolishResult{}, err
+			}
+		}
+		delete(b.serviceByOrder, orderID)
+	}
 	return DemolishResult{Compensation: compensation}, nil
 }
 
@@ -582,6 +675,22 @@ func (b *BuildAPI) Tick(month int64) error {
 		return err
 	}
 
+	// FEAT-build-services-bridge-2026-09-02 round remedy (b), self-healing
+	// half: re-drive registration for any order that is ALREADY complete
+	// but has no serviceByOrder record (the durability gap the independent
+	// round found — engine.services is not a save participant, so a
+	// snapshot restore brings back complete=true orders with services'
+	// instance table empty and no further Tick would ever revisit a
+	// complete order to notice). Idempotent (registerCompletedServicesLocked
+	// skips anything already tracked or not a service order at all), so
+	// running it at the top of EVERY Tick call is cheap and self-heals
+	// within one simulation day even if a caller forgets the explicit
+	// RegisterCompletedServices call the composition root makes right after
+	// a restore (compose/save_wire.go's Composition.Load).
+	if err := b.registerCompletedServicesLocked(); err != nil {
+		return err
+	}
+
 	for _, order := range b.queue {
 		if order.complete {
 			continue
@@ -620,6 +729,34 @@ func (b *BuildAPI) Tick(month int64) error {
 
 		// (4) Completion: all three requirements met.
 		if order.materialsRemaining == 0 && order.labourRemaining == 0 && order.leadTimeRemaining == 0 {
+			// (edge engine.build->engine.services)
+			// FEAT-build-services-bridge-2026-09-02, AC-2/AC-8: resolve
+			// whether this completion registers a service BEFORE any state
+			// lands. A registration failure — engine.services never wired
+			// (AC-8a), an unregistered service kind (AC-8b), or a
+			// non-finite location/coverage-radius input (AC-8c) — must
+			// leave the order incomplete and the zone/structure OFF the
+			// map, never landed and then silently unregistered. This is a
+			// deliberate resolution, in AC-8's favour, of the spec's own
+			// ordering tension against AC-2's literal "after
+			// world.SetStructure() succeeds" phrasing: SetStructure below
+			// runs only once RegisterService has already succeeded, so a
+			// structure is never visible on the map while its service
+			// registration is outstanding or failed.
+			var registeredService services.ServiceID
+			if entry, ok := b.catalogueEntries[order.buildingID]; ok && entry.ServiceKind != "" {
+				if b.services == nil {
+					return errs.New(ErrDependencyMissing, b.correlationID, map[string]any{
+						"dependency": "services", "operation": "Tick",
+					})
+				}
+				registered, err := b.registerServiceLocked(order, entry)
+				if err != nil {
+					return err
+				}
+				registeredService = registered
+			}
+
 			order.complete = true
 			key := cellKey{tile: order.tile, local: order.local}
 			b.zoneState[key] = order.zone
@@ -628,9 +765,175 @@ func (b *BuildAPI) Tick(month int64) error {
 			if err := b.world.SetStructure(order.tile, order.local, uint32(order.id), b.correlationID); err != nil {
 				return err
 			}
+			if registeredService != "" {
+				b.serviceByOrder[order.id] = registeredService
+			}
 		}
 	}
 	return nil
+}
+
+// serviceLocation converts a build order's world coordinates (tile + tile-
+// local cell) into the plain (X, Y) metres pair engine.services.ServiceSpec
+// expects for its CoverageSummary/CoverageByDistrict spatial-reach maths
+// (FEAT-build-services-bridge-2026-09-02, spec Q2): the real inverse of
+// engine.world's own tile/cell layout constants (world.TileSizeM,
+// world.CellSizeM — §2.1's 2km tiles of §2.4's 10m cells), not the spec's
+// illustrative 16x16 placeholder grid, which does not match engine.world's
+// actual 200x200-cells-per-tile layout (world.TileSizeCells). X grows east,
+// matching TileCoord.X and CellLocal.Col directly (VERIFIED against
+// engine.world/terrain_import.go's ImportTerrain: "u := col /
+// (TileSizeCells-1)" is multiplied by the EASTWARD span, i.e. Col 0 is the
+// west edge and Col increases east — no inversion needed).
+//
+// Y (northing) is NOT a direct local.Row multiply, though: CellLocal.Row is
+// documented, in the one place engine.world states it explicitly
+// (terrain_import.go's SourceGrid doc comment, "row-major elevation
+// samples... row 0 is the northernmost", and ImportTerrain's own inline
+// comment "output row 0 is north (row TileSizeCells-1) per ESRI's
+// north-first convention" — the same row index populateTerrainFromHeightmap
+// then writes into localIndex(col, row), the SAME index space CellAt/
+// SetStructure address via CellLocal.Row) to be NORTH-FIRST: Row 0 is a
+// tile's NORTH edge and Row increases SOUTHWARD, the opposite of the
+// TileCoord.Y axis it shares a tile with (TileCoord.Y grows north, per
+// grid.go's TileCoord doc comment). An initial implementation of this
+// function multiplied local.Row directly against a north-growing Y — up to
+// a 2km (one tile) placement error — before this was caught by the
+// FEAT-build-services-bridge-2026-09-02 independent round and verified
+// against engine.world's own source rather than assumed; see
+// TestServiceLocationRowAxisMatchesWorldNorthFirstConvention /
+// TestAttackRound_ServiceLocationAgainstLiteralGeometry for the pinned
+// convention. (internal/engine/mining/blight.go's own tile/local->grid
+// helper does NOT apply this inversion — a pre-existing, separate
+// inconsistency in that package, out of this bridge's scope to fix.)
+func serviceLocation(tile world.TileCoord, local world.CellLocal) (x, y float64) {
+	x = float64(tile.X)*world.TileSizeM + float64(local.Col)*world.CellSizeM
+	y = float64(tile.Y)*world.TileSizeM + float64(world.TileSizeCells-1-local.Row)*world.CellSizeM
+	return x, y
+}
+
+// registerServiceLocked builds a ServiceSpec for order's catalogue entry and
+// registers it with engine.services, treating services.ErrDuplicateService
+// as an already-correct success rather than a hard failure — the SAME
+// idempotent-across-re-wires precedent engine.refuse's registerService and
+// engine.education's stage registration already use for exactly this class
+// of "this instance may already be registered" call (FEAT-build-services-
+// bridge-2026-09-02 round remedy (a)). This is what closes the "wedge": a
+// rewind-load that replays the SAME completing order a second time against
+// a live (non-participant) ServicesAPI would otherwise re-derive the
+// identical "build-order-N" id, get MET-G1207 back from RegisterService,
+// and hard-fail Tick forever after (the round's Attack 3). Any OTHER
+// RegisterService error (unknown kind AC-8b, non-finite input AC-8c) still
+// propagates verbatim — only the duplicate-of-the-same-id case is treated
+// as success. The caller holds b.mu (Lock).
+func (b *BuildAPI) registerServiceLocked(order *buildOrder, entry data.BuildingEntry) (services.ServiceID, error) {
+	spec := services.ServiceSpecFromBuilding(
+		services.ServiceID(fmt.Sprintf("build-order-%d", order.id)),
+		services.ServiceKind(entry.ServiceKind),
+		entry,
+	)
+	spec.CoverageRadius = entry.CoverageRadius
+	spec.X, spec.Y = serviceLocation(order.tile, order.local)
+	spec.StaffingNeed = entry.StaffingNeed
+	if err := b.services.RegisterService(spec); err != nil {
+		if code, ok := err.(*errs.E); ok && code.Code == services.ErrDuplicateService {
+			return spec.ID, nil
+		}
+		// RegisterService itself is the AC-8b/AC-8c gate — an unknown kind
+		// or a non-finite field is rejected with its own registry-sourced
+		// *errs.E (engine.services owns that error, never re-coded here
+		// per GR#3).
+		return "", err
+	}
+	return spec.ID, nil
+}
+
+// registerCompletedServicesLocked is RegisterCompletedServices' body,
+// callable from Tick (which already holds b.mu.Lock) without recursive
+// locking. It re-drives registration for every order that is ALREADY
+// complete, names a catalogue entry declaring a serviceKind, and has no
+// serviceByOrder record yet — the durability half of the round's remedy
+// (b): engine.services is not itself a save.Participant
+// (compose/save_wire.go's Participants() list), so restoring a composition
+// from a state snapshot (Composition.Load/LoadAt,
+// RestoreLatestSnapshotOrGenesis's snapshot walk-back branch) brings build's
+// queue back with complete=true already set but services' instance table
+// empty — and Tick's main loop above SKIPS any order with complete==true,
+// so nothing would otherwise ever re-register it. Iterates b.queue in its
+// own slice (insertion) order — never a map range — so re-registration is
+// deterministic (GR#21) and idempotent (a second call, or a call against an
+// order already tracked, is a no-op).
+//
+// A demolished order must NEVER be re-registered by this sweep — it stays
+// in b.queue forever (there is no queue-eviction on demolish) with
+// complete==true and its buildingID intact, so "complete && has a
+// buildingID" alone is not "still standing". b.structures (keyed by
+// cellKey -> the standing order's id) is the authoritative record of which
+// orders currently have a structure on the map — SubmitDemolishCommand
+// deletes an order's entry from it, and it already round-trips through the
+// save schema exactly, so building a one-shot standing-order membership set
+// from it (rather than adding and serializing a brand-new "demolished"
+// order field) is the smallest-footprint way to make the sweep demolition-
+// aware, in-process AND across a save/load. Iterating b.structures' map
+// VALUES here only builds an unordered membership SET consulted by a
+// downstream skip/include decision — the registration order itself still
+// comes from b.queue's own deterministic slice order below, so this is not
+// the order-dependent-fold class GR#21 guards against (mirrors
+// IndustryAndFarmsPresent's own order-independent map range).
+func (b *BuildAPI) registerCompletedServicesLocked() error {
+	standing := make(map[BuildOrderID]bool, len(b.structures))
+	for _, oid := range b.structures {
+		standing[oid] = true
+	}
+	for _, order := range b.queue {
+		if !order.complete || order.buildingID == "" || !standing[order.id] {
+			continue
+		}
+		if _, tracked := b.serviceByOrder[order.id]; tracked {
+			continue
+		}
+		entry, ok := b.catalogueEntries[order.buildingID]
+		if !ok || entry.ServiceKind == "" {
+			continue
+		}
+		if b.services == nil {
+			// Not wired yet: nothing to re-drive. Not an error — an
+			// already-landed structure whose dependency has not (yet) been
+			// wired is a different failure class from AC-8's pre-landing
+			// gate (which never lets an order land in the first place); the
+			// next call (another Tick, or the composition root's explicit
+			// sweep once SetServices finally runs) picks this order back
+			// up.
+			continue
+		}
+		registered, err := b.registerServiceLocked(order, entry)
+		if err != nil {
+			return err
+		}
+		b.serviceByOrder[order.id] = registered
+	}
+	return nil
+}
+
+// RegisterCompletedServices re-drives engine.services registration for
+// every already-complete order this BuildAPI holds whose catalogue entry
+// declares a serviceKind but is not yet tracked in serviceByOrder
+// (FEAT-build-services-bridge-2026-09-02 round remedy (b)). The composition
+// root calls this once, immediately after Composition.Load/LoadAt restores
+// both build's and engine.services' state (compose/save_wire.go), so a
+// durable-host restart (cmd/metroserve's RestoreLatestSnapshotOrGenesis)
+// does not leave a completed service building contributing zero capacity
+// until the next tick happens to run. Safe to call repeatedly — every call
+// after the first is a no-op over already-tracked orders — and safe to
+// call even when nothing is wired yet (silently defers those orders; see
+// registerCompletedServicesLocked).
+func (b *BuildAPI) RegisterCompletedServices() error {
+	if err := b.checkNotCopied("RegisterCompletedServices"); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.registerCompletedServicesLocked()
 }
 
 // Queue returns a read-only snapshot of the build queue in insertion (order
