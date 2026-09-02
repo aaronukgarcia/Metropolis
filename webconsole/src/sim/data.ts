@@ -1355,6 +1355,41 @@ export const SPECS: Record<string, Spec> = {
   res_estate_compact: P('res_estate_compact', 'residential', 'Compact Housing', 'Apartment blocks in dense urban cores · 4×4', 4, 4, 32000000, 90, '#4c9aff', 'zones', 8, { residents: 900, capacityTiers: [900, 990, 1089, 1197, 1317, 1449, 1594, 1753, 1929, 2121] }),
   res_estate: P('res_estate', 'residential', 'Housing Estate', 'Master-planned housing estate · ≈ 12 low-rise blocks', 5, 5, 45000000, 130, '#4c9aff', 'zones', 10, { residents: 1500, capacityTiers: [1500, 1650, 1815, 1996, 2196, 2416, 2657, 2923, 3215, 3536] }),
   res_estate_sprawl: P('res_estate_sprawl', 'residential', 'Sprawl Housing', 'Low-rise suburban sprawl · 6×6', 6, 6, 70000000, 200, '#4c9aff', 'zones', 15, { residents: 2500, capacityTiers: [2500, 2750, 3025, 3327, 3660, 4026, 4429, 4872, 5359, 5894] }),
+
+  // FEAT-2326609750 — ULTRA-DENSE MEGA-TOWER residential specs (Aaron's ask). These
+  // graduate the res_estate_* family (above) one more rung: instead of one big
+  // building standing for ~12-20 constituent blocks, these stand for a WHOLE
+  // dense city quarter — a NYC-style residential superblock and a Singapore-style
+  // mega-estate precinct. Same estate-scale DATA-only treatment as res_estate_*:
+  // no `mw` (power draw stays count-based), no water `tag`/`served` (they HOUSE
+  // residents, never supply water capacity) — pure `residents` + `capacityTiers`
+  // so they flow through placement / road activation / economy / waste / school /
+  // health exactly like every other residential spec (GR#15 — zero extra wiring).
+  //
+  // Footprint honesty (Aaron's FEAT-2326609740 ruling: footprint growth = shape
+  // growth, not density growing forever on a fixed footprint): res_highrise (2×2,
+  // 600 residents) is the densest EXISTING single building at 150 residents/tile.
+  // These two are deliberately given honest LARGER footprints rather than just
+  // cramming more residents into a highrise-sized box — 7×7 (49 tiles) and 9×9
+  // (81 tiles), both well past every current residential footprint (res_estate_
+  // sprawl's 6×6 is the previous largest), reflecting that a 10k/20k-resident
+  // structure is a whole superblock/precinct, not one more tower.
+  //
+  // Ratio derivation (GR#15 — extrapolated from the existing family, not invented):
+  //   res_estate:        cost/resident ≈ £30,000, upkeep/resident ≈ 0.0867/tick
+  //   res_estate_sprawl: cost/resident ≈ £28,000, upkeep/resident ≈ 0.08/tick
+  //   res_tower_nyc  extrapolates res_estate's ratio:        £30,000/resident, 0.087/tick
+  //   res_tower_sgp  extrapolates res_estate_sprawl's ratio: £28,000/resident, 0.08/tick
+  //     (Singapore mass-housing read as the MORE cost-efficient-at-scale precinct,
+  //     matching the trend already in the family: bigger estate = lower £/resident)
+  // Unlock gated well above the whole Housing family's current ceiling
+  // (res_estate_sprawl = 15) — these are the capstone of residential density —
+  // in the same 16-20 band as other capstone mega-projects (pow_hydro 16,
+  // land_tunnel 18, land_space 20).
+  // ⚠ BALANCE-NUMBER PLACEHOLDER — every cost/upkeep/residents figure here is
+  // directional only, pending Aaron's row-by-row balance pass (house convention).
+  res_tower_nyc: P('res_tower_nyc', 'residential', 'NYC-style Superblock', 'Dense Manhattan-style residential superblock · ≈ 10,000 residents · 7×7', 7, 7, 300000000, 870, '#3d84e6', 'zones', 16, { residents: 10000, capacityTiers: [10000, 11000, 12100, 13310, 14641, 16105, 17716, 19487, 21436, 23579] }),
+  res_tower_sgp: P('res_tower_sgp', 'residential', 'Singapore-style Mega-Estate', 'Ultra-dense Singapore-style HDB mega-precinct · ≈ 20,000 residents · 9×9', 9, 9, 560000000, 1600, '#3d84e6', 'zones', 18, { residents: 20000, capacityTiers: [20000, 22000, 24200, 26620, 29282, 32210, 35431, 38974, 42872, 47159] }),
   off_businesspark: P('off_businesspark', 'office', 'Business Park', 'Landscaped out-of-town office park · ≈ 4 towers', 5, 5, 85000000, 420, '#43aa8b', 'zones', 12, { jobs: 1200, capacityTiers: [1200, 1320, 1452, 1597, 1757, 1933, 2126, 2339, 2573, 2830] }),
   off_towers_downtown: P('off_towers_downtown', 'office', 'Downtown Towers', 'Dense downtown office towers', 5, 5, 128000000, 630, '#43aa8b', 'zones', 14, { jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
   ind_estate: P('ind_estate', 'industrial', 'Industrial Estate', 'Heavy industrial estate · ≈ 18 factories · ICI-Wilton scale', 6, 6, 180000000, 900, '#a371f7', 'zones', 11, { tag: 'pollution', jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
@@ -1546,7 +1581,7 @@ assertResidentialSpecsHaveResidents(SPECS);
 export const PALETTE: { title: string; items: string[] }[] = [
   { title: 'Network', items: ['road', 'rd_avenue', 'rd_aroad', 'rd_dual', 'rail_branch'] },
   { title: 'Transport', items: ['bus_stop', 'bus_depot', 'car_park', 'station_ashford', 'bus_station', 'tram_depot', 'ferry_pier', 'metro_station', 'grand_terminus', 'ev_charging_hub', 'trans_parkride', 'rail_freightyard', 'trans_interchange'] },
-  { title: 'Housing', items: ['res_hut', 'res_block', 'res_terrace', 'res_lowrise', 'res_midrise', 'res_highrise', 'res_penthouse', 'res_estate_compact', 'res_estate', 'res_estate_sprawl'] },
+  { title: 'Housing', items: ['res_hut', 'res_block', 'res_terrace', 'res_lowrise', 'res_midrise', 'res_highrise', 'res_penthouse', 'res_estate_compact', 'res_estate', 'res_estate_sprawl', 'res_tower_nyc', 'res_tower_sgp'] },
   { title: 'Retail', items: ['com_shop', 'com_retail', 'com_market', 'com_super', 'com_mall', 'com_discounter', 'com_hypermarket', 'com_darkstore'] },
   { title: 'Industry & Farms', items: ['farm_wheat', 'farm_cattle', 'farm_orchard', 'ind_factory', 'ind_light', 'ind_warehouse', 'ind_heavy', 'ind_cement', 'ind_logistics', 'farm_dairy', 'farm_abattoir', 'farm_estate', 'ind_estate', 'harbour_fishing', 'ind_parcelhub', 'ind_chemworks', 'ind_fulfilment', 'ind_refinery'] },
   { title: 'Offices', items: ['off_suite', 'off_tower', 'off_data', 'off_businesspark', 'off_towers_downtown'] },
