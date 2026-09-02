@@ -880,6 +880,10 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
     case 'school': {
       let places = 0;
       for (const o of s.buildings) {
+        // BUG-569: gate on isOnline the same way serviceCoverageOf's school
+        // rows do — an under-construction / disconnected school contributes
+        // no coverage, so it must not inflate the utilisation denominator.
+        if (!isOnline(s, o)) continue;
         const os = SPECS[o.spec];
         if (os?.children) places += os.children;
       }

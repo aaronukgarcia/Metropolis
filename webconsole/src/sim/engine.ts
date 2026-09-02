@@ -503,6 +503,12 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   let commuterWeight = 0;
   for (const b of s.buildings) {
     if (!links.connectedIds.has(b.id)) continue;
+    // BUG-569: stationLinks() only tests road-adjacency (the network-wiring
+    // question); it never tests construction, so an under-construction
+    // station shouldn't be excluded from `links.connectedIds` — but it must
+    // still be excluded here, same as every other contribution site, before
+    // it can earn Commuter Revenue.
+    if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (sp?.kind !== 'station') continue;
     commuterWeight += sp.id === 'station_ashford' ? 3 : 1;
@@ -526,6 +532,9 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   // Now: single source of truth for tourism income.
   let tourism = s.policies.tourismDrive ? Math.round(s.population * 0.12) : 0;
   for (const b of s.buildings) {
+    // BUG-569: an under-construction / disconnected attraction shouldn't be
+    // drawing tourists yet — mirror the isOnline gate used everywhere else.
+    if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (sp?.tourism) tourism += sp.tourism * Math.min(1, s.population / 300);
   }
@@ -554,7 +563,11 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     ? gridImportCostPerTick(pw.cap, pw.need, GRID_IMPORT_TARIFF_PER_MW)
     : 0;
 
-  const harbourBoost = s.buildings.some((b) => b.spec === 'land_harbour') ? 1.4 : 1;
+  // BUG-569: an under-construction harbour shouldn't grant the Freight Tax
+  // boost yet — existence alone isn't enough, mirror the isOnline gate.
+  const harbourBoost = s.buildings.some((b) => b.spec === 'land_harbour' && isOnline(s, b))
+    ? 1.4
+    : 1;
 
   const buckets: Record<string, number> = {};
   for (const b of s.buildings) {
