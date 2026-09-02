@@ -9,6 +9,7 @@ import { AboutModal } from './About';
 import { FileMenu } from './FileMenu';
 import { ConfigMenu } from './ConfigMenu';
 import { LiveEngineBadge } from './LiveEngineBadge';
+import { StaleBuildBanner } from './StaleBuildBanner';
 
 const SPEEDS: { v: 0 | 1 | 2 | 3; label: string }[] = [
   { v: 0, label: 'Pause' },
@@ -29,6 +30,10 @@ export function TopBar() {
   const wbColor = wb.overall >= 70 ? 'var(--done)' : wb.overall >= 45 ? 'var(--warn)' : 'var(--danger)';
   return (
     <header className="topbar">
+      {/* FEAT-2326609725: fixed-position, pointer-events:none banner — renders
+          null in the normal case (matching shas) and never intercepts clicks
+          on gameplay controls even when shown (see .stale-build-banner CSS). */}
+      <StaleBuildBanner />
       <div className="brand">
         <span className="brand-mark" />
         Metropolis

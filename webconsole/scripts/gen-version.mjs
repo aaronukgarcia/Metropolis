@@ -40,17 +40,33 @@ const SEP = String.fromCharCode(31); // 0x1f unit separator
 const FALLBACK = {
   version: 'dev',
   numericVersion: '0.0.0.0',
+  sha: 'dev',
   gitAvailable: false,
   generatedAt: new Date().toISOString(),
   changelog: [],
 };
 
-function git(args) {
+export function git(args) {
   return execFileSync('git', args, {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   }).trim();
+}
+
+/**
+ * Short commit sha of HEAD, or 'dev' when git is unavailable. This is the
+ * comparison key for FEAT-2326609725's stale-build guard: unlike `version`
+ * (a describe string) or `numericVersion` (commits-since-tag, which the
+ * pre-existing hot-upgrade path already advances live via a poll), a sha is
+ * an exact, unambiguous identity for "which commit is this" with no parsing.
+ */
+function computeShortSha() {
+  try {
+    return git(['rev-parse', '--short', 'HEAD']) || 'dev';
+  } catch {
+    return 'dev';
+  }
 }
 
 /**
@@ -117,6 +133,7 @@ export function generate() {
     return {
       version,
       numericVersion: computeNumericVersion(),
+      sha: computeShortSha(),
       gitAvailable: true,
       generatedAt: new Date().toISOString(),
       changelogCap: CHANGELOG_COMMIT_CAP,
@@ -128,6 +145,45 @@ export function generate() {
 }
 
 /**
+ * Compute version data LIVE at request time, straight from git HEAD -- never
+ * from version.live.json. FEAT-2326609725 (2026-09-02 incident): a long-lived
+ * vite dev server kept serving an OLD module graph while /version.json ALSO
+ * reported the stale version, because that endpoint read a file that is only
+ * rewritten by the post-commit hook -- if that hook doesn't fire (or the dev
+ * server predates it, or a rebase/checkout moves HEAD without a commit), the
+ * file silently drifts from the real on-disk HEAD and polling it can't catch
+ * the drift. This function always asks git directly, so it reflects reality
+ * regardless of how long the dev-server process has been running.
+ *
+ * A short in-process cache (LIVE_CACHE_MS) avoids spawning `git` on every
+ * client poll while staying well under any plausible poll interval.
+ */
+const LIVE_CACHE_MS = 2000;
+let liveCache = null; // { data, ts } | null
+
+export function getLiveVersionData() {
+  const now = Date.now();
+  if (liveCache && now - liveCache.ts < LIVE_CACHE_MS) return liveCache.data;
+
+  let version = 'unknown';
+  try {
+    version = git(['describe', '--tags', '--always', '--dirty']) || 'unknown';
+  } catch {
+    // git unavailable -- fall through with the 'unknown' placeholder.
+  }
+
+  const data = {
+    version,
+    numericVersion: computeNumericVersion(),
+    sha: computeShortSha(),
+    gitAvailable: version !== 'unknown',
+    generatedAt: new Date().toISOString(),
+  };
+  liveCache = { data, ts: now };
+  return data;
+}
+
+/**
  * Write the live version JSON (version.live.json) that the running app polls.
  * Kept tiny and dependency-free. This is the ONLY file the post-commit hook
  * touches, so a commit never disturbs Vite's module graph (no reload, no reset).
@@ -136,6 +192,7 @@ export function writeLiveVersion(data) {
   const live = {
     version: data.version,
     numericVersion: data.numericVersion,
+    sha: data.sha,
     gitAvailable: data.gitAvailable,
     generatedAt: data.generatedAt,
   };
@@ -170,6 +227,7 @@ export function writeVersionModule() {
     'export interface VersionInfo {\n' +
     '  version: string;\n' +
     '  numericVersion: string;\n' +
+    '  sha: string;\n' +
     '  gitAvailable: boolean;\n' +
     '  generatedAt: string;\n' +
     '  changelogCap: number;\n' +
@@ -183,6 +241,12 @@ export function writeVersionModule() {
     'export const APP_VERSION = versionInfo.version;\n' +
     '// 1.2.3.4-style number that increments every commit — for the title/badge.\n' +
     'export const APP_VERSION_NUMERIC = versionInfo.numericVersion;\n' +
+    '// Short commit sha FROZEN at build/dev-start (FEAT-2326609725): unlike the\n' +
+    "// numeric/version above (which the hot-upgrade poll advances live to track\n" +
+    '// disk), this constant never changes for the life of the loaded bundle --\n' +
+    '// it is exactly "which commit is the JS actually running", the baseline the\n' +
+    '// stale-build guard compares against the live server sha.\n' +
+    'export const APP_VERSION_SHA = versionInfo.sha;\n' +
     'export const CHANGELOG = versionInfo.changelog;\n';
 
   writeFileSync(OUT_FILE, body, 'utf8');

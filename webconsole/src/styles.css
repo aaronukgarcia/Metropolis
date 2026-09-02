@@ -403,6 +403,30 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   pointer-events: none;
 }
 
+/* FEAT-2326609725 (dev-server staleness guard, 2026-09-02) — a loud, persistent
+   warning that the running bundle is behind disk (a stale vite dev server kept
+   serving an old module graph while the badge and /version.json both looked
+   current). Pinned above even the play-mode banner (z-index 3000) since a
+   stale build is the more urgent developer-facing fact. `pointer-events: none`
+   on the wrapper means it NEVER blocks a click on anything beneath it — it is
+   a thin strip a developer is meant to read and act on (restart + hard
+   reload), not a control surface, so it needs no interactive area at all. */
+.stale-build-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3001;
+  background: var(--danger, #ff4d4f);
+  color: #250505;
+  text-align: center;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  padding: 5px 10px;
+  pointer-events: none;
+}
+
 /* BUG-497 (2): the "SIMULATION ENDED" HUD badge — a frozen clock is otherwise
    indistinguishable from a hang. */
 .sim-ended-badge {
