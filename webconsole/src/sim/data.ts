@@ -902,9 +902,14 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
       };
     }
     case 'health': {
-      // Aggregate health capacity from GP + hospital
-      const gp = sumBy(s, (sp) => sp.id === 'hea_clinic', (sp) => sp.served ?? 0);
-      const hosp = sumBy(s, (sp) => sp.id === 'hea_hospital' || sp.id === 'hea_teaching', (sp) => sp.served ?? 0);
+      // Aggregate health capacity from GP + hospital.
+      // FEAT-webworker-sim-offload Stage 0 (2026-09-02): this case is invoked
+      // PER BUILDING from MapView's render loop (see file header on
+      // serviceCapacityAggregates) — reusing the memoised aggregate instead of
+      // two fresh sumBy() full-building-list passes turns what used to be an
+      // O(buildings²) render cost (at 68K population, unusable) into O(buildings)
+      // (first call per state computes, every subsequent building hits cache).
+      const { gp, hosp } = serviceCapacityAggregates(s);
       const cap = gp + hosp;
       if (cap <= 0) return null;
       return {
@@ -915,7 +920,7 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
     case 'police': {
       // BUG-399 spec-drift fix: match serviceCoverageOf — count by KIND so a
       // Divisional HQ (pol_hq) also registers police coverage in this panel.
-      const cap = sumBy(s, (sp) => sp.kind === 'police', (sp) => sp.served ?? 0);
+      const { police: cap } = serviceCapacityAggregates(s);
       if (cap <= 0) return null;
       return {
         ratio: ratio(s.population, cap),
@@ -925,7 +930,7 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
     case 'fire': {
       // BUG-526 (Q100046 A1) — mirrors the police case above; fire coverage
       // is now a real served-population basis (serviceCoverageOf, GR#3 SSOT).
-      const cap = sumBy(s, (sp) => sp.kind === 'fire', (sp) => sp.served ?? 0);
+      const { fire: cap } = serviceCapacityAggregates(s);
       if (cap <= 0) return null;
       return {
         ratio: ratio(s.population, cap),
@@ -1618,7 +1623,13 @@ export function countByKind(buildings: SimState['buildings']): Record<ZoneKind, 
 // of everything PLACED, online or not. Mirror the powerStats()/sumBy() gate
 // exactly: `if (!isOnline(s, b)) continue;` inside the building loop.
 // Order-independent fold, no map-range-with-break (GR#21).
-export function countByKindOnline(s: SimState): Record<ZoneKind, number> {
+// FEAT-webworker-sim-offload Stage 0 (2026-09-02): memoised (memoOnState,
+// defined below — a hoisted function declaration, safe to reference from a
+// textually-earlier call site) because computeFlows (engine.ts) calls this
+// 3x per invocation on the SAME unchanged state (once for Business/Freight
+// Tax, once for the Office Tax split, once for the harbour-boosted Freight
+// Tax recompute) — one real O(buildings) pass instead of three.
+export const countByKindOnline: (s: SimState) => Record<ZoneKind, number> = memoOnState((s) => {
   const c = { ...ZERO_COUNTS };
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
@@ -1626,7 +1637,7 @@ export function countByKindOnline(s: SimState): Record<ZoneKind, number> {
     if (sp) c[sp.kind]++;
   }
   return c;
-}
+});
 
 /**
  * FEAT-1972079878 inc1 (AC-5): total residents capacity, including auto-scaled tiers.
@@ -1944,17 +1955,122 @@ export function lineUsageOf(s: SimState): LineUsage[] {
 // gate exactly: `if (!isOnline(s, b)) continue;` inside the building loop,
 // same as those two functions (data.ts ~1918, ~2208). Order-independent
 // fold, no map-range-with-break (GR#21).
-function sumBy(s: SimState, f: (sp: Spec) => boolean, g: (sp: Spec) => number): number {
-  let t = 0;
+//
+// FEAT-webworker-sim-offload Stage 0 (2026-09-02): the old per-predicate
+// `sumBy()` helper that lived here (called once per service kind — 7 times
+// from serviceCoverageOf, plus 3 more from utilisationOf) was removed once
+// every call site was folded into the single-pass serviceCapacityAggregates()
+// below — see that function's docblock for the full before/after story. Its
+// isOnline-gated-full-building-list-per-predicate SHAPE is preserved exactly
+// in the new aggregate's single loop, just no longer duplicated per call.
+
+// FEAT-webworker-sim-offload Stage 0 (2026-09-02) — memoisation for the
+// O(buildings) selectors that get called MULTIPLE times per unchanged
+// SimState within one derivation pass: powerStats (utilisationOf/brownoutOf/
+// serviceCoverageOf/computeFlows/debugjson/snapshot), countByKindOnline
+// (computeFlows calls it 3x today), and the sumBy-driven service-capacity sums
+// (serviceCoverageOf's 7 separate full-building-list passes, PLUS utilisationOf
+// re-running the SAME sumBy predicates per-building from MapView's render loop
+// — an O(buildings²) amplification at 68K population).
+//
+// INDEPENDENT ROUND FINDING (2026-09-02, REJECT on the first cut): the first
+// version of this memo keyed on a hand-picked TRIPLE — (buildings,
+// roadConnectivity, tick) — reasoned from isOnline()'s own read-set. That
+// list was INCOMPLETE: serviceCapacityAggregates() also reads pipeTier
+// (via plantEffServed -> pipeTierOf for water plants), so a 'pipeUpgrade'
+// dispatch — which changes ONLY pipeTier, leaving buildings/roadConnectivity/
+// tick byte-identical — produced a cache HIT against the stale pre-upgrade
+// capacity. Proven: read serviceCoverageOf, dispatch pipeUpgrade, read again
+// -> cleanwater cap silently unchanged (stale) while waterCaps(s) on the SAME
+// state reported the new number, and wellbeingOf(s) (pure by contract)
+// returned different values cold vs. after a prior read — a live GR#3
+// violation (two panels disagree) and a live GR#21 violation (a "pure"
+// function became call-history-dependent). Hand-enumerating a memoised
+// function's read-set is exactly the kind of list that silently rots as the
+// function grows — the SAME class of gap that produced the miss.
+//
+// FIX: key the cache on the STATE OBJECT ITSELF (a WeakMap<SimState, T>,
+// the same idiom occupiedSetCache above already uses, just keyed on `s`
+// instead of `s.buildings`) rather than on a hand-picked field list. This is
+// structurally immune to "forgot a field" by construction, given the
+// reducer's existing immutable-update discipline: every reduceCore() case
+// that changes ANY field returns a brand-new top-level object via `{...state,
+// ...}` (verified: no `state.<field> =` or `.buildings[i] =`/`.push(`
+// in-place mutation exists anywhere in engine.ts — grepped clean), and every
+// no-op case returns the SAME `state` reference unchanged (a correct,
+// trivial cache hit). So: same object -> guaranteed nothing relevant changed
+// -> safe to reuse; different object -> guaranteed something MAY have
+// changed -> safe (if slightly conservative) to recompute. No per-function
+// read-set bookkeeping, no way to add a new field this memo silently misses.
+// WeakMap entries are GC'd once a superseded state is no longer referenced
+// anywhere (journal/redux history included) — no unbounded-growth leak risk,
+// same reasoning as occupiedSetCache's.
+function memoOnState<T>(compute: (s: SimState) => T): (s: SimState) => T {
+  const cache = new WeakMap<SimState, T>();
+  return (s: SimState): T => {
+    if (cache.has(s)) return cache.get(s) as T;
+    const value = compute(s);
+    cache.set(s, value);
+    return value;
+  };
+}
+
+/**
+ * Service-capacity aggregate for the served-population/children services —
+ * SINGLE pass over s.buildings computing every sum serviceCoverageOf() and
+ * utilisationOf()'s health/police/fire cases used to each gather via their
+ * OWN separate sumBy() call (7 full-building-list passes -> 1). Memoised
+ * (memoOnState) so utilisationOf's per-building MapView render loop hits the
+ * cache on every building after the first, instead of re-walking the whole
+ * buildings array once per rendered building.
+ */
+interface ServiceCapacityAggregates {
+  nursery: number;
+  primary: number;
+  tertiary: number;
+  gp: number;
+  hosp: number;
+  police: number;
+  fire: number;
+  clean: number;
+  waste: number;
+}
+
+const serviceCapacityAggregates: (s: SimState) => ServiceCapacityAggregates = memoOnState((s) => {
+  let nursery = 0;
+  let primary = 0;
+  let tertiary = 0;
+  let gp = 0;
+  let hosp = 0;
+  let police = 0;
+  let fire = 0;
+  let clean = 0;
+  let waste = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
-    if (sp && f(sp)) t += g(sp);
+    if (!sp) continue;
+    if (sp.stage === 'nursery') nursery += sp.children ?? 0;
+    else if (sp.stage === 'primary' || sp.stage === 'city') primary += sp.children ?? 0;
+    else if (sp.stage === 'tertiary') tertiary += sp.children ?? 0;
+    if (sp.id === 'hea_clinic') gp += sp.served ?? 0;
+    else if (sp.id === 'hea_hospital' || sp.id === 'hea_teaching') hosp += sp.served ?? 0;
+    if (sp.kind === 'police') police += sp.served ?? 0;
+    else if (sp.kind === 'fire') fire += sp.served ?? 0;
+    else if (sp.kind === 'water') {
+      const eff = plantEffServed(s, b);
+      if (sp.tag === 'clean') clean += eff;
+      if (sp.tag === 'waste') waste += eff;
+    }
   }
-  return t;
-}
+  return { nursery, primary, tertiary, gp, hosp, police, fire, clean, waste };
+});
 
-export function powerStats(s: SimState): { need: number; cap: number } {
+export const powerStats: (s: SimState) => { need: number; cap: number } = memoOnState(
+  (s) => computePowerStats(s)
+);
+
+function computePowerStats(s: SimState): { need: number; cap: number } {
   // BUG-430 — a power plant only feeds the grid while it is ONLINE. Mirror the
   // building-activation gate (onlineResidentsCapacity / wasteGeneratedOf): a
   // road-disconnected or still-under-construction plant (incl. the Five Gorges
@@ -2160,40 +2276,16 @@ export interface ServiceCoverage {
  */
 export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
   const pop = s.population;
-  const nursery = sumBy(s, (sp) => sp.stage === 'nursery', (sp) => sp.children ?? 0);
-  const primary = sumBy(s, (sp) => sp.stage === 'primary' || sp.stage === 'city', (sp) => sp.children ?? 0);
-  const tertiary = sumBy(s, (sp) => sp.stage === 'tertiary', (sp) => sp.children ?? 0);
-  const gp = sumBy(s, (sp) => sp.id === 'hea_clinic', (sp) => sp.served ?? 0);
-  const hosp = sumBy(s, (sp) => sp.id === 'hea_hospital' || sp.id === 'hea_teaching', (sp) => sp.served ?? 0);
-  // BUG-399 spec-drift fix: count police coverage by KIND, not a hardcoded id.
-  // Newer police buildings (e.g. pol_hq "Divisional HQ", served 60,000) pay
-  // upkeep and are unambiguously police coverage in the same served-population
-  // unit; keying on id === 'pol_station' left them invisible to the meter, so a
-  // fully-policed city read a pegged +100 shortfall. 'police' has exactly one
-  // capability (population coverage via `served`), so kind is the right key.
-  const police = sumBy(s, (sp) => sp.kind === 'police', (sp) => sp.served ?? 0);
-  // BUG-526 (Q100046 A1) — fire coverage, the missing wellbeing wiring: fire
-  // stations charge upkeep (a cost-only sink today) but their `served`
-  // capacity was never read anywhere. Same served-population pattern as
-  // police/GP/hospital (sumBy, isOnline-gated) — need = whole population,
-  // cap = Σ online fire-building `served`.
-  const fire = sumBy(s, (sp) => sp.kind === 'fire', (sp) => sp.served ?? 0);
-  // BUG-534 — mirror BUG-430/BUG-527: an offline (disconnected / still
-  // under-construction) water plant contributes ZERO clean/waste capacity to
-  // the coverage meters, exactly as an offline power plant contributes zero
-  // MW (powerStats) and an offline service building contributes zero served
-  // population (sumBy). Order-independent fold (GR#21): same state → same
-  // clean/waste; no Date/Math.random.
-  let clean = 0;
-  let waste = 0;
-  for (const b of s.buildings) {
-    if (!isOnline(s, b)) continue;
-    const sp = SPECS[b.spec];
-    if (sp?.kind !== 'water') continue;
-    const eff = plantEffServed(s, b);
-    if (sp.tag === 'clean') clean += eff;
-    if (sp.tag === 'waste') waste += eff;
-  }
+  // FEAT-webworker-sim-offload Stage 0 (2026-09-02): the nursery/primary/
+  // tertiary/gp/hosp/police/fire/clean/waste sums used to be 7 separate
+  // sumBy() calls plus an inline clean/waste loop — 8 full O(buildings)
+  // passes per serviceCoverageOf() call. serviceCapacityAggregates() folds
+  // all of them into ONE pass (memoised per buildings/roadConnectivity/tick
+  // triple), with identical predicates/gates (BUG-399/BUG-526/BUG-534) to
+  // what each sumBy() call did individually — see its definition above for
+  // the shared isOnline gate this preserves exactly.
+  const agg = serviceCapacityAggregates(s);
+  const { nursery, primary, tertiary, gp, hosp, police, fire, clean, waste } = agg;
   const pw = powerStats(s);
 
   const row = (id: string, label: string, need: number, cap: number, spec: string): ServiceCoverage =>

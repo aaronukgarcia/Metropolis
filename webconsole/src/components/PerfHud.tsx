@@ -14,6 +14,11 @@ import {
   type FpsTrackerState,
   type RenderThrottle,
 } from '../sim/perfhud';
+// FEAT-webworker-sim-offload / FEAT-2326609734 (2026-09-02): queue-depth
+// groundwork — the worker's backlog (ticks posted, not yet acknowledged),
+// read from the same global-singleton idiom as getGlobalTickTracker above.
+// Zero-lag (no worker, or the metropolis.webworker flag off) always reads 0.
+import { getGlobalWorkerQueueTracker } from '../sim/workerQueueDepth';
 
 /**
  * Performance HUD overlay — DEV-gated, corner-anchored.
@@ -29,6 +34,14 @@ export function PerfHud() {
 
   const [visible, setVisible] = useState(false);
   const [snapshot, setSnapshot] = useState<PerfHudSnapshot | null>(null);
+  const [workerQueueDepth, setWorkerQueueDepth] = useState(0);
+  // N1 fix / FEAT-2326609734 AC-7 honesty (independent round 2 REJECT,
+  // 2026-09-02): depth() alone reads 0 both when genuinely caught up AND
+  // when every tick is being discarded via supersede under sustained input
+  // contention (each supersede drains its own slot) — the attacker flagged
+  // this "silently reads caught up while the clock is stalled" gap twice.
+  // supersedeStreak surfaces the difference.
+  const [workerSupersedeStreak, setWorkerSupersedeStreak] = useState(0);
 
   const fpsTrackerRef = useRef<FpsTrackerState>(createFpsTracker());
   const renderThrottleRef = useRef<RenderThrottle>(createRenderThrottle());
@@ -68,6 +81,9 @@ export function PerfHud() {
           snapshotAtMs: nowMs,
         };
         setSnapshot(snap);
+        const tracker = getGlobalWorkerQueueTracker();
+        setWorkerQueueDepth(tracker.depth());
+        setWorkerSupersedeStreak(tracker.supersedeStreak());
       }
 
       frameId = requestAnimationFrame(loop);
@@ -122,6 +138,25 @@ export function PerfHud() {
           <span className="perf-label">Network</span>
           <span className="perf-value">
             {snapshot.network.fetchCount} calls / {(snapshot.network.fetchBytes / 1024).toFixed(1)} KB
+          </span>
+        </div>
+        {/* FEAT-webworker-sim-offload / FEAT-2326609734: sim-worker backlog
+            readout — 0/"caught up" whenever the worker offload is
+            disabled/unavailable (AC-7 zero-lag case) or genuinely idle.
+            N1 fix (independent round 2 REJECT, 2026-09-02): a nonzero
+            depth() (posted-not-yet-acked) OR a nonzero supersedeStreak
+            (ticks being discarded under sustained input contention, which
+            drains its own slot immediately so depth() alone reads 0) both
+            surface as NOT caught up — depth()===0 no longer means "caught
+            up" on its own. */}
+        <div className="perf-row" data-testid="worker-queue-depth-row">
+          <span className="perf-label">Sim queue</span>
+          <span className="perf-value" data-testid="worker-queue-depth-value">
+            {workerQueueDepth === 0 && workerSupersedeStreak === 0
+              ? 'caught up'
+              : workerSupersedeStreak > 0
+                ? `${workerSupersedeStreak} superseded — catching up`
+                : `${workerQueueDepth} pending`}
           </span>
         </div>
       </div>

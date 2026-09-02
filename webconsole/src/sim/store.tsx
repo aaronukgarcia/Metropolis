@@ -35,6 +35,22 @@ import {
   type ProgressSample,
 } from './genesisReplay';
 import { attemptWipe, captureOnUnload, captureBeforeWipe } from './captureBeforeWipe';
+// FEAT-webworker-sim-offload Stage 1 / Landing 2 (2026-09-02): tick-only
+// worker offload — flag, protocol types, and the queue-depth groundwork
+// (FEAT-2326609734). See simWorkerProtocol.ts's header for the full design
+// and its documented Landing-2-vs-Landing-3 scope tradeoff.
+import { webWorkerOffloadEnabled } from './webWorkerFlag';
+import type { MainToWorkerMessage, WorkerToMainMessage } from './simWorkerProtocol';
+import { getGlobalWorkerQueueTracker } from './workerQueueDepth';
+import {
+  initialOffloadControllerState,
+  beginTickRequest,
+  invalidateInFlight,
+  decideTickReply,
+  shouldForceSyncTick,
+  afterForcedSyncTick,
+  type OffloadControllerState,
+} from './simWorkerOffloadController';
 import {
   buildGameSave,
   parseGameSave,
@@ -356,7 +372,18 @@ export function SimProvider({ children }: { children: ReactNode }) {
       });
 
       // Dispatch the action.
-      const timedAction = () => dispatch(action);
+      // B2 fix (independent round REJECT, 2026-09-02): 'reset' wholesale-
+      // replaces state (reduceCore's reset case, exempted from the decline
+      // freeze alongside 'hydrate' — engine.ts). Any worker tick reply still
+      // in flight was computed against the PRE-reset state and must never
+      // be allowed to land afterwards — invalidateInFlightWorkerTick tells
+      // the offload controller so its requestId no longer matches, and
+      // worker.onmessage's decideTickReply drops the eventual reply
+      // unconditionally, regardless of what tick number it carries.
+      const timedAction = () => {
+        if (action.type === 'reset') invalidateInFlightWorkerTick();
+        dispatch(action);
+      };
 
       if (tickTracker && action.type === 'tick') {
         const start = performance.now();
@@ -393,6 +420,316 @@ export function SimProvider({ children }: { children: ReactNode }) {
       recordAndDispatch(action);
     };
   }, [tickTracker]);
+
+  // ---------------------------------------------------------------------
+  // FEAT-webworker-sim-offload Stage 1 / Landing 2 (2026-09-02): tick-only
+  // Web Worker offload. See simWorkerProtocol.ts's header for the full
+  // design and the documented Landing-2-vs-Landing-3 scope tradeoff (full
+  // per-tick state snapshot, not a targeted diff — that's Landing 3).
+  //
+  // AC-8 fallback contract: `webWorkerActiveRef.current` stays false (and
+  // every effect below becomes a no-op) whenever the flag is off, `Worker`
+  // is unavailable, or construction throws — the tick-driver effect further
+  // below then falls straight back to calling wrappedDispatch({type:'tick'})
+  // exactly as it did before this feature existed. Same reducer module
+  // either way (simWorkerProtocol.ts imports the SAME `reducer` this file
+  // imports for the fallback) — GR#21.
+  const workerRef = useRef<Worker | null>(null);
+  // FEAT-webworker-sim-offload / independent round REJECT follow-up
+  // (2026-09-02): ALL request/reply/supersede bookkeeping lives in
+  // simWorkerOffloadController.ts's pure, directly-unit-tested state
+  // machine (test/simworker-offload.test.mjs covers B2/B3 against it in
+  // isolation, no DOM/timers/Worker needed) — this ref just holds ITS
+  // current state across renders. store.tsx below is thin glue: call a
+  // controller transition, apply its returned state, act on its decision.
+  const offloadControllerRef = useRef<OffloadControllerState>(initialOffloadControllerState());
+
+  /**
+   * B1/B2/"lesser" fix, superseding the FIRST cut's buffer-while-in-flight
+   * design entirely (independent round REJECT, 2026-09-02 — see the round's
+   * closing note: "reconsider buffering PLACEMENT actions behind a full-
+   * state round trip; it delays clicks — the opposite of the goal").
+   *
+   * OLD design: a non-tick action dispatched while a tick was in flight was
+   * BUFFERED (held back, not applied) until the tick's reply landed, then
+   * replayed. That reintroduced exactly the "click blocked by sim work" lag
+   * this feature exists to remove (a bounded worker-round-trip's worth, not
+   * 5 seconds, but still a regression against the stated goal), AND its
+   * buffer-draining logic was itself a source of bugs (a buffered 'reset'
+   * silently dropped on component teardown = a GR#27 capture-before-wipe
+   * no-op; applyLoadedSave's raw hydrate never even routed through the
+   * buffer at all, so it wasn't protected by it — the B2 finding).
+   *
+   * NEW design: a non-tick action is applied to main's CURRENT state
+   * IMMEDIATELY, exactly as it would be with the worker offload off — never
+   * delayed, never buffered. Instead, this function SUPERSEDES whatever
+   * tick request is in flight (via the controller's invalidateInFlight): it
+   * is unconditionally discarded when its reply eventually arrives (the
+   * controller's requestId can never match again), because that reply was
+   * computed from a state this action has now moved past — applying it
+   * afterwards would silently revert this action's effect. Per B3, a
+   * discarded tick is never journaled and never applied, so nothing
+   * inconsistent reaches the journal; the very next tick-driver interval
+   * simply issues a FRESH request from the now-current (post-action) state.
+   * Net effect under contention: the simulation occasionally reruns/delays
+   * ONE tick by a beat, but a placement/bulldoze/etc click is NEVER made to
+   * wait on a worker round-trip — the correct tradeoff, since ticks have no
+   * wall-clock deadline a player can perceive but click latency is exactly
+   * what this whole feature is trying to fix.
+   *
+   * Determinism/journal-ordering (thought through, per the round's ask):
+   * the journal ends up with the non-tick action recorded at the SAME tick
+   * number it already carried (`stateRefForDispatch.current.tick`, read by
+   * wrappedDispatch's own recordAndDispatch — untouched), followed later by
+   * a fresh 'tick' entry once the REISSUED request completes — i.e. exactly
+   * the sequence [..., action @ T, tick @ T, ...] that genesis-replay would
+   * reproduce if the same action and tick had simply been processed
+   * back-to-back on a single thread with the action arriving first. No
+   * action is ever lost, double-applied, or journaled out of the order it
+   * was actually processed in.
+   *
+   * Also used before a 'reset' or a loadGame/loadNamed hydrate proceeds —
+   * the B2 finding: applyLoadedSave's raw `dispatch({type:'hydrate', ...})`
+   * never invalidated the in-flight tracking, so an in-flight tick's reply
+   * (a HIGHER, pre-load tick number) passed the old monotonic guard and
+   * clobbered a freshly loaded OLDER save — reachable in ordinary play, not
+   * a contrived race. Same supersede logic applies: the in-flight request
+   * becomes unconditionally moot the instant the state it was computed
+   * against is superseded by ANY other change, whether that's one more
+   * user action or a full reset/load.
+   */
+  const invalidateInFlightWorkerTick = () => {
+    const before = offloadControllerRef.current;
+    offloadControllerRef.current = invalidateInFlight(before);
+    if (before.pendingTick) {
+      const tracker = getGlobalWorkerQueueTracker();
+      tracker.drain();
+      // N1 fix / FEAT-2326609734 AC-7 honesty: report the (now possibly
+      // incremented) consecutive-supersede streak so a UI readout can show
+      // "behind / catching up" instead of misreading depth()'s post-drain 0
+      // as "caught up" — see workerQueueDepth.ts's reportSupersedeStreak.
+      tracker.reportSupersedeStreak(offloadControllerRef.current.supersedeStreak);
+    }
+  };
+
+  // Record a 'tick' journal entry WITHOUT running the local reducer — used
+  // only by the worker-offload path below, which hands the actual advance()
+  // computation to the worker instead. Mirrors exactly what
+  // recordAndDispatch's setJournal call does for every other action; kept as
+  // a tiny top-level closure (not memoised) so it can be called from the
+  // worker's onmessage handler below without adding it to that effect's
+  // dependency array — every reference inside (setJournal, refs) is already
+  // stable across renders.
+  //
+  // B3 fix (independent round REJECT, 2026-09-02): this used to be called at
+  // REQUEST time (before postMessage), so a tick request that was later
+  // DISCARDED (monotonic-guard rejection, a reset/load invalidating it, a
+  // worker error, or teardown mid-flight) still left a 'tick' entry in the
+  // journal — a tick genesis-replay would later fold through the reducer
+  // even though live play never actually applied that tick's effect to
+  // state (GR#21/AC-5: replay must reproduce exactly what happened, no
+  // more, no less). It is now called ONLY from worker.onmessage, ONLY on
+  // the branch that goes on to actually apply the result via hydrate —
+  // never on request, never on a discarded/rejected/errored reply. `tick`
+  // is passed explicitly (the PRE-tick number the offload controller
+  // captured at request time — decideTickReply's `tickToJournal`) rather
+  // than re-read from stateRefForDispatch.current, which may have moved on
+  // by apply time.
+  const recordTickInJournalOnly = (tick: number) => {
+    setJournal((j) => {
+      const updated = recordAction(j, tick, { type: 'tick' });
+      journalPersisterRef.current?.schedule(updated);
+      return updated;
+    });
+  };
+
+  /**
+   * Issue a new tick request to the worker if none is currently in flight.
+   * Called ONLY from the tick-driver interval's own scheduled cadence —
+   * NOT from worker.onmessage.
+   *
+   * N2 fix (independent round 3 REJECT, 2026-09-02, superseding the round-2
+   * N1 fix): an earlier version of this feature ALSO called this from
+   * worker.onmessage on a stale-reply "rebase" (issue the next request
+   * immediately rather than waiting for the next interval). That, combined
+   * with shouldForceSyncTick's K-consecutive-supersedes escape, formed an
+   * INTERVAL-INDEPENDENT tick generator: under continuous sub-round-trip-
+   * interval input, issue/invalidate/reissue cycles could complete many
+   * times within a single SPEED_MS period, each Kth one forcing a
+   * synchronous tick — the round measured ~20x the selected speed at
+   * SPEED_MS=1000/16ms round-trip/60Hz drag. Removing the onmessage call
+   * site (see worker.onmessage's stale-reply branch below for the full
+   * story) restores the invariant that a tick request can ONLY be issued in
+   * response to a scheduled interval fire, which bounds the supersede rate
+   * — and therefore the forced-tick rate — to at most the interval rate:
+   * total tick production can never exceed the selected speed (see
+   * test/simworker-offload.test.mjs's N2 ceiling matrix, ratio <= 1.0 in
+   * every cell). The K-escape alone still guarantees liveness (the round-2
+   * fix direction, confirmed correct by the round): forward progress at
+   * least once every K+1 intervals under sustained contention, never a
+   * freeze, and — now — never a runaway either.
+   */
+  const issueTickRequest = () => {
+    const worker = workerRef.current;
+    if (!worker) return;
+    const begun = beginTickRequest(offloadControllerRef.current, stateRefForDispatch.current.tick);
+    if (!begun) return; // already pending — nothing to do.
+    offloadControllerRef.current = begun.state;
+    getGlobalWorkerQueueTracker().enqueue();
+    const msg: MainToWorkerMessage = {
+      type: 'runTick',
+      state: stateRefForDispatch.current,
+      requestId: begun.requestId,
+    };
+    worker.postMessage(msg);
+  };
+
+  // Construct/tear down the worker exactly once per SimProvider lifetime
+  // (or never, if disabled/unavailable) — a stable worker instance is
+  // required so the tick-driver effect and this effect agree on the SAME
+  // `workerRef.current`.
+  useEffect(() => {
+    if (!webWorkerOffloadEnabled()) return undefined;
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL('./simWorker.ts', import.meta.url), { type: 'module' });
+    } catch {
+      // AC-8: construction throwing must never crash the app — leave
+      // workerRef null so every call site below falls back to main-thread.
+      return undefined;
+    }
+    const tracker = getGlobalWorkerQueueTracker();
+    worker.onmessage = (ev: MessageEvent<WorkerToMainMessage>) => {
+      const msg = ev.data;
+      if (msg.type !== 'tickResult') return;
+      // B2/B3 fix: ALL of "is this reply stale", "should it be applied",
+      // and "what tick number (if any) to journal" are decided by the pure
+      // controller — see simWorkerOffloadController.ts's decideTickReply
+      // header for the full reasoning (requestId-based discard, not a
+      // tick-number comparison against whatever `state` happens to be
+      // current by the time this runs).
+      const { state: nextControllerState, decision } = decideTickReply(
+        offloadControllerRef.current,
+        { requestId: msg.requestId, resultTick: msg.state.tick },
+        stateRefForDispatch.current.tick
+      );
+      const wasStaleMismatch = nextControllerState === offloadControllerRef.current;
+      if (wasStaleMismatch) {
+        // N2 fix (independent round 3 REJECT, 2026-09-02): this reply was
+        // already invalidated (a superseding action, or a reset/load) —
+        // its own enqueue()/drain() bookkeeping was already settled at
+        // invalidation time (invalidateInFlightWorkerTick), so nothing to
+        // drain here.
+        //
+        // DELIBERATELY DISCARD, do NOT rebase. The round-2 fix immediately
+        // re-issued a new request right here — combined with the K-supersede
+        // forced-sync-tick escape, that turned into an INTERVAL-INDEPENDENT
+        // tick generator: under continuous sub-round-trip-interval input
+        // (e.g. a 60Hz drag against a ~16ms worker round-trip), issue/
+        // invalidate/reissue cycles could complete many times WITHIN a
+        // single SPEED_MS interval period, each Kth one forcing a
+        // synchronous tick — decoupling total tick production entirely from
+        // the player's selected speed (measured: ~20x the selected speed at
+        // SPEED_MS=1000, 16ms round-trip, 60Hz drag). The round's own
+        // control proved the opposite failure mode does NOT occur when
+        // rebase is removed: with supersedes only ever occurring against
+        // requests the INTERVAL itself issued, the supersede rate — and
+        // therefore the forced-tick rate — is bounded by the interval rate,
+        // so total tick production can never exceed the selected speed
+        // (ratio <= 1.0 always; see test/simworker-offload.test.mjs's N2
+        // ceiling matrix). The K-escape ALONE still guarantees liveness
+        // (progress >= 1 tick per K+1 intervals under sustained contention —
+        // slower than selected speed, never faster, and never frozen) — the
+        // NEXT scheduled interval fire (not this handler) issues the fresh
+        // request, exactly like the AC-8 fallback's own cadence.
+        return;
+      }
+      offloadControllerRef.current = nextControllerState;
+      tracker.drain();
+      tracker.reportSupersedeStreak(nextControllerState.supersedeStreak);
+      if (decision.kind === 'apply') {
+        // B3 fix: journal the tick HERE, only now that we know the result
+        // will actually be applied — never at request time (see
+        // recordTickInJournalOnly's header comment).
+        recordTickInJournalOnly(decision.tickToJournal);
+        dispatch({ type: 'hydrate', state: msg.state });
+      }
+    };
+    worker.onerror = () => {
+      // Lesser finding (independent round, 2026-09-02): terminate the
+      // worker BEFORE clearing workerRef, so no message this dying worker
+      // might still emit can race the fallback path that starts running
+      // main-thread ticks the instant workerRef.current reads null.
+      worker.terminate();
+      // A worker runtime error disables the offload for the rest of this
+      // session (workerRef cleared) — the tick-driver effect's fallback
+      // branch then runs the reducer on main exactly as it always has.
+      // AC-8: no user-visible error, no loss of save/load/journal function.
+      // No journal write for whatever tick was in flight (B3: never
+      // journaled until applied, and an errored worker's result is never
+      // applied) — the fallback path's next interval fire will re-derive
+      // that tick correctly from current state via the ordinary reducer.
+      // No buffer to flush either (the buffering design was removed —
+      // see invalidateInFlightWorkerTick's header comment): every non-tick
+      // action already applied to main state the instant it was dispatched.
+      workerRef.current = null;
+      if (offloadControllerRef.current.pendingTick) tracker.drain();
+      tracker.reset(); // also clears the reported supersedeStreak — a torn-down worker has nothing left to be "behind" on.
+      offloadControllerRef.current = initialOffloadControllerState();
+    };
+    workerRef.current = worker;
+    return () => {
+      worker.terminate();
+      workerRef.current = null;
+      if (offloadControllerRef.current.pendingTick) tracker.drain();
+      tracker.reset();
+      offloadControllerRef.current = initialOffloadControllerState();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dispatch is
+    // the stable useReducer dispatch; wrappedDispatch's own identity is
+    // stabilised (BUG-434) to depend only on tickTracker.
+  }, [wrappedDispatch, dispatch]);
+
+  // The dispatch exposed to the whole app via useSim(). A non-tick action is
+  // ALWAYS applied immediately (never buffered/delayed — see
+  // invalidateInFlightWorkerTick's header comment for the full reasoning);
+  // the only extra behaviour versus wrappedDispatch is superseding whatever
+  // tick request is currently in flight, so its reply (computed from a
+  // state this action is about to move past) is unconditionally discarded
+  // rather than silently reverting this action's effect.
+  //
+  // N1 fix (independent round 2 REJECT, 2026-09-02): "continuous input
+  // starves the tick to a dead stop" — the round proved, against the real
+  // controller+reducer+journal, that with the ORIGINAL invalidate-on-every-
+  // action design, one action per interval fire (a drag-paint's per-
+  // pointermove 'place' at up to 60Hz is exactly this) invalidates EVERY
+  // tick request before its worker reply can land, forever — 200 interval
+  // fires produced 0 applied ticks, with queue-depth silently reading
+  // "caught up" the whole time (each supersede drains its own slot). Fixed
+  // by shouldForceSyncTick's K-consecutive-supersedes escape: once
+  // offloadControllerRef's streak reaches the threshold, the NEXT tick is
+  // forced through the EXISTING synchronous main-thread fallback path
+  // (wrappedDispatch({type:'tick'}), the same one AC-8 already uses when
+  // the worker is unavailable) — this has no worker round-trip at all, so
+  // it cannot be starved by input arriving after it has already returned,
+  // guaranteeing the clock advances at least once every K actions
+  // regardless of input rate or worker latency. Run AFTER the user's own
+  // action (never delays it — the whole point of this feature) so a forced
+  // catch-up tick reads as "the overdue tick finally landed right after
+  // your click", never as added click latency.
+  const guardedDispatch = useMemo(() => {
+    return (action: Action) => {
+      if (workerRef.current && offloadControllerRef.current.pendingTick && action.type !== 'tick') {
+        invalidateInFlightWorkerTick();
+      }
+      wrappedDispatch(action);
+      if (workerRef.current && action.type !== 'tick' && shouldForceSyncTick(offloadControllerRef.current)) {
+        offloadControllerRef.current = afterForcedSyncTick(offloadControllerRef.current);
+        getGlobalWorkerQueueTracker().reportSupersedeStreak(0);
+        wrappedDispatch({ type: 'tick' });
+      }
+    };
+  }, [wrappedDispatch]);
 
   // Autosave timer: every AUTOSAVE_INTERVAL_MS, persist a savepoint.
   // FEAT-1972079854: rolling autosave with fail-safe error handling.
@@ -480,6 +817,27 @@ export function SimProvider({ children }: { children: ReactNode }) {
     if (state.speed === 0) return;
     const id = setInterval(() => {
       if (rebuildInProgress) return;
+      if (workerRef.current) {
+        // Stage 1 offload (Landing 2): hand the actual advance()
+        // computation to the worker instead of running it here.
+        // issueTickRequest() no-ops if one is already in flight — skip this
+        // interval fire rather than piling up a request against state that
+        // hasn't been hydrated with the last result yet. N2 fix (independent
+        // round 3 REJECT, 2026-09-02): this interval is now the ONLY place a
+        // tick request is ever issued — see issueTickRequest's own header
+        // for why removing the onmessage rebase call site is what bounds
+        // total tick production to the selected speed.
+        //
+        // B3 fix (independent round REJECT, 2026-09-02): the journal write
+        // used to happen HERE, at request time — moved to worker.onmessage,
+        // and ONLY on the branch that actually applies the result, so a
+        // discarded/rejected/errored tick is never journaled as having
+        // happened (see recordTickInJournalOnly's header comment).
+        issueTickRequest();
+        return;
+      }
+      // Fallback path (AC-8): worker disabled/unavailable — exactly
+      // today's untouched behaviour, same reducer module.
       wrappedDispatch({ type: 'tick' });
     }, SPEED_MS[state.speed]);
     return () => clearInterval(id);
@@ -872,6 +1230,17 @@ export function SimProvider({ children }: { children: ReactNode }) {
         }
         setJournal(save.journal);
         setLastSaveIndex(save.journal.entries.length);
+        // B2 fix (independent round REJECT, 2026-09-02): this raw hydrate
+        // wholesale-replaces state with the LOADED save, whose tick number
+        // can be lower (an older save) than whatever tick an in-flight
+        // worker request was computed against — the old code left
+        // pendingTickRef/activeTickRequestIdRef untouched here, so that
+        // request's eventual reply (a HIGHER, pre-load tick number) passed
+        // the monotonic guard and clobbered the just-loaded city with the
+        // stale pre-load one. Reachable in ordinary play (Load Save while a
+        // tick happens to be round-tripping the worker), not a contrived
+        // race — invalidate BEFORE this hydrate proceeds.
+        invalidateInFlightWorkerTick();
         dispatch({ type: 'hydrate', state: snapshot });
         if (!persisted) {
           recordError('City loaded in memory; session persist failed (quota). Use Config → Clear journal, then Save.', {
@@ -1072,7 +1441,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       state,
-      dispatch: wrappedDispatch,
+      // FEAT-webworker-sim-offload Stage 1: guardedDispatch is
+      // behaviour-identical to wrappedDispatch except for the narrow
+      // buffer-while-a-tick-is-in-flight window documented above it — see
+      // guardedDispatch's own comment.
+      dispatch: guardedDispatch,
       cityName,
       listSaves,
       listRecent,
@@ -1082,7 +1455,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       loadNamed,
       renameCity,
     }),
-    [state, wrappedDispatch, cityName],
+    [state, guardedDispatch, cityName],
   );
   // Use autoSaveError for quiet indicator (available for UI to display if desired).
   return (
