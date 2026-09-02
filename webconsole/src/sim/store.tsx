@@ -256,7 +256,20 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const [autoSaveError, setAutoSaveError] = useState<boolean>(false);
   // GR#27 (BUG-420): surfaced when a Start Over / reset was ABORTED because the
   // mandatory pre-wipe debug capture failed. The wipe did not happen; state is intact.
+  // BUG-513 GAP 3: this same banner state is also used to surface LOAD failures
+  // (a load never wipes anything, so the wording must not claim "Start Over"),
+  // so `captureErrorKind` tracks which flow produced the message and
+  // `captureErrorCode` carries the registry code (e.g. MET-V850) when one exists.
   const [captureError, setCaptureError] = useState<string | null>(null);
+  const [captureErrorKind, setCaptureErrorKind] = useState<'reset' | 'load'>('reset');
+  const [captureErrorCode, setCaptureErrorCode] = useState<string | undefined>(undefined);
+  // BUG-513 GAP 3: single call site for setting the banner so kind/code never
+  // drift out of sync with the message.
+  const showCaptureError = (msg: string, kind: 'reset' | 'load', code?: string) => {
+    setCaptureError(msg);
+    setCaptureErrorKind(kind);
+    setCaptureErrorCode(code);
+  };
   // inc2: cross-build rebuild prompt state. `rebuildDecision` non-null means a
   // save from a different build is awaiting the player's choice; `rebuildPhase`
   // drives the modal (prompt → running → report); `rebuildReportState` carries
@@ -355,7 +368,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           recordError(`Start Over aborted — pre-wipe debug capture failed: ${msg}. State left intact.`, { type: 'reset-abort' });
-          setCaptureError(msg);
+          showCaptureError(msg, 'reset');
         }
         return;
       }
@@ -685,13 +698,13 @@ export function SimProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         recordError(`Load aborted — pre-wipe capture failed: ${msg}. State left intact.`, { type: 'reset-abort' });
-        setCaptureError(msg);
+        showCaptureError(msg, 'load');
         return false;
       }
     }
   };
 
-  const rememberOpened = (save: GameSave) => {
+  const rememberOpened = (save: GameSave, opts?: { confirmedOverwrite?: boolean }) => {
     const snap = save.savepoint.snapshot;
     // BUG-457: neither of these is allowed to swallow a quota failure silently
     // (GR#1/#17) — both now return a success boolean (routed through the
@@ -716,17 +729,33 @@ export function SimProvider({ children }: { children: ReactNode }) {
         action: 'save',
       });
     }
+    // BUG-512: BUG-445 gated the named-save collision check at the Save-As/
+    // rename UI vectors only. This is the SAME writeNamedSave call, reached
+    // from a plain saveGame()/load's rememberOpened, so it was still ungated —
+    // loading or plain-saving onto a name that collides a DIFFERENT existing
+    // slot silently clobbered it. Apply the identical BUG-445 pattern here:
+    // a same-city re-save (or an already-confirmed overwrite from the
+    // saveGameAs/renameCity flows) proceeds; a different-city collision is
+    // refused, not written, and reported — never silently overwritten.
+    const collision = checkNamedSaveCollision(window.localStorage, save.name);
     let namedOk = false;
-    try {
-      namedOk = writeNamedSave(window.localStorage, save);
-    } catch {
-      namedOk = false;
-    }
-    if (!namedOk) {
+    if (collision && !opts?.confirmedOverwrite) {
       recordError(
-        'Named-city slot not updated (storage quota). Use Config → Reclaim storage, then Save As again.',
-        { type: 'app', action: 'save' },
+        `Named-city slot NOT updated: a different city named "${collision.existingName}" already exists at slot "${collision.slug}". Use Save As to confirm overwrite.`,
+        { type: 'app', action: 'save', code: 'MET-V851' },
       );
+    } else {
+      try {
+        namedOk = writeNamedSave(window.localStorage, save);
+      } catch {
+        namedOk = false;
+      }
+      if (!namedOk) {
+        recordError(
+          'Named-city slot not updated (storage quota). Use Config → Reclaim storage, then Save As again.',
+          { type: 'app', action: 'save' },
+        );
+      }
     }
   };
 
@@ -756,7 +785,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
     if (!ok) {
       if (msg) {
         recordError(msg, { type: 'app', action: 'load' });
-        setCaptureError(msg);
+        showCaptureError(msg, 'load');
       }
       setRebuildDecision(null);
       setRebuildPhase('prompt');
@@ -899,7 +928,12 @@ export function SimProvider({ children }: { children: ReactNode }) {
       } catch {
         /* ignore */
       }
-      rememberOpened(save);
+      // BUG-512: this call site already resolved any collision above (either
+      // there was none, or the caller explicitly confirmed the overwrite) —
+      // thread that confirmation through so rememberOpened's own collision
+      // gate (guarding the OTHER two, previously-ungated call sites) doesn't
+      // re-block a write the user already approved.
+      rememberOpened(save, { confirmedOverwrite: true });
       await pickSaveFile(suggestedSaveName(save.savepoint.snapshot.tick, label), gameSaveText(save));
       return { ok: true };
     } catch (e) {
@@ -916,28 +950,32 @@ export function SimProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       recordError(`Load failed: ${msg}`, { type: 'app', action: 'load' });
-      setCaptureError(msg);
+      showCaptureError(msg, 'load');
       return;
     }
     if (text == null) return;
     if (text.length > 15_000_000) {
       const msg = 'Load refused: file is larger than 15 MB.';
       recordError(msg, { type: 'app', action: 'load' });
-      setCaptureError(msg);
+      showCaptureError(msg, 'load');
       return;
     }
     let parsed;
     try {
       parsed = parseGameSave(text);
     } catch (e) {
+      // BUG-513 GAP 2: parseGameSave rejects via codedError (MET-V850) — thread
+      // that code through recordError so it survives into the ring/debug.json
+      // instead of being dropped at this boundary (gap-1 already renders it).
       const msg = e instanceof Error ? e.message : String(e);
-      recordError(`Load refused: ${msg}`, { type: 'app', action: 'load' });
-      setCaptureError(msg);
+      const code = (e as { code?: string })?.code;
+      recordError(`Load refused: ${msg}`, { type: 'app', action: 'load', code });
+      showCaptureError(msg, 'load', code);
       return;
     }
     if (!parsed.ok || !parsed.save) {
       recordError(`Load refused: ${parsed.reason ?? 'invalid save'}`, { type: 'app', action: 'load' });
-      setCaptureError(parsed.reason ?? 'invalid save');
+      showCaptureError(parsed.reason ?? 'invalid save', 'load');
       return;
     }
     applyLoadedSave(parsed.save);
@@ -1051,10 +1089,20 @@ export function SimProvider({ children }: { children: ReactNode }) {
             fontFamily: 'monospace',
             zIndex: 2,
           }}
-          title="The reset was aborted because the mandatory pre-wipe debug capture failed. Your city is unchanged."
+          title={
+            captureErrorKind === 'load'
+              ? 'The load was refused/aborted. Your current city is unchanged.'
+              : 'The reset was aborted because the mandatory pre-wipe debug capture failed. Your city is unchanged.'
+          }
           onClick={() => setCaptureError(null)}
         >
-          ⚠ Start Over aborted — could not archive debug snapshot ({captureError}). Your city is intact.
+          {/* BUG-513 GAP 3: this banner is fired for both Start-Over aborts AND
+              load failures/refusals — the wording must not claim "Start Over"
+              for a load, and the registry code (when present) must be visible
+              here, not just in the Errors panel. */}
+          {captureErrorKind === 'load'
+            ? `⚠ Load failed${captureErrorCode ? ` [${captureErrorCode}]` : ''} — ${captureError}. Your city is intact.`
+            : `⚠ Start Over aborted — could not archive debug snapshot (${captureError}). Your city is intact.`}
         </div>
       )}
       {rebuildDecision && (

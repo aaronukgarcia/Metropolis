@@ -839,7 +839,7 @@ function PolicyTab() {
 // survives; the element itself is never re-mounted (stable tree position, no
 // key changes). A 1 s wall-clock interval drives the countdown label — that
 // updates a SIBLING element, which does not disturb selection inside the pre.
-function DebugTab() {
+export function DebugTab() {
   const { state, dispatch } = useSim();
   const { run } = useBusy();
   const [status, setStatus] = useState<string | null>(null);
@@ -901,7 +901,11 @@ function DebugTab() {
   // FEAT-1972079885: the state-mutating cheats are DEV-gated exactly like the
   // TopBar +£10m button — debugActions() returns [] in production builds, so
   // the row (and every cheat) vanishes from `vite build` output entirely.
-  const devButtons = debugActions(import.meta.env.DEV);
+  // BUG-412-class robustness: optional-chain `import.meta.env`, mirroring the
+  // exact fix store.tsx already carries — under a bare tsx/Node test runtime
+  // (no Vite) `import.meta.env` itself is undefined, and a non-optional
+  // `.DEV` access here threw the moment any test rendered DebugTab.
+  const devButtons = debugActions(import.meta.env?.DEV);
   const errList = errorListModel(recentErrors());
 
   return (
@@ -953,8 +957,12 @@ function DebugTab() {
                       selectable identifier Aaron reports — show it prominently, falling
                       back to the type for older ring entries recorded before codes were
                       captured (never blank, never crash). */}
+                  {/* BUG-513 gap-1 nit: `??` only falls back on null/undefined, so a
+                      record with code:'' (an empty-but-present code) rendered a blank
+                      `[]` instead of falling back to the type. `||` treats '' the same
+                      as missing, matching the `e.code && ...` check just below. */}
                   <strong className="err-code" title={e.code ? undefined : 'no code captured for this entry'}>
-                    [{e.code ?? e.type}]
+                    [{e.code || e.type}]
                   </strong>{' '}
                   {e.code && <span className="muted">({e.type})</span>}{' '}
                   {e.msg}
