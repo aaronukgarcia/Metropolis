@@ -2743,6 +2743,19 @@ export type Action =
 // top of every reducer() call so a stale false can never leak across actions.
 let roadTopologyMayHaveChanged = true;
 
+// BUG-583 FIX: a bare `+ 's'` on a catalogue spec name (`sp.name`) breaks the
+// instant a name already ends in 's' — "Water Works" becomes "Water Workss",
+// and the same naive suffix mangles any other irregular/plural-looking name
+// the catalogue ever gains (data.ts has ~150 spec names, e.g. "ADX Supermax"
+// -> "ADX Supermaxs" would be equally wrong under English pluralisation).
+// Sidestep English pluralisation entirely rather than special-case every
+// name: report the count as "N x <Name>" ("2 x Water Works"), which reads
+// correctly for every name in SPECS with the SAME format regardless of
+// whether the name is singular, plural, or ends in 's'.
+function formatPlacedCount(count: number, specName: string): string {
+  return `${count} x ${specName}`;
+}
+
 function reduceCore(state: SimState, action: Action): SimState {
   // FEAT-1972079923 inc4 (AC-11): the FINAL DECLINE screen is a HARD STOP on
   // the whole game, not just the tick clock — once declineState is set, EVERY
@@ -2947,7 +2960,7 @@ function reduceCore(state: SimState, action: Action): SimState {
       const shortBy = cost > 0 && cur.funds < cost ? 'insufficient funds' : 'some tiles already occupied';
       return {
         ...cur,
-        placeNotice: `Placed ${placed} of ${action.tiles.length} ${sp.name}${action.tiles.length === 1 ? '' : 's'} — ${shortBy}`,
+        placeNotice: `Placed ${placed} of ${formatPlacedCount(action.tiles.length, sp.name)} — ${shortBy}`,
       };
     }
 
@@ -3008,7 +3021,7 @@ function reduceCore(state: SimState, action: Action): SimState {
       const shortBy = cost > 0 && cur.funds < cost ? 'insufficient funds' : 'no buildable site found';
       return {
         ...cur,
-        placeNotice: `Placed ${placed} of ${plan.count} ${sp.name}${plan.count === 1 ? '' : 's'} — ${shortBy}`,
+        placeNotice: `Placed ${placed} of ${formatPlacedCount(plan.count, sp.name)} — ${shortBy}`,
       };
     }
 

@@ -121,6 +121,10 @@ test('AC-8: source grep — RAG_THRESHOLDS is imported/referenced at multiple ca
     'src/components/left/tabs/populationTabs.tsx',
     'src/components/left/tabs/servicesTabs.tsx',
     'src/components/left/tabs/buildZoningTabs.tsx',
+    // BUG-580: TopBar.tsx's wellbeing dot repointed at the shared classifier
+    // (was a local 70/45 literal duplicating WELLBEING.GREEN/AMBER) —
+    // completes AC-8's single-source requirement for the wellbeing row.
+    'src/components/TopBar.tsx',
   ];
   let hits = 0;
   for (const f of files) {

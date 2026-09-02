@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useSim } from '../sim/simContext';
 import { levelOf, xpForLevel, wellbeingOf, UNLOCK_ALL_COST } from '../sim/engine';
+import { ragForWellbeing, ragColor } from './ragThresholds';
 import { fmtMoney, fmtNum, gameDate } from '../sim/utils';
 import { useLiveVersion } from '../sim/liveVersion';
 import { TrendArrows } from './Trend';
@@ -27,7 +28,12 @@ export function TopBar() {
   const next = xpForLevel(level + 1);
   const frac = Math.min(100, ((state.xp - cur) / Math.max(1, next - cur)) * 100);
   const wb = wellbeingOf(state);
-  const wbColor = wb.overall >= 70 ? 'var(--done)' : wb.overall >= 45 ? 'var(--warn)' : 'var(--danger)';
+  // BUG-580: was a local nested ternary duplicating ragThresholds.ts's
+  // RAG_THRESHOLDS.WELLBEING (GREEN 70 / AMBER 45, HUD inc2 FEAT-2326609720)
+  // — now the single source (AC-8): populationTabs.tsx's WellbeingTab
+  // consumes the SAME ragForWellbeing/ragColor pair, so a future retune of
+  // RAG_THRESHOLDS.WELLBEING moves both.
+  const wbColor = ragColor(ragForWellbeing(wb.overall));
   return (
     <header className="topbar">
       {/* FEAT-2326609725 / BUG-564: StaleBuildBanner UNMOUNTED (Aaron, 2026-09-02).
