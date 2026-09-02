@@ -121,6 +121,13 @@ export function ConfigMenu() {
   const [tick, setTick] = useState(0);
   // BUG-457: measured (not assumed) bytes freed by the last Reclaim run.
   const [reclaimMsg, setReclaimMsg] = useState<string | null>(null);
+  // BUG-575: "Clear named cities" / "Clear autosave slots" permanently destroy
+  // the player's saves and previously fired on the first click with no way
+  // back. Gate them behind an explicit second click, mirroring the in-app
+  // state-driven confirm idiom FileMenu already uses for a same-consequence
+  // decision (BUG-445's save/rename collision confirm) rather than a blocking
+  // window.confirm() native dialog.
+  const [confirmingClear, setConfirmingClear] = useState<null | 'namedCities' | 'autosaves'>(null);
 
   const usage = useMemo(() => {
     try {
@@ -135,11 +142,18 @@ export function ConfigMenu() {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') closePanel();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
+
+  // BUG-575: closing the panel (any route) disarms a pending confirm — never
+  // leave a destructive action armed across a re-open.
+  const closePanel = () => {
+    setOpen(false);
+    setConfirmingClear(null);
+  };
 
   const clearPrefix = (prefix: string) => {
     const keys: string[] = [];
@@ -151,13 +165,26 @@ export function ConfigMenu() {
     setTick((n) => n + 1);
   };
 
+  // BUG-575: the actual destructive actions, only ever invoked after the
+  // explicit second-click confirm below — never wired directly to the
+  // buttons that arm them.
+  const clearNamedCities = () => {
+    clearPrefix(NAMED_SAVE_SLOT_PREFIX);
+    window.localStorage.removeItem(NAMED_SAVES_INDEX_KEY);
+    setConfirmingClear(null);
+  };
+  const clearAutosaveSlots = () => {
+    clearPrefix(SAVEPOINT_KEY_PREFIX);
+    setConfirmingClear(null);
+  };
+
   return (
     <>
       <button className={`btn tiny${open ? ' active' : ''}`} onClick={() => setOpen(true)} title="Storage and archive settings">
         Config
       </button>
       {open && (
-        <div className="about-backdrop" onClick={() => setOpen(false)} role="presentation">
+        <div className="about-backdrop" onClick={closePanel} role="presentation">
           <section
             className="panel about-panel"
             role="dialog"
@@ -167,7 +194,7 @@ export function ConfigMenu() {
           >
             <header className="panel-h">
               <span className="panel-title">Config — storage</span>
-              <button className="btn tiny" onClick={() => setOpen(false)}>
+              <button className="btn tiny" onClick={closePanel}>
                 Close
               </button>
             </header>
@@ -236,18 +263,40 @@ export function ConfigMenu() {
                 <button className="btn tiny" onClick={() => { window.localStorage.removeItem(QUEUE_KEY); setTick((n) => n + 1); }}>
                   Clear debug queue
                 </button>
-                <button
-                  className="btn tiny"
-                  onClick={() => {
-                    clearPrefix(NAMED_SAVE_SLOT_PREFIX);
-                    window.localStorage.removeItem(NAMED_SAVES_INDEX_KEY);
-                  }}
-                >
-                  Clear named cities
-                </button>
-                <button className="btn tiny" onClick={() => clearPrefix(SAVEPOINT_KEY_PREFIX)}>
-                  Clear autosave slots
-                </button>
+                {/* BUG-575: these two destroy real player saves (named cities /
+                    the autosave rotation), unlike the clears above which only
+                    touch journal/archive/debug scaffolding — so each is armed
+                    by a first click and only fires on an explicit second one. */}
+                {confirmingClear === 'namedCities' ? (
+                  <span className="brand-menu-form" role="group" aria-label="Confirm clear named cities">
+                    <span className="muted">Delete ALL named cities?</span>
+                    <button className="btn tiny accent" onClick={clearNamedCities}>
+                      Yes, delete
+                    </button>
+                    <button className="btn tiny" onClick={() => setConfirmingClear(null)}>
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button className="btn tiny" onClick={() => setConfirmingClear('namedCities')}>
+                    Clear named cities
+                  </button>
+                )}
+                {confirmingClear === 'autosaves' ? (
+                  <span className="brand-menu-form" role="group" aria-label="Confirm clear autosave slots">
+                    <span className="muted">Delete all autosave slots?</span>
+                    <button className="btn tiny accent" onClick={clearAutosaveSlots}>
+                      Yes, delete
+                    </button>
+                    <button className="btn tiny" onClick={() => setConfirmingClear(null)}>
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button className="btn tiny" onClick={() => setConfirmingClear('autosaves')}>
+                    Clear autosave slots
+                  </button>
+                )}
               </div>
             </div>
           </section>
