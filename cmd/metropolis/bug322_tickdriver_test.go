@@ -366,6 +366,54 @@ func TestBUG322_ShutdownLeaksNoGoroutine(t *testing.T) {
 	}
 }
 
+// waitForTickProgress is BUG-581's replacement for a flat wall-clock
+// deadline in a test that ITSELF competes for CPU with the thing it is
+// waiting on.
+//
+// waitForTicks (above) is fine everywhere else in this file: those tests
+// boot the driver and then do nothing (or one key press), so if 10s of real
+// time passes with no ticks, the driver is genuinely stuck. This test is
+// different — it deliberately runs two CPU-bound spinners for the entire
+// wait, and BUG-464's fix already had to teach them to yield so the driver's
+// timer goroutine gets scheduled at all. On a CI runner under -race (which
+// adds heavy per-access instrumentation) with a small or noisy-neighbour
+// core count, the OS/Go scheduler can legitimately delay the driver's
+// goroutine for a long stretch even while it IS making forward progress —
+// that is scheduling contention, not a stuck driver, and BUG-581 is exactly
+// this: a real CI run hit the 120s flat deadline at 123.45s with zero code
+// change, then passed on an identical rerun.
+//
+// So the failure bound here is PROGRESS, not a fixed wall-clock ceiling: the
+// stall timer resets every time TicksCompleted moves at all, and only fires
+// if the count sits motionless for stallWindow — which can only happen if
+// the driver has actually stopped advancing time, the exact defect BUG-322
+// exists to catch. overallCap is a belt-and-braces backstop against a
+// genuinely infinite hang (e.g. if the engine wedges instead of merely
+// slowing down) so this can't run forever; it is set far above anything a
+// realistic stall sequence could accumulate.
+func waitForTickProgress(t *testing.T, w *skeletonWiring, want uint64, stallWindow, overallCap time.Duration) uint64 {
+	t.Helper()
+	started := time.Now()
+	last := w.engine.TicksCompleted()
+	lastMove := started
+	for {
+		got := w.engine.TicksCompleted()
+		if got >= want {
+			return got
+		}
+		if got != last {
+			last = got
+			lastMove = time.Now()
+		} else if stalled := time.Since(lastMove); stalled > stallWindow {
+			t.Fatalf("engine made no tick progress for %s (stuck at %d, want %d) — the tick driver is not advancing time", stalled, got, want)
+		}
+		if time.Since(started) > overallCap {
+			t.Fatalf("engine never reached %d ticks within the %s backstop (stuck at %d) — the tick driver is not advancing time", want, overallCap, got)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 // TestBUG322_RenderLoopAndDriverRunConcurrently is the -race target: the
 // driver's goroutine and the render loop's draw path touch the same statusBar
 // and the same engine clock at their own independent cadences. Run under
@@ -392,22 +440,29 @@ func TestBUG322_RenderLoopAndDriverRunConcurrently(t *testing.T) {
 				draw(buf, &core.ViewModels{})
 				pressKey(w, ']')
 				pressKey(w, '[')
-				// Yield so the tick-driver goroutine is not starved on a
-				// limited-core CI runner under -race (BUG-464): these two
-				// busy-spinners would otherwise peg every P and the wall-clock
-				// tick driver would see zero ticks. The goroutines still hammer
-				// the draw/keybinding path concurrently — they just let the
-				// scheduler run the driver between iterations.
-				runtime.Gosched()
+				// BUG-464 yielded with a bare runtime.Gosched() here, which is
+				// only a HINT — it puts the calling goroutine back on the run
+				// queue but does not force the OS to actually run a different
+				// thread, so on a GOMAXPROCS-starved or noisy-neighbour CI box
+				// under -race (5-20x slower, heavier scheduling pressure) these
+				// two spinners could still keep winning every available P and
+				// leave the driver's timer goroutine waiting far longer than
+				// intended (BUG-581: this is what turned a 120s flat deadline
+				// red at 123.45s with no code change). A short real Sleep
+				// actually cedes the processor rather than just requesting a
+				// reschedule, and 1ms is still fast enough to hammer the
+				// draw/keybinding path thousands of times over the test's run.
+				time.Sleep(time.Millisecond)
 			}
 		}()
 	}
 
-	// Generous "time never moved" bound per waitForTicks's doc contract: only a
-	// genuine hang should fire this, never scheduling contention on a loaded
-	// -race runner. The spinners keep hammering until close(stop) below, so a
-	// longer wait means MORE concurrent race coverage, not less.
-	waitForTicks(t, w, 5, 120*time.Second)
+	// PROGRESS bound, not a flat wall-clock ceiling (see waitForTickProgress's
+	// doc comment for why: this test's own spinners contend with the driver
+	// for CPU, so "5 ticks within 120s" can go red on scheduling alone). The
+	// spinners keep hammering until close(stop) below, so a longer wait means
+	// MORE concurrent race coverage, not less.
+	waitForTickProgress(t, w, 5, 30*time.Second, 5*time.Minute)
 	close(stop)
 	wg.Wait()
 }
