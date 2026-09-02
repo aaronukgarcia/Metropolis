@@ -124,6 +124,11 @@ export function StartOverButton() {
   // Unlock-all is a large cash gate (FEAT-1972079899). Disabled when already unlocked
   // or when the treasury cannot cover UNLOCK_ALL_COST — the reducer is all-or-nothing,
   // so the control never partially applies.
+  // DEV-GATED (Aaron ruling Q100047 c = C2): this was a permanently-visible priced
+  // gameplay button (a cash god-mode sink) — it must render only in dev builds,
+  // same import.meta.env.DEV idiom as DevFundsButton/DevFundsLargeButton below.
+  // The reducer action (`unlockAll`) and its cost logic are NOT removed — only the
+  // button's production visibility is gated; dev builds and tests still exercise it.
   const canUnlockAll = !state.unlockedAll && state.funds >= UNLOCK_ALL_COST;
   const unlockTitle = state.unlockedAll
     ? 'God mode: every structure already unlocked'
@@ -139,14 +144,16 @@ export function StartOverButton() {
       >
         Start Over
       </button>
-      <button
-        className="btn accent unlock-all"
-        disabled={!canUnlockAll}
-        title={unlockTitle}
-        onClick={() => run(() => dispatch({ type: 'unlockAll' }))}
-      >
-        {state.unlockedAll ? 'All Unlocked' : 'Unlock All'}
-      </button>
+      {import.meta.env.DEV && (
+        <button
+          className="btn accent unlock-all"
+          disabled={!canUnlockAll}
+          title={unlockTitle}
+          onClick={() => run(() => dispatch({ type: 'unlockAll' }))}
+        >
+          {state.unlockedAll ? 'All Unlocked' : 'Unlock All'}
+        </button>
+      )}
       <DevFundsButton />
       <DevFundsLargeButton />
     </div>
