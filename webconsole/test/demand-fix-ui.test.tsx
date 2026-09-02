@@ -145,10 +145,15 @@ test('FEAT-2326609728 inc2 (a): advisor shows "place N <building>s" with the cor
     const advisor = container.querySelector('.advisor');
     assert.ok(advisor, 'precondition: the advisor element must render');
     const text = advisor!.textContent ?? '';
+    // BUG-587: "N x <Name>" (formatBuildingCount), not the old English
+    // pluraliser's bare "N <Name+s/es>" — Water Works is itself the hazard
+    // case (already ends in -s) that the old rule mangled into "Water
+    // Workses"; assert BOTH the correct shape and the absence of the bug.
     assert.ok(
-      text.includes(`place ${top.count} Water Works`),
-      `advisor text must quantify the fix as "place ${top.count} Water Works", got: "${text}"`,
+      text.includes(`place ${top.count} x Water Works`),
+      `advisor text must quantify the fix as "place ${top.count} x Water Works", got: "${text}"`,
     );
+    assert.ok(!/Water Workses/.test(text), `advisor text must not double-pluralise "Water Works": "${text}"`);
     assert.ok(text.includes('clean water'), 'advisor text must name the service the fix clears');
     assert.ok(container.querySelector('.advisor.clickable'), 'the advisor must be clickable when a fix is offered');
 
@@ -208,6 +213,10 @@ test('FEAT-2326609728 inc2 (b): a DEMAND-panel row in shortfall shows a "Fix (N)
       waterBtn,
       `expected a "Fix (1)" Water Works button for the clean-water row among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`
     );
+    // BUG-587: the title must read "1 x Water Works" (formatBuildingCount),
+    // never the old English pluraliser's mangled "Water Workses".
+    assert.ok(/1 x Water Works/.test(waterBtn!.title ?? ''), `Fix button title must read "1 x Water Works", got: "${waterBtn!.title}"`);
+    assert.ok(!/Water Workses/.test(waterBtn!.title ?? ''), `Fix button title must not double-pluralise "Water Works": "${waterBtn!.title}"`);
 
     await act(async () => {
       waterBtn!.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -273,6 +282,74 @@ test('FEAT-2326609728 inc2 (c): no shortfall -> the advisor offers no fix-prompt
     const dock = await mountReal(DemandDock, dockCtx);
     const fixButtons = dock.container.querySelectorAll('.demand-fix-btn');
     assert.equal(fixButtons.length, 0, 'DemandDock must render zero Fix buttons when nothing is in shortfall');
+    await dock.act(async () => {
+      dock.root.unmount();
+    });
+  } finally {
+    dom.window.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (d) BUG-587: a hazard-class catalogue name (Water Works, count > 1) renders
+// correctly ("N x Name") on BOTH surfaces — the old pluralizeBuildingName()
+// English -s/-x/-z/-ch/-sh -> -es rule mangled this exact name into
+// "Water Workses" whenever count !== 1 (count === 1 returned the name
+// unchanged, so the bug was invisible at count 1 — this test deliberately
+// picks a population where cleanwater's fix needs 2 units).
+//
+// RED-PROOF: reverting demandFixUi.ts's formatBuildingCount() to the old
+// `pluralizeBuildingName` body (count===1 ? name : name+'es' for this
+// -s-ending case) makes both /Water Workses/ assertions below fail — hand-
+// verified during development and re-confirmed by temporarily restoring the
+// old implementation and re-running this test.
+// ---------------------------------------------------------------------------
+
+test('BUG-587 (d): "Water Works" x2 renders as "2 x Water Works" (never "Water Workses") on both the MapView advisor and the DemandDock Fix button', async () => {
+  const dom: any = await installJsdom();
+  try {
+    const { initialState } = await import('../src/sim/engine.ts');
+    const { demandFixPlan, SPECS } = await import('../src/sim/data.ts');
+    const { MapView } = await import('../src/components/MapView.tsx');
+    const { DemandDock } = await import('../src/components/left/DemandDock.tsx');
+
+    // Population 20,000: cleanwater's shortfall needs 2x Water Works (served
+    // 20,000/unit) and independently wins the worst-gap ranking — verified by
+    // direct exploration of demandFixPlan() at this population during
+    // development (see PR notes); re-verified here as a precondition so a
+    // future SPECS/optimalProvider() rebalance that changes the winning
+    // service or count fails LOUD rather than silently making this test
+    // vacuous.
+    const state = shortfallState(initialState, 20000);
+    const plan = demandFixPlan(state);
+    const top = expectedWorstFix(plan);
+    assert.ok(top, 'precondition: population 20,000 must yield a real shortfall');
+    assert.equal(top.serviceKey, 'cleanwater', 'precondition: cleanwater must win the worst-gap ranking at this population');
+    assert.equal(top.count, 2, 'precondition: 2x Water Works must be needed to clear the 20,000-population shortfall');
+    assert.equal(SPECS[top.specId].name, 'Water Works');
+
+    const { ctx: mapCtx } = makeCtx(state);
+    const map = await mountReal(MapView, mapCtx);
+    const advisorText = map.container.querySelector('.advisor')?.textContent ?? '';
+    assert.ok(
+      advisorText.includes('place 2 x Water Works'),
+      `advisor text must read "place 2 x Water Works", got: "${advisorText}"`,
+    );
+    assert.ok(!/Water Workses/.test(advisorText), `advisor text must not double-pluralise "Water Works": "${advisorText}"`);
+    await map.act(async () => {
+      map.root.unmount();
+    });
+
+    const { ctx: dockCtx } = makeCtx(state);
+    const dock = await mountReal(DemandDock, dockCtx);
+    const buttons = Array.from(dock.container.querySelectorAll('.demand-fix-btn')) as any[];
+    const waterBtn = buttons.find((b) => /Fix \(2\)/.test(b.textContent ?? '') && /Water Works/.test(b.title ?? ''));
+    assert.ok(
+      waterBtn,
+      `expected a "Fix (2)" Water Works button among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`,
+    );
+    assert.ok(/2 x Water Works/.test(waterBtn!.title ?? ''), `Fix button title must read "2 x Water Works", got: "${waterBtn!.title}"`);
+    assert.ok(!/Water Workses/.test(waterBtn!.title ?? ''), `Fix button title must not double-pluralise "Water Works": "${waterBtn!.title}"`);
     await dock.act(async () => {
       dock.root.unmount();
     });

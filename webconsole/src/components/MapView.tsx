@@ -48,7 +48,7 @@ import { fmtMoney, fmtNum, formatPower } from '../sim/utils';
 import { buildingProfile, specClassLabel, buildingCopyPayload, type ProfileLine } from '../sim/profile';
 import { useBlockingOverlay, useEscapeKey } from './overlayManager';
 import { BLOCKING_OVERLAY_ID, BLOCKING_OVERLAY_RANK } from './overlayLayers';
-import { pluralizeBuildingName, DEMAND_FIX_SERVICE_LABELS, worstDemandFix } from './demandFixUi';
+import { formatBuildingCount, DEMAND_FIX_SERVICE_LABELS, worstDemandFix } from './demandFixUi';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 48;
@@ -794,9 +794,12 @@ export function MapView() {
       const sp = SPECS[fix.specId];
       if (sp) {
         const label = DEMAND_FIX_SERVICE_LABELS[fix.serviceKey] ?? fix.serviceKey;
-        const buildingLabel = pluralizeBuildingName(sp.name, fix.count);
+        // BUG-587: "N x <Name>" (formatBuildingCount), matching the placeNotice
+        // wording BUG-583 landed for the same reason — no English pluralisation
+        // rule survives the full SPECS catalogue (e.g. "Water Works").
+        const buildingLabel = formatBuildingCount(sp.name, fix.count);
         return {
-          text: `Do you want to place ${fix.count} ${buildingLabel}? (clears ${label} demand +5%)`,
+          text: `Do you want to place ${buildingLabel}? (clears ${label} demand +5%)`,
           go: () => {
             run(() => {
               dispatch({ type: 'resolveDemand', serviceKey: fix.serviceKey });

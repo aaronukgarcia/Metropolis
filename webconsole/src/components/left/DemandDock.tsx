@@ -3,7 +3,7 @@ import { useSim } from '../../sim/simContext';
 import { demandOf, levelOf } from '../../sim/engine';
 import { useBusy } from '../Busy';
 import { Panel } from '../Tabs';
-import { pluralizeBuildingName } from '../demandFixUi';
+import { formatBuildingCount } from '../demandFixUi';
 
 export function DemandDock() {
   const { state, dispatch } = useSim();
@@ -73,7 +73,10 @@ export function DemandDock() {
               color={SPECS[m.spec].color}
               alert={m.alert}
               fixCount={fix?.count}
-              fixTitle={fix ? `Place ${fix.count} ${pluralizeBuildingName(SPECS[fix.specId].name, fix.count)} to clear this shortfall +5%` : undefined}
+              // BUG-587: "N x <Name>" (formatBuildingCount) — same shape as the
+              // MapView advisor prompt and engine.ts's placeNotice (BUG-583),
+              // sidestepping English pluralisation entirely.
+              fixTitle={fix ? `Place ${formatBuildingCount(SPECS[fix.specId].name, fix.count)} to clear this shortfall +5%` : undefined}
               onFix={fix ? () => runResolveDemand(m.id) : undefined}
             />
           );

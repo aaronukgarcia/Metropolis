@@ -10,17 +10,24 @@ import { demandFixPlan, type DemandFixPlanItem } from '../sim/data';
 import type { SimState } from '../sim/types';
 
 /**
- * Sane pluralization of a building display name for prompts like
- * "place 10 Water Towers". count === 1 keeps the singular; names ending
- * -s/-x/-z/-ch/-sh take -es; a consonant + -y becomes -ies; everything else
- * takes a plain -s. Covers the small closed set of SPECS names in this game —
- * no i18n library warranted. Pure (GR#21): no Date/Math.random.
+ * BUG-587: the old pluralizeBuildingName() applied an English -s/-x/-z/-ch/-sh
+ * -> -es rule that mangled 32 of the 203 catalogue names — "Water Works"
+ * (already ends in -s) became "Water Workses", "Crossroads" became
+ * "Crossroadses", "Versailles" became "Versailleses", "St Peter's" became
+ * "St Peter'ses" — on both the MapView advisor prompt and the DemandDock Fix
+ * button title. BUG-583 already solved this exact class in engine.ts's
+ * formatPlacedCount() (the placeNotice line) by sidestepping pluralisation
+ * entirely: "N x <Name>" reads correctly regardless of the name's own
+ * grammatical number. This is that same shape, reimplemented here rather
+ * than imported from sim/engine.ts — the BUG-583 round explicitly endorsed
+ * NOT sharing a formatter across the sim/UI boundary for a function this
+ * trivial (GR#3: two tiny formatters producing the SAME output shape are an
+ * acceptable, deliberate exception to "no duplication without validation"
+ * when the alternative is a component importing from the engine internals).
+ * Pure (GR#21): no Date/Math.random.
  */
-export function pluralizeBuildingName(name: string, count: number): string {
-  if (count === 1) return name;
-  if (/([sxz]|[cs]h)$/i.test(name)) return `${name}es`;
-  if (/[^aeiou]y$/i.test(name)) return `${name.slice(0, -1)}ies`;
-  return `${name}s`;
+export function formatBuildingCount(name: string, count: number): string {
+  return `${count} x ${name}`;
 }
 
 /**
