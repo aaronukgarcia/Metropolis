@@ -75,6 +75,11 @@
             "type": "command",
             "command": "node claude-checkin-pipe-guard.js",
             "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "node claude-test-scope-guard.js",
+            "timeout": 3
           }
         ]
       },
@@ -130,6 +135,11 @@
           {
             "type": "command",
             "command": "node claude-checkin-pipe-guard.js",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "node claude-test-scope-guard.js",
             "timeout": 3
           }
         ]
