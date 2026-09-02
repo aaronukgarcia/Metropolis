@@ -17,6 +17,10 @@ import {
 } from '../../../sim/data';
 import { fmtMoney, fmtNum } from '../../../sim/utils';
 import { ragForLineSaturation, ragColor } from '../../ragThresholds';
+// BUG-605: re-exported so LeftDock's Build & Zoning group can mount the
+// Construction Queue alongside Structures/Lines/Unlocks/Specialists/Reference
+// without importing across two sibling tab-group files at the call site.
+export { ConstructionQueueTab } from '../ConstructionQueue';
 
 // §1 row 10 — remainder of RightDock `status` (Structures table + fiscal hint).
 export function StructuresTab() {

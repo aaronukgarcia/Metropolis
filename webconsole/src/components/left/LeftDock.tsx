@@ -1,5 +1,7 @@
 import { useState, type ReactElement } from 'react';
 import { Panel, TabStrip } from '../Tabs';
+import { useSim } from '../../sim/simContext';
+import { constructionQueueOf } from './ConstructionQueue';
 import {
   FinanceOverviewTab,
   FinanceFlowTab,
@@ -23,6 +25,7 @@ import {
   UnlocksTab,
   SpecialistsTab,
   ReferenceTab,
+  ConstructionQueueTab,
 } from './tabs/buildZoningTabs';
 import { MilestonesTab, DemandForecastTab, RevenueForecastTab } from './tabs/projectionsTabs';
 import { AlertsCriticalTab, AlertsWarningTab, AlertsInfoTab } from './tabs/alertsTabs';
@@ -94,6 +97,10 @@ const GROUPS: TopGroup[] = [
     id: 'buildZoning',
     label: 'Build & Zoning',
     children: [
+      // BUG-605 (Aaron: "I still don't see the queue") — Queue is FIRST so it
+      // is the default child tab shown the moment Build & Zoning is opened,
+      // and it always renders (no dev-flag gate, explicit empty state).
+      { id: 'queue', label: 'Queue', Body: ConstructionQueueTab },
       { id: 'structures', label: 'Structures', Body: StructuresTab },
       { id: 'lines', label: 'Lines & Networks', Body: LinesNetworksTab },
       { id: 'unlocks', label: 'Unlocks', Body: UnlocksTab },
@@ -123,7 +130,18 @@ const GROUPS: TopGroup[] = [
 
 const DEBUG_GROUP_ID = 'debug';
 
+/**
+ * BUG-605 (exported so tests can prove the badge logic without needing to
+ * simulate clicking into the Build & Zoning group in an SSR render): folds
+ * the queue count into the 'queue' child tab's label, "Queue (N)"; every
+ * other child id, and a zero count, pass its base label through unchanged.
+ */
+export function queueChildLabel(childId: string, baseLabel: string, queueCount: number): string {
+  return childId === 'queue' && queueCount > 0 ? `${baseLabel} (${queueCount})` : baseLabel;
+}
+
 export function LeftDock() {
+  const { state } = useSim();
   const [groupId, setGroupId] = useState(GROUPS[0].id);
   const [childByGroup, setChildByGroup] = useState<Record<string, string>>(
     () => Object.fromEntries(GROUPS.map((g) => [g.id, g.children[0].id])),
@@ -143,7 +161,14 @@ export function LeftDock() {
     { id: DEBUG_GROUP_ID, label: 'Debug' },
   ];
 
-  const childTabs = activeGroup ? activeGroup.children.map((c) => ({ id: c.id, label: c.label })) : [];
+  // BUG-605: TabDef (Tabs.tsx) has no separate badge slot, so the Queue count
+  // is folded into the child tab's own label — "Queue (N)" — the same low-risk
+  // approach Alerts' group (no count badge either) leaves untouched. Read-only:
+  // constructionQueueOf is a pure derivation over existing state, no new state.
+  const queueCount = constructionQueueOf(state).length;
+  const childTabs = activeGroup
+    ? activeGroup.children.map((c) => ({ id: c.id, label: queueChildLabel(c.id, c.label, queueCount) }))
+    : [];
   const activeChildId = activeGroup ? (childByGroup[activeGroup.id] ?? activeGroup.children[0].id) : null;
   const ActiveBody = activeGroup
     ? activeGroup.children.find((c) => c.id === activeChildId)?.Body ?? activeGroup.children[0].Body

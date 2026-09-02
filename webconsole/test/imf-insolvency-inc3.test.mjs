@@ -222,14 +222,35 @@ function shortfallFixture() {
 test('AC-6: the advisor (pickAutoSpec) does not offer paid buildings under administration', () => {
   const flush = shortfallFixture();
   assert.ok(flush.administrationState, 'precondition: administration is active');
-  // Every candidate row in this fixture (nursery/primary/college/gp/hosp/
-  // police/water/power) maps to a PAID spec — there is no free alternative
-  // for the advisor to fall back to — so the guard's correct effect here is
-  // to skip every one of them and return null (proven NON-vacuous by the
-  // MUTATION-PROVE companion below: the SAME fixture, admin cleared, returns
-  // a real paid suggestion instead of null).
+  // Every candidate row in this fixture ORIGINALLY (nursery/primary/college/
+  // gp/hosp/police/water/power) mapped to a PAID spec, so the assertion was
+  // `null`. BUG-601/BUG-572 (2026-09-02) added the PARKS demand row, whose
+  // provider `park` is a free zone (placementCost 0) — and AC-6's own rule is
+  // that a £0 suggestion is STILL FINE under administration (it can't bounce
+  // off the discretionary-spend block). So the correct behaviour now is: the
+  // advisor may offer a FREE spec, and must never offer a PAID one. Proven
+  // NON-vacuous by the MUTATION-PROVE companion below: the SAME fixture,
+  // admin cleared, returns a PAID suggestion instead.
   const suggestion = pickAutoSpec(flush);
-  assert.equal(suggestion, null, 'no candidate here is free, so the advisor must offer NOTHING under administration, not a paid building');
+  if (suggestion !== null) {
+    const sp = SPECS[suggestion.spec];
+    assert.equal(
+      placementCost(sp),
+      0,
+      `under administration the advisor may only offer FREE specs; it offered paid ${suggestion.spec}`,
+    );
+  }
+  // And with the free parks row satisfied (ample park coverage), the original
+  // all-paid scenario is restored — the advisor must then offer NOTHING.
+  const parks = { ...flush, buildings: [...flush.buildings] };
+  for (let i = 0; i < 60; i++) {
+    parks.buildings.push({ id: 900000 + i, spec: 'park', x: 200 + i, y: 200, builtTick: null });
+  }
+  assert.equal(
+    pickAutoSpec(parks),
+    null,
+    'with parks satisfied, no candidate is free, so the advisor must offer NOTHING under administration, not a paid building',
+  );
 });
 
 test('AC-6 MUTATION-PROVE target: without the admin guard, the advisor DOES offer a paid building (same fixture, funds allow it)', () => {
