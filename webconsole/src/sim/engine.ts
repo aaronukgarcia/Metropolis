@@ -9,7 +9,7 @@ import {
   PIPE_TIERS,
   SPECS,
   canEnterSim,
-  countByKind,
+  countByKindOnline,
   fits,
   isOnline,
   occupiedSet,
@@ -267,7 +267,10 @@ export interface ZoneDemand {
 const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 export function demandOf(s: SimState): ZoneDemand {
-  const c = countByKind(s.buildings);
+  // BUG-520 (remaining part): an OFFLINE / road-disconnected commercial or
+  // industrial building must not accelerate growth demand — countByKindOnline
+  // mirrors the powerStats()/sumBy() activation gate.
+  const c = countByKindOnline(s);
   const t = s.taxRates;
   const avgTax = (t.residential + t.commercial + t.industrial) / 3;
   const jobs = totalJobs(s);
@@ -474,7 +477,12 @@ export function regionalGrantPerTick(tick: number): number {
 }
 
 export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: FlowItem[] } {
-  const c = countByKind(s.buildings);
+  // BUG-520 (remaining part): Business/Freight/Office Tax must count only
+  // ONLINE buildings — a road-disconnected commercial/industrial/office/mine
+  // building already pays zero upkeep (isOnline gate below), so it must also
+  // pay zero tax. Mirrors the powerStats()/sumBy() gate exactly (c/c2/c3 below
+  // all switch to the online-gated count for the same reason).
+  const c = countByKindOnline(s);
   const t = s.taxRates;
   const inflows: FlowItem[] = [
     { label: 'Council Tax', value: councilTaxPerTick(s.population, t.residential) },
@@ -503,7 +511,7 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     });
   }
 
-  const c2 = countByKind(s.buildings);
+  const c2 = countByKindOnline(s);
   const officeJobs = totalJobs(s) - c2.commercial * 12 - c2.industrial * 18;
   const officeTax = Math.max(0, officeJobs) * t.commercial * 0.05;
   if (officeTax > 0) inflows.push({ label: 'Office Tax', value: Math.round(officeTax) });
@@ -563,7 +571,7 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     outflows.push({ label: GRID_IMPORT_OUTFLOW_LABEL, value: gridImportCost });
   }
 
-  const c3 = countByKind(s.buildings);
+  const c3 = countByKindOnline(s);
   const freightIdx = inflows.findIndex((f) => f.label === 'Freight Tax');
   if (freightIdx >= 0) {
     inflows[freightIdx] = {

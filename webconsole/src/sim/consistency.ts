@@ -12,7 +12,7 @@ import {
   TIER_COLORS,
   densityTier,
   PALETTE_FLAT,
-  countByKind,
+  countByKindOnline,
   isOnline,
 } from './data.ts';
 import {
@@ -321,7 +321,11 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   // Path B (derived): what we'd compute now from placed[] + policies
 
   // Recompute fiscal flows using shared formulas (fiscal.ts) for single source of truth.
-  const c = countByKind(s.buildings);
+  // BUG-520 (remaining part): this cross-check MUST use the same online-gated
+  // count computeFlows() now uses for Business Tax, or a road-disconnected
+  // commercial building would make this recompute diverge from the (correct)
+  // actual flow and falsely redden the consistency gate.
+  const c = countByKindOnline(s);
   const t = s.taxRates;
   // BUG-419: recompute against the START-of-tick population the engine actually charged
   // (recorded in lastFlows.population), not the grown end-of-tick s.population. Fall back

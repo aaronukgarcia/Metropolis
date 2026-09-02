@@ -1581,6 +1581,26 @@ export function countByKind(buildings: SimState['buildings']): Record<ZoneKind, 
   return c;
 }
 
+// BUG-520 (remaining part) — an OFFLINE / road-disconnected building already
+// contributes zero power/waste/upkeep (powerStats/sumBy/wasteGeneratedOf); it
+// must ALSO contribute zero to business/freight/office TAX (computeFlows) and
+// zero to growth DEMAND (demandOf) — the exact same activation gate, applied
+// to the per-kind counts those two paths derive from. plain countByKind()
+// stays ungated on purpose: debug/save "byKind" totals (debugjson.ts,
+// snapshot.ts) and the build-advisor/milestone UI legitimately want the count
+// of everything PLACED, online or not. Mirror the powerStats()/sumBy() gate
+// exactly: `if (!isOnline(s, b)) continue;` inside the building loop.
+// Order-independent fold, no map-range-with-break (GR#21).
+export function countByKindOnline(s: SimState): Record<ZoneKind, number> {
+  const c = { ...ZERO_COUNTS };
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (sp) c[sp.kind]++;
+  }
+  return c;
+}
+
 /**
  * FEAT-1972079878 inc1 (AC-5): total residents capacity, including auto-scaled tiers.
  * For each residential building, capacity = capacityAtTier(sp, building.capacityTier ?? 0).
