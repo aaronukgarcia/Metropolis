@@ -52,6 +52,8 @@ import {
   setCurrentCityName,
   displayCityName,
   cityNameToSlug,
+  checkNamedSaveCollision,
+  type NamedSaveCollision,
 } from './namedsaves';
 import { versionRaw, versionBadgeLabel } from './version';
 import { currentMapUi, type MapViewState } from './uistate';
@@ -842,9 +844,25 @@ export function SimProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const saveGameAs = async (name?: string) => {
+  const saveGameAs = async (
+    name?: string,
+    opts?: { confirmedOverwrite?: boolean },
+  ): Promise<{ ok: boolean; collision?: NamedSaveCollision }> => {
     try {
       const label = displayCityName(name ?? cityName);
+      // BUG-445/AC-5: a Save-As that would silently clobber a DIFFERENT
+      // city's slot is refused (not written at all) unless the caller has
+      // already obtained the user's explicit confirmation. A re-save onto
+      // the same city's own slot never collides (checkNamedSaveCollision
+      // returns null for that case) and proceeds exactly as before.
+      const collision = checkNamedSaveCollision(window.localStorage, label);
+      if (collision && !opts?.confirmedOverwrite) {
+        recordError(
+          `Save As refused: a different city named "${collision.existingName}" already exists at slot "${collision.slug}". Confirm overwrite to proceed.`,
+          { type: 'app', action: 'save', code: 'MET-V851' },
+        );
+        return { ok: false, collision };
+      }
       const save = buildCurrentSave(label);
       persistSavepoint(window.localStorage, save.savepoint);
       // BUG-458: flush — Save As is a save boundary, same as saveGame.
@@ -858,9 +876,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
       }
       rememberOpened(save);
       await pickSaveFile(suggestedSaveName(save.savepoint.snapshot.tick, label), gameSaveText(save));
+      return { ok: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       recordError(`Save As failed: ${msg}`, { type: 'app', action: 'save' });
+      return { ok: false };
     }
   };
 
@@ -923,18 +943,36 @@ export function SimProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const renameCity = (name: string): boolean => {
+  const renameCity = (
+    name: string,
+    opts?: { confirmedOverwrite?: boolean },
+  ): { ok: boolean; collision?: NamedSaveCollision } => {
     const next = displayCityName(name);
     const oldSlug = cityNameToSlug(cityName);
+    const newSlug = cityNameToSlug(next);
+    // BUG-445/AC-5: renaming onto a slug already held by a DIFFERENT city is
+    // the same silent-destruction hazard as Save As — refuse without
+    // confirmation. Renaming within your own existing slug (newSlug ===
+    // oldSlug, e.g. a case/whitespace-only edit) is never a collision.
+    if (newSlug !== oldSlug) {
+      const collision = checkNamedSaveCollision(window.localStorage, next);
+      if (collision && !opts?.confirmedOverwrite) {
+        recordError(
+          `Rename refused: a different city named "${collision.existingName}" already exists at slot "${collision.slug}". Confirm overwrite to proceed.`,
+          { type: 'app', action: 'save', code: 'MET-V851' },
+        );
+        return { ok: false, collision };
+      }
+    }
     try {
       if (!renameNamedSave(window.localStorage, oldSlug, next)) {
         setCurrentCityName(window.localStorage, next);
       }
     } catch {
-      return false;
+      return { ok: false };
     }
     setCityName(next);
-    return true;
+    return { ok: true };
   };
 
   const value = useMemo(

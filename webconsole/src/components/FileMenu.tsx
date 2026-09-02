@@ -88,7 +88,24 @@ export function FileMenu() {
               className="brand-menu-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                void saveGameAs(name).then(close);
+                // BUG-445/AC-5: a slug collision with a DIFFERENT city is
+                // refused by the store until the user explicitly confirms —
+                // never overwritten silently. A same-city re-save has no
+                // collision and proceeds straight through.
+                void saveGameAs(name).then((result) => {
+                  if (result.ok) {
+                    close();
+                    return;
+                  }
+                  if (result.collision) {
+                    const overwrite = window.confirm(
+                      `A city named "${result.collision.existingName}" already exists. Overwrite it?`,
+                    );
+                    if (overwrite) {
+                      void saveGameAs(name, { confirmedOverwrite: true }).then(close);
+                    }
+                  }
+                });
               }}
             >
               <input
@@ -109,7 +126,18 @@ export function FileMenu() {
               className="brand-menu-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (renameCity(name)) close();
+                // BUG-445/AC-5: same collision-confirm contract as Save As.
+                const result = renameCity(name);
+                if (result.ok) {
+                  close();
+                  return;
+                }
+                if (result.collision) {
+                  const overwrite = window.confirm(
+                    `A city named "${result.collision.existingName}" already exists. Overwrite it?`,
+                  );
+                  if (overwrite && renameCity(name, { confirmedOverwrite: true }).ok) close();
+                }
               }}
             >
               <input

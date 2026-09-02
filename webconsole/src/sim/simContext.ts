@@ -1,9 +1,20 @@
 import { createContext, useContext, type Context, type Dispatch } from 'react';
 import type { SimState } from './types.ts';
 import type { Action } from './engine.ts';
-import type { NamedSaveMeta } from './namedsaves.ts';
+import type { NamedSaveMeta, NamedSaveCollision } from './namedsaves.ts';
 import type { RecentOpened } from './recentfiles.ts';
 import { codedError } from './backend.ts';
+
+/**
+ * BUG-445/AC-5: outcome of a named-save write attempt. `ok: false` with a
+ * `collision` means the write was refused because it would silently clobber
+ * a DIFFERENT city's slot — the caller must re-invoke with
+ * `{ confirmedOverwrite: true }` after the user explicitly confirms.
+ */
+export interface NamedSaveWriteOutcome {
+  ok: boolean;
+  collision?: NamedSaveCollision;
+}
 
 export interface SimContextValue {
   state: SimState;
@@ -12,10 +23,10 @@ export interface SimContextValue {
   listSaves: () => NamedSaveMeta[];
   listRecent: () => RecentOpened[];
   saveGame: () => Promise<boolean>;
-  saveGameAs: (name?: string) => Promise<void>;
+  saveGameAs: (name?: string, opts?: { confirmedOverwrite?: boolean }) => Promise<NamedSaveWriteOutcome>;
   loadGame: () => Promise<void>;
   loadNamed: (slug: string) => Promise<void>;
-  renameCity: (name: string) => boolean;
+  renameCity: (name: string, opts?: { confirmedOverwrite?: boolean }) => NamedSaveWriteOutcome;
 }
 
 const g = globalThis as unknown as { __metroSimContext?: Context<SimContextValue | null> };

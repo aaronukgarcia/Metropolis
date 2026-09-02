@@ -111,6 +111,31 @@ export function writeNamedSave(storage: NamedSaveStorage, save: GameSave): boole
   }
 }
 
+/** BUG-445/AC-5: a named-save slot already occupied by a DIFFERENT city. */
+export interface NamedSaveCollision {
+  slug: string;
+  existingName: string;
+}
+
+/**
+ * BUG-445/AC-5: read-only collision check — does writing `name` as a named
+ * save land on a slug already occupied by a DIFFERENT city's save? Returns
+ * null when the slot is free, or when the save already there IS the same
+ * city (a normal re-save onto your own slot must never prompt for
+ * confirmation). Callers (saveGameAs/renameCity in store.tsx) MUST call this
+ * before writeNamedSave/renameNamedSave and require explicit confirmation on
+ * a non-null result — never overwrite silently.
+ */
+export function checkNamedSaveCollision(storage: NamedSaveStorage, name: string): NamedSaveCollision | null {
+  const proposed = displayCityName(name);
+  const slug = cityNameToSlug(proposed);
+  const existing = readNamedSave(storage, slug);
+  if (!existing) return null;
+  const existingName = displayCityName(existing.name);
+  if (existingName === proposed) return null;
+  return { slug, existingName };
+}
+
 export function readNamedSave(storage: NamedSaveStorage, slug: string): GameSave | null {
   try {
     const raw = storage.getItem(slotKey(slug));

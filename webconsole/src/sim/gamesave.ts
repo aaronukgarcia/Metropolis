@@ -6,6 +6,7 @@ import { createSavepoint } from './replay.ts';
 import { emptyJournal } from './journal.ts';
 import { gameDate } from './utils.ts';
 import { sanitizeTreasury } from './engine.ts';
+import { codedError } from './backend.ts';
 
 export const GAME_SAVE_FORMAT = 'metropolis-save/1';
 
@@ -51,45 +52,101 @@ export function buildGameSave(opts: {
   };
 }
 
+/**
+ * BUG-446/GR#7: every structural rejection is a registry-sourced, trapped
+ * error (MET-V850) — never a bare `throw new Error(...)`, never a silently
+ * coerced/partial object. Mirrors the codedError convention already used by
+ * captureBeforeWipe.ts (MET-V807) and simContext.ts (MET-V800).
+ */
+function rejectSave(reason: string): never {
+  throw codedError('MET-V850', reason);
+}
+
+/**
+ * BUG-446/AC-3/AC-8: validate one entry of snapshot.buildings against the
+ * REAL Building shape (types.ts) — the exact fields buildGameSave/the engine
+ * actually write, not an invented schema. Required: id (number), spec
+ * (string), x (number), y (number). Optional fields (builtTick, bridgeOver,
+ * capacityTier, lastAutoScaleTick), if present, must carry their declared
+ * type — a wrong-typed optional is still garbage that would break the
+ * reducer downstream, so it is rejected too rather than silently coerced.
+ */
+function validateBuildingElement(value: unknown, index: number): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    rejectSave(`Snapshot buildings[${index}] is not an object`);
+  }
+  const b = value as Record<string, unknown>;
+  if (typeof b.id !== 'number' || !Number.isFinite(b.id)) {
+    rejectSave(`Snapshot buildings[${index}] is missing a numeric id`);
+  }
+  if (typeof b.spec !== 'string' || b.spec.length === 0) {
+    rejectSave(`Snapshot buildings[${index}] is missing a spec`);
+  }
+  if (typeof b.x !== 'number' || !Number.isFinite(b.x) || typeof b.y !== 'number' || !Number.isFinite(b.y)) {
+    rejectSave(`Snapshot buildings[${index}] is missing a valid x/y position`);
+  }
+  if (b.builtTick !== undefined && typeof b.builtTick !== 'number') {
+    rejectSave(`Snapshot buildings[${index}] has a wrong-typed builtTick`);
+  }
+  if (b.bridgeOver !== undefined && typeof b.bridgeOver !== 'string') {
+    rejectSave(`Snapshot buildings[${index}] has a wrong-typed bridgeOver`);
+  }
+  if (b.capacityTier !== undefined && typeof b.capacityTier !== 'number') {
+    rejectSave(`Snapshot buildings[${index}] has a wrong-typed capacityTier`);
+  }
+  if (b.lastAutoScaleTick !== undefined && typeof b.lastAutoScaleTick !== 'number') {
+    rejectSave(`Snapshot buildings[${index}] has a wrong-typed lastAutoScaleTick`);
+  }
+}
+
+/**
+ * BUG-446: parses and structurally validates a saved-city JSON blob. On ANY
+ * malformed shape — a non-object root, a missing/wrong-typed required field,
+ * or a garbage element inside snapshot.buildings — this THROWS a
+ * registry-sourced MET-V850 error (GR#1/GR#7) rather than returning a
+ * partially-valid or silently-coerced GameSave. The only successful return
+ * is `{ ok: true, save }` with a save whose shape has been fully verified.
+ */
 export function parseGameSave(text: string): ParseGameSaveResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { ok: false, reason: 'File is not JSON' };
+    rejectSave('File is not JSON');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, reason: 'Save root must be an object' };
+    rejectSave('Save root must be an object');
   }
   const o = parsed as Record<string, unknown>;
   if (o.format !== GAME_SAVE_FORMAT) {
     if (o.format === 'metropolis-debug/1') {
-      return { ok: false, reason: 'That file is a debug dump, not a save. Use File → Save As to write a loadable city.' };
+      rejectSave('That file is a debug dump, not a save. Use File → Save As to write a loadable city.');
     }
-    return { ok: false, reason: `Not a ${GAME_SAVE_FORMAT} save (got ${String(o.format)})` };
+    rejectSave(`Not a ${GAME_SAVE_FORMAT} save (got ${String(o.format)})`);
   }
   if (typeof o.name !== 'string' || typeof o.savedAt !== 'string' || typeof o.buildVersion !== 'string') {
-    return { ok: false, reason: 'Save is missing name, savedAt, or buildVersion' };
+    rejectSave('Save is missing name, savedAt, or buildVersion');
   }
   const sp = o.savepoint;
   if (!sp || typeof sp !== 'object' || Array.isArray(sp)) {
-    return { ok: false, reason: 'Save is missing savepoint' };
+    rejectSave('Save is missing savepoint');
   }
   const snapshot = (sp as Record<string, unknown>).snapshot;
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
-    return { ok: false, reason: 'Savepoint is missing snapshot' };
+    rejectSave('Savepoint is missing snapshot');
   }
   const snap = snapshot as Record<string, unknown>;
   if (typeof snap.tick !== 'number' || !Array.isArray(snap.buildings)) {
-    return { ok: false, reason: 'Snapshot is missing tick or buildings' };
+    rejectSave('Snapshot is missing tick or buildings');
   }
+  (snap.buildings as unknown[]).forEach((b, i) => validateBuildingElement(b, i));
   const journal = o.journal;
   if (!journal || typeof journal !== 'object' || Array.isArray(journal)) {
-    return { ok: false, reason: 'Save is missing journal' };
+    rejectSave('Save is missing journal');
   }
   const entries = (journal as Record<string, unknown>).entries;
   if (!Array.isArray(entries)) {
-    return { ok: false, reason: 'Journal is missing entries' };
+    rejectSave('Journal is missing entries');
   }
   const savepoint = sp as Savepoint;
   savepoint.snapshot = sanitizeTreasury(savepoint.snapshot);
