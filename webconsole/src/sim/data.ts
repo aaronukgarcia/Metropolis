@@ -904,6 +904,16 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
         basis: 'citywide police coverage',
       };
     }
+    case 'fire': {
+      // BUG-526 (Q100046 A1) — mirrors the police case above; fire coverage
+      // is now a real served-population basis (serviceCoverageOf, GR#3 SSOT).
+      const cap = sumBy(s, (sp) => sp.kind === 'fire', (sp) => sp.served ?? 0);
+      if (cap <= 0) return null;
+      return {
+        ratio: ratio(s.population, cap),
+        basis: 'citywide fire coverage',
+      };
+    }
     case 'commercial':
     case 'office':
     case 'industrial':
@@ -919,7 +929,6 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
     case 'park':
     case 'landmark':
     case 'leisure':
-    case 'fire':
     case 'civic':
     case 'transport':
     case 'road':
@@ -2073,6 +2082,32 @@ export function totalJobs(s: SimState): number {
   return jobs;
 }
 
+/**
+ * BUG-524 (Q100046 C1) — unemployment / jobs-deficit measure, the SSOT
+ * (GR#3) consumed by BOTH wellbeingOf's new "Jobs/Employment" part and,
+ * indirectly, move-out (engine.ts feeds unemployment into wellbeing only —
+ * see the no-double-count note at engine.ts wellbeingOf). Mirrors the
+ * `serviceCoverageOf` 'commercial'/'office'/'industrial'/'mine' basis
+ * (workers = population * 0.55, PLACEHOLDER working-age fraction per the
+ * audit) but expressed as a 0..1 unemployment RATE rather than a coverage
+ * ratio, since "jobs > workers" (full employment plus vacancies) must clamp
+ * to 0% unemployment, not a negative rate.
+ *
+ * unemployment = max(0, workers - jobs) / workers. No workers (population 0)
+ * ⇒ 0 (nobody is unemployed in an empty city — avoids a 0/0 NaN).
+ * Pure / order-independent (GR#21): jobs comes from totalJobs() which is
+ * already isOnline-gated (BUG-525), so an offline factory contributes no
+ * jobs here either.
+ */
+export const WORKING_AGE_FRACTION = 0.55; // PLACEHOLDER-balance, matches serviceCoverageOf's jobs basis.
+
+export function unemploymentOf(s: SimState): number {
+  const workers = s.population * WORKING_AGE_FRACTION;
+  if (workers <= 0) return 0;
+  const jobs = totalJobs(s);
+  return Math.max(0, workers - jobs) / workers;
+}
+
 // ---------- per-service coverage: SINGLE SOURCE OF TRUTH (BUG-392, GR#3) ----
 //
 // Before BUG-392 the demand meters (here) and the wellbeing breakdown
@@ -2102,8 +2137,8 @@ export interface ServiceCoverage {
 /**
  * ⚠ BALANCE-NUMBER REGIME (Aaron's blanket rule): every `need` rate below
  * (0.06 / 0.12 / 0.05 of population for school places; whole-population reach
- * for GP/hospital/police/water) is a PLACEHOLDER — directional only, pending
- * Aaron's row-by-row balance pass.
+ * for GP/hospital/police/fire/water) is a PLACEHOLDER — directional only,
+ * pending Aaron's row-by-row balance pass.
  */
 export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
   const pop = s.population;
@@ -2119,6 +2154,12 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
   // fully-policed city read a pegged +100 shortfall. 'police' has exactly one
   // capability (population coverage via `served`), so kind is the right key.
   const police = sumBy(s, (sp) => sp.kind === 'police', (sp) => sp.served ?? 0);
+  // BUG-526 (Q100046 A1) — fire coverage, the missing wellbeing wiring: fire
+  // stations charge upkeep (a cost-only sink today) but their `served`
+  // capacity was never read anywhere. Same served-population pattern as
+  // police/GP/hospital (sumBy, isOnline-gated) — need = whole population,
+  // cap = Σ online fire-building `served`.
+  const fire = sumBy(s, (sp) => sp.kind === 'fire', (sp) => sp.served ?? 0);
   // BUG-534 — mirror BUG-430/BUG-527: an offline (disconnected / still
   // under-construction) water plant contributes ZERO clean/waste capacity to
   // the coverage meters, exactly as an offline power plant contributes zero
@@ -2150,6 +2191,7 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
     row('gp', 'GP clinics', pop, gp, 'hea_clinic'),
     row('hosp', 'Hospital', pop, hosp, 'hea_hospital'),
     row('police', 'Police', pop, police, 'pol_station'),
+    row('fire', 'Fire cover', pop, fire, 'fire_station'),
     row('cleanwater', 'Clean water', pop, clean, 'wat_clean'),
     row('waste', 'Sewage', pop, waste, 'wat_waste'),
     row('power', `Power (${formatPower(pw.cap)}/${formatPower(pw.need)})`, pw.need, pw.cap, pw.need - pw.cap > 60 ? 'pow_coal' : 'pow_wind'),
@@ -2650,13 +2692,18 @@ export function pickAutoSpec(
 // placement mechanism.
 //
 // SCOPE: covers exactly the services with a REAL demand/coverage number today —
-// the nine serviceCoverageOf() rows (nursery/primary/college/gp/hosp/police/
-// cleanwater/waste/power) plus refuse (wasteStatsOf() generated-vs-capacity,
-// which is the twin coverage function for the collection-depot service). Parks
-// and fire have no coverage/demand metric in the engine yet (BUG-392/serviceDemandOf
-// scope), so — per the "don't invent demand" rule — they are simply never
-// candidates here; demandFixPlan only ever emits an entry when a real (need, have)
-// pair says there IS a shortfall.
+// nine of the TEN serviceCoverageOf() rows (nursery/primary/college/gp/hosp/
+// police/cleanwater/waste/power) plus refuse (wasteStatsOf() generated-vs-
+// capacity, the twin coverage function for the collection-depot service).
+// Parks have no coverage/demand metric in the engine yet (BUG-392/
+// serviceDemandOf scope), so — per the "don't invent demand" rule — parks are
+// never a candidate here. Fire (BUG-526, Q100046 A1) gained a REAL
+// serviceCoverageOf row and now shows in the DEMAND panel, but is
+// DELIBERATELY NOT added to DEMAND_FIX_PROVIDERS below in this pass — the
+// one-click bulk-place feature for it is a separate follow-up, not part of
+// the wellbeing-wiring fix; demandFixPlan only ever emits an entry when a
+// real (need, have) pair says there IS a shortfall AND a registered provider
+// exists.
 // ════════════════════════════════════════════════════════════════════════════
 
 /**

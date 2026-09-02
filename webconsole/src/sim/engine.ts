@@ -21,6 +21,7 @@ import {
   BROWNOUT_WELLBEING_K,
   stationLinks,
   totalJobs,
+  unemploymentOf,
   waterBalanceOf,
   unlockedAtLevel,
   MAP_H,
@@ -1179,6 +1180,10 @@ function advance(s: SimState): SimState {
     deaths = Math.round(popBefore * DEATH_RATE_PER_TICK);
     // Move-out rate rises as wellbeing falls (state-derived, deterministic —
     // GR#21: no Date/random). At wellbeing 100 the rate is exactly the base.
+    // BUG-524 (Q100046 C1) — unemployment reaches move-out THROUGH wbOverall
+    // (wellbeingOf's new "Jobs/Employment" part, above) rather than as a
+    // second direct term here. See the NO-DOUBLE-COUNT DECISION comment on
+    // that part in wellbeingOf for the reasoning.
     const moveOutRate =
       MOVE_OUT_BASE_RATE * (1 + (WELLBEING_MOVEOUT_FACTOR * (100 - wbOverall)) / 100);
     moveOuts = Math.round(popBefore * moveOutRate);
@@ -3736,6 +3741,26 @@ export function wellbeingOf(s: SimState): {
     ? Math.max(0, Math.round(part(utilities) * (1 - brownout.deficitRatio * BROWNOUT_WELLBEING_K)))
     : part(utilities);
 
+  // BUG-524 (Q100046 C1) — jobs/unemployment now has TEETH: a "Jobs/
+  // Employment" wellbeing part that drops as unemployment rises. unemployment
+  // is the SSOT unemploymentOf() (data.ts, GR#3) — same workers=pop*0.55 /
+  // totalJobs() basis serviceCoverageOf's commercial/office/industrial/mine
+  // rows already use. `part()` expects a coverage-shaped 0..1 (1 = good), so
+  // employment coverage = 1 - unemployment (full employment ⇒ 1 ⇒ ~100;
+  // 100% unemployment ⇒ 0 ⇒ ~0, subject to the same early-game blend as every
+  // other part). ⚠ BALANCE-NUMBER PLACEHOLDER: linear map, pending Aaron's
+  // pass.
+  //
+  // NO-DOUBLE-COUNT DECISION (documented per the brief): unemployment feeds
+  // move-out ONLY via this wellbeing part, not as a second direct term in
+  // engine.ts's moveOutRate formula (~1183). moveOutRate already reads
+  // wbOverall — which now includes this part — so a high-unemployment city
+  // already gets a higher move-out rate through the existing wellbeing→
+  // move-out link (symmetric with every other wellbeing-driven service
+  // effect). Adding a SEPARATE unemployment term to moveOutRate on top of
+  // this part would double-count the exact same signal twice in one tick.
+  const employment = part(clampN(1 - unemploymentOf(s), 0, 1));
+
   const parts = [
     { label: 'Approval', value: approvalOf(s) },
     { label: 'Parks & leisure', value: parks },
@@ -3743,6 +3768,11 @@ export function wellbeingOf(s: SimState): {
     { label: 'Hospital care', value: part(ratio('hosp')) },
     { label: 'Education', value: part(education) },
     { label: 'Safety', value: part(ratio('police')) },
+    // BUG-526 (Q100046 A1) — fire stations charged upkeep with no wellbeing
+    // effect (cost-only sink) until now; wired to the new serviceCoverageOf
+    // 'fire' row (data.ts, GR#3 SSOT) exactly like Safety/police above.
+    { label: 'Fire safety', value: part(ratio('fire')) },
+    { label: 'Jobs/Employment', value: employment },
     { label: 'Utilities', value: utilitiesValue },
     { label: 'Sewage', value: part(ratio('waste')) },
     // FEAT-1972079906 inc1 — WASTE-HEALTH penalty. Uncollected refuse hurts
