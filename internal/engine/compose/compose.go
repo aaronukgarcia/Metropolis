@@ -1241,6 +1241,40 @@ type simState struct {
 
 	nextCitizenID uint64
 
+	// liveResidentIDsCache/liveResidentIDsCacheMigrants/
+	// liveResidentIDsCacheChildren/liveResidentIDsCacheNextID are
+	// BUG-547's allocation-regression fix for liveResidentIDs() (see that
+	// method's own doc comment for the full BUG-529 union it computes).
+	// BUG-529 made liveResidentIDs() the enumeration
+	// markEmploymentAndCount/formResidentHouseholds/
+	// distributeWagesToResidents/employedResidentCount (moneycirc.go) all
+	// call, independently, every time they run — perfci measured this as
+	// +278% alloc bytes / +394% alloc count per tick (~4x the pre-BUG-529
+	// baseline, one full-population slice build per caller). This cache
+	// memoises the LAST computed union against the exact three live
+	// counters it is a pure function of (residentIDs()'s own nextCitizenID
+	// plus attract's/citizens' live migrant/fertility-child counters): a
+	// cache hit is returned ONLY when all three still match what produced
+	// the cached slice, so the memo is invalidated automatically and
+	// EXACTLY when the true answer would differ — never on a wall-clock or
+	// tick-boundary guess, which would have been wrong here (migrants get
+	// admitted mid-month, between formResidentHouseholds' PhasePopulation
+	// call and markEmploymentAndCount's later PhaseFinance call in the
+	// SAME tick, so a naive "compute once per tick" cache would have
+	// delayed a freshly-admitted migrant's employment marking by a whole
+	// month — a real, if subtle, correctness regression this
+	// counter-keyed design cannot introduce). Deliberately NOT part of any
+	// snapshot payload (mirrors liveResidentIDs' own doc comment on why a
+	// compose-tracked counter must never be persisted): a zero-value cache
+	// miss-compares against the live counters after every LoadAt/restore
+	// (vanishingly unlikely to coincide with a real 0/0/0 state) and
+	// simply recomputes the full union on the next call, so restore
+	// correctness never depends on this field surviving a restore.
+	liveResidentIDsCache         []uint64
+	liveResidentIDsCacheMigrants uint64
+	liveResidentIDsCacheChildren uint64
+	liveResidentIDsCacheNextID   uint64
+
 	// vitalBirths/vitalDeaths are the cumulative real fertility/mortality
 	// totals folded into peopleDelta so far (liveness evidence, mirrors
 	// consumptionDelivered/netMigration above) — the "births/deaths are
@@ -2152,6 +2186,17 @@ func (st *simState) residentIDs() []uint64 {
 func (st *simState) liveResidentIDs() []uint64 {
 	migrants := st.attract.MigrantsAdmitted()
 	children := st.citizens.FertilityChildrenBorn(st.cid)
+	// BUG-547: a cache hit requires ALL THREE of the values the union is a
+	// pure function of to be unchanged since the cache was populated — see
+	// this cache's own field doc comment (compose.go's simState struct)
+	// for why counter-keyed invalidation is exact, not tick-boundary
+	// approximate.
+	if st.liveResidentIDsCache != nil &&
+		st.liveResidentIDsCacheMigrants == migrants &&
+		st.liveResidentIDsCacheChildren == children &&
+		st.liveResidentIDsCacheNextID == st.nextCitizenID {
+		return st.liveResidentIDsCache
+	}
 	ids := st.residentIDs()
 	for i := uint64(1); i <= migrants; i++ {
 		ids = append(ids, attract.MigrantIDBase+i)
@@ -2159,6 +2204,10 @@ func (st *simState) liveResidentIDs() []uint64 {
 	for i := uint64(1); i <= children; i++ {
 		ids = append(ids, citizens.FertilityChildIDBase+i)
 	}
+	st.liveResidentIDsCache = ids
+	st.liveResidentIDsCacheMigrants = migrants
+	st.liveResidentIDsCacheChildren = children
+	st.liveResidentIDsCacheNextID = st.nextCitizenID
 	return ids
 }
 
