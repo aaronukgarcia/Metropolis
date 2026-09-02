@@ -535,9 +535,25 @@ test('residentsCapacity includes auto-scaled tiers', () => {
 });
 
 test('totalJobs includes auto-scaled tiers', () => {
+  // BUG-525 fix: totalJobs() is now isOnline-gated (mirrors powerStats /
+  // onlineResidentsCapacity), so the buildings must actually BE online for
+  // this test to exercise tier scaling rather than the activation gate.
+  // builtTick: 0 with the default tick: 0 from mk() would put both towers
+  // under construction (constructionTicks(off_towers_downtown) = 85) and
+  // read zero jobs — that WAS the old ungated behaviour this test relied on
+  // incidentally, not a deliberate assertion that offline buildings count.
+  // Advance tick past the construction window so both towers are online.
+  // mk() derives from initialState(), which already ran advance() once on
+  // an EMPTY map and cached a (stale, empty) roadConnectivity — leaving it
+  // in place would fail these un-road-connected towers on G2/G3 (road
+  // adjacency/connection) instead of exercising the tier-scaling behaviour
+  // this test targets. Explicitly clear it to `undefined`, which isOnline's
+  // backward-tolerance clause treats as "no connectivity graph computed yet"
+  // and skips the road gates — isolating G1 (construction time) here, same
+  // as bug430-power-gate.test.mjs's construction-only cases.
   const b1 = { id: 1, spec: 'off_towers_downtown', x: 10, y: 10, builtTick: 0, capacityTier: 0 };
   const b2 = { id: 2, spec: 'off_towers_downtown', x: 20, y: 20, builtTick: 0, capacityTier: 1 };
-  const s = mk({ buildings: [b1, b2] });
+  const s = mk({ buildings: [b1, b2], tick: 100, roadConnectivity: undefined });
 
   const jobs = totalJobs(s);
   const sp = SPECS['off_towers_downtown'];

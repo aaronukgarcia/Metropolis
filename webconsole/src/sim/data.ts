@@ -1881,9 +1881,20 @@ export function lineUsageOf(s: SimState): LineUsage[] {
   return out;
 }
 
+// BUG-527 — sumBy backs GP/hospital/police/school coverage in BOTH
+// serviceCoverageOf and utilisationOf. Before this fix it iterated every
+// building regardless of activation state, so an OFFLINE / road-disconnected
+// / still-under-construction police station, clinic, hospital, or school
+// contributed its full `served`/`children` capacity to the coverage meters
+// while (correctly) drawing zero upkeep — free coverage from a
+// non-functioning building. Mirror the powerStats() / wasteGeneratedOf()
+// gate exactly: `if (!isOnline(s, b)) continue;` inside the building loop,
+// same as those two functions (data.ts ~1918, ~2208). Order-independent
+// fold, no map-range-with-break (GR#21).
 function sumBy(s: SimState, f: (sp: Spec) => boolean, g: (sp: Spec) => number): number {
   let t = 0;
   for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (sp && f(sp)) t += g(sp);
   }
@@ -2015,9 +2026,18 @@ export function isBrownoutActive(s: SimState): boolean {
  * For buildings with capacityTiers, uses capacityAtTier(sp, building.capacityTier ?? 0).
  * For others, uses sp.jobs or default commercial/industrial job counts.
  */
+// BUG-525 — before this fix totalJobs() summed EVERY job building
+// regardless of activation state, while onlineResidentsCapacity() (data.ts
+// ~1596) IS gated — an inconsistency that let an offline / road-disconnected
+// / under-construction factory, office, or shop contribute full job
+// capacity (feeding employment ratios, commuter/office splits, and the
+// jobs-capacity pass in engine.ts) while correctly paying zero upkeep.
+// Mirror the powerStats() gate exactly: `if (!isOnline(s, b)) continue;`
+// inside the building loop (data.ts ~1918). Order-independent fold (GR#21).
 export function totalJobs(s: SimState): number {
   let jobs = 0;
   for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (!sp) continue;
     if (sp.jobs) jobs += capacityAtTier(sp, b.capacityTier ?? 0);
