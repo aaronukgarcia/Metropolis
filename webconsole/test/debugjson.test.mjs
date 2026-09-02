@@ -133,8 +133,10 @@ test('demand carries power need/capacity in MW matching powerStats', () => {
   assert.equal(dj.demand.power.capMw, pw.cap);
   // BUG-526 (Q100046 A1) added a 'fire' row to serviceCoverageOf/serviceDemandOf
   // (fire stations now feed wellbeing via the new Fire safety part, GR#3 SSOT),
-  // so the demand-services set grew from 9 to 10 indices.
-  assert.equal(dj.demand.services.length, 10, 'all ten service demand indices present (incl. BUG-526 fire)');
+  // growing the demand-services set from 9 to 10; BUG-572 (the DemandDock
+  // overhaul, 88bb6fa) then folded the previously-unrendered 'refuse' row in
+  // from wasteStatsOf, growing it to 11.
+  assert.equal(dj.demand.services.length, 11, 'all eleven service demand indices present (incl. BUG-526 fire + BUG-572 refuse)');
 });
 
 test('info tabs: experience ladder spans levels 1-20; policy rows reflect toggles; milestones evaluated', () => {
