@@ -1113,6 +1113,13 @@ const (
 	feat169CoupleSeed       uint64 = 1
 	feat169CoupleBirthMonth int64  = 334
 	feat169CoupleRunMonths  int64  = feat169CoupleBirthMonth + 1
+	// feat169CoupleParentA/B name the couple's two citizen ids (previously
+	// only inlined as the 90000/90001 literals below) — births-unblock lane,
+	// 2026-09-02: TestBUG517_FertilityBirthsStillAgeZero needs these to look
+	// up the couple's OWN child via household membership rather than
+	// assuming a global fertility-child id.
+	feat169CoupleParentA uint64 = 90000
+	feat169CoupleParentB uint64 = 90001
 )
 
 // buildFertilityCoupleAPI constructs a fresh CitizensAPI seeded with one
@@ -1127,17 +1134,17 @@ func buildFertilityCoupleAPI(t *testing.T) *citizens.CitizensAPI {
 	if err != nil {
 		t.Fatalf("NewCitizensAPI: %v", err)
 	}
-	a := mkFertilityColdRecord(90000, 0)
-	b := mkFertilityColdRecord(90001, 0)
+	a := mkFertilityColdRecord(feat169CoupleParentA, 0)
+	b := mkFertilityColdRecord(feat169CoupleParentB, 0)
 	if err := api.SeedColdRecords([]citizens.ColdRecord{a, b}, cid); err != nil {
 		t.Fatalf("SeedColdRecords: %v", err)
 	}
 	if err := api.ApplyLifeEventCommand(citizens.LifeEventCommand{
-		CorrelationID: cid, Kind: citizens.LifeEventPartner, CitizenID: 90000, PartnerID: 90001,
+		CorrelationID: cid, Kind: citizens.LifeEventPartner, CitizenID: feat169CoupleParentA, PartnerID: feat169CoupleParentB,
 	}); err != nil {
 		t.Fatalf("ApplyLifeEventCommand(LifeEventPartner): %v", err)
 	}
-	if hh, ok := api.HouseholdOf(90000, cid); !ok || hh.ID != 1 {
+	if hh, ok := api.HouseholdOf(feat169CoupleParentA, cid); !ok || hh.ID != 1 {
 		t.Fatalf("couple household = %+v (ok=%v), want household id 1 (the verified triple assumes this)", hh, ok)
 	}
 	return api

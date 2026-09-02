@@ -19,10 +19,24 @@ import (
 //     epochMonth (age is derived, AC-2);
 //   - bit/byte-packed states: employment packs state (high 4 bits) and
 //     sector (low 4 bits) into one uint8; satisfaction/personality axes
-//     are int8; household/partner/home/workplace ids are narrowed to
-//     uint32 (2^32 ids is far beyond any city this project targets).
+//     are int8; home/workplace/school ids are narrowed to uint32 (2^32 ids
+//     is far beyond any city this project targets). household/partner ids
+//     are FULL-WIDTH uint64 (BUG-541-class fix, births-unblock lane,
+//     2026-09-02): engine.attract mints admitted-migrant ids from 1<<62 and
+//     this package's own fertility-born children from 1<<63 (see
+//     fertilityChildIDBase's doc comment) — both far outside uint32's
+//     range, so narrowing them via safeUint32() silently SATURATED every
+//     cross-cohort partner/household reference to math.MaxUint32,
+//     permanently zeroing Citizen.Partner for any migrant-or-fertility-
+//     child couple and excluding them from FertilityEligible's partnerID==0
+//     check. This was the births blocker: with the columns narrowed, births
+//     were structurally impossible for anyone outside the closed seed
+//     cohort. Widening these two columns only (not workplace/school, which
+//     stay uint32 — no known collision there) restores full-width id
+//     round-tripping at a modest cost: +8B/citizen (67B -> 75B) for the two
+//     widened columns, still comfortably inside A1's 60-100B band.
 //
-// The measured per-citizen cost is ~67B (see bytesPerCitizen and
+// The measured per-citizen cost is ~75B (see bytesPerCitizen and
 // TestColdShardBytesPerCitizen), inside A1's 60–100B band. A ColdShard is
 // accessed by row index only; rows are removed by swap-with-last (order
 // within a shard is not a determinism input — the monthly pass iterates
@@ -34,8 +48,8 @@ type ColdShard struct {
 	sexes      []uint8
 
 	// relationships
-	households []uint32
-	partners   []uint32
+	households []uint64 // widened from uint32 — births-unblock lane, 2026-09-02 (see ColdShard's doc comment)
+	partners   []uint64 // widened from uint32 — births-unblock lane, 2026-09-02 (see ColdShard's doc comment)
 	childCount []uint8
 
 	// location / stratification
@@ -278,8 +292,8 @@ type ColdRecord struct {
 	ID              uint64
 	BirthMonth      int64
 	Sex             Sex
-	Household       uint32
-	Partner         uint32
+	Household       uint64 // widened from uint32 — births-unblock lane, 2026-09-02
+	Partner         uint64 // widened from uint32 — births-unblock lane, 2026-09-02
 	ChildCount      uint8
 	Home            CellRef
 	District        uint16
@@ -326,8 +340,8 @@ func (s *ColdShard) bytesPerCitizen() int {
 	total := unsafe.Sizeof(u64) // ids
 	total += unsafe.Sizeof(i16) // birthDelta
 	total += unsafe.Sizeof(u8)  // sexes
-	total += unsafe.Sizeof(u32) // households
-	total += unsafe.Sizeof(u32) // partners
+	total += unsafe.Sizeof(u64) // households (widened from uint32 — births-unblock lane, 2026-09-02)
+	total += unsafe.Sizeof(u64) // partners (widened from uint32 — births-unblock lane, 2026-09-02)
 	total += unsafe.Sizeof(u8)  // childCount
 	total += unsafe.Sizeof(u32) // homeCells
 	total += unsafe.Sizeof(u16) // districts

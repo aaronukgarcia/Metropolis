@@ -102,6 +102,21 @@ func TestBUG517_MigrantsHaveNonDegenerateAgeSpread(t *testing.T) {
 // must still be exactly age 0 at its own birth month. This uses the same
 // couple/fertility harness FEAT-169's regression suite already
 // established (buildFertilityCoupleAPI + feat169Couple* constants).
+//
+// Births-unblock lane (2026-09-02, BUG-541-class fix): this test used to
+// assume the household-1 couple's child would ALWAYS be the globally-FIRST
+// fertility child ever minted (citizens.FertilityChildIDBase+0), because on
+// unfixed code every OTHER couple compose's own spawnCitizens/
+// formResidentHouseholds forms among the wider seed population was
+// cross-cohort-truncation-broken (the safeUint32 partner/household id
+// finding this ticket fixes) and so could never itself reproduce first.
+// Now that the births blocker is fixed, some other seed-population couple
+// can legitimately reproduce BEFORE the verified triple's month 334 (this
+// run measures one doing so at month 58) — that is the fix working, not a
+// regression — so the test must identify THIS couple's own child via
+// household 1's membership (the id FormHousehold assigned when
+// buildFertilityCoupleAPI explicitly partnered 90000/90001, before Wire
+// ever ticks), never by assuming a global id.
 func TestBUG517_FertilityBirthsStillAgeZero(t *testing.T) {
 	api := buildFertilityCoupleAPI(t)
 	e := core.NewEngine(core.WithWorldSeed(feat169CoupleSeed), core.WithPoolSize(1))
@@ -114,7 +129,23 @@ func TestBUG517_FertilityBirthsStillAgeZero(t *testing.T) {
 	if got := comp.VitalBirths(); got <= 0 {
 		t.Fatalf("VitalBirths() = %d, want > 0 (this test needs a REAL fertility child in play)", got)
 	}
-	childID := uint64(citizens.FertilityChildIDBase)
+	hh, ok := comp.state.citizens.HouseholdOf(feat169CoupleParentA, comp.state.cid)
+	if !ok {
+		t.Fatalf("expected household-1 couple's household to still exist")
+	}
+	var childID uint64
+	for _, member := range hh.Members {
+		if member != feat169CoupleParentA && member != feat169CoupleParentB {
+			childID = member
+			break
+		}
+	}
+	if childID == 0 {
+		t.Fatalf("household %d has no child member (Members=%v) — the verified couple never gave birth", hh.ID, hh.Members)
+	}
+	if childID < citizens.FertilityChildIDBase {
+		t.Fatalf("household %d's extra member %d is below citizens.FertilityChildIDBase — not a fertility-born child", hh.ID, childID)
+	}
 	child, ok := comp.state.citizens.CitizenAt(childID, comp.state.cid)
 	if !ok {
 		t.Fatalf("expected fertility child %d to exist", childID)

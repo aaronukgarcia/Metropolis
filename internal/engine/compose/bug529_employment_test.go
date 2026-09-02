@@ -130,8 +130,9 @@ func bug529Measure(t *testing.T, comp *Composition, month int64) bug529Snapshot 
 //  2. the wage bill does NOT pin at monthlyWagesFloor (BUG-529's concrete
 //     symptom);
 //  3. (logged, not asserted — see the safeUint32 finding in the test body)
-//     VitalBirths() after the run, and why it stays 0 even after this
-//     ticket's fix;
+//     VitalBirths() after the run: >0 once the births-unblock lane
+//     (2026-09-02) fixed the safeUint32 partner/household truncation this
+//     finding originally reported;
 //  4. the conservation invariant (people in == out + pending, money
 //     conserved) holds every tick of the whole run — proving the wider
 //     liveResidentIDs() enumeration introduces no double-counting or
@@ -201,33 +202,27 @@ func TestBUG529_EmployedFractionStaysProportionalUnderOrganicMigration(t *testin
 		t.Fatalf("month %d: wage bill = %d, did not exceed monthlyWagesFloor (%d) despite population growing from %d to %d — the wage bill is pinned at the floor (BUG-529 symptom)", last.month, last.wageBill, int64(monthlyWagesFloor), first.population, last.population)
 	}
 
-	// 3) BUG-535 follow-up (logged, NOT asserted — see below):
-	// formResidentHouseholds now pairs migrants/children (liveResidentIDs()),
-	// which was expected to unblock cross-cohort fertility. It does NOT:
-	// VitalBirths() stays 0 for the whole run. Root-caused, NOT fixed here —
-	// a SEPARATE, PRE-EXISTING bug independent of BUG-529/535: CitizensAPI's
-	// LifeEventPartner handler (registry.go) stores BOTH the new household id
-	// and each partner's id through safeUint32() into ColdShard's
-	// `partners []uint32`/`households []uint32` columns (coldshard.go).
-	// Migrant ids live at attract.MigrantIDBase (1<<62) and fertility-child
-	// ids at citizens.FertilityChildIDBase (1<<63) — both far outside
-	// uint32's range — so safeUint32 SATURATES them to math.MaxUint32
-	// (4294967295), confirmed empirically (a probe printed a paired
-	// migrant's stored Partner field as exactly 4294967295 for every
-	// migrant pair, seed-range partners unaffected). Every downstream
-	// partner/household lookup for a migrant or fertility-born citizen is
-	// therefore silently wrong, including engine.attract's OWN
-	// applyImmigration pairing (migration.go uses this identical
-	// LifeEventPartner path) — this predates and is fully independent of
-	// this ticket's residentIDs()/liveResidentIDs() change, which only
-	// widened WHO gets iterated, not how partner/household ids are stored.
-	// Fixing it means widening ColdShard's partner/household columns past
-	// uint32 (a real schema/memory-layout change touching every cold-store
-	// consumer), which is out of proportion for a wiring fix and its own
-	// bounded-gate session — flagged here as a NEW finding for a follow-up
-	// ticket, not silently worked around or hidden by loosening this
-	// assertion to "eventually" pass.
-	t.Logf("VitalBirths() = %d after %d months (expected 0 — see the safeUint32 partner/household truncation finding above; NOT part of this ticket's fix, filed as a follow-up)", comp.VitalBirths(), totalMonths)
+	// 3) BUG-535/births-unblock lane history (logged, NOT asserted — see
+	// below): formResidentHouseholds pairs migrants/children
+	// (liveResidentIDs()), which was expected to unblock cross-cohort
+	// fertility but did NOT at the time BUG-535 landed — VitalBirths()
+	// stayed 0 for the whole run. Root-caused there as a SEPARATE bug,
+	// independent of BUG-529/535: CitizensAPI's LifeEventPartner handler
+	// (registry.go) stored BOTH the new household id and each partner's id
+	// through safeUint32() into ColdShard's `partners []uint32`/
+	// `households []uint32` columns (coldshard.go). Migrant ids live at
+	// attract.MigrantIDBase (1<<62) and fertility-child ids at
+	// citizens.FertilityChildIDBase (1<<63) — both far outside uint32's
+	// range — so safeUint32 SATURATED them to math.MaxUint32 (4294967295),
+	// permanently zeroing Citizen.Partner for any migrant-or-fertility-child
+	// couple and excluding them from FertilityEligible's partnerID==0 check.
+	//
+	// FIXED (births-unblock lane, 2026-09-02, Aaron ruling Q100050 A1):
+	// households/partners widened to uint64 (coldshard.go), so this run now
+	// DOES see real births once a cross-cohort couple forms and clears the
+	// fertility hazard — VitalBirths() > 0 is the expected, correct outcome
+	// below, not a regression.
+	t.Logf("VitalBirths() = %d after %d months (births-unblock lane fix live — >0 is now expected once a cross-cohort couple clears the fertility hazard; see the safeUint32 partner/household widening above)", comp.VitalBirths(), totalMonths)
 
 	// 4) Conservation must still hold every tick: widening residentIDs()
 	// touches the wage/employment/household-formation surface every month,

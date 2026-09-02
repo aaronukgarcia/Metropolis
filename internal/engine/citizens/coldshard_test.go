@@ -23,8 +23,8 @@ func mkRecord(id uint64, district uint16) ColdRecord {
 		ID:              id,
 		BirthMonth:      int64(id % 1200), // within 100 years of genesis
 		Sex:             Sex(id % 2),
-		Household:       uint32(id / 2),
-		Partner:         uint32(id/2 + 1),
+		Household:       id / 2,
+		Partner:         id/2 + 1,
 		ChildCount:      uint8(id % 4),
 		Home:            CellRef(id % 1_000_000),
 		District:        district,

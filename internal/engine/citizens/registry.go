@@ -363,8 +363,9 @@ func (c *CitizensAPI) TotalPopulation(correlationID string) int {
 // exactly 1 per minted child, so this IS the count, not an id).
 // BUG-529/BUG-535: the composition root needs this to reconstruct the
 // exact set of fertility-child ids it should treat as live residents for
-// wage/employment/household-formation purposes
-// ([FertilityChildIDBase+1, FertilityChildIDBase+FertilityChildrenBorn()]).
+// wage/employment/household-formation purposes ([FertilityChildIDBase+0,
+// FertilityChildIDBase+FertilityChildrenBorn()-1] — BUG-541 fixed the
+// caller's off-by-one that previously enumerated [+1, +count]).
 // This is a LIVE read of citizens' own already-correctly-persisted counter
 // (participant.go's NextFertilityChildID field), never a value the caller
 // tracks or caches itself, so it stays correct across a save/LoadAt
@@ -524,8 +525,8 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 		// elevated) and the cold store (the single source of truth).
 		c.setHouseholdLocked(cmd.CitizenID, h.ID, cmd.PartnerID)
 		c.setHouseholdLocked(cmd.PartnerID, h.ID, cmd.CitizenID)
-		c.setColdHouseholdLocked(cmd.CitizenID, safeUint32(h.ID), safeUint32(cmd.PartnerID))
-		c.setColdHouseholdLocked(cmd.PartnerID, safeUint32(h.ID), safeUint32(cmd.CitizenID))
+		c.setColdHouseholdLocked(cmd.CitizenID, h.ID, cmd.PartnerID)
+		c.setColdHouseholdLocked(cmd.PartnerID, h.ID, cmd.CitizenID)
 	case LifeEventDeath:
 		// A departure (mortality or emigration) unwires the citizen's
 		// household membership (the inverse of LifeEventPartner's wiring):
@@ -1069,13 +1070,16 @@ func (c *CitizensAPI) clearPartnerOnlyLocked(citizenID uint64) {
 	} else if r, ok := c.coldRecord(citizenID); ok {
 		householdID = uint64(r.Household)
 	}
-	c.setColdHouseholdLocked(citizenID, safeUint32(householdID), 0)
+	c.setColdHouseholdLocked(citizenID, householdID, 0)
 }
 
 // setColdHouseholdLocked updates a citizen's household/partner columns in
 // the cold store (the single source of truth). A partnering event must
-// reach the cold record, not only the elevation cache.
-func (c *CitizensAPI) setColdHouseholdLocked(citizenID uint64, householdID, partnerID uint32) {
+// reach the cold record, not only the elevation cache. householdID/partnerID
+// are full-width uint64 (widened from uint32 — births-unblock lane,
+// 2026-09-02): narrowing them here was the births blocker (see coldshard.go's
+// ColdShard doc comment).
+func (c *CitizensAPI) setColdHouseholdLocked(citizenID uint64, householdID, partnerID uint64) {
 	shard := det.ShardForEntity(citizenID)
 	s := c.cold[shard]
 	if row := s.rowOf(citizenID); row >= 0 {
@@ -1210,8 +1214,8 @@ func hotToColdRecord(c Citizen, district uint16) ColdRecord {
 		ID:              c.ID,
 		BirthMonth:      int64(c.BirthMonth),
 		Sex:             c.Sex,
-		Household:       safeUint32(c.Household),
-		Partner:         safeUint32(c.Partner),
+		Household:       c.Household,
+		Partner:         c.Partner,
 		ChildCount:      safeUint8(len(c.Children)),
 		Home:            c.Home,
 		District:        district,

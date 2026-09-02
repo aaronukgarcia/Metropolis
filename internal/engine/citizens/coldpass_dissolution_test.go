@@ -59,7 +59,7 @@ func runBug369Scenario(t *testing.T) (*CitizensAPI, uint64) {
 
 	child := mkRecord(bug369ChildID, 0)
 	child.BirthMonth = month - 1 // a genuine young child: must count toward the cap
-	child.Household = safeUint32(hh.ID)
+	child.Household = hh.ID
 	child.Partner = 0
 	if err := api.SeedColdRecords([]ColdRecord{child}, "corr"); err != nil {
 		t.Fatalf("SeedColdRecords child: %v", err)

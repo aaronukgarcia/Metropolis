@@ -182,8 +182,8 @@ type coldCitizenWire struct {
 	ID              uint64                   `json:"id"`
 	BirthMonth      int64                    `json:"birthMonth"`
 	Sex             Sex                      `json:"sex"`
-	Household       uint32                   `json:"household"`
-	Partner         uint32                   `json:"partner"`
+	Household       uint64                   `json:"household"` // widened from uint32 — births-unblock lane, 2026-09-02; JSON numbers are untyped so an old uint32-range save still decodes correctly
+	Partner         uint64                   `json:"partner"`   // widened from uint32 — births-unblock lane, 2026-09-02
 	ChildCount      uint8                    `json:"childCount"`
 	Home            CellRef                  `json:"home"`
 	District        uint16                   `json:"district"`

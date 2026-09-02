@@ -283,7 +283,7 @@ func TestLiveColdPassHouseholdDissolutionAtRealisation(t *testing.T) {
 	child.BirthMonth = month - 1
 	child.HealthBand = HealthGood
 	child.Access = 100
-	child.Household = safeUint32(hh.ID)
+	child.Household = hh.ID
 	child.Partner = 0
 	if err := api.SeedColdRecords([]ColdRecord{child}, "corr"); err != nil {
 		t.Fatalf("SeedColdRecords child: %v", err)

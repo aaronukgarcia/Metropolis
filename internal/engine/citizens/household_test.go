@@ -201,10 +201,10 @@ func TestDeathWithChildrenPersistsHousehold(t *testing.T) {
 	// exactly what birthChildLocked wires a real fertility birth into
 	// (fertility.go), without depending on the probabilistic fertility draw.
 	child1 := mkRecord(3, 0)
-	child1.Household = safeUint32(householdID)
+	child1.Household = householdID
 	child1.Partner = 0
 	child2 := mkRecord(4, 0)
-	child2.Household = safeUint32(householdID)
+	child2.Household = householdID
 	child2.Partner = 0
 	if err := api.SeedColdRecords([]ColdRecord{child1, child2}, "corr"); err != nil {
 		t.Fatalf("SeedColdRecords children: %v", err)
@@ -300,10 +300,10 @@ func TestRepartneringDetachesFromOldHousehold(t *testing.T) {
 	// Seed two children into the couple's household, exactly mirroring
 	// TestDeathWithChildrenPersistsHousehold's setup.
 	child1 := mkRecord(3, 0)
-	child1.Household = safeUint32(oldHouseholdID)
+	child1.Household = oldHouseholdID
 	child1.Partner = 0
 	child2 := mkRecord(4, 0)
-	child2.Household = safeUint32(oldHouseholdID)
+	child2.Household = oldHouseholdID
 	child2.Partner = 0
 	if err := api.SeedColdRecords([]ColdRecord{child1, child2}, "corr"); err != nil {
 		t.Fatalf("SeedColdRecords children: %v", err)

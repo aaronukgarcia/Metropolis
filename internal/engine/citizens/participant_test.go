@@ -49,11 +49,17 @@ func distinctRecord(id uint64) ColdRecord {
 		p[i] = int8(1 + (int(id)*3+i*11)%100) // distinct per axis, 1..100
 	}
 	return ColdRecord{
-		ID:              id,
-		BirthMonth:      int64(1 + id%1000),
-		Sex:             Sex(id % 2),
-		Household:       uint32(1000 + id),
-		Partner:         uint32(5000 + id),
+		ID:         id,
+		BirthMonth: int64(1 + id%1000),
+		Sex:        Sex(id % 2),
+		// Household/Partner deliberately exceed uint32's range (births-unblock
+		// lane, 2026-09-02): these columns were widened uint32->uint64 to fix
+		// the safeUint32 truncation that saturated every migrant/fertility-
+		// child partner id to math.MaxUint32, so the round-trip test data must
+		// actually exercise the full width, not just re-confirm a narrower
+		// range that would pass even with the old, buggy uint32 columns.
+		Household:       uint64(1)<<40 + id,
+		Partner:         uint64(1)<<41 + id,
 		ChildCount:      uint8(1 + id%4),
 		Home:            CellRef(1 + id%800000),
 		District:        uint16(1 + id%50),

@@ -2201,7 +2201,20 @@ func (st *simState) liveResidentIDs() []uint64 {
 	for i := uint64(1); i <= migrants; i++ {
 		ids = append(ids, attract.MigrantIDBase+i)
 	}
-	for i := uint64(1); i <= children; i++ {
+	// BUG-541: fertility mints from [FertilityChildIDBase+0,
+	// FertilityChildIDBase+children-1] (fertility.go's nextFertilityChildID
+	// starts at 0 and increments AFTER minting each child — see
+	// fertility.go's birthChildLocked / FertilityChildrenBorn's doc comment),
+	// NOT [+1, +children] as this loop originally enumerated. The off-by-one
+	// dropped the FIRST fertility-born child from every liveResidentIDs()
+	// consumer (wage/employment marking, household formation) and spuriously
+	// enumerated FertilityChildIDBase+children, one past the last real mint,
+	// which CitizenAt's !ok check silently skips today only because births
+	// were structurally zero (the coupled safeUint32 truncation bug,
+	// coldshard.go). It was inert until that bug was fixed alongside it
+	// (births-unblock lane, 2026-09-02) — the moment births actually happen,
+	// this becomes a live per-child wage/household bug.
+	for i := uint64(0); i < children; i++ {
 		ids = append(ids, citizens.FertilityChildIDBase+i)
 	}
 	st.liveResidentIDsCache = ids

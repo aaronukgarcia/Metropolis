@@ -325,11 +325,18 @@ func safeUint8(v int) uint8 {
 	return uint8(v)
 }
 
-// safeUint32 narrows a uint64 reference id (household, partner, workplace)
+// safeUint32 narrows a uint64 reference id (home cell, workplace, school)
 // into the uint32 cold column with clamping (GR#16: never a bare
 // uint32(...) that wraps). 2^32 ids is far beyond this project's 100M-citizen
 // ceiling, so the clamp is defense-in-depth only — the documented cold-store
-// representation is uint32.
+// representation is uint32. Household/partner ids are NO LONGER narrowed
+// through this helper (births-unblock lane, 2026-09-02): engine.attract's
+// migrant ids (1<<62) and this package's own fertility-child ids (1<<63)
+// both live far outside uint32's range, and safeUint32 was silently
+// saturating every cross-cohort partner/household reference to
+// math.MaxUint32 — permanently zeroing Citizen.Partner for those couples and
+// making births structurally impossible outside the closed seed cohort. See
+// ColdShard's doc comment (coldshard.go) for the full finding.
 func safeUint32(v uint64) uint32 {
 	const max = uint64(^uint32(0)) // math.MaxUint32
 	if v > max {

@@ -77,8 +77,8 @@ type coldShardWire struct {
 	IDs            []uint64
 	BirthDelta     []int16
 	Sexes          []uint8
-	Households     []uint32
-	Partners       []uint32
+	Households     []uint64 // widened from uint32 — births-unblock lane, 2026-09-02 (mirrors ColdShard.households)
+	Partners       []uint64 // widened from uint32 — births-unblock lane, 2026-09-02 (mirrors ColdShard.partners)
 	ChildCount     []uint8
 	HomeCells      []uint32
 	Districts      []uint16

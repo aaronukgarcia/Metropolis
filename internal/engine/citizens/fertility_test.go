@@ -46,7 +46,7 @@ func mkFertilityCouple(t *testing.T, api *CitizensAPI, id uint64, birthMonth int
 			// space), so no seeded child can ever collide.
 			childID := 900_000_000 + id*1_000 + uint64(i)
 			c := mkRecord(childID, 0)
-			c.Household = safeUint32(hh.ID)
+			c.Household = hh.ID
 			c.Partner = 0
 			c.ChildCount = 0
 			children = append(children, c)
@@ -497,7 +497,7 @@ func TestHouseholdChildCountIgnoresAdultNonPartnerMember(t *testing.T) {
 
 	// A genuine young child (age 0 at `month`): must count.
 	child := mkRecord(9001, 0)
-	child.Household = safeUint32(hh)
+	child.Household = hh
 	child.Partner = 0
 	child.BirthMonth = month
 
@@ -506,7 +506,7 @@ func TestHouseholdChildCountIgnoresAdultNonPartnerMember(t *testing.T) {
 	// they are firmly an adult -- must NOT count.
 	minAdultAgeMonths := int64(cfg.Params.MinChildbearingAgeYears.Value * 12)
 	adultMember := mkRecord(9002, 0)
-	adultMember.Household = safeUint32(hh)
+	adultMember.Household = hh
 	adultMember.Partner = 0
 	adultMember.BirthMonth = month - minAdultAgeMonths - 12*12 // well past the adult line
 

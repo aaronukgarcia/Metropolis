@@ -259,7 +259,7 @@ func TestHotElevatedDeathDissolvesHousehold(t *testing.T) {
 	}
 	child := mkRecord(childID, 0)
 	child.BirthMonth = month - 1
-	child.Household = safeUint32(hh.ID)
+	child.Household = hh.ID
 	child.Partner = 0
 	if err := api.SeedColdRecords([]ColdRecord{child}, "corr"); err != nil {
 		t.Fatalf("SeedColdRecords child: %v", err)
