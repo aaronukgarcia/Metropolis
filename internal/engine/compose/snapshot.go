@@ -303,11 +303,13 @@ func (c *Composition) restoreFromSnapshotBytes(data []byte) (int64, error) {
 //     path: every durably journaled command replayed from tick 0
 //     (RestoreCommands, inc2).
 //
-// Before either branch runs, checkOrStampWorldSeed (BUG-488) verifies e's
-// world seed against city's durably-recorded originating seed (or, if none
-// has ever been recorded, stamps e's seed as the seed of record and
-// proceeds — the explicit backward-compatible default for a journal that
-// predates this check). This is what makes the genesis-replay fallback
+// Before either branch runs, checkWorldSeed (BUG-488) verifies e's world
+// seed against city's durably-recorded originating seed; if none has ever
+// been recorded, e's seed is stamped as the seed of record ONLY once a
+// restore path has actually earned that (stampWorldSeedIfNeeded, BUG-508 —
+// deferred past the snapshot branch's own bundle-header check so a doomed
+// cross-city attempt can never poison the seed of record even though it is
+// still correctly refused). This is what makes the genesis-replay fallback
 // above refuse a cross-city restore exactly like the snapshot walk-back
 // already does via BUG-479's bundle-header check, closing the sibling gap
 // a bare genesis journal otherwise leaves wide open (no bundle header to
@@ -325,10 +327,31 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 	// WithExpectedWorldSeed), but the GENESIS-REPLAY fallback
 	// (restoreGenesis, below) has no bundle header to check against at
 	// all: a genesis journal is just command frames, so this is the
-	// PERSIST-LAYER check the item calls for. See
-	// checkOrStampWorldSeed's own doc comment for the three cases
-	// (mismatch/match/never-recorded).
-	if err := checkOrStampWorldSeed(ctx, store, city, e.WorldSeed(), c.state.cid); err != nil {
+	// PERSIST-LAYER check the item calls for. See checkWorldSeed's own
+	// doc comment for the two checked cases (mismatch/match).
+	//
+	// BUG-508: the actual STAMPING of a never-recorded seed is deferred
+	// (stampWorldSeedIfNeeded, called at each success point below) rather
+	// than performed unconditionally here. Stamping here — before a
+	// pre-fix SNAPSHOT city's own bundle-header check (tryRestoreCandidate
+	// below) has had a chance to run — poisoned seed.json to a DOOMED
+	// cross-city restore attempt's seed: the attempt was still correctly
+	// refused (fail-closed, never a silent cross-city acceptance), but the
+	// refusal itself corrupted the seed of record, so a SUBSEQUENT
+	// legitimate restore at the city's real seed was then ALSO refused
+	// (MET-E819) against the poisoned value. checkWorldSeed below performs
+	// ONLY the read-and-compare (cases 1/2 of the original three); case 3
+	// (never recorded) is signalled back via recorded=false and the stamp
+	// is applied by the caller only once a restore path has actually
+	// committed to proceeding — for the no-snapshot and walk-back-exhausted
+	// genesis fallbacks, that is immediately before restoreGenesis (no
+	// bundle header ever exists to validate against, so this exactly
+	// preserves BUG-488's original backward-compatible default); for the
+	// snapshot walk-back, that is only AFTER tryRestoreCandidate has
+	// proven a candidate's bundle header matches (ok=true) — so a doomed
+	// candidate never reaches the stamp at all.
+	recorded, err := checkWorldSeed(ctx, store, city, e.WorldSeed(), c.state.cid)
+	if err != nil {
 		return false, 0, err
 	}
 
@@ -342,6 +365,9 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 	}
 
 	if len(ids) == 0 {
+		if err := stampWorldSeedIfNeeded(ctx, store, city, e.WorldSeed(), recorded, c.state.cid); err != nil {
+			return false, 0, err
+		}
 		return restoreGenesis(e, c, cmds)
 	}
 
@@ -376,8 +402,16 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 			// next-older snapshot.
 			continue
 		}
-		// Candidate validated clean: apply it for real, exactly once, onto
-		// the caller's own e/c (never touched until this point).
+		// Candidate validated clean (its own bundle header matched e's
+		// seed, inside tryRestoreCandidate -> LoadAt -> BUG-479): NOW it is
+		// safe to stamp a never-recorded seed of record (BUG-508) — a
+		// doomed candidate earlier in this loop never reached this line,
+		// so it never poisoned seed.json.
+		if err := stampWorldSeedIfNeeded(ctx, store, city, e.WorldSeed(), recorded, c.state.cid); err != nil {
+			return false, 0, err
+		}
+		// Apply it for real, exactly once, onto the caller's own e/c
+		// (never touched until this point).
 		if _, err := c.restoreFromSnapshotBytes(data); err != nil {
 			return false, 0, err
 		}
@@ -393,76 +427,107 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 
 	// Every snapshot's tail proved inconsistent with the journal: fall back
 	// to a full genesis replay, which never depends on a snapshot at all.
+	// No bundle header was ever validated against any candidate (every one
+	// was skipped), so this is the same backward-compatible
+	// no-header-to-check-against default as the no-snapshot case above.
+	if err := stampWorldSeedIfNeeded(ctx, store, city, e.WorldSeed(), recorded, c.state.cid); err != nil {
+		return false, 0, err
+	}
 	return restoreGenesis(e, c, cmds)
 }
 
-// checkOrStampWorldSeed is BUG-488's persist-layer seed guard, called once
-// at the top of RestoreLatestSnapshotOrGenesis before any journal record or
-// snapshot is read. It closes the sibling gap BUG-479 left open: BUG-479
-// made a restored SAVE BUNDLE (a snapshot) refuse a foreign seed via its
-// own header, but a bare genesis journal has no header at all to check —
+// checkWorldSeed is BUG-488's persist-layer seed guard (split from the
+// original checkOrStampWorldSeed by BUG-508 — see
+// RestoreLatestSnapshotOrGenesis's doc comment for why the STAMP had to be
+// separated from the CHECK), called once at the top of
+// RestoreLatestSnapshotOrGenesis before any journal record or snapshot is
+// read. It closes the sibling gap BUG-479 left open: BUG-479 made a
+// restored SAVE BUNDLE (a snapshot) refuse a foreign seed via its own
+// header, but a bare genesis journal has no header at all to check —
 // nothing on the wire distinguishes "city A's journal" from "city B's
 // journal" once restoreGenesis starts replaying protocol.Commands. This
-// function makes that distinguishable by durably recording a city's
-// ORIGINATING world seed (persist.Store.SetWorldSeedIfAbsent, stamped once
-// per city the moment persistence is first wired for it — see compose.go's
-// Wire) and validating restoringSeed against it here, early enough that a
-// refusal never touches e or c.
+// function makes that distinguishable by comparing restoringSeed against
+// city's durably recorded originating world seed, early enough that a
+// mismatch refusal never touches e or c.
 //
-// Three cases:
+// Two checked cases, returned as (recorded, err):
 //
-//  1. store has a recorded seed for city AND it equals restoringSeed: the
-//     common case (a normal restart, or the correct city) — no-op, restore
-//     proceeds.
+//  1. store has a recorded seed for city AND it equals restoringSeed:
+//     the common case (a normal restart, or the correct city) —
+//     recorded=true, err=nil, restore proceeds.
 //  2. store has a recorded seed for city and it does NOT equal
 //     restoringSeed: EXACTLY BUG-488's measured scenario (a
 //     differently-seeded engine restoring city's journal) — refused with
 //     save.ErrSaveSeedMismatch (MET-E819, reusing BUG-479's registered
 //     code for the identical failure class) before any command replays.
-//  3. store has NO recorded seed for city at all: either a genuinely
-//     brand-new city (nothing durable exists yet — Wire's stamp call
-//     races this one and either can win harmlessly, both write the same
-//     value for a fresh city) or a PRE-BUG-488 journal that predates this
-//     fix and was never stamped. Both are the SAME explicit
-//     backward-compatible default: no check is possible, so none is
-//     performed (never a guessed refusal) — restoringSeed is stamped as
-//     the durable seed of record now, so every FUTURE restore of this
-//     same city IS protected from this point on. This mirrors BUG-479's
-//     "old-savepoint defaults explicit" handling: the gap for pre-fix
-//     data is real and documented, never silently widened further, and
-//     never masked by inventing a value to fail closed against.
-func checkOrStampWorldSeed(ctx context.Context, store persist.Store, city persist.CityKey, restoringSeed uint64, correlationID string) error {
-	recorded, ok, err := store.WorldSeed(ctx, city)
+//
+// The third original case — store has NO recorded seed for city at all
+// (either a genuinely brand-new city, or a PRE-BUG-488 journal that
+// predates this fix and was never stamped) — is now signalled back as
+// recorded=false, err=nil rather than being stamped here. Stamping is the
+// caller's responsibility (stampWorldSeedIfNeeded), deferred to a point
+// where the restore attempt has actually earned it (BUG-508): stamping
+// unconditionally at this call site, before a snapshot city's own
+// bundle-header check has run, let a DOOMED cross-city restore attempt
+// poison the seed of record even though the attempt itself was correctly
+// refused — a subsequent LEGITIMATE restore then failed too, against the
+// poisoned value.
+func checkWorldSeed(ctx context.Context, store persist.Store, city persist.CityKey, restoringSeed uint64, correlationID string) (recorded bool, err error) {
+	rec, ok, err := store.WorldSeed(ctx, city)
 	if err != nil {
-		return errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{"module": "persist", "step": "read-world-seed"})
+		return false, errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{"module": "persist", "step": "read-world-seed"})
 	}
-	if ok {
-		if recorded != restoringSeed {
-			// ctx keys MUST match MET-E819's registered template
-			// ({bundleSeed}/{compositionSeed}, data/errors.json) exactly —
-			// BUG-317/BUG-357 are the standing proof that "registered" is
-			// not the same as "renders": a ctx key that does not match the
-			// template's token renders a literal `{token}` in the log.
-			// "bundleSeed" is reused here for the journal's durably
-			// recorded originating seed even though this path has no save
-			// bundle — the message text ("save bundle world seed...")
-			// slightly overreaches for this path, an accepted cost of
-			// reusing BUG-479's registered code instead of minting a new
-			// one for the identical failure class (the item's own
-			// direction: "MET-E819 can be reused").
-			return errs.New(save.ErrSaveSeedMismatch, correlationID, map[string]any{
-				"city":            city.TenantID + "/" + city.CityID,
-				"bundleSeed":      recorded,
-				"compositionSeed": restoringSeed,
-				"path":            "journal-only-genesis-replay",
-			})
-		}
+	if !ok {
+		return false, nil
+	}
+	if rec != restoringSeed {
+		// ctx keys MUST match MET-E819's registered template
+		// ({bundleSeed}/{compositionSeed}, data/errors.json) exactly —
+		// BUG-317/BUG-357 are the standing proof that "registered" is
+		// not the same as "renders": a ctx key that does not match the
+		// template's token renders a literal `{token}` in the log.
+		// "bundleSeed" is reused here for the journal's durably
+		// recorded originating seed even though this path has no save
+		// bundle — the message text ("save bundle world seed...")
+		// slightly overreaches for this path, an accepted cost of
+		// reusing BUG-479's registered code instead of minting a new
+		// one for the identical failure class (the item's own
+		// direction: "MET-E819 can be reused").
+		return true, errs.New(save.ErrSaveSeedMismatch, correlationID, map[string]any{
+			"city":            city.TenantID + "/" + city.CityID,
+			"bundleSeed":      rec,
+			"compositionSeed": restoringSeed,
+			"path":            "journal-only-genesis-replay",
+		})
+	}
+	return true, nil
+}
+
+// stampWorldSeedIfNeeded establishes restoringSeed as city's durable
+// originating world seed (persist.Store.SetWorldSeedIfAbsent) IFF recorded
+// is false (checkWorldSeed's case 3 — nothing was ever recorded for city).
+// A no-op when recorded is true (checkWorldSeed already proved a match, or
+// the call site never reached here on a mismatch since that already
+// returned an error).
+//
+// BUG-508: callers invoke this ONLY at a point where the current restore
+// attempt has been proven — or has committed, with no way left to prove it
+// further — legitimate for THIS call site's path: immediately before a
+// no-header genesis replay (nothing to validate against, so stamping here
+// exactly preserves BUG-488's original backward-compatible default), or
+// immediately AFTER a snapshot candidate's own bundle-header check
+// (BUG-479, inside tryRestoreCandidate) has confirmed a match. Never called
+// before that point, so a doomed candidate (wrong seed, refused by the
+// bundle-header check) never reaches this call and never poisons
+// seed.json — closing the gap this bug's title describes.
+//
+// SetWorldSeedIfAbsent never overwrites a concurrently-won stamp, so this
+// is safe even if compose.go's Wire raced this one (both write the same
+// value for a genuinely fresh city).
+func stampWorldSeedIfNeeded(ctx context.Context, store persist.Store, city persist.CityKey, restoringSeed uint64, recorded bool, correlationID string) error {
+	if recorded {
 		return nil
 	}
-	// Case 3: nothing recorded yet — establish it now (backward-compat /
-	// fresh-city stamp). SetWorldSeedIfAbsent never overwrites a
-	// concurrently-won stamp, so this is safe even if Wire's own call
-	// (compose.go) raced this one.
 	if _, err := store.SetWorldSeedIfAbsent(ctx, city, restoringSeed); err != nil {
 		return errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{"module": "persist", "step": "stamp-world-seed"})
 	}
