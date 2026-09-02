@@ -43,6 +43,8 @@ import {
   MOTORWAY_JUNCTION_COST,
   residentsCapacity,
   onlineResidentsCapacity,
+  demandFixPlan,
+  findSpot,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -2663,6 +2665,9 @@ export type Action =
   | { type: 'tool'; tool: Tool }
   | { type: 'place'; spec: string; x: number; y: number }
   | { type: 'placeRoadPath'; spec: string; tiles: { x: number; y: number }[] }
+  // FEAT-2326609728 — one-click demand fix: bulk-place demandFixPlan(state)'s
+  // count for one service, via the existing single-tile 'place' path.
+  | { type: 'resolveDemand'; serviceKey: string }
   | { type: 'bulldoze'; x: number; y: number }
   | { type: 'sellAsset'; id: number }
   | { type: 'enterAdministration' }
@@ -2820,6 +2825,50 @@ function reduceCore(state: SimState, action: Action): SimState {
         pendingRewards: [...state.pendingRewards, ...rewards],
         lastRewardedLevel, // Mark as rewarded now (funds apply later)
         notice: rewards[rewards.length - 1].notice, // Show latest level's notice immediately for UX
+      };
+    }
+
+    // FEAT-2326609728 (engine core) — ONE-CLICK DEMAND FIX bulk-place.
+    //
+    // Walks demandFixPlan(state)'s count for `action.serviceKey`, placing ONE
+    // unit at a time through the SAME single-tile 'place' path this reducer
+    // already runs (findSpot() for the site, reduceCore({type:'place',...}) for
+    // the mutation) — no second placement mechanism, so road-adjacency,
+    // administration-mode, funds affordability, auto-connect/auto-branch-rail,
+    // and building monitors all apply exactly as a manual click would. Each
+    // placement is folded into `cur` before the next findSpot() call, so later
+    // sites see the just-placed building (deterministic — GR#21, no Date/
+    // Math.random, purely a function of the evolving state).
+    //
+    // Affordability (brief requirement): if funds run out partway, place as
+    // many as affordable and STOP — never silently place fewer with no signal
+    // (placeNotice reports "placed X of Y") and never let funds go negative
+    // from this bulk action (the same cost>0 && funds<cost guard 'place' uses).
+    case 'resolveDemand': {
+      const plan = demandFixPlan(state).find((p) => p.serviceKey === action.serviceKey);
+      if (!plan) return state;
+      const sp = SPECS[plan.specId];
+      if (!canEnterSim(sp) || !specUnlocked(state, sp)) return state;
+      const cost = placementCost(sp);
+
+      let cur = state;
+      let placed = 0;
+      for (let i = 0; i < plan.count; i++) {
+        if (cost > 0 && cur.administrationState) break;
+        if (cost > 0 && cur.funds < cost) break;
+        const spot = findSpot(cur, plan.specId);
+        if (!spot) break; // out of buildable sites near the housing centroid
+        const next = reduceCore(cur, { type: 'place', spec: plan.specId, x: spot.x, y: spot.y });
+        if (next === cur) break; // defensive: 'place' declined for a reason not checked above
+        cur = next;
+        placed++;
+      }
+
+      if (placed >= plan.count) return cur; // full shortfall cleared — 'place' already cleared placeNotice
+      const shortBy = cost > 0 && cur.funds < cost ? 'insufficient funds' : 'no buildable site found';
+      return {
+        ...cur,
+        placeNotice: `Placed ${placed} of ${plan.count} ${sp.name}${plan.count === 1 ? '' : 's'} — ${shortBy}`,
       };
     }
 

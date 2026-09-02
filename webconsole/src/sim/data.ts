@@ -2616,6 +2616,130 @@ export function pickAutoSpec(
   return null;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-2326609728 — ONE-CLICK DEMAND FIX (engine core).
+//
+// The advisor's vague "place a Clinic?" becomes "place N <building>s": N clears
+// the WHOLE current shortfall for a service plus a 5% headroom buffer, in one
+// building type. demandFixPlan() is the PURE planning half (this file); the
+// bulk-place mutation is the 'resolveDemand' reducer action (engine.ts), which
+// walks the plan and places count units via the SAME single-tile `place` path
+// (findSpot + reduceCore 'place') so connectivity/affordability/road-adjacency
+// gating and the eventual placement-STYLE setting (victorian/dispersed/optimal,
+// a later feature) all plug in for free — this file introduces NO second
+// placement mechanism.
+//
+// SCOPE: covers exactly the services with a REAL demand/coverage number today —
+// the nine serviceCoverageOf() rows (nursery/primary/college/gp/hosp/police/
+// cleanwater/waste/power) plus refuse (wasteStatsOf() generated-vs-capacity,
+// which is the twin coverage function for the collection-depot service). Parks
+// and fire have no coverage/demand metric in the engine yet (BUG-392/serviceDemandOf
+// scope), so — per the "don't invent demand" rule — they are simply never
+// candidates here; demandFixPlan only ever emits an entry when a real (need, have)
+// pair says there IS a shortfall.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * One shortfall-clearing build plan for a single service.
+ *   count = ceil(max(0, need*1.05 - have) / unitCapacity)   (always > 0 when present)
+ */
+export interface DemandFixPlanItem {
+  /** serviceCoverageOf() id, or 'refuse' for the wasteStatsOf() collection service. */
+  serviceKey: string;
+  /** The canonical buildable spec id chosen for this service (cheapest unlocked). */
+  specId: string;
+  /** Capacity ONE unit of specId contributes to this service (children/served/mw/tonnes). */
+  unitCapacity: number;
+  /** Current demand/required quantity for the service. */
+  need: number;
+  /** Current online capacity/coverage for the service. */
+  have: number;
+  /** Units to place to reach need*1.05 (5% headroom) — always > 0. */
+  count: number;
+}
+
+/**
+ * Per-service provider predicate + per-unit capacity extractor. Mirrors the
+ * exact grouping serviceCoverageOf()/wasteStatsOf() already sum over (GR#3 SSOT
+ * — same predicates, not re-derived), so a provider found here is guaranteed to
+ * be counted by the coverage function whose (need, have) drove the plan.
+ */
+const DEMAND_FIX_PROVIDERS: Record<
+  string,
+  { match: (sp: Spec) => boolean; unitCapacity: (sp: Spec) => number }
+> = {
+  nursery: { match: (sp) => sp.stage === 'nursery', unitCapacity: (sp) => sp.children ?? 0 },
+  primary: {
+    match: (sp) => sp.stage === 'primary' || sp.stage === 'city',
+    unitCapacity: (sp) => sp.children ?? 0,
+  },
+  college: { match: (sp) => sp.stage === 'tertiary', unitCapacity: (sp) => sp.children ?? 0 },
+  gp: { match: (sp) => sp.id === 'hea_clinic', unitCapacity: (sp) => sp.served ?? 0 },
+  hosp: {
+    match: (sp) => sp.id === 'hea_hospital' || sp.id === 'hea_teaching',
+    unitCapacity: (sp) => sp.served ?? 0,
+  },
+  police: { match: (sp) => sp.kind === 'police', unitCapacity: (sp) => sp.served ?? 0 },
+  cleanwater: {
+    match: (sp) => sp.kind === 'water' && sp.tag === 'clean',
+    unitCapacity: (sp) => sp.served ?? 0,
+  },
+  waste: {
+    match: (sp) => sp.kind === 'water' && sp.tag === 'waste',
+    unitCapacity: (sp) => sp.served ?? 0,
+  },
+  power: { match: (sp) => sp.kind === 'power', unitCapacity: (sp) => sp.mw ?? 0 },
+  refuse: { match: (sp) => (sp.wasteCapacity ?? 0) > 0, unitCapacity: (sp) => sp.wasteCapacity ?? 0 },
+};
+
+/**
+ * Cheapest UNLOCKED, non-placeholder spec providing `serviceKey`, tie-broken by
+ * id (deterministic, GR#21 — no reliance on Object.values() insertion order
+ * beyond a stable sort). Returns null when nothing unlocked qualifies (the
+ * caller then omits the service — it cannot be one-click-fixed yet).
+ */
+function cheapestProvider(s: SimState, serviceKey: string): Spec | null {
+  const rule = DEMAND_FIX_PROVIDERS[serviceKey];
+  if (!rule) return null;
+  let best: Spec | null = null;
+  for (const sp of Object.values(SPECS)) {
+    if (!canEnterSim(sp) || !specUnlocked(s, sp)) continue;
+    if (!rule.match(sp)) continue;
+    if (rule.unitCapacity(sp) <= 0) continue;
+    if (!best || sp.cost < best.cost || (sp.cost === best.cost && sp.id < best.id)) best = sp;
+  }
+  return best;
+}
+
+/**
+ * Pure demand-fix plan (FEAT-2326609728): one entry per service currently in
+ * shortfall (need*1.05 > have) that has an unlocked provider. No mutation, no
+ * Date/Math.random (GR#21) — a pure function of `s`.
+ */
+export function demandFixPlan(s: SimState): DemandFixPlanItem[] {
+  const waste = wasteStatsOf(s);
+  const rows: { serviceKey: string; need: number; have: number }[] = [
+    ...serviceCoverageOf(s).map((c) => ({ serviceKey: c.id, need: c.need, have: c.cap })),
+    { serviceKey: 'refuse', need: waste.generated, have: waste.capacity },
+  ];
+
+  const plan: DemandFixPlanItem[] = [];
+  for (const row of rows) {
+    if (row.need <= 0) continue;
+    const target = row.need * 1.05;
+    if (row.have >= target) continue; // already at/above target+headroom
+    const sp = cheapestProvider(s, row.serviceKey);
+    if (!sp) continue; // no unlocked provider yet — omit (needs-unlock)
+    const rule = DEMAND_FIX_PROVIDERS[row.serviceKey];
+    const unitCapacity = rule.unitCapacity(sp);
+    if (unitCapacity <= 0) continue;
+    const count = Math.ceil(Math.max(0, target - row.have) / unitCapacity);
+    if (count <= 0) continue;
+    plan.push({ serviceKey: row.serviceKey, specId: sp.id, unitCapacity, need: row.need, have: row.have, count });
+  }
+  return plan;
+}
+
 // ---------- milestones / policies / misc ----------
 
 export interface MilestoneDef {

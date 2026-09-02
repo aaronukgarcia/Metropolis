@@ -84,6 +84,10 @@ export function isStateAffecting(action: Action): boolean {
       return true;
     case 'placeRoadPath':
       return true;
+    // FEAT-2326609728 — bulk-places via the same mutation path as 'place'
+    // (funds/buildings/xp change) — must journal + replay identically.
+    case 'resolveDemand':
+      return true;
     case 'bulldoze':
       return true;
     // FEAT-1972079923 inc2 (AC-4): forced asset sale — removes a building and
