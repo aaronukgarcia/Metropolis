@@ -9,6 +9,14 @@ import { specUnlocked } from './engine.ts';
 // traffic weight + city activity ramp (GR#3 SSOT) — call-time (cyclic-safe) imports,
 // same pattern as specUnlocked above. Neither is used at module-eval time.
 import { feederTrafficWeight, trafficActivity } from './engine.ts';
+// FEAT-crime-mechanic-2026-09-02: crimeRateOf's wellbeing-feedback input reads
+// engine.ts's wellbeingCoreOf (the wellbeing computation MINUS the Crime part
+// itself) — same call-time cyclic-import pattern as specUnlocked above.
+// wellbeingCoreOf never calls crimeRateOf, so this one-way edge plus the
+// month-lagged crimeRatePreviousMonth field (types.ts) together keep the
+// crime<->wellbeing feedback loop acyclic within a single tick (see the long
+// comment on crimeRateOf below for the full argument).
+import { wellbeingCoreOf } from './engine.ts';
 // FEAT-159: DEBUG-ONLY per-class fast-build override (off by default).
 import { scaleConstructionTicks } from './debugBuildSpeed.ts';
 // FEAT-2326609711 inc1: fiscal.ts is a leaf module (imports only ./types.ts),
@@ -2327,6 +2335,150 @@ export const demandIndexOf = (coverage: number): number =>
 /** Early-game damping so a near-empty map doesn't scream demand.
  *  ⚠ BALANCE-NUMBER PLACEHOLDER (pop/50 ramp), pending Aaron's balance pass. */
 export const earlyGameFactor = (pop: number): number => Math.min(1, pop / 50);
+
+/**
+ * FEAT-crime-mechanic-2026-09-02 (Q100046 D2-now + Q100069 rec-on-all) —
+ * PLACEHOLDER balance constants, grouped in one named object per the spec so
+ * Aaron's future balance-pass row replaces all seven in a single commit.
+ * BASELINE_CRIME_RATE is UK ONS-grounded (mid-size English urban area,
+ * 2024-25 Crime Survey average); every reduction/feedback constant below is
+ * directional-only pending playtest data.
+ */
+export const CRIME_CONSTANTS = {
+  /** Ambient crime a city with ZERO services still has (crimes/100k/month equivalent). */
+  BASELINE_CRIME_RATE: 35,
+  /** "Crime breeds crime": each point of prior-month crime adds this fraction next month. */
+  CRIME_BREEDS_CRIME_FACTOR: 0.05,
+  /**
+   * Hard cap on the breeding term alone. PLACEHOLDER (Aaron's balance pass) —
+   * deliberately set BELOW the term's own natural ceiling (FACTOR * 100 = 5,
+   * since priorCrime is itself clamped to [0,100] by sanitizeCrimeRate) so
+   * the cap actually BINDS and is testable (BUG-round-1 F3: the original 30
+   * placeholder was unreachable dead code — the term can never exceed 5, so
+   * a cap of 30 did nothing and no test could distinguish "capped" from
+   * "uncapped"). Binds whenever priorCrime > CRIME_BREEDS_CRIME_CAP /
+   * CRIME_BREEDS_CRIME_FACTOR = 60. Boundedness ALSO comes independently
+   * from the final [0,100] clamp on the whole crime formula (AC-6) — this
+   * cap is a SEPARATE, tighter guard on the breeding term specifically, not
+   * the only thing standing between the model and runaway.
+   */
+  CRIME_BREEDS_CRIME_CAP: 3,
+  /** Points of crime eliminated at 100% police coverage, scaling linearly to 0 at 0%. */
+  POLICE_REDUCTION_FACTOR: 25,
+  /** Points of crime eliminated at 100% education coverage (avg of nursery/primary/college). */
+  EDUCATION_REDUCTION_FACTOR: 15,
+  /** Points of crime eliminated at 100% parks coverage. */
+  PARKS_REDUCTION_FACTOR: 12,
+  /** Extra crime points added per point of wellbeing BELOW 100 (i.e. (100-wb) * this). */
+  WELLBEING_CRIME_FACTOR: 0.15,
+} as const;
+
+/**
+ * FEAT-crime-mechanic-2026-09-02 round-1 F1 (P1, GR#16) — Type-Safe Storage
+ * Boundary sanitiser for `s.crimeRatePreviousMonth`, same shape as fiscal.ts's
+ * `sanitizeFunds`: a corrupt save can hand back ANY JSON-representable value
+ * for a `number`-typed field (a string, an object, NaN survives one lossy
+ * round-trip as `null`, `1e9`, etc.) — TypeScript's `number` annotation is
+ * a compile-time promise only, never a runtime guarantee for data loaded from
+ * outside the program. Without this guard a corrupt value flows straight into
+ * arithmetic: `"abc" * 0.05` is `NaN`, which then poisons `crimeRateOf`'s
+ * return, `wellbeingOf().overall`, and — after ONE month of `advance()` —
+ * `population`/`funds` (both computed from wellbeing-derived rates). Mirrors
+ * `sanitizeFunds`'s contract: non-finite/non-number collapses to a safe
+ * default (BASELINE_CRIME_RATE, this field's own documented old-save
+ * default — types.ts) rather than 0, and an in-range-but-absurd value (a
+ * corrupt `1e9`) is clamped into [0,100] like any other crime rate.
+ */
+export function sanitizeCrimeRate(n: unknown): number {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return CRIME_CONSTANTS.BASELINE_CRIME_RATE;
+  return Math.max(0, Math.min(100, n));
+}
+
+/**
+ * FEAT-crime-mechanic-2026-09-02 — crime rate, 0-100 clamped, representing
+ * crime incidents per 100k population equivalent. A PURE, order-independent
+ * derived read-out (GR#21): no Math.random(), no Date.now(); the parks loop
+ * below is an unconditional forward scan over s.buildings (no early break —
+ * the map-range-with-break trap), and serviceCoverageOf() already returns a
+ * stable, insertion-order-independent array (GR#3 SSOT — same coverage rows
+ * wellbeingOf()/serviceDemandOf() consume).
+ *
+ * LOOP-BREAKING DESIGN (build-note requirement; both breakers are required —
+ * removing either one reintroduces a cycle):
+ *
+ * 1. "Crime breeds crime" reads `s.crimeRatePreviousMonth`, a value
+ *    engine.ts's advance() snapshots ONLY at month boundaries (tick %
+ *    TICKS_PER_MONTH === 0), taken from the tick's OWN freshly-computed
+ *    crimeRateOf() result — but written into the RETURNED state's field for
+ *    NEXT month, never read back within the same tick. So the breeding term
+ *    is always a genuine one-month LAG (self-reinforcement across time), not
+ *    same-tick self-reference — it cannot diverge in a single evaluation,
+ *    and the explicit `CRIME_BREEDS_CRIME_CAP` bounds it further even across
+ *    ticks (AC-6).
+ * 2. The wellbeing-feedback input reads engine.ts's `wellbeingCoreOf(s)` —
+ *    the wellbeing computation with every part EXCEPT Crime — never
+ *    `wellbeingOf(s)` (which itself calls crimeRateOf() to build the Crime
+ *    part). wellbeingCoreOf() contains no call back into crimeRateOf(), so
+ *    the call graph is strictly one-way: wellbeingOf -> crimeRateOf ->
+ *    wellbeingCoreOf, with wellbeingCoreOf as a leaf. No recursion is
+ *    possible even though "crime lowers wellbeing" and "low wellbeing raises
+ *    crime" are both modelled truths.
+ */
+export function crimeRateOf(s: SimState): number {
+  const {
+    BASELINE_CRIME_RATE,
+    CRIME_BREEDS_CRIME_FACTOR,
+    CRIME_BREEDS_CRIME_CAP,
+    POLICE_REDUCTION_FACTOR,
+    EDUCATION_REDUCTION_FACTOR,
+    PARKS_REDUCTION_FACTOR,
+    WELLBEING_CRIME_FACTOR,
+  } = CRIME_CONSTANTS;
+
+  const pop = s.population;
+  // Early-game damping — same earlyGameFactor ramp demand/wellbeing use
+  // (GR#3), so a near-empty genesis city starts with damped baseline crime
+  // rather than the full adult-city ambient rate.
+  const f = earlyGameFactor(pop);
+  const baseline = Math.round(BASELINE_CRIME_RATE * f);
+
+  // F1 (GR#16): sanitize at the boundary, not just null/undefined-guard —
+  // a corrupt save's crimeRatePreviousMonth may be any JSON value.
+  const priorCrime = sanitizeCrimeRate(s.crimeRatePreviousMonth);
+  const breedingTerm = Math.min(priorCrime * CRIME_BREEDS_CRIME_FACTOR, CRIME_BREEDS_CRIME_CAP);
+
+  const covById = new Map(serviceCoverageOf(s).map((r) => [r.id, r.coverage]));
+  const policeCov = Math.min(1, covById.get('police') ?? 1);
+  const eduCov =
+    (Math.min(1, covById.get('nursery') ?? 1) +
+      Math.min(1, covById.get('primary') ?? 1) +
+      Math.min(1, covById.get('college') ?? 1)) /
+    3;
+
+  // Parks coverage — same capacity/need formula wellbeingOf()'s Parks &
+  // leisure part and serviceDemandOf() use (GR#3 SSOT). Unconditional
+  // forward scan, no early break (GR#21).
+  let parksCapacity = 0;
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'park') parksCapacity += sp.w * sp.h;
+  }
+  const parksNeed = Math.max(1, pop * 0.002);
+  const parksCov = Math.min(1, parksCapacity / parksNeed);
+
+  const policeReduction = policeCov * POLICE_REDUCTION_FACTOR;
+  const eduReduction = eduCov * EDUCATION_REDUCTION_FACTOR;
+  const parksReduction = parksCov * PARKS_REDUCTION_FACTOR;
+
+  // See loop-breaking design note above: wellbeingCoreOf, never wellbeingOf.
+  const wbCore = wellbeingCoreOf(s);
+  const wellbeingReduction = Math.max(0, (100 - wbCore) * WELLBEING_CRIME_FACTOR);
+
+  const crime =
+    baseline + breedingTerm - policeReduction - eduReduction - parksReduction + wellbeingReduction;
+
+  return Math.round(Math.max(0, Math.min(100, crime)));
+}
 
 export function serviceDemandOf(
   s: SimState

@@ -48,6 +48,7 @@ import {
   onlineResidentsCapacity,
   demandFixPlan,
   findSpot,
+  crimeRateOf,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -1612,7 +1613,7 @@ function advance(s: SimState): SimState {
           ? 'bailout_second'
           : insolvencyState;
 
-  return {
+  const next: SimState = {
     ...s,
     tick,
     funds,
@@ -1661,6 +1662,19 @@ function advance(s: SimState): SimState {
     // BUG-506 (AC-506-3/4): rolling window of the last N ticks' funds.
     recentFundsWindow,
   };
+
+  // FEAT-crime-mechanic-2026-09-02 (Q100069 rec-on-all Q4, "immediate
+  // prior-month"): snapshot THIS tick's crime rate for NEXT month's breeding
+  // term, but only at month boundaries — `next` still carries the OLD
+  // crimeRatePreviousMonth (copied via `...s` above, not yet overwritten), so
+  // crimeRateOf(next) reads last month's value and produces the value that
+  // becomes new for the month ahead. A non-boundary tick carries the existing
+  // field forward unchanged (no per-tick recompute — matches the monthly
+  // aggregate idiom every other monthly system here uses, e.g. line 1051).
+  if (tick % TICKS_PER_MONTH === 0) {
+    return { ...next, crimeRatePreviousMonth: crimeRateOf(next) };
+  }
+  return next;
 }
 
 /**
@@ -3829,10 +3843,18 @@ export function approvalOf(s: SimState): number {
   return Math.max(0, Math.min(100, Math.round(a)));
 }
 
-export function wellbeingOf(s: SimState): {
-  overall: number;
-  parts: { label: string; value: number }[];
-} {
+/**
+ * FEAT-crime-mechanic-2026-09-02 — the wellbeing part list MINUS Crime.
+ * Extracted verbatim from the pre-crime wellbeingOf() body so crimeRateOf()
+ * (data.ts) has a wellbeing-feedback input that can NEVER recurse back into
+ * itself: crimeRateOf() calls wellbeingCoreOf(), which builds this list and
+ * never calls crimeRateOf() in return. wellbeingOf() below calls this SAME
+ * function for its own core parts, then separately calls crimeRateOf() (which
+ * internally recomputes this list again via wellbeingCoreOf() — a second,
+ * cheap, pure call, not a cycle) to build the Crime part. See crimeRateOf's
+ * doc comment (data.ts) for the full loop-breaking argument.
+ */
+function buildWellbeingCoreParts(s: SimState): { label: string; value: number }[] {
   const pop = s.population;
   // Early-game blend toward a 55 baseline while pop < 50 — same ramp as the
   // demand meters' earlyGameFactor so the two systems damp identically.
@@ -3937,6 +3959,45 @@ export function wellbeingOf(s: SimState): {
     // ⚠ BALANCE-NUMBER PLACEHOLDER: reuses the shared coverage→part map.
     { label: 'Refuse', value: part(collectionCoverageOf(s)) },
   ];
+  return parts;
+}
+
+/**
+ * FEAT-crime-mechanic-2026-09-02 — wellbeing overall WITHOUT the Crime part.
+ * The sole consumer is crimeRateOf() (data.ts), which needs a wellbeing
+ * signal that provably never depends on crime itself (see that function's
+ * doc comment). ⚠ BALANCE-NUMBER PLACEHOLDER: equal part weights, same as
+ * wellbeingOf(), pending Aaron's pass.
+ */
+export function wellbeingCoreOf(s: SimState): number {
+  const parts = buildWellbeingCoreParts(s);
+  return Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
+}
+
+export function wellbeingOf(s: SimState): {
+  overall: number;
+  parts: { label: string; value: number }[];
+} {
+  const coreParts = buildWellbeingCoreParts(s);
+
+  // Same blend/part shaping as buildWellbeingCoreParts uses internally
+  // (duplicated here deliberately — see that function's doc comment for why
+  // the Crime part cannot be folded into the shared list without reordering
+  // the crime<->wellbeing call graph into a cycle).
+  const pop = s.population;
+  const f = earlyGameFactor(pop);
+  const blend = (computed: number) => Math.round(computed * f + 55 * (1 - f));
+  const part = (coverage: number) => blend(Math.round(clampN(coverage * 100, 0, 100)));
+
+  // FEAT-crime-mechanic-2026-09-02 (AC-8): Crime as its own wellbeing part,
+  // separate from Safety/police — a city can have full police coverage and
+  // still suffer high crime (an incomplete defence), or low crime despite
+  // low police (a well-integrated community). Invert: high crime (100) ->
+  // coverage 0 -> part ~0; low crime (0) -> coverage 1 -> part ~100.
+  const crime = crimeRateOf(s);
+  const crimePart = part(clampN(1 - crime / 100, 0, 1));
+
+  const parts = [...coreParts, { label: 'Crime', value: crimePart }];
   // ⚠ BALANCE-NUMBER PLACEHOLDER: equal part weights, pending Aaron's pass.
   const overall = Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
   return { overall, parts };

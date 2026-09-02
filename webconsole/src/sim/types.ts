@@ -493,6 +493,20 @@ export interface SimState {
    * (never latched).
    */
   playModeLatched?: boolean;
+  /**
+   * FEAT-crime-mechanic-2026-09-02 (Q100046 D2, Q100069 rec-on-all Q4) —
+   * the crimeRateOf() result SNAPSHOTTED by engine.ts's advance() at each
+   * month boundary (tick % TICKS_PER_MONTH === 0), read back by the NEXT
+   * month's crimeRateOf() call as its "crime breeds crime" feedback input.
+   * This is a genuine one-month LAG, not same-tick self-reference — the
+   * value written this month is computed from the value stored BEFORE the
+   * write (see advance()'s crimeRatePreviousMonth assignment, which reads
+   * `next` — a state that still carries the OLD field — before overwriting
+   * it). Optional for backward tolerance: a legacy state without it is
+   * treated as data.ts's BASELINE_CRIME_RATE (a new city starts crime
+   * calculations exactly where a fresh genesis state would).
+   */
+  crimeRatePreviousMonth?: number;
 }
 
 /**

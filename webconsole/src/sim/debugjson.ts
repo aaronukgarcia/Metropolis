@@ -74,6 +74,7 @@ import {
   efwPowerOf,
 } from './data.ts';
 import type { PipeTierAgg } from './data.ts';
+import { sanitizeCrimeRate } from './data.ts';
 import {
   HISTORY_CAP,
   LEDGER_CAP,
@@ -251,6 +252,8 @@ export interface DebugJson {
     recentFundsWindow: number[];
     /** FEAT-2326609723 (Play Mode) — the one-way sandbox latch. */
     playModeLatched: boolean;
+    /** FEAT-crime-mechanic-2026-09-02 — last month-boundary-snapshotted crime rate. */
+    crimeRatePreviousMonth: number;
   };
   flows: {
     inflows: FlowItem[];
@@ -525,6 +528,8 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   recoveryStreak: 'sim.recoveryStreak',
   recentFundsWindow: 'sim.recentFundsWindow',
   playModeLatched: 'sim.playModeLatched',
+  // FEAT-crime-mechanic-2026-09-02.
+  crimeRatePreviousMonth: 'sim.crimeRatePreviousMonth',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -770,6 +775,11 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       recoveryStreak: s.recoveryStreak ?? 0,
       recentFundsWindow: s.recentFundsWindow ?? [],
       playModeLatched: s.playModeLatched ?? false,
+      // FEAT-crime-mechanic-2026-09-02 (round-1 F1, GR#16): sanitizeCrimeRate
+      // covers BOTH backward tolerance for a legacy state predating this
+      // field AND a corrupt save's non-number value (a raw `?? default`
+      // only catches null/undefined — see crimeRateOf's doc comment).
+      crimeRatePreviousMonth: sanitizeCrimeRate(s.crimeRatePreviousMonth),
     },
     flows: {
       inflows: s.lastFlows.inflows,
