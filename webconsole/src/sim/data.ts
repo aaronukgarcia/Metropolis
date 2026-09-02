@@ -2650,21 +2650,6 @@ export const POLICIES: PolicyDef[] = [
   { id: 'austerity', label: 'Austerity Budget', description: '-10% all outflows, -12 approval' },
 ];
 
-export interface SpecialistDef {
-  id: string;
-  name: string;
-  unlockLevel: number;
-  effect: string;
-  cost: number;
-}
-
-export const SPECIALISTS: SpecialistDef[] = [
-  { id: 'stadium', name: 'Regional Stadium', unlockLevel: 5, effect: 'Large tourism income, +6 approval', cost: 24000 },
-  { id: 'university', name: 'University Campus', unlockLevel: 5, effect: 'XP gain x1.5, skilled wage premium', cost: 20000 },
-  { id: 'airport', name: 'International Airport', unlockLevel: 6, effect: 'Major tourism + freight income', cost: 45000 },
-  { id: 'harbour', name: 'Deep-Water Harbour', unlockLevel: 7, effect: 'Industrial output x1.4', cost: 38000 },
-];
-
 export const UNIT_REGISTRY = [
   { unit: 'pound (£)', dimension: 'currency', note: 'All fiscal flows; integers only in the engine' },
   { unit: 'person', dimension: 'population', note: 'Persistent individual citizens' },
