@@ -681,9 +681,12 @@ export function plantEffServed(s: SimState, b: SimState['buildings'][number]): n
 }
 
 export function waterCaps(s: SimState): { clean: number; waste: number } {
+  // BUG-534 — same activation gate as serviceCoverageOf()'s inline water sum
+  // and powerStats(): an offline plant serves nobody.
   let clean = 0;
   let waste = 0;
   for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (sp?.kind !== 'water') continue;
     const eff = plantEffServed(s, b);
@@ -782,6 +785,9 @@ export function waterPipeInfo(s: SimState): {
   const perTier: Record<number, PipeTierAgg> = {};
   const plants: PipePlantUtil[] = [];
   for (const b of s.buildings) {
+    // BUG-534 — an offline plant carries no live pipe flow; exclude it from
+    // the pipe-utilisation panel, mirroring waterCaps()/serviceCoverageOf().
+    if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (sp?.kind !== 'water') continue;
     const tier = pipeTierOf(s, b.id);
@@ -2093,9 +2099,16 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
   // fully-policed city read a pegged +100 shortfall. 'police' has exactly one
   // capability (population coverage via `served`), so kind is the right key.
   const police = sumBy(s, (sp) => sp.kind === 'police', (sp) => sp.served ?? 0);
+  // BUG-534 — mirror BUG-430/BUG-527: an offline (disconnected / still
+  // under-construction) water plant contributes ZERO clean/waste capacity to
+  // the coverage meters, exactly as an offline power plant contributes zero
+  // MW (powerStats) and an offline service building contributes zero served
+  // population (sumBy). Order-independent fold (GR#21): same state → same
+  // clean/waste; no Date/Math.random.
   let clean = 0;
   let waste = 0;
   for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (sp?.kind !== 'water') continue;
     const eff = plantEffServed(s, b);
