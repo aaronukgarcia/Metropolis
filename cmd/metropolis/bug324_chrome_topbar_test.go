@@ -96,16 +96,38 @@ func freezeClock(t *testing.T, w *skeletonWiring) {
 // awaitStatus blocks until the live status line contains want, or fails
 // the test. Polling rather than assuming: every status figure arrives
 // asynchronously through the pump and router goroutines.
+//
+// BUG-510: this used to bound the poll with a fixed 5s wall-clock
+// deadline. That is exactly the kind of bound GR#21/the verification
+// standards forbid ("never assert a wall-clock upper bound"), and it was
+// caught doing real damage: under a loaded/`-race`-instrumented runner
+// (CI's build-test-vet job measured this package at 221s against ~27s
+// locally) the driver's own boot-time Resume, and the pump/router
+// goroutines that carry every subsequent status delta, simply had not
+// been scheduled onto a CPU within 5s yet — nothing was broken, the test
+// was just impatient. Reproduced 100% of 20 -race runs on a heavily
+// loaded machine with the old fixed deadline; the fix below is not a
+// bigger magic number, it is the CORRECT bound: t.Context() is the real
+// contract this poll should honour — cancelled at the test's own
+// -timeout (or when the test/its cleanup ends), never sooner and never
+// an arbitrary local guess. A genuine deadlock or a status delta that
+// truly never arrives still fails the test (and the whole run), just at
+// the real deadline instead of a made-up one shorter than the runner
+// sometimes needs.
 func awaitStatus(t *testing.T, w *skeletonWiring, want string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	ctx := t.Context()
+	for {
 		if strings.Contains(w.statusBar.Line(), want) {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the status bar never reported %q before the test's own deadline; last line: %q", want, w.statusBar.Line())
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	t.Fatalf("the status bar never reported %q within 5s; last line: %q", want, w.statusBar.Line())
 }
 
 // TestBUG324_ChromeIsConstructedAndSubscribed is the cheap wiring

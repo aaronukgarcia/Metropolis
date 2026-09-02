@@ -2,7 +2,6 @@ package main
 
 import (
 	"testing"
-	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
@@ -44,6 +43,17 @@ func awaitRouterResult(w *skeletonWiring, correlationID protocol.CorrelationID) 
 // back to this call rather than it being an unrecoverable routing-table
 // hit nothing observes), and returns the result or fails the test on
 // timeout/send error.
+//
+// BUG-510: the wait used to be bounded by a fixed 2s wall-clock timeout —
+// the same class of defect as awaitStatus's old 5s bound (see that
+// function's doc comment, bug324_chrome_topbar_test.go): on a loaded or
+// `-race`-instrumented runner the router/pump goroutines that deliver the
+// CommandResult can legitimately take longer than 2s to be scheduled,
+// with nothing actually wrong. t.Context() ties the wait to the test's
+// REAL deadline (its own -timeout, or cleanup) instead of a guessed
+// constant, so a genuinely undelivered result still fails the test — just
+// at the deadline that actually governs the test, not one picked to be
+// "probably enough."
 func sendAndAwaitResult(t *testing.T, w *skeletonWiring, cmd protocol.Command) protocol.CommandResult {
 	t.Helper()
 	ch := awaitRouterResult(w, cmd.CorrelationID)
@@ -53,8 +63,8 @@ func sendAndAwaitResult(t *testing.T, w *skeletonWiring, cmd protocol.Command) p
 	select {
 	case res := <-ch:
 		return res
-	case <-time.After(2 * time.Second):
-		t.Fatalf("timed out waiting for a %s result (via router.RegisterResultHandler)", cmd.Kind)
+	case <-t.Context().Done():
+		t.Fatalf("timed out waiting for a %s result (via router.RegisterResultHandler) before the test's own deadline", cmd.Kind)
 		return protocol.CommandResult{}
 	}
 }
