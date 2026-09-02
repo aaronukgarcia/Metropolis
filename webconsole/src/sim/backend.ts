@@ -477,6 +477,9 @@ export interface ErrorRow {
   time: string;
   msg: string;
   type: ErrorSource;
+  /** Registry-sourced error code (MET-xxxx), GR#1 pillar-4 selectable display.
+   * Undefined for older ring entries recorded before codes were captured (BUG-513). */
+  code?: string;
   correlationId: number;
   /** Occurrences collapsed into this row (>= 1). */
   count: number;
@@ -509,6 +512,7 @@ export function errorListModel(errors: readonly ErrorRecord[]): {
         time: new Date(lastAt).toLocaleTimeString(),
         msg: e.msg,
         type: e.type ?? 'app',
+        code: e.code,
         correlationId: e.correlationId ?? i,
         count: e.count ?? 1,
         firstTime: new Date(firstAt).toLocaleTimeString(),

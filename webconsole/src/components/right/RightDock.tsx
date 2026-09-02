@@ -949,7 +949,15 @@ function DebugTab() {
                 <summary>
                   <span className="muted">{e.time}</span>{' '}
                   <span className="muted">#{e.correlationId}</span>{' '}
-                  <span className="muted">[{e.type}]</span> {e.msg}
+                  {/* BUG-513 gap 1 (GR#1 pillar-4): the registry code (MET-xxxx) is the
+                      selectable identifier Aaron reports — show it prominently, falling
+                      back to the type for older ring entries recorded before codes were
+                      captured (never blank, never crash). */}
+                  <strong className="err-code" title={e.code ? undefined : 'no code captured for this entry'}>
+                    [{e.code ?? e.type}]
+                  </strong>{' '}
+                  {e.code && <span className="muted">({e.type})</span>}{' '}
+                  {e.msg}
                   {e.count > 1 && <span className="muted"> ×{e.count}</span>}
                 </summary>
                 <div className="error-detail">
