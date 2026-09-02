@@ -1666,6 +1666,10 @@
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
           },
           {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
             "key": "feat.faith",
             "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           },
@@ -5020,6 +5024,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
           },
           {
             "key": "int.protocol",

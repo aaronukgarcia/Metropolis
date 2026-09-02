@@ -1774,6 +1774,7 @@
         "engine.dispatch",
         "foundation.errors",
         "foundation.num",
+        "foundation.det",
         "int.protocol",
         "ui.alerts",
         "ui.widgets",
