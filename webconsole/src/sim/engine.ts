@@ -3007,6 +3007,18 @@ function reduceCore(state: SimState, action: Action): SimState {
     // AC-4 requires so the consistency checker can trace a funds jump back to
     // a named inflow even for this between-tick action (bulldoze/loan/repay
     // don't extend lastFlows; this one deliberately does, per the AC).
+    //
+    // BUG-503: because this is the ONE between-tick action that extends
+    // lastFlows, it is also the one that must keep the tick-boundary
+    // conservation snapshot (fundsAtTickEnd === fundsAtTickStart + Σinflows −
+    // Σoutflows, consistency.ts 'conservation.funds-vs-flows') in step:
+    // growing Σinflows by saleValue without moving fundsAtTickEnd makes the
+    // RHS grow while the LHS stays stale, a false −saleValue violation for
+    // the whole window until the next tick() recomputes both snapshots from
+    // scratch. bulldoze/debugFunds avoid this by not touching lastFlows at
+    // all; sellAsset can't do that (AC-4), so it must bump fundsAtTickEnd by
+    // the same saleValue instead — the only field that needs it, since
+    // fundsAtTickStart is a start-of-window snapshot this action never moves.
     case 'sellAsset': {
       const target = state.buildings.find((b) => b.id === action.id);
       if (!target) return state;
@@ -3033,6 +3045,10 @@ function reduceCore(state: SimState, action: Action): SimState {
         buildings: state.buildings.filter((w) => w.id !== target.id),
         ...(state.movingId === target.id ? { movingId: null } : {}),
         lastFlows: { ...state.lastFlows, inflows },
+        // BUG-503: keep the tick-boundary snapshot in step with the Σinflows
+        // bump above (see comment on the case) — fundsAtTickStart is
+        // untouched (it's the start-of-window snapshot), only the end moves.
+        fundsAtTickEnd: state.fundsAtTickEnd + saleValue,
         ...logEvent(state, `${ASSET_SALE_LABEL}: ${sp.name}`, saleValue),
       };
     }
