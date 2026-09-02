@@ -9,7 +9,7 @@ import { AboutModal } from './About';
 import { FileMenu } from './FileMenu';
 import { ConfigMenu } from './ConfigMenu';
 import { LiveEngineBadge } from './LiveEngineBadge';
-import { StaleBuildBanner } from './StaleBuildBanner';
+// import { StaleBuildBanner } from './StaleBuildBanner'; // BUG-564: unmounted, see comment at the former mount site below
 
 const SPEEDS: { v: 0 | 1 | 2 | 3; label: string }[] = [
   { v: 0, label: 'Pause' },
@@ -30,10 +30,17 @@ export function TopBar() {
   const wbColor = wb.overall >= 70 ? 'var(--done)' : wb.overall >= 45 ? 'var(--warn)' : 'var(--danger)';
   return (
     <header className="topbar">
-      {/* FEAT-2326609725: fixed-position, pointer-events:none banner — renders
-          null in the normal case (matching shas) and never intercepts clicks
-          on gameplay controls even when shown (see .stale-build-banner CSS). */}
-      <StaleBuildBanner />
+      {/* FEAT-2326609725 / BUG-564: StaleBuildBanner UNMOUNTED (Aaron, 2026-09-02).
+          The detection misfires in active dev: "running" (APP_VERSION_SHA) is
+          frozen at dev-server START while "disk" (live git HEAD, recomputed by
+          the /version.json middleware) advances on every commit — so after any
+          commit the banner shows a permanent mismatch that Reload can NEVER
+          clear (only a dev-server restart re-stamps the running sha), even
+          though vite HMR has kept the actual running code current. A warning
+          the player cannot act on is worse than none. The component + its
+          tests stay; re-mount only after the BUG-564 rework (detect genuine
+          staleness via HMR-connection liveness, not sha comparison).
+      <StaleBuildBanner /> */}
       <div className="brand">
         <span className="brand-mark" />
         Metropolis
