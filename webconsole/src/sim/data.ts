@@ -14,6 +14,12 @@ import { scaleConstructionTicks } from './debugBuildSpeed.ts';
 // FEAT-2326609711 inc1: fiscal.ts is a leaf module (imports only ./types.ts),
 // so importing GRID_IMPORT_ENABLED_DEFAULT here creates no cycle.
 import { GRID_IMPORT_ENABLED_DEFAULT } from './fiscal.ts';
+// BUG-511: registry-sourced (GR#7) fail-loud guard for the residential
+// no-`residents` trap below (assertResidentialSpecsHaveResidents). backend.ts
+// is a leaf for this purpose too — it imports only commitqueue.ts and a
+// type-only debugjson.ts, never data.ts — so this import is call-time/
+// module-eval safe and introduces no cycle.
+import { codedError } from './backend.ts';
 
 export const MAP_W = 440;
 export const MAP_H = 260;
@@ -325,7 +331,11 @@ export function capacityAtTier(sp: Spec | undefined, tier: number): number {
     }
     return tiers[Math.max(0, tier)]; // Clamp to 0 if negative
   }
-  // No capacityTiers defined, fallback to base capacity (residents or jobs)
+  // No capacityTiers defined, fallback to base capacity (residents or jobs).
+  // BUG-511: for a 'residential' spec this can only fall through to `?? 0`
+  // if `residents` is missing, which assertResidentialSpecsHaveResidents()
+  // (above, run at catalogue-load time against SPECS) makes impossible to
+  // ship silently -- a spec missing it throws MET-V852 on import instead.
   return sp.residents ?? sp.jobs ?? 0;
 }
 
@@ -1436,6 +1446,46 @@ for (const [id, d] of Object.entries(DIMS)) {
   const sp = SPECS[id];
   if (sp) sp.dims = d;
 }
+
+/**
+ * BUG-511 (P3): capacityAtTier's no-capacityTiers fallback is
+ * `sp.residents ?? sp.jobs ?? 0` — for a residential spec that omits both
+ * `capacityTiers` AND `residents`, that resolves to a SILENT 0, which would
+ * freeze the population ceiling for every building of that type (see BUG-509
+ * for what a wrong ceiling value does to city growth) with no error, no log,
+ * nothing — a classic silent-zero-capacity trap. Every one of today's 10
+ * residential specs (res_hut .. res_estate_sprawl) defines `residents`, so
+ * the trap is harmless TODAY, but nothing stops a FUTURE residential spec
+ * from being added without it.
+ *
+ * GR#15 (validators derive from data, never a hardcoded expected count) +
+ * GR#7 (registry-sourced errors only) fix: rather than inventing a magic
+ * non-zero fallback number that could silently change city behaviour the
+ * moment a future spec fails to override it, this asserts the INVARIANT
+ * itself at catalogue-load time — every 'residential' spec MUST declare
+ * `residents` — and throws the registry error MET-V852
+ * (ResidentialSpecMissingResidents) the instant that invariant is violated.
+ * A missing field becomes a loud crash on load, never a quiet 0.
+ *
+ * Exported so tests can call it directly against a synthetic catalogue
+ * (rather than only observing the module-load-time throw below, which would
+ * require a subprocess to exercise a second time per test file).
+ */
+export function assertResidentialSpecsHaveResidents(specs: Record<string, Spec>): void {
+  for (const [id, sp] of Object.entries(specs)) {
+    if (sp.kind === 'residential' && !sp.placeholder && sp.residents == null) {
+      throw codedError(
+        'MET-V852',
+        `Residential zone spec '${id}' has no 'residents' field -- capacityAtTier would silently fall back to 0, freezing the population ceiling for this building type.`
+      );
+    }
+  }
+}
+
+// Run the guard now, at catalogue-load time, against the real SPECS table —
+// a future residential spec added without `residents` fails to even IMPORT
+// this module, rather than shipping a silent-zero capacity trap.
+assertResidentialSpecsHaveResidents(SPECS);
 
 // FEAT-1972079877: the old 9-family palette is regrouped so each family shows a
 // realistic, populated count. Ordering within a family is by unlock level, so
