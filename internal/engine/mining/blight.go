@@ -629,11 +629,51 @@ func (b *BlightAPI) Reclaim(objectKey string, option ReclaimOption, correlationI
 
 // globalCell maps a (tile, local) position to its global cell index (GR#21:
 // deterministic integer arithmetic, no floats).
+//
+// X (easting) is a direct multiply: TileCoord.X and CellLocal.Col both grow
+// east, so no inversion is needed (mirroring engine.build's serviceLocation,
+// which verifies the same thing against engine.world/terrain_import.go's
+// ImportTerrain — "u := col / (TileSizeCells-1)" multiplies the eastward
+// span with no sign flip).
+//
+// Y (northing) DOES need inversion, and getting this wrong is exactly
+// BUG-585 (found by the FEAT-build-services-bridge-2026-09-02 independent
+// round, filed as a follow-up against this package and now closed here):
+// CellLocal.Row is documented, in the one place engine.world states it
+// explicitly (terrain_import.go's SourceGrid doc comment — "row-major
+// elevation samples... row 0 is the northernmost" — and ImportTerrain's own
+// inline comment "output row 0 is north (row TileSizeCells-1) per ESRI's
+// north-first convention"; populateTerrainFromHeightmap writes that SAME row
+// value into localIndex(col, row), the identical index space CellAt reads
+// via CellLocal.Row, so the convention is CellLocal.Row's generally, not a
+// terrain-only quirk), to be NORTH-FIRST: Row 0 is a tile's NORTH edge and
+// Row increases SOUTHWARD — the OPPOSITE of TileCoord.Y, which grows north
+// (grid.go's TileCoord doc comment). A naive `gy = tile.Y*TileSizeCells +
+// local.Row` (this function's prior form) is not merely an internal
+// convention choice: EffectAt's distanceM/losOcclusion treat (gx,gy) as a
+// real Cartesian plane in metres, and the naive form is non-monotonic
+// across a tile-Y boundary — walking due north from a tile's north edge
+// (Row 0, gy = tile.Y*TileSizeCells) into the tile north of it (whose SOUTH
+// edge is Row TileSizeCells-1, gy = (tile.Y+1)*TileSizeCells + Row) makes gy
+// jump forward by nearly two tiles' worth of cells while `y` should be
+// increasing smoothly by one cell. That corrupts every distance and
+// line-of-sight calculation for a blighting object and a home cell that
+// straddle a tile boundary in Y — squarely live, not self-contained,
+// because EffectAt's home/object cells routinely sit in different tiles
+// across the 30x30 expansion grid.
+//
+// Save-compat: this is safe to fix outright (no migration needed) because
+// (gx,gy) is never persisted — every blightingObject/extractionSite stores
+// the real world.TileCoord/world.CellLocal verbatim, and globalCell/
+// cellFromGlobal are a transient, in-package geometry pair recomputed every
+// call. See TestGlobalCellRowAxisMatchesWorldNorthFirstConvention.
 func globalCell(tile world.TileCoord, local world.CellLocal) (int, int) {
-	return tile.X*world.TileSizeCells + local.Col, tile.Y*world.TileSizeCells + local.Row
+	return tile.X*world.TileSizeCells + local.Col,
+		tile.Y*world.TileSizeCells + (world.TileSizeCells - 1 - local.Row)
 }
 
-// cellFromGlobal maps a global cell index back to (tile, local). ok is false
+// cellFromGlobal maps a global cell index back to (tile, local) — the exact
+// inverse of [globalCell], including its Row-axis inversion. ok is false
 // when the index is negative or outside the expansion extent.
 func cellFromGlobal(gx, gy int) (world.TileCoord, world.CellLocal, bool) {
 	if gx < 0 || gy < 0 {
@@ -645,7 +685,10 @@ func cellFromGlobal(gx, gy int) (world.TileCoord, world.CellLocal, bool) {
 		return world.TileCoord{}, world.CellLocal{}, false
 	}
 	return world.TileCoord{X: tx, Y: ty},
-		world.CellLocal{Row: gy % world.TileSizeCells, Col: gx % world.TileSizeCells}, true
+		world.CellLocal{
+			Row: world.TileSizeCells - 1 - (gy % world.TileSizeCells),
+			Col: gx % world.TileSizeCells,
+		}, true
 }
 
 // distanceM is the centre-to-centre distance in metres between two global
