@@ -1485,6 +1485,13 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
       const React = await import('react');
       const { createRoot } = await import('react-dom/client');
       const { act } = await import('react-dom/test-utils');
+      // CI runs `node --test` from the REPO ROOT, so tsImport's tsconfig
+      // search never finds webconsole/tsconfig.json (jsx: react-jsx) and
+      // compiles store.tsx's JSX to CLASSIC React.createElement calls that
+      // expect a global React. Locally scoped.mjs runs from webconsole/ and
+      // gets the automatic transform, which is why this only reddened on CI.
+      // Providing the global is harmless under either transform.
+      globalThis.React = React.default ?? React;
       const { SimProvider, useSim } = await tsImport('../src/sim/store.tsx', import.meta.url);
       // NOTE: deliberately NOT a second `tsImport`/`import` of backend.ts for
       // recentErrors() here — each separate tsImport() call gets its OWN
@@ -1604,6 +1611,13 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
       const React = await import('react');
       const { createRoot } = await import('react-dom/client');
       const { act } = await import('react-dom/test-utils');
+      // CI runs `node --test` from the REPO ROOT, so tsImport's tsconfig
+      // search never finds webconsole/tsconfig.json (jsx: react-jsx) and
+      // compiles store.tsx's JSX to CLASSIC React.createElement calls that
+      // expect a global React. Locally scoped.mjs runs from webconsole/ and
+      // gets the automatic transform, which is why this only reddened on CI.
+      // Providing the global is harmless under either transform.
+      globalThis.React = React.default ?? React;
       const { SimProvider, useSim } = await tsImport('../src/sim/store.tsx', import.meta.url);
 
       getGlobalWorkerQueueTracker().reset();
