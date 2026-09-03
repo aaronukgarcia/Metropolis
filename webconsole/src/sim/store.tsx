@@ -42,6 +42,11 @@ import { attemptWipe, captureOnUnload, captureBeforeWipe } from './captureBefore
 import { webWorkerOffloadEnabled } from './webWorkerFlag';
 import type { MainToWorkerMessage, WorkerToMainMessage } from './simWorkerProtocol';
 import { getGlobalWorkerQueueTracker } from './workerQueueDepth';
+// BUG-618: the engine-lag gauge tracker (always-active, no DEV/flag gating —
+// see engineLag.ts's header for why perfhud.ts's DEV-only tick tracker was
+// the wrong reuse target). Fed from the two tick-driver instrumentation
+// points below (interval fire = scheduled, applied tick = completed/duration).
+import { engineLagTracker } from './engineLag';
 import {
   initialOffloadControllerState,
   beginTickRequest,
@@ -386,11 +391,23 @@ export function SimProvider({ children }: { children: ReactNode }) {
         dispatch(action);
       };
 
-      if (tickTracker && action.type === 'tick') {
-        const start = performance.now();
-        timedAction();
-        const duration = performance.now() - start;
-        recordTickDuration(tickTracker, duration);
+      if (action.type === 'tick') {
+        // BUG-618: time EVERY main-thread-applied tick (fallback path AND
+        // the forced-sync-tick escape — both dispatch {type:'tick'} through
+        // here), unconditionally — this is the always-on twin of the
+        // DEV-only tickTracker block just below, which stays exactly as it
+        // was for PerfHud.tsx's dev overlay.
+        const lagStart = performance.now();
+        if (tickTracker) {
+          const start = performance.now();
+          timedAction();
+          const duration = performance.now() - start;
+          recordTickDuration(tickTracker, duration);
+        } else {
+          timedAction();
+        }
+        engineLagTracker.recordTickDuration(performance.now() - lagStart);
+        engineLagTracker.recordTickCompleted();
       } else {
         timedAction();
       }
@@ -436,6 +453,13 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // either way (simWorkerProtocol.ts imports the SAME `reducer` this file
   // imports for the fallback) — GR#21.
   const workerRef = useRef<Worker | null>(null);
+  // BUG-618: wall-clock timestamp (performance.now()) of the most recent
+  // postMessage to the worker, consumed the instant a reply/error is
+  // observed (worker.onmessage below) to compute the worker round-trip
+  // duration for the engine-lag gauge. Landing 2's "at most one in flight"
+  // design (workerBusy) means a single ref suffices — never more than one
+  // request is ever outstanding at a time.
+  const workerPostAtRef = useRef<number | null>(null);
   // FEAT-webworker-sim-offload / independent round REJECT follow-up
   // (2026-09-02): ALL request/reply/supersede bookkeeping lives in
   // simWorkerOffloadController.ts's pure, directly-unit-tested state
@@ -614,6 +638,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
       requestId: begun.requestId,
     };
     try {
+      // BUG-618: stamp the post time BEFORE the actual postMessage call so
+      // the recorded duration includes the structured-clone cost of handing
+      // the ~1.77MB SimState across the thread boundary — that cost is real
+      // engine-vs-UI lag, not something to hide from the gauge.
+      workerPostAtRef.current = performance.now();
       worker.postMessage(msg);
       return true;
     } catch (err) {
@@ -632,6 +661,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // request was never actually sent, so it must never read as
       // outstanding backlog.
       getGlobalWorkerQueueTracker().drain();
+      // BUG-618: postMessage itself threw — no reply will ever arrive to
+      // consume workerPostAtRef, so clear it now rather than leaving a
+      // stale timestamp for a LATER successful post's onmessage to
+      // mistakenly compute against.
+      workerPostAtRef.current = null;
       const detail = err instanceof Error ? err.message : String(err);
       recordError(`Worker tick offload failed to post (${detail}); falling back to synchronous tick.`, {
         type: 'app',
@@ -680,6 +714,16 @@ export function SimProvider({ children }: { children: ReactNode }) {
       offloadControllerRef.current = clearWorkerBusy(offloadControllerRef.current);
       tracker.drain();
       tracker.reportSupersedeStreak(offloadControllerRef.current.supersedeStreak);
+      // BUG-618: the worker is observed to have finished ITS one outstanding
+      // computation right here, unconditionally (same placement rationale as
+      // clearWorkerBusy just above) — record the round-trip duration
+      // regardless of whether the reply turns out to be stale/discarded
+      // below, since the worker genuinely spent that wall-clock time either
+      // way and that cost is exactly what the gauge exists to surface.
+      if (workerPostAtRef.current !== null) {
+        engineLagTracker.recordTickDuration(performance.now() - workerPostAtRef.current);
+        workerPostAtRef.current = null;
+      }
       if (msg.type !== 'tickResult') return;
       // B2/B3 fix: ALL of "is this reply stale", "should it be applied",
       // and "what tick number (if any) to journal" are decided by the pure
@@ -733,6 +777,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // recordTickInJournalOnly's header comment).
         recordTickInJournalOnly(decision.tickToJournal);
         dispatch({ type: 'hydrate', state: msg.state });
+        // BUG-618: this IS an applied tick (bypasses wrappedDispatch's own
+        // 'tick' branch entirely — raw `dispatch` above — so it must be
+        // counted here, the only place a worker-sourced tick actually lands).
+        engineLagTracker.recordTickCompleted();
       }
     };
     worker.onerror = () => {
@@ -902,9 +950,35 @@ export function SimProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (state.speed === 0) return;
+    if (state.speed === 0) {
+      // F1 fix (independent round REJECT, 2026-09-03) — a paused engine
+      // cannot be "behind" (nothing is being asked of it): settle() zeroes
+      // the scheduled-vs-completed backlog left over from the instant
+      // before pause (e.g. a drag-supersede burst right before the player
+      // hit Pause) so the chip cannot read "Engine: N behind" forever while
+      // paused. This effect re-runs on every state.speed transition (its own
+      // dependency array below), so this fires exactly once per entry into
+      // pause, not on every render.
+      engineLagTracker.settle();
+      return;
+    }
+    // BUG-618: report the interval length the tick-driver is ABOUT to run at
+    // — read whenever this effect (re)fires, i.e. whenever state.speed
+    // changes (this effect's own dependency array, below).
+    engineLagTracker.setIntervalMs(SPEED_MS[state.speed]);
     const id = setInterval(() => {
       if (rebuildInProgress) return;
+      // BUG-618: one "wants a tick" fire, counted BEFORE any
+      // worker/fallback branching below — a fire that finds the worker
+      // already busy (issueTickRequest() no-ops) still counts as scheduled,
+      // which is exactly what makes backlog meaningful: it is the count of
+      // intervals that wanted a tick but have not yet gotten one applied.
+      // Deliberately AFTER the rebuildInProgress guard above: a chunked
+      // genesis replay suspends the ordinary tick driver for an unrelated
+      // reason (FEAT-1972079917) and is not itself engine-vs-UI lag — a long
+      // rebuild must not inflate backlog with fires that were never real
+      // ticks the live engine fell behind on.
+      engineLagTracker.recordTickScheduled();
       if (workerRef.current) {
         // Stage 1 offload (Landing 2): hand the actual advance()
         // computation to the worker instead of running it here.

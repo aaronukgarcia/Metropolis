@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSim } from '../sim/simContext';
 import { levelOf, xpForLevel, wellbeingOf, UNLOCK_ALL_COST } from '../sim/engine';
 import { ragForWellbeing, ragColor } from './ragThresholds';
@@ -10,6 +10,9 @@ import { AboutModal } from './About';
 import { FileMenu } from './FileMenu';
 import { ConfigMenu } from './ConfigMenu';
 import { LiveEngineBadge } from './LiveEngineBadge';
+import { engineLagTracker, engineLagClassOf, type EngineLagSnapshot } from '../sim/engineLag';
+import { webWorkerOffloadEnabled } from '../sim/webWorkerFlag';
+import { getGlobalWorkerQueueTracker } from '../sim/workerQueueDepth';
 // import { StaleBuildBanner } from './StaleBuildBanner'; // BUG-564: unmounted, see comment at the former mount site below
 
 const SPEEDS: { v: 0 | 1 | 2 | 3; label: string }[] = [
@@ -18,6 +21,145 @@ const SPEEDS: { v: 0 | 1 | 2 | 3; label: string }[] = [
   { v: 2, label: 'Fast' },
   { v: 3, label: 'Turbo' },
 ];
+
+/** Safe performance.now() reader — mirrors the optional-chaining idiom used
+ *  throughout store.tsx/perfhud.ts for a runtime that may not have a global
+ *  `performance` (defensive only; every real target, including this
+ *  codebase's own SSR smoke test, provides one). */
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : 0;
+}
+
+/**
+ * EngineLagChip — BUG-618 (P1): the ENGINE LAG GAUGE. ALWAYS rendered, no
+ * dev gating, both worker-offload flag states — see engineLag.ts's header
+ * for the full "what was wrongly built instead" context (a Construction
+ * Queue tab and a QueueDepthHud worker line that says nothing useful in
+ * Aaron's own flag-off play sessions).
+ *
+ * Three signals surfaced in the compact chip label / expandable popover:
+ *   - TICK BACKLOG (engineLagTracker.recordTickScheduled/recordTickCompleted,
+ *     fed by store.tsx's tick-driver interval and its two apply sites).
+ *   - TICK COST RATIO (lastTickMs / intervalMs, same tracker).
+ *   - STALL DETECTOR — this component's OWN requestAnimationFrame heartbeat
+ *     below feeds engineLagTracker.recordFrameGap: a gap between two
+ *     consecutive painted frames > STALL_THRESHOLD_MS means the main thread
+ *     was blocked. Retroactive by construction — a stall cannot be observed
+ *     while it is happening (the thread is blocked, nothing can run) so it
+ *     is reported the instant the NEXT frame finally paints, exactly per
+ *     the brief's "on the next paint show ... for a few seconds".
+ *
+ * Pure UI-layer instrumentation: no SimState read beyond the single `speed`
+ * prop below (never any other SimState field), no Date.now, no
+ * reducer/capture-path involvement (GR#21/GR#27) — see engineLag.ts's header.
+ *
+ * F1 fix (independent round REJECT, 2026-09-03, "the killer — pause
+ * honesty"): `speed` is TopBar's own `state.speed` (the same value already
+ * driving store.tsx's tick-driver effect) passed straight through — while
+ * paused (speed === 0) the chip reads "Engine: paused" (green) regardless of
+ * whatever backlog/ratio the tracker still holds from the instant before
+ * pause, rather than trusting store.tsx's engineLagTracker.settle() call to
+ * have already landed by render time (it is dispatched from a useEffect,
+ * which commits AFTER paint — a naive backlog-only read could flash "N
+ * behind" for one frame on every pause). A stall detected WHILE paused still
+ * overrides to "stalled" — a blocked main thread is a real fact regardless
+ * of sim speed, never suppressed just because the game clock isn't ticking.
+ */
+export function EngineLagChip({ speed }: { speed: number }) {
+  const [snapshot, setSnapshot] = useState<EngineLagSnapshot>(() => engineLagTracker.snapshot(nowMs()));
+  const [open, setOpen] = useState(false);
+  const lastFrameRef = useRef<number | null>(null);
+  const rafIdRef = useRef<number | null>(null);
+
+  // Subscribe to every tracker mutation (backlog/duration/interval/stall).
+  useEffect(() => engineLagTracker.subscribe(setSnapshot, nowMs()), []);
+
+  // A stall's "for a few seconds" display window must expire even with NO
+  // new tracker mutation in between (nothing else may fire for seconds after
+  // a stall clears) — a light poll re-reads the snapshot so recentStallMs
+  // reliably reverts to null once STALL_DISPLAY_MS has elapsed.
+  useEffect(() => {
+    const id = setInterval(() => setSnapshot(engineLagTracker.snapshot(nowMs())), 500);
+    return () => clearInterval(id);
+  }, []);
+
+  // Stall-detector heartbeat: requestAnimationFrame is unavailable under
+  // SSR/node-test rendering (mount.test.tsx's renderToString) — skip
+  // gracefully rather than throw, exactly the AC-8-style degrade convention
+  // used elsewhere in this codebase for an absent browser API.
+  useEffect(() => {
+    if (typeof requestAnimationFrame === 'undefined' || typeof cancelAnimationFrame === 'undefined') {
+      return undefined;
+    }
+    let cancelled = false;
+    const loop = (t: number) => {
+      if (cancelled) return;
+      if (lastFrameRef.current !== null) {
+        engineLagTracker.recordFrameGap(t - lastFrameRef.current, t);
+      }
+      lastFrameRef.current = t;
+      rafIdRef.current = requestAnimationFrame(loop);
+    };
+    rafIdRef.current = requestAnimationFrame(loop);
+    return () => {
+      cancelled = true;
+      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+    };
+  }, []);
+
+  // F1: paused (speed 0) always reads as honest/green UNLESS a stall is
+  // actively being reported — see the component header comment above.
+  const paused = speed === 0;
+  const stalled = snapshot.recentStallMs !== null;
+  const cls = stalled ? 'red' : paused ? 'green' : engineLagClassOf(snapshot);
+  const label = stalled
+    ? `Engine: stalled ${(snapshot.recentStallMs! / 1000).toFixed(1)}s`
+    : paused
+      ? 'Engine: paused'
+      : snapshot.backlog > 0
+        ? `Engine: ${snapshot.backlog} behind`
+        : 'Engine: OK';
+
+  const workerOn = webWorkerOffloadEnabled();
+  const workerQueueDepth = workerOn ? getGlobalWorkerQueueTracker().depth() : null;
+
+  return (
+    <span className="stat">
+      <button
+        type="button"
+        className={`engine-lag-chip ${cls}`}
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        title="Engine lag gauge (BUG-618) — click for backlog/tick-cost/stall detail"
+      >
+        <span className="engine-lag-dot" />
+        {label}
+      </button>
+      {open && (
+        <div className="engine-lag-popover" role="dialog" aria-label="Engine lag detail">
+          <dl>
+            <dt>Backlog</dt>
+            <dd>{snapshot.backlog}</dd>
+            <dt>Last tick</dt>
+            <dd>{snapshot.lastTickMs != null ? `${snapshot.lastTickMs.toFixed(1)} ms` : '—'}</dd>
+            <dt>Interval</dt>
+            <dd>{snapshot.intervalMs != null ? `${snapshot.intervalMs} ms` : '—'}</dd>
+            <dt>Ratio</dt>
+            <dd>{snapshot.ratio != null ? `${snapshot.ratio.toFixed(2)}x` : '—'}</dd>
+            <dt>Worst stall</dt>
+            <dd>{snapshot.worstStallMs > 0 ? `${(snapshot.worstStallMs / 1000).toFixed(1)} s` : 'none'}</dd>
+            {workerOn && (
+              <>
+                <dt>Worker queue</dt>
+                <dd>{workerQueueDepth}</dd>
+              </>
+            )}
+          </dl>
+        </div>
+      )}
+    </span>
+  );
+}
 
 export function TopBar() {
   const { state, dispatch } = useSim();
@@ -84,6 +226,7 @@ export function TopBar() {
           </span>
         </span>
         <span className="stat mono">{gameDate(state.tick)}</span>
+        <EngineLagChip speed={state.speed} />
         {/* BUG-497 (2): once declineState is set advance() freezes the clock forever
             BY DESIGN (see engine.ts's declineState hard-stop) — a frozen clock with
             no signal reads as a hang. This badge makes the freeze unmistakably
