@@ -509,6 +509,57 @@ export interface SimState {
    */
   playModeLatched?: boolean;
   /**
+   * FEAT-dynamic-bailout (Aaron ruling Q100045, 2026-09-02) — running total of
+   * every `placementCost` charged since genesis (or, for a save predating this
+   * feature, a one-time backfill proxy — see `capexBackfilled` below). NEVER
+   * decremented by refunds/demolitions/forced asset sales (gross spend only —
+   * a refund is a separate ledger event, per the spec's §7.1 recommendation:
+   * netting would let a demolish/rebuild cycle manipulate the dynamic bailout
+   * offer downward right before triggering crisis). Feeds
+   * fiscal.computeDynamicBailoutOffer's CAPEX-allowance term. Optional for
+   * backward tolerance: a legacy state without it is backfilled once (see
+   * `capexBackfilled`) rather than treated as a bare 0, so an old, large,
+   * already-mid-crisis save never sees a false "tiny city, tiny offer" cliff.
+   */
+  cumulativeCapexSpent?: number;
+  /**
+   * FEAT-dynamic-bailout — set ONCE, the first time a save is sanitized
+   * (engine.ts's sanitizeTreasury, which runs at the top of every reducer()
+   * call) with `cumulativeCapexSpent` absent. A brand-new game starts with
+   * this already `true` (genesis has spent nothing yet — no backfill needed).
+   * An old save missing `cumulativeCapexSpent` gets backfilled EXACTLY ONCE
+   * from the CURRENT standing asset base (sum of `placementCost` for every
+   * building present at load — a reasonable "what it would cost to build
+   * what's standing today" proxy, understating true lifetime spend but never
+   * overstating it, and never zero for a real city), then this flag flips
+   * true so the sum is never repeated on subsequent loads/actions. Optional
+   * for backward tolerance: a legacy state without it is treated as `false`
+   * (backfill still owed).
+   */
+  capexBackfilled?: boolean;
+  /**
+   * FEAT-dynamic-bailout (Aaron ruling Q100045: "this only happens once. then
+   * that's it.") — a ONE-WAY, set-once latch: once true, no action ever sets
+   * it back to false (mirrors `playModeLatched`'s shape exactly). Replaces
+   * `firstBailoutCount`'s re-arm-counting role now that the maximum is
+   * strictly one, not `fiscal.MAX_FIRST_BAILOUTS` re-arms — a bool is simpler
+   * than a counter once the cap is 1. Set the SAME tick the ONE dynamic
+   * bailout offer is credited (engine.ts advance()'s fresh-crisis-trigger
+   * branch); once true, a subsequent crisis entry credits NOTHING NEW at the
+   * first tier — the (unchanged) worse-terms second-bailout escalation is
+   * what fires instead (engine.ts's FEAT-dynamic-bailout scoping note).
+   * Migrated on load for a save that predates this feature (see the FEAT-
+   * dynamic-bailout spec's §4 migration table, applied once in
+   * sanitizeTreasury alongside the capex backfill): a save already mid-
+   * bailout, past a first bailout, in/past a second bailout, in
+   * administration, or in decline is marked `true` immediately (no-double-dip
+   * — they already had their "once"); a save that is genuinely solvent with
+   * no bailout history at all starts `false`. Optional for backward
+   * tolerance: a legacy state without it is migrated on first sanitize
+   * (never read as a bare default without going through that migration).
+   */
+  dynamicBailoutUsed?: boolean;
+  /**
    * FEAT-crime-mechanic-2026-09-02 (Q100046 D2, Q100069 rec-on-all Q4) —
    * the crimeRateOf() result SNAPSHOTTED by engine.ts's advance() at each
    * month boundary (tick % TICKS_PER_MONTH === 0), read back by the NEXT

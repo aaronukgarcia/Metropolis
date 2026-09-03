@@ -75,7 +75,7 @@ import type {
   BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, MAX_FIRST_BAILOUTS, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -431,6 +431,13 @@ function rawState(): SimState {
     recentFundsWindow: [],
     // FEAT-2326609723: Play Mode's one-way latch — never engaged at game start.
     playModeLatched: false,
+    // FEAT-dynamic-bailout: genesis has spent nothing yet — no backfill ever
+    // needed for a brand-new game (capexBackfilled starts already true).
+    cumulativeCapexSpent: 0,
+    capexBackfilled: true,
+    // FEAT-dynamic-bailout (Aaron ruling Q100045): the ONE dynamic bailout
+    // has not been used at game start.
+    dynamicBailoutUsed: false,
   };
 }
 
@@ -1485,20 +1492,59 @@ function advance(s: SimState): SimState {
     secondBailoutEarlyExit = true;
   }
 
-  // BUG-504 Option A: re-arm counter — how many FRESH first bailouts this
-  // playthrough has used. Capped at MAX_FIRST_BAILOUTS below.
+  // BUG-504 Option A: legacy re-arm counter — NO LONGER INCREMENTED by any
+  // FRESH bailout trigger (FEAT-dynamic-bailout retires the re-arm; see
+  // `dynamicBailoutUsed` below), kept read-only so an OLD save's count is
+  // never lost and `bailoutStandingCostPerTick` still reads a stable value
+  // (a fresh dynamic bailout never touches it, so it stays at whatever an
+  // old save already carries — 0 for a save that never used the old ladder).
   const firstBailoutCountBefore = s.firstBailoutCount ?? 0;
-  let firstBailoutCount = firstBailoutCountBefore;
+  const firstBailoutCount = firstBailoutCountBefore;
 
-  // FEAT-1972079923 inc3 (AC-7): a crisis-band re-read caused by ADMINISTRATION
-  // ENDING still-broke must NOT re-fire a fresh bailout (a still-broke
-  // administration ending auto-triggers the SECOND bailout instead — inc4,
-  // handled in the administration block below — never a fresh FIRST bailout).
-  // Guarded by `prevInsolvencyState !== 'administration'` — a genuine NEW
-  // crossing into crisis always arrives from 'solvent'/'warning', never from
-  // 'administration'. Each branch is also guarded by `!firstBailoutEarlyExit`
-  // so an early exit resolved above is never immediately re-triggered or
-  // re-escalated on the SAME tick.
+  // FEAT-1972079923 inc3 (AC-5, AC-6, AC-7): ADMINISTRATION MODE overlay.
+  // Entry is USER-INITIATED (the `enterAdministration` action, below in
+  // reduceCore) — advance() never enters administration on its own; it only
+  // handles the AC-7 year-end re-evaluation: exactly ADMINISTRATION_DURATION_TICKS
+  // after entry, administration ALWAYS ends (whether or not funds recovered) —
+  // deterministic tick arithmetic only (GR#21), never Date.now(). Recovery is
+  // reported via the funds band below (solvent/warning). Still-broke reverts
+  // to the funds band too, but FEAT-1972079923 inc4 (AC-10/AC-11) ALSO fires
+  // the next stage of the endgame depending which bailout year this
+  // administration session covered (`origin`, stamped by `enterAdministration`):
+  // 'bailout' (first year) → auto-trigger the second bailout (UNCHANGED, see
+  // the FEAT-dynamic-bailout scoping note below); 'bailout_second' (second
+  // year) → transition to the final decline screen (AC-11). Declared here
+  // (ABOVE the fresh-crisis-trigger block below) so both blocks can share the
+  // same `declineState`/`administrationState` locals.
+  const prevAdministrationState = s.administrationState ?? null;
+  let administrationState = prevAdministrationState;
+  // FEAT-1972079923 inc4 (AC-11): declineState is read/mutated here (the
+  // administration-origin-'bailout_second' branch below may set it) and in the
+  // plain bailoutSecondState year-end branch further down.
+  const prevDeclineState = s.declineState ?? null;
+  let declineState = prevDeclineState;
+
+  // FEAT-dynamic-bailout (Aaron ruling Q100045, docs/planning/acceptance/
+  // FEAT-dynamic-bailout-2026-09-02.md) — "this only happens once. then
+  // that's it." RETIRES the old MAX_FIRST_BAILOUTS re-arm ladder's FRESH-ENTRY
+  // path: `dynamicBailoutUsed` (a bool, not a counter — the max is now
+  // strictly one) gates the ONE dynamic offer this playthrough ever gets, in
+  // place of the retired `firstBailoutCountBefore < MAX_FIRST_BAILOUTS` test.
+  // SCOPING DECISION (lower blast-radius, spec §3's alternative branch (b) —
+  // "keep bailoutSecondState as a structurally-different... stage, Aaron's
+  // call"): the escalation-to-second-bailout MACHINERY below (both the
+  // fresh-crisis-with-offer-already-used branch, and the plain/administration
+  // year-end-still-broke branches further down) is left COMPLETELY UNCHANGED
+  // from the landed ladder — still the fixed BAILOUT_INCOME_INJECTION_SECOND
+  // on worse terms, still leading to decline exactly as before. Only the
+  // FIRST-tier grant's SIZE (dynamic, not fixed) and its once-only gate
+  // (`dynamicBailoutUsed`, not a re-arm counter) are new. This reuses the
+  // whole already-tested endgame-teeth estate (imf-insolvency-inc4/inc5,
+  // bug-504-505-506-endgame, bug496-497, play-mode-endgame, bug501) instead
+  // of duplicating a second decline path — see the build report's retire-the-
+  // ladder note for the full reasoning and the (a)-vs-(b) tradeoff.
+  const dynamicBailoutUsedBefore = s.dynamicBailoutUsed ?? false;
+  let dynamicBailoutUsed = dynamicBailoutUsedBefore;
   if (
     !firstBailoutEarlyExit &&
     insolvencyState === 'crisis' &&
@@ -1507,16 +1553,26 @@ function advance(s: SimState): SimState {
     prevBailoutState === null &&
     prevBailoutSecondState === null
   ) {
-    if (firstBailoutCountBefore < MAX_FIRST_BAILOUTS) {
-      // Fresh grant — a genuinely NEW crisis, a re-arm slot is still available.
+    if (!dynamicBailoutUsedBefore) {
+      // THE one dynamic offer — sized off THIS city's own cumulative capex
+      // spend + its current opex bleed rate (fiscal.computeDynamicBailoutOffer),
+      // replacing the retired fixed BAILOUT_INCOME_INJECTION. The bleed
+      // reading is taken from THIS tick's own (pre-injection) flows — by
+      // construction free of self-distortion, since this tick's own grant
+      // hasn't been appended to `inflows` yet, and any PAST tick's injection
+      // lives in a PAST tick's flows, never in this tick's `inflows`/`outflows`.
+      const bleed = netOpexBleedPerTick({ inflows, outflows });
+      const dynamicOffer = computeDynamicBailoutOffer(s.cumulativeCapexSpent ?? 0, bleed);
       bailoutState = { enteredAt: tick };
-      firstBailoutCount = firstBailoutCountBefore + 1;
-      funds += BAILOUT_INCOME_INJECTION;
-      inflows = [...inflows, { label: BAILOUT_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION }];
+      dynamicBailoutUsed = true;
+      funds += dynamicOffer.offer;
+      inflows = [...inflows, { label: DYNAMIC_BAILOUT_INJECTION_LABEL, value: dynamicOffer.offer }];
     } else {
-      // BUG-504 Option A: re-arm cap exhausted — FORCED escalation straight
-      // to the (worse-terms) second bailout. Never re-collects a fresh
-      // first-bailout grant once MAX_FIRST_BAILOUTS has been used.
+      // FEAT-dynamic-bailout: the ONE dynamic offer is already spent this
+      // playthrough — no fresh first-tier grant. Escalates straight to the
+      // (unchanged, worse-terms) second bailout, exactly like the retired
+      // ladder's "re-arm cap exhausted" branch did — see the scoping note
+      // above for why this machinery is deliberately left untouched.
       bailoutSecondState = { enteredAt: tick };
       funds += BAILOUT_INCOME_INJECTION_SECOND;
       inflows = [
@@ -1540,11 +1596,9 @@ function advance(s: SimState): SimState {
       // DEBT_THRESHOLD_FOR_BAILOUT, strictly below 0).
       bailoutState = null;
     } else {
-      // Still not solvent at the FIRST bailout year-end — AUTO-TRIGGERS the
-      // second bailout. Unconditional escalation (the MAX_FIRST_BAILOUTS cap
-      // above only governs a FRESH bailout entry, never this escalation) —
-      // per the FEAT-endgame-ladder spec's assumption 7, admission to the
-      // second bailout must remain automatic so the ladder never stalls.
+      // Still not solvent at the ONE dynamic bailout's year-end — AUTO-
+      // TRIGGERS the (unchanged, worse-terms) second bailout, exactly like
+      // the landed ladder — see the scoping note above.
       bailoutState = null;
       bailoutSecondState = { enteredAt: tick };
       funds += BAILOUT_INCOME_INJECTION_SECOND;
@@ -1555,25 +1609,6 @@ function advance(s: SimState): SimState {
     }
   }
 
-  // FEAT-1972079923 inc3 (AC-5, AC-6, AC-7): ADMINISTRATION MODE overlay.
-  // Entry is USER-INITIATED (the `enterAdministration` action, below in
-  // reduceCore) — advance() never enters administration on its own; it only
-  // handles the AC-7 year-end re-evaluation: exactly ADMINISTRATION_DURATION_TICKS
-  // after entry, administration ALWAYS ends (whether or not funds recovered) —
-  // deterministic tick arithmetic only (GR#21), never Date.now(). Recovery is
-  // reported via the funds band below (solvent/warning). Still-broke reverts
-  // to the funds band too, but FEAT-1972079923 inc4 (AC-10/AC-11) ALSO fires
-  // the next stage of the endgame depending which bailout year this
-  // administration session covered (`origin`, stamped by `enterAdministration`):
-  // 'bailout' (first year) → auto-trigger the second bailout; 'bailout_second'
-  // (second year) → transition to the final decline screen (AC-11).
-  const prevAdministrationState = s.administrationState ?? null;
-  let administrationState = prevAdministrationState;
-  // FEAT-1972079923 inc4 (AC-11): declineState is read/mutated here (the
-  // administration-origin-'bailout_second' branch below may set it) and in the
-  // plain bailoutSecondState year-end branch further down.
-  const prevDeclineState = s.declineState ?? null;
-  let declineState = prevDeclineState;
   if (
     prevAdministrationState !== null &&
     tick >= prevAdministrationState.enteredAt + ADMINISTRATION_DURATION_TICKS
@@ -1586,8 +1621,8 @@ function advance(s: SimState): SimState {
     // DEBT_THRESHOLD_FOR_BAILOUT) — otherwise Administration Mode would be a
     // silent loophole back into the unbounded-rescue class BUG-504 closed.
     if (origin === 'bailout' && funds < BAILOUT_CLEAN_END_THRESHOLD) {
-      // Still broke after an administration-covered FIRST bailout year — auto
-      // second bailout (same trigger as the plain-bailout branch above).
+      // Still broke after an administration-covered ONE dynamic bailout
+      // year — auto second bailout (UNCHANGED, see the scoping note above).
       bailoutSecondState = { enteredAt: tick };
       funds += BAILOUT_INCOME_INJECTION_SECOND;
       inflows = [
@@ -1773,13 +1808,42 @@ function advance(s: SimState): SimState {
     peakPopulation,
     minFundsEver,
     totalSpending,
-    // BUG-504 Option A: how many FRESH first-bailout re-arms this playthrough
-    // has used (capped by MAX_FIRST_BAILOUTS).
+    // BUG-504 Option A: legacy first-bailout re-arm counter — FEAT-dynamic-
+    // bailout RETIRES its re-arm role (no fresh trigger increments it any
+    // more; a fresh dynamic grant is gated by `dynamicBailoutUsed`, a bool,
+    // not this counter — see fiscal.MAX_FIRST_BAILOUTS's own doc comment).
+    // Kept read-only/threaded through so an old save's value survives and
+    // `bailoutStandingCostPerTick` still reads a stable number.
     firstBailoutCount,
     // BUG-506 (AC-506-1/2): consecutive-tick sustained-recovery counter.
     recoveryStreak,
     // BUG-506 (AC-506-3/4): rolling window of the last N ticks' funds.
     recentFundsWindow,
+    // FEAT-dynamic-bailout: tick-time capital spend from the road/building
+    // auto-scale passes counts towards cumulative capex exactly like a
+    // player-initiated placement — these ARE real placementCost-derived
+    // outflows, just charged by advance() instead of a reducer action.
+    //
+    // F2 FIX (independent round REJECT, 2026-09-02): `orphanConnectCost` is
+    // DELIBERATELY EXCLUDED here — sweepOrphanConnects() (called above, whose
+    // result IS `s` by this point) drives every reconnect through the SAME
+    // autoConnect() reducer path 'place' uses, and autoConnect() ALREADY
+    // writes its own cumulativeCapexSpent increment into the state it
+    // returns (engine.ts's autoConnect, `cumulativeCapexSpent: (s.
+    // cumulativeCapexSpent ?? 0) + totalCost`). `s.cumulativeCapexSpent`
+    // read here is therefore ALREADY the post-sweep total — adding
+    // `orphanConnectCost` a second time double-counted every pound the sweep
+    // spent (measured: 36,000 real spend -> 72,000 capex). `autoScaleCost`/
+    // `buildingAutoScaleCost` are the OPPOSITE case: evaluateRoadMonitors/
+    // evaluateBuildingMonitors are pure selectors that never touch
+    // cumulativeCapexSpent themselves, so their spend is NOT yet reflected in
+    // `s.cumulativeCapexSpent` and MUST be added here exactly once.
+    cumulativeCapexSpent: (s.cumulativeCapexSpent ?? 0) + autoScaleCost + buildingAutoScaleCost,
+    // FEAT-dynamic-bailout (Aaron ruling Q100045): the ONE-WAY once-only latch
+    // — see `dynamicBailoutUsed`'s doc in types.ts. Must be written explicitly
+    // here (not left to the `...s` spread above) since it is a genuinely NEW
+    // per-tick-computed value, not a passthrough.
+    dynamicBailoutUsed,
     // FEAT-congestion-teeth-2026-09-02 (AC-1): this tick's advanced per-line
     // sustained-congestion counters, read by the NEXT tick's wellbeing/income.
     congestionTicksBySpec,
@@ -2001,6 +2065,8 @@ export function autoConnect(
   return {
     ...s,
     funds: s.funds - totalCost,
+    // FEAT-dynamic-bailout: connector + upgrade-on-connect is real capex spend.
+    cumulativeCapexSpent: (s.cumulativeCapexSpent ?? 0) + totalCost,
     nextId,
     buildings,
     ledger,
@@ -2190,6 +2256,9 @@ function autoBranchRail(s: SimState, placed: Building, sp: Spec): SimState {
   let nextLedgerId = s.nextLedgerId;
   const newTiles: Building[] = [];
   let blockedAny = false;
+  // FEAT-dynamic-bailout: accumulate real capex spend across every branch laid
+  // this call (today £0 per tile, but a future per-tile branch cost must count).
+  let branchCapexSpent = 0;
 
   for (const lineSpecId of GATEWAY_BRANCH_TARGET_SPECS) {
     const targets = lineTiles[lineSpecId];
@@ -2240,6 +2309,7 @@ function autoBranchRail(s: SimState, placed: Building, sp: Spec): SimState {
       occupied.add(`${p.x},${p.y}`);
     }
     funds -= branchCost;
+    branchCapexSpent += branchCost;
     ledger = [
       {
         id: nextLedgerId++,
@@ -2254,6 +2324,7 @@ function autoBranchRail(s: SimState, placed: Building, sp: Spec): SimState {
   return {
     ...s,
     funds,
+    cumulativeCapexSpent: (s.cumulativeCapexSpent ?? 0) + branchCapexSpent,
     nextId,
     buildings: newTiles.length > 0 ? [...s.buildings, ...newTiles] : s.buildings,
     ledger,
@@ -3000,6 +3071,9 @@ function reduceCore(state: SimState, action: Action): SimState {
       const placedState = {
         ...state,
         funds: state.funds - cost,
+        // FEAT-dynamic-bailout: every paid placement is real capex spend, gross
+        // (never netted against a later refund/demolition — spec §7.1).
+        cumulativeCapexSpent: (state.cumulativeCapexSpent ?? 0) + cost,
         xp: state.xp + 4,
         nextId: state.nextId + 1,
         buildings: [...state.buildings, placedBuilding],
@@ -3369,7 +3443,13 @@ function reduceCore(state: SimState, action: Action): SimState {
       }
 
       // All checks passed; execute conversions and placements atomically.
-      let placedState: SimState = { ...state, funds: state.funds - totalCost, placeNotice: null };
+      let placedState: SimState = {
+        ...state,
+        funds: state.funds - totalCost,
+        // FEAT-dynamic-bailout: road/junction/bridge path spend is real capex.
+        cumulativeCapexSpent: (state.cumulativeCapexSpent ?? 0) + totalCost,
+        placeNotice: null,
+      };
       let newPlacementCount = 0;
       let conversionCount = 0;
 
@@ -3433,6 +3513,11 @@ function reduceCore(state: SimState, action: Action): SimState {
         let repState: SimState = {
           ...placedState,
           funds: placedState.funds - replanPlan.totalCost,
+          // FEAT-dynamic-bailout: the re-plan cascade's new tiles + upgrades
+          // are real capex spend too (demolitions are refunds — never netted
+          // out here, spec §7.1 — but the demolition refund itself is applied
+          // elsewhere in this cascade and is not part of replanPlan.totalCost).
+          cumulativeCapexSpent: (placedState.cumulativeCapexSpent ?? 0) + replanPlan.totalCost,
           buildings: placedState.buildings
             .filter((b) => !demolishedIds.has(b.id))
             .map((b) => {
@@ -3600,6 +3685,12 @@ function reduceCore(state: SimState, action: Action): SimState {
         !fits(occupiedSet(state, moving.id), sp.w, sp.h, action.x, action.y)
       )
         return state;
+      // FEAT-dynamic-bailout: MOVE_COST is deliberately EXCLUDED from
+      // cumulativeCapexSpent — it is a flat UI-convenience repositioning fee
+      // for an ALREADY-owned building (no new capital asset is built), not a
+      // placementCost-derived capital spend. Counting it would inflate the
+      // dynamic bailout's CAPEX-proportional term for spend that built
+      // nothing new.
       return {
         ...state,
         funds: state.funds - MOVE_COST,
@@ -3712,6 +3803,11 @@ function reduceCore(state: SimState, action: Action): SimState {
       const updated = {
         ...state,
         funds: state.funds - netCost,
+        // FEAT-dynamic-bailout: the GROSS placement spend (totalCost), never
+        // netted against the demolition refund (refundTotal) — spec §7.1's
+        // gross-only rule, so a demolish/rebuild stamp can't manipulate the
+        // dynamic bailout offer downward.
+        cumulativeCapexSpent: (state.cumulativeCapexSpent ?? 0) + totalCost,
         xp: state.xp + xpGain,
         nextId,
         buildings: newBuildings,
@@ -3750,6 +3846,8 @@ function reduceCore(state: SimState, action: Action): SimState {
       return {
         ...state,
         funds: state.funds - cost,
+        // FEAT-dynamic-bailout: a pipe-tier upgrade is real capex spend.
+        cumulativeCapexSpent: (state.cumulativeCapexSpent ?? 0) + cost,
         pipeTier: { ...state.pipeTier, [action.id]: tier + 1 },
         ...logEvent(state, `${sp.name} pipe upgraded to ${PIPE_TIERS[tier + 1].label}`, -cost),
       };
@@ -3863,6 +3961,12 @@ function reduceCore(state: SimState, action: Action): SimState {
       // deduction is a between-tick mutation exactly like debugFunds/place cost, so it
       // never disturbs the tick-boundary conservation invariant; a ledger entry is
       // recorded for UI visibility (mirrors how `place` logs its spend).
+      // FEAT-dynamic-bailout: UNLOCK_ALL_COST is deliberately EXCLUDED from
+      // cumulativeCapexSpent — it is a meta-game catalogue GATE (buys unlock
+      // access, a rules toggle), not placementCost for a built capital asset.
+      // Counting it would let a player inflate their dynamic bailout CAPEX
+      // term for free by god-moding the catalogue open, without building
+      // anything the offer is meant to be proportional to.
       if (state.unlockedAll) return state; // idempotent — already unlocked, no re-charge
       if (state.funds < UNLOCK_ALL_COST) return state;
       return {
@@ -3983,16 +4087,106 @@ export function sanitizeTreasury(s: SimState): SimState {
   const claimedMilestonesChanged =
     claimedMilestones.length !== (s.claimedMilestones ?? []).length ||
     claimedMilestones.some((id, i) => id !== (s.claimedMilestones ?? [])[i]);
+
+  // FEAT-dynamic-bailout (spec §4 migration table) — runs EXACTLY ONCE per
+  // save, guarded by `capexBackfilled` (a brand-new game already starts with
+  // it `true` — see rawState() — so this branch only ever fires for a save
+  // that predates this feature). No migration path may crash, throw, or
+  // silently zero a loaded save's funds (spec §4 closing paragraph) — this is
+  // a pure additive/defaulting mapping over already-optional fields, exactly
+  // like the notice/milestoneNotice/claimedMilestones tolerance above.
+  //
+  // F3 FIX (independent round REJECT, 2026-09-02, GR#16 "type-safe storage
+  // boundaries" / GR#1 "aggressive error trapping"): the ORIGINAL code below
+  // used bare `=== undefined` checks, which pass a hand-edited/corrupt-but-
+  // DEFINED value straight through untouched. Two concrete exploits closed:
+  //   (a) cumulativeCapexSpent: 'not a number' (a string) is not undefined,
+  //       so it skipped the backfill AND was never coerced — every downstream
+  //       `(s.cumulativeCapexSpent ?? 0) + cost` charge site then does STRING
+  //       CONCATENATION, not addition, silently growing into ever-longer
+  //       digit-garbage; computeDynamicBailoutOffer's Number.isFinite guard
+  //       then reads it as 0, and the whole CAPEX-proportional formula
+  //       silently degrades to the fixed BAILOUT_FLOOR with no error (GR#1/
+  //       #17 violation). Fixed by coercing through sanitizeFunds() — the
+  //       SAME numeric storage-boundary guard funds/loanBalance already use
+  //       above — AFTER the backfill decision (so a corrupt-but-defined value
+  //       still correctly SKIPS a re-backfill; it is coerced to a safe
+  //       number, not re-derived from the standing asset base).
+  //   (b) dynamicBailoutUsed: 0 (or '', null) is FALSY but DEFINED — the old
+  //       `=== undefined` migration check passed it straight through as `0`,
+  //       so an already-escalated save (bailoutSecondState active) with a
+  //       hand-corrupted `0` latch would silently RE-ARM a second dynamic
+  //       grant (the exact BUG-504 re-arm class this feature exists to
+  //       close). Fixed by keying migration on `typeof !== 'boolean'`
+  //       instead — ANY non-boolean value (undefined, 0, '', null, a stray
+  //       string) is treated as "needs (re-)deriving from real state signals"
+  //       and never trusted at face value; a genuine, properly-typed
+  //       `true`/`false` always passes straight through unchanged.
+  let capexBackfilled = typeof s.capexBackfilled === 'boolean' ? s.capexBackfilled : false;
+  let cumulativeCapexSpentRaw = s.cumulativeCapexSpent;
+  if (!capexBackfilled) {
+    if (cumulativeCapexSpentRaw === undefined) {
+      // BACKFILL PROXY (spec §4): sum placementCost for every building
+      // CURRENTLY standing — "what it would cost to build what's standing
+      // today". Understates true lifetime spend (ignores demolished/
+      // refunded structures) but never overstates it, and is never zero for
+      // a real city — closes the false "tiny city, tiny offer" migration
+      // cliff the spec calls out.
+      let backfill = 0;
+      for (const b of s.buildings) {
+        const sp = SPECS[b.spec];
+        if (sp) backfill += placementCost(sp);
+      }
+      cumulativeCapexSpentRaw = backfill;
+    }
+    capexBackfilled = true;
+  }
+  // GR#16 storage-boundary coercion (F3 fix (a) above) — mirrors funds/
+  // loanBalance exactly: never trust the stored TYPE, only ever emit a real,
+  // finite, safe-integer number.
+  const cumulativeCapexSpent = sanitizeFunds(cumulativeCapexSpentRaw as number);
+
+  let dynamicBailoutUsed = typeof s.dynamicBailoutUsed === 'boolean' ? s.dynamicBailoutUsed : undefined;
+  if (dynamicBailoutUsed === undefined) {
+    // §4 migration table, no-double-dip: a save that has ALREADY touched any
+    // stage of the old fixed-terms ladder (mid a first bailout, a first-
+    // bailout re-arm already used, a second bailout, administration, or
+    // decline) has already had its ONE dynamic-era "once" — it does not get a
+    // fresh dynamic offer on top. A save that is genuinely solvent with no
+    // bailout history at all (the common case) starts clean at `false`.
+    dynamicBailoutUsed =
+      s.declineState != null ||
+      s.administrationState != null ||
+      s.bailoutSecondState != null ||
+      s.bailoutState != null ||
+      (s.firstBailoutCount ?? 0) >= 1;
+  }
+
+  const capexBackfilledPrev = typeof s.capexBackfilled === 'boolean' ? s.capexBackfilled : false;
+  const dynamicBailoutUsedPrev = typeof s.dynamicBailoutUsed === 'boolean' ? s.dynamicBailoutUsed : undefined;
   if (
     funds === s.funds &&
     loanBalance === s.loanBalance &&
     notice === s.notice &&
     milestoneNotice === (s.milestoneNotice ?? null) &&
-    !claimedMilestonesChanged
+    !claimedMilestonesChanged &&
+    capexBackfilled === capexBackfilledPrev &&
+    cumulativeCapexSpent === s.cumulativeCapexSpent &&
+    dynamicBailoutUsed === dynamicBailoutUsedPrev
   ) {
     return s;
   }
-  return { ...s, funds, loanBalance, notice, milestoneNotice, claimedMilestones };
+  return {
+    ...s,
+    funds,
+    loanBalance,
+    notice,
+    milestoneNotice,
+    claimedMilestones,
+    cumulativeCapexSpent,
+    capexBackfilled,
+    dynamicBailoutUsed,
+  };
 }
 
 export function reducer(state: SimState, action: Action): SimState {

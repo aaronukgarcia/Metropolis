@@ -24,6 +24,7 @@ import {
   ASSET_SALE_VALUE_FRACTION,
   BAILOUT_INJECTION_LABEL,
   ASSET_SALE_LABEL,
+  DYNAMIC_BAILOUT_INJECTION_LABEL,
 } from '../src/sim/fiscal.ts';
 import { isStateAffecting } from '../src/sim/journal.ts';
 import { placementCost, SPECS } from '../src/sim/data.ts';
@@ -82,15 +83,27 @@ test('AC-1/AC-2: crossing into crisis triggers the bailout state machine exactly
 // Verified by scratch-editing engine.ts's bailout trigger `if` to always fire and
 // confirming `stillCrisis.bailoutState.enteredAt` no longer matches (RED), then restoring.
 
-test('AC-2: the bailout injects BAILOUT_INCOME_INJECTION as a labelled inflow, exactly once', () => {
+// FEAT-dynamic-bailout SUPERSESSION NOTE (Aaron ruling Q100045, 2026-09-02):
+// the FRESH first-tier grant is no longer the fixed BAILOUT_INCOME_INJECTION
+// under BAILOUT_INJECTION_LABEL — it is now the dynamically-sized offer
+// (fiscal.computeDynamicBailoutOffer) under DYNAMIC_BAILOUT_INJECTION_LABEL.
+// Updated (not deleted) to prove the NEW label/mechanism fires exactly once
+// per entry — see fiscal.test.mjs / feat-dynamic-bailout.test.mjs for the
+// formula's own proportionality/floor/cap coverage.
+test('AC-2 (superseded by FEAT-dynamic-bailout): the bailout injects the DYNAMIC offer as a labelled inflow, exactly once', () => {
   const s0 = initialState();
   const warning = tickAtFunds(s0, WARNING_BAND_FUNDS);
   const preEntryFunds = warning.funds;
   const entered = tickAtFunds(warning, CRISIS_FUNDS);
 
-  const injectionFlow = entered.lastFlows.inflows.find((f) => f.label === BAILOUT_INJECTION_LABEL);
+  const injectionFlow = entered.lastFlows.inflows.find((f) => f.label === DYNAMIC_BAILOUT_INJECTION_LABEL);
   assert.ok(injectionFlow, 'the injection must be a NAMED inflow, traceable by the consistency checker');
-  assert.equal(injectionFlow.value, BAILOUT_INCOME_INJECTION);
+  assert.ok(injectionFlow.value > 0, 'the dynamic offer must be a real positive credit');
+  assert.equal(
+    entered.lastFlows.inflows.some((f) => f.label === BAILOUT_INJECTION_LABEL),
+    false,
+    'the OLD fixed-terms label must never appear for a fresh dynamic grant',
+  );
 
   // Conservation: fundsAtTickEnd must still equal fundsAtTickStart + Σinflows − Σoutflows
   // WITH the injection counted (mirrors consistency.ts's conservation.funds-vs-flows check).
@@ -100,7 +113,7 @@ test('AC-2: the bailout injects BAILOUT_INCOME_INJECTION as a labelled inflow, e
 
   // A tick that does NOT enter crisis (already in crisis) must NOT inject again.
   const nextTick = reducer(entered, { type: 'tick' });
-  const secondInjection = nextTick.lastFlows.inflows.find((f) => f.label === BAILOUT_INJECTION_LABEL);
+  const secondInjection = nextTick.lastFlows.inflows.find((f) => f.label === DYNAMIC_BAILOUT_INJECTION_LABEL);
   assert.equal(secondInjection, undefined, 'no re-injection on a non-entry tick');
 });
 

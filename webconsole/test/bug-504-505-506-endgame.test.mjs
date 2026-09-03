@@ -49,6 +49,7 @@ import {
   DECLINE_AVERAGING_WINDOW_TICKS,
   BAILOUT_STANDING_COST_LABEL,
   bailoutStandingCostPerTick,
+  DYNAMIC_BAILOUT_INJECTION_LABEL,
 } from '../src/sim/fiscal.ts';
 
 // Mirrors imf-insolvency-inc*.test.mjs's helper exactly.
@@ -151,44 +152,66 @@ test('BUG-504: a city merely above the OLD crisis-line bar (but still genuinely 
   );
 });
 
-test('BUG-504: after MAX_FIRST_BAILOUTS fresh grants, a new crisis is FORCED straight to the second bailout — no more free grants', () => {
-  let s = initialState();
-  for (let i = 0; i < MAX_FIRST_BAILOUTS; i++) {
-    s = freshCrisisEntry(s);
-    assert.ok(s.bailoutState, `re-arm ${i + 1}/${MAX_FIRST_BAILOUTS} must be a genuine fresh bailout`);
-    assert.equal(s.firstBailoutCount, i + 1, 're-arm counter must increment exactly once per fresh grant');
-    const freshInjection = s.lastFlows.inflows.find((f) => f.label === BAILOUT_INJECTION_LABEL);
-    assert.equal(freshInjection?.value, BAILOUT_INCOME_INJECTION, `re-arm ${i + 1} must still receive the fresh grant while under the cap`);
-    // Clean-end this bailout by riding it to REAL solvency at year-end.
-    let t = s;
-    for (let k = 0; k < BAILOUT_DURATION_TICKS - 1; k++) t = tickAtFunds(t, 5_000_000);
-    s = tickAtFunds(t, 5_000_000);
-    assert.equal(s.bailoutState, null, `re-arm ${i + 1} must clean-end once genuinely solvent`);
-    assert.equal(s.bailoutSecondState, null, `re-arm ${i + 1}'s clean recovery must never escalate`);
-  }
-  // The cap is now exhausted — a FRESH crisis must skip the first-bailout
-  // grant entirely and go straight to the second bailout.
-  const capped = freshCrisisEntry(s);
-  assert.equal(capped.firstBailoutCount, MAX_FIRST_BAILOUTS, 'the re-arm counter must NOT increment past the cap');
-  assert.equal(capped.bailoutState, null, 'no FRESH first-bailout grant once MAX_FIRST_BAILOUTS is exhausted');
-  assert.ok(capped.bailoutSecondState, 'must be FORCED straight to the (worse-terms) second bailout instead');
-  const freshInjectionAtCap = capped.lastFlows.inflows.find((f) => f.label === BAILOUT_INJECTION_LABEL);
-  assert.equal(freshInjectionAtCap, undefined, 'no BAILOUT_INCOME_INJECTION grant once the cap is exhausted');
-  const secondInjectionAtCap = capped.lastFlows.inflows.find((f) => f.label === BAILOUT_SECOND_INJECTION_LABEL);
-  assert.equal(secondInjectionAtCap?.value, BAILOUT_INCOME_INJECTION_SECOND, 'the forced escalation still gets the (worse-terms) second-bailout injection');
+// FEAT-dynamic-bailout SUPERSESSION NOTE (Aaron ruling Q100045, 2026-09-02):
+// "this only happens once. then that's it." RETIRES MAX_FIRST_BAILOUTS's
+// re-arm role — the fresh-grant cap is now effectively 1 (a boolean latch,
+// `dynamicBailoutUsed`, not a counter), and the fresh grant itself is now
+// dynamically sized (fiscal.computeDynamicBailoutOffer), not the fixed
+// BAILOUT_INCOME_INJECTION. The original test below exercised MULTIPLE
+// fresh re-arms (MAX_FIRST_BAILOUTS=2) each getting a full fresh grant —
+// that behaviour is the exact thing this feature retires. Rewritten (not
+// deleted) to prove the NEW once-only behaviour: exactly ONE fresh grant
+// ever, any SUBSEQUENT fresh crisis (even a fully-recovered one) escalates
+// straight to the unchanged worse-terms second bailout — see engine.ts's
+// FEAT-dynamic-bailout scoping note for why the second-bailout MACHINERY
+// itself is deliberately left untouched (spec §3 alternative branch (b)).
+test('FEAT-dynamic-bailout: exactly ONE fresh grant ever — a second fresh crisis (even after full recovery) escalates straight to the second bailout, never a second fresh grant', () => {
+  let s = freshCrisisEntry(initialState());
+  assert.ok(s.bailoutState, 'the ONE dynamic grant must fire on the first fresh crisis');
+  assert.equal(s.dynamicBailoutUsed, true, 'the once-only latch must flip true the SAME tick as the grant');
+  const freshInjection = s.lastFlows.inflows.find((f) => f.label === DYNAMIC_BAILOUT_INJECTION_LABEL);
+  assert.ok(freshInjection, 'the ONE grant must be the NEW dynamic-sized, dynamic-labelled inflow');
+  assert.equal(s.lastFlows.inflows.some((f) => f.label === BAILOUT_INJECTION_LABEL), false, 'the OLD fixed-terms label must never appear for a fresh dynamic grant');
+
+  // Clean-end this bailout by riding it to REAL solvency at year-end.
+  let t = s;
+  for (let k = 0; k < BAILOUT_DURATION_TICKS - 1; k++) t = tickAtFunds(t, 5_000_000);
+  s = tickAtFunds(t, 5_000_000);
+  assert.equal(s.bailoutState, null, 'the one bailout must clean-end once genuinely solvent');
+  assert.equal(s.bailoutSecondState, null, 'a clean recovery must never escalate');
+  assert.equal(s.dynamicBailoutUsed, true, 'the latch survives a clean recovery — it is one-way, never reset by recovery');
+
+  // A SECOND fresh crisis — even after the city fully recovered — must NOT
+  // get a second fresh (dynamic OR fixed) grant of any kind. It escalates
+  // straight to the (unchanged) worse-terms second bailout instead.
+  const second = freshCrisisEntry(s);
+  assert.equal(second.bailoutState, null, 'no second fresh first-tier bailout, ever');
+  assert.ok(second.bailoutSecondState, 'a second fresh crisis must be FORCED straight to the second bailout');
+  const secondFreshDynamic = second.lastFlows.inflows.find((f) => f.label === DYNAMIC_BAILOUT_INJECTION_LABEL);
+  assert.equal(secondFreshDynamic, undefined, 'AC-6: no second dynamic-labelled inflow of any size, ever, once dynamicBailoutUsed is true');
+  const secondInjection = second.lastFlows.inflows.find((f) => f.label === BAILOUT_SECOND_INJECTION_LABEL);
+  assert.equal(secondInjection?.value, BAILOUT_INCOME_INJECTION_SECOND, 'the forced escalation still gets the (worse-terms) second-bailout injection');
 });
 
-test('BUG-504 MUTATION-PROVE target: a city NOT at the cap still gets a fresh grant (the cap only bites once exhausted)', () => {
-  let s = initialState();
-  for (let i = 0; i < MAX_FIRST_BAILOUTS - 1; i++) {
-    s = freshCrisisEntry(s);
-    let t = s;
-    for (let k = 0; k < BAILOUT_DURATION_TICKS - 1; k++) t = tickAtFunds(t, 5_000_000);
-    s = tickAtFunds(t, 5_000_000);
-  }
-  const stillUnderCap = freshCrisisEntry(s);
-  assert.ok(stillUnderCap.bailoutState, 'below the cap, a fresh crisis must still receive a genuine first-bailout grant');
-  assert.equal(stillUnderCap.firstBailoutCount, MAX_FIRST_BAILOUTS);
+test('FEAT-dynamic-bailout MUTATION-PROVE target: a THIRD fresh crisis after the second bailout also clean-ends still never re-arms the first tier', () => {
+  let s = freshCrisisEntry(initialState());
+  // Clean-end bailout #1.
+  let t = s;
+  for (let k = 0; k < BAILOUT_DURATION_TICKS - 1; k++) t = tickAtFunds(t, 5_000_000);
+  s = tickAtFunds(t, 5_000_000);
+  // Force a second fresh crisis (escalates straight to bailoutSecondState),
+  // then clean-end IT too by riding to solvency at ITS year-end.
+  s = freshCrisisEntry(s);
+  assert.ok(s.bailoutSecondState);
+  let u = s;
+  for (let k = 0; k < SECOND_BAILOUT_DURATION_TICKS - 1; k++) u = tickAtFunds(u, 5_000_000);
+  s = tickAtFunds(u, 5_000_000);
+  assert.equal(s.bailoutSecondState, null, 'the second bailout must also clean-end once genuinely solvent');
+
+  // A THIRD fresh crisis: still no first-tier re-arm — the latch never resets.
+  const third = freshCrisisEntry(s);
+  assert.equal(third.bailoutState, null, 'the once-only latch never re-arms the dynamic grant, no matter how many cycles follow');
+  assert.ok(third.bailoutSecondState, 'every subsequent crisis escalates straight to the second bailout');
 });
 
 test('BUG-504: the bailout standing cost is a NAMED, traceable outflow while a bailout is active, and conservation still holds', () => {

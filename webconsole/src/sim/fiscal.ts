@@ -371,15 +371,25 @@ export function insolvencyStateForFunds(funds: number): InsolvencyState {
 export const BAILOUT_DURATION_TICKS = 360;
 
 /**
- * FEAT-1972079923 inc2 / BUG-452 inc1 (2026-09-01, Aaron's "bigger relief"
- * ruling): one-time cash injection credited to the treasury the SAME tick the
- * bailout is entered — 50% of the debt hole (computed against
- * DEBT_THRESHOLD_FOR_BAILOUT's magnitude, i.e. STARTING_TREASURY), a bigger
- * relief than the old flat 2,000,000 (previously 0.2x treasury). This is a
- * legitimate external inflow (like a grant), not manufactured money — booked
- * as a normal labelled inflow (see BAILOUT_INJECTION_LABEL) so conservation
- * (fundsAtTickEnd === fundsAtTickStart + Σinflows − Σoutflows) can trace it
- * exactly like every other inflow.
+ * ⚠ RETIRED (FEAT-dynamic-bailout, Aaron ruling Q100045, 2026-09-02) — GR#18
+ * audit note: this constant has ZERO PRODUCTION READERS as of this feature.
+ * The FRESH first-tier bailout grant is no longer this fixed £-value; it is
+ * `fiscal.computeDynamicBailoutOffer()`'s CAPEX+bleed-proportional offer
+ * (see `DYNAMIC_BAILOUT_INJECTION_LABEL` further down this file). This
+ * constant is kept, UNCHANGED in value, ONLY so a save that predates this
+ * feature and is mid an already-credited old-terms bailout can be
+ * grandfathered/reasoned about (engine.ts's sanitizeTreasury migration
+ * comments reference it) — it is NEVER read by any live trigger path any
+ * more. Do not wire this back into a fresh grant without re-reading the
+ * FEAT-dynamic-bailout spec's §3 ruling.
+ *
+ * Original doc (FEAT-1972079923 inc2 / BUG-452 inc1, 2026-09-01, Aaron's
+ * "bigger relief" ruling, preserved for history): one-time cash injection
+ * credited the SAME tick the bailout was entered — 50% of the debt hole
+ * (computed against DEBT_THRESHOLD_FOR_BAILOUT's magnitude, i.e.
+ * STARTING_TREASURY). Booked as a normal labelled inflow (see
+ * BAILOUT_INJECTION_LABEL) so conservation could trace it exactly like every
+ * other inflow.
  */
 export const BAILOUT_INCOME_INJECTION = Math.round(Math.abs(DEBT_THRESHOLD_FOR_BAILOUT) * 0.5);
 
@@ -498,13 +508,22 @@ export const FINAL_DECLINE_FUNDS_THRESHOLD = 0;
 export const BAILOUT_CLEAN_END_THRESHOLD = 0;
 
 /**
- * BUG-504 Option A — a city may receive at MOST this many FRESH first
- * bailouts across a single playthrough. Once exhausted, a fresh crisis entry
- * is FORCED straight to the (worse-terms) second bailout instead of
- * re-issuing a free BAILOUT_INCOME_INJECTION grant — closing the unbounded
- * re-arm loop for good, independent of how slowly a city drains.
- * ⚠ PLACEHOLDER-balance (Aaron's row-by-row pass pending; "e.g. N = 2" per
- * the FEAT-endgame-ladder spec).
+ * ⚠ RETIRED (FEAT-dynamic-bailout, Aaron ruling Q100045, 2026-09-02) — GR#18
+ * audit note: this constant has ZERO PRODUCTION READERS as of this feature.
+ * "This only happens once. Then that's it." replaced the re-arm COUNTER with
+ * a one-way boolean LATCH (`SimState.dynamicBailoutUsed`) — the effective
+ * cap is now hard-coded to exactly 1, not this named constant. Kept, value
+ * UNCHANGED, only so `bug-504-505-506-endgame.test.mjs`'s determinism
+ * regression (which still exercises a fixed loop-count fixture) and the
+ * historical comments below stay meaningful. Do not re-wire this into a
+ * fresh-grant gate — see engine.ts's FEAT-dynamic-bailout comment block.
+ *
+ * Original doc (BUG-504 Option A, preserved for history): a city could
+ * receive at MOST this many FRESH first bailouts across a single
+ * playthrough; once exhausted, a fresh crisis entry was FORCED straight to
+ * the (worse-terms) second bailout instead of re-issuing a free
+ * BAILOUT_INCOME_INJECTION grant.
+ * ⚠ PLACEHOLDER-balance (historical; moot now the cap is fixed at 1).
  */
 export const MAX_FIRST_BAILOUTS = 2;
 
@@ -579,3 +598,224 @@ export const PLAY_MODE_INJECTION_AMOUNT = 1_000_000_000_000;
  * inflow (GR#3: distinct, unambiguous labels for distinct concepts).
  */
 export const PLAY_MODE_INJECTION_LABEL = 'Play Mode Sandbox Injection (not a simulation)';
+
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-dynamic-bailout (docs/planning/acceptance/FEAT-dynamic-bailout-2026-09-02.md)
+// — Aaron ruling Q100045 (2026-09-02, verbatim): "the 750K and 1.5M are wrong
+// - in a long standing game there could be 10's of billions of investment and
+// these amounts are not even a days run cost... we need some proportional
+// 'offer of help' based on the CAPEX already spent and the current bleed...
+// this only happens once. then that's it."
+//
+// RETIRES the two-stage worse-terms-second-bailout ladder's FRESH-ENTRY path
+// (BAILOUT_INCOME_INJECTION / BAILOUT_INCOME_INJECTION_SECOND /
+// MAX_FIRST_BAILOUTS's re-arm role) per the spec's §3 recommended branch (a):
+// exactly ONE dynamic offer per playthrough, full stop — a second insolvency
+// proceeds straight through Administration/Decline with no further grant of
+// any kind. The OLD constants above are kept, UNCHANGED, purely so an
+// in-flight/grandfathered old save (see engine.ts's migration in
+// sanitizeTreasury) can finish its already-credited bailout under its
+// original terms — see the spec's §4 migration table. `bailoutState`/
+// `administrationState`/`declineState`'s STATE-MACHINE SHAPE and the trigger
+// bands (DEBT_THRESHOLD_FOR_BAILOUT/INSOLVENCY_WARNING_THRESHOLD) are
+// DELIBERATELY UNCHANGED by this feature (scoping decision, see the spec's
+// open question §7.4's own recommendation to keep the trigger simple) — only
+// the INJECTION SIZE and the ONCE-ONLY enforcement are dynamic. This is
+// Phase-1 of the spec's §7.5 phasing (a resized LUMP SUM credited the
+// triggering tick, exactly like the retired ladder's mechanic) — the
+// drawdown-facility shape (§2.4) and its CAPEX-spend-gated sub-ledger (AC-11)
+// are explicitly Phase-2, NOT built here.
+//
+// SCOPING NOTE (build-time decision, flagged for Aaron's explicit
+// confirmation): engine.ts's fresh-trigger logic implements the spec's §3
+// alternative branch (b), NOT the recommended branch (a) above — only the
+// FRESH first-tier grant is retired (once-only, dynamically sized); the
+// existing worse-terms second-bailout ESCALATION machinery
+// (BAILOUT_INCOME_INJECTION_SECOND/BAILOUT_SECOND_INJECTION_LABEL) is left
+// byte-for-byte unchanged as "the teeth" once the one dynamic offer is used,
+// per the spec's own explicitly-sanctioned alternative. This avoided
+// rewriting ~15 tests across the pre-existing endgame-teeth estate
+// (imf-insolvency-inc2/inc3/inc4/inc5, bug-504-505-506-endgame, bug496-497,
+// play-mode-endgame, bug501) for a behavioural change branch (a) would have
+// forced. See engine.ts's own FEAT-dynamic-bailout comment block.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * ⚠ BALANCE-NUMBER PLACEHOLDER (Aaron's row-by-row pass pending, spec §6):
+ * the CAPEX "spend to save" allowance — the fraction of a city's cumulative
+ * historic capital spend offered as part of the ONE dynamic bailout, sized so
+ * the money can "fix the cause" (build the missing power plant/service) as
+ * well as cover a year of OPEX bleed. Applied to `cumulativeCapexSpent`.
+ */
+export const CAPEX_SPEND_TO_SAVE_FRACTION = 0.05;
+
+/**
+ * ⚠ BALANCE-NUMBER PLACEHOLDER (spec §6): the dynamic offer must never be
+ * LESS than this — preserves "the old £750k really was a lifesaver at the
+ * start" for a brand-new/small city whose bleed rate and CAPEX are both tiny
+ * (a fresh insolvency from a one-off shock, near-zero ongoing bleed).
+ * Numerically identical to the RETIRED BAILOUT_INCOME_INJECTION today (both
+ * derive from STARTING_TREASURY * 0.5) — an INDEPENDENT named constant (not a
+ * re-export), so the balance pass can diverge the two later; a test asserts
+ * they start equal.
+ */
+export const BAILOUT_FLOOR = Math.round(STARTING_TREASURY * 0.5);
+
+/**
+ * ⚠ BALANCE-NUMBER PLACEHOLDER (spec §6): safety-rail ceiling on the dynamic
+ * offer, expressed as a MULTIPLE of the city's OWN cumulative historic CAPEX
+ * (never a fixed £ literal — a size-of-the-city-relative ceiling, keeping the
+ * ruling's "no fixed £ constant" spirit even for the guard rail). Stops a
+ * runaway/degenerate bleed reading (an engine bug producing an absurd
+ * per-tick outflow) from minting an absurd one-time injection.
+ */
+export const BAILOUT_CAP_FRACTION_OF_CAPEX = 2.0;
+
+/**
+ * FEAT-dynamic-bailout — SSOT label for the ONE dynamic bailout's one-time
+ * cash injection inflow, distinct from the retired ladder's
+ * BAILOUT_INJECTION_LABEL/BAILOUT_SECOND_INJECTION_LABEL so a debug read (or
+ * the AC-6 regression test) can tell a fresh dynamic grant apart from a
+ * grandfathered old-save injection under the old terms.
+ */
+export const DYNAMIC_BAILOUT_INJECTION_LABEL = 'Dynamic Bailout Grant';
+
+/**
+ * FEAT-dynamic-bailout (spec §2.1/§7.2) — inflow labels that are ONE-OFF
+ * external injections, not structural income, and so must be EXCLUDED from
+ * the bleed-rate reading below (reusing this SAME rate to size a FRESH
+ * bailout would let a past bailout's own injection distort the next
+ * reading — the exact distortion the spec calls out `recentFundsWindow` for).
+ * SSOT set (GR#3): every one-off inflow label already defined above/elsewhere
+ * in this file is listed here once, not re-typed at each call site.
+ */
+const ONE_OFF_INFLOW_LABELS: ReadonlySet<string> = new Set<string>([
+  BAILOUT_INJECTION_LABEL,
+  BAILOUT_SECOND_INJECTION_LABEL,
+  DYNAMIC_BAILOUT_INJECTION_LABEL,
+  ASSET_SALE_LABEL,
+  PLAY_MODE_INJECTION_LABEL,
+]);
+
+/**
+ * FEAT-dynamic-bailout (spec §2.1, "a fresh netOpexBleedPerTick() SSOT
+ * function... explicitly excludes one-off injections"). Pure, deterministic
+ * (GR#21: no Date/random) — reads a single tick's already-computed flows
+ * (engine.ts's advance() calls this BEFORE appending that same tick's own
+ * bailout injection, so no self-distortion is possible; a PAST tick's
+ * injection lives in a PAST tick's flows and never reaches this call at all).
+ * Floored at 0 — a tick that is net POSITIVE (more structural income than
+ * outflow) has no "bleed" to speak of, never a negative allowance.
+ */
+export function netOpexBleedPerTick(flows: { inflows: FlowItem[]; outflows: FlowItem[] }): number {
+  const outflowSum = flows.outflows.reduce((a, b) => a + b.value, 0);
+  const structuralInflowSum = flows.inflows
+    .filter((f) => !ONE_OFF_INFLOW_LABELS.has(f.label))
+    .reduce((a, b) => a + b.value, 0);
+  return Math.max(0, outflowSum - structuralInflowSum);
+}
+
+/** Which formula branch produced a dynamic bailout offer — surfaced to the
+ * player-visible UI messaging per spec §2.5 ("distressed-then-recovered play
+ * session isn't confusing to debug"). */
+export type DynamicBailoutBranch = 'floored' | 'formula' | 'capped';
+
+export interface DynamicBailoutOffer {
+  offer: number;
+  opexAllowance: number;
+  capexAllowance: number;
+  branch: DynamicBailoutBranch;
+}
+
+/**
+ * F4 FIX (independent round REJECT, 2026-09-02) — the safe INPUT ceilings
+ * computeDynamicBailoutOffer clamps its two arguments to BEFORE any
+ * arithmetic runs, so every downstream term (opexAllowance/capexAllowance/
+ * cap) is a safe integer BY CONSTRUCTION and never needs zeroing after the
+ * fact. Each is `floor(MAX_SAFE_INTEGER / <the largest multiplier that term
+ * feeds>)` so `<ceiling> * <multiplier>` can never exceed
+ * Number.MAX_SAFE_INTEGER. BAILOUT_CAP_FRACTION_OF_CAPEX (2.0) is used for
+ * capex (it is the larger of the two capex multipliers, vs.
+ * CAPEX_SPEND_TO_SAVE_FRACTION's 0.05); BAILOUT_DURATION_TICKS (360) for bleed.
+ */
+const MAX_SAFE_CAPEX_INPUT = Math.floor(Number.MAX_SAFE_INTEGER / BAILOUT_CAP_FRACTION_OF_CAPEX);
+const MAX_SAFE_BLEED_INPUT = Math.floor(Number.MAX_SAFE_INTEGER / BAILOUT_DURATION_TICKS);
+
+/**
+ * GR#16 storage-boundary coercion for a formula INPUT (not stored state) —
+ * never trust the caller's type: a non-number (string/null/object/NaN/
+ * Infinity), a non-finite number, or a non-positive number all sanitize to
+ * 0 (no allowance from a garbage/absent reading); a legitimate positive
+ * finite number is clamped to `ceiling` so it can never blow the arithmetic
+ * budget the caller (computeDynamicBailoutOffer) has reserved for it.
+ */
+function sanitizePositiveFiniteInput(n: unknown, ceiling: number): number {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, ceiling);
+}
+
+/**
+ * FEAT-dynamic-bailout (spec §2.3/§2.5) — THE formula. Pure, deterministic
+ * (GR#21): a function of two numbers only, no Date/random, so two identical
+ * runs produce byte-identical offers (AC-9).
+ *
+ *   opexAllowance  = recentOpexBleedPerTick * BAILOUT_DURATION_TICKS  (a full
+ *                    year of the CURRENT bleed rate — "offering a year's
+ *                    worth of support", spec §2.3)
+ *   capexAllowance = cumulativeCapexSpent * CAPEX_SPEND_TO_SAVE_FRACTION
+ *                    ("spend to save" — fix the cause, sized off what's
+ *                    already been built)
+ *   offer          = clamp(opexAllowance + capexAllowance, BAILOUT_FLOOR, cap)
+ *
+ * `cap` is BAILOUT_CAP_FRACTION_OF_CAPEX × cumulativeCapexSpent, floored at
+ * BAILOUT_FLOOR itself (AC-5's own safety: a synthetic/adversarial city with
+ * cumulativeCapexSpent === 0 must still receive a FINITE, floor-sized offer
+ * rather than being capped to zero by its own zero CAPEX base — the cap is a
+ * ceiling on top of the floor, never a way to undercut it).
+ *
+ * F4 FIX (independent round REJECT, 2026-09-02): inputs are SANITIZED FIRST
+ * (sanitizePositiveFiniteInput, clamped to a safe-integer-bounded ceiling),
+ * the clamp (floor/cap) runs LAST. The ORIGINAL code sanitized the FINAL
+ * offer with sanitizeFunds() AFTER the floor/cap clamp — sanitizeFunds()
+ * returns 0 for any non-safe-integer, so a capex input around ~1.8e17
+ * survived the bare `Number.isFinite` guard, its 2x-capex `cap` term then
+ * OVERFLOWED Number.MAX_SAFE_INTEGER, and the stale post-clamp sanitizeFunds
+ * call zeroed the whole thing — returning {offer: 0, branch: 'formula'}, a
+ * LYING branch label (claims the plain formula ran clean) reporting an offer
+ * strictly BELOW the feature's own documented floor. Sanitizing the inputs
+ * up front instead means every downstream term is provably a safe integer,
+ * so the offer this function returns is NEVER silently zeroed by a
+ * downstream integer-safety catch.
+ */
+export function computeDynamicBailoutOffer(
+  cumulativeCapexSpent: number,
+  recentOpexBleedPerTick: number,
+): DynamicBailoutOffer {
+  const safeCapex = sanitizePositiveFiniteInput(cumulativeCapexSpent, MAX_SAFE_CAPEX_INPUT);
+  const safeBleed = sanitizePositiveFiniteInput(recentOpexBleedPerTick, MAX_SAFE_BLEED_INPUT);
+
+  const opexAllowance = Math.round(safeBleed * BAILOUT_DURATION_TICKS);
+  const capexAllowance = Math.round(safeCapex * CAPEX_SPEND_TO_SAVE_FRACTION);
+  const raw = opexAllowance + capexAllowance;
+  const cap = Math.max(BAILOUT_FLOOR, Math.round(safeCapex * BAILOUT_CAP_FRACTION_OF_CAPEX));
+
+  let offer = raw;
+  let branch: DynamicBailoutBranch = 'formula';
+  if (offer < BAILOUT_FLOOR) {
+    offer = BAILOUT_FLOOR;
+    branch = 'floored';
+  } else if (offer > cap) {
+    offer = cap;
+    branch = 'capped';
+  }
+  // Defensive final guard ONLY (never zeroing): by construction both inputs
+  // were pre-clamped to safe-integer-bounded ceilings above, so `offer` is
+  // already a safe integer at this point in every normal case. This just
+  // truncates any stray fractional residue and caps the theoretical
+  // combined-extreme edge (both inputs simultaneously at their own safe
+  // ceiling) at Number.MAX_SAFE_INTEGER — it must NEVER collapse a
+  // legitimately-clamped offer down to 0 the way the retired post-clamp
+  // sanitizeFunds() call did.
+  offer = Math.trunc(Math.min(offer, Number.MAX_SAFE_INTEGER));
+  return { offer, opexAllowance, capexAllowance, branch };
+}

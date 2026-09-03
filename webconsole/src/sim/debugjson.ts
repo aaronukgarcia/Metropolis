@@ -253,6 +253,12 @@ export interface DebugJson {
     recentFundsWindow: number[];
     /** FEAT-2326609723 (Play Mode) — the one-way sandbox latch. */
     playModeLatched: boolean;
+    /** FEAT-dynamic-bailout — running total of every placementCost charged since genesis. */
+    cumulativeCapexSpent: number;
+    /** FEAT-dynamic-bailout — whether the old-save CAPEX backfill has run (once-only guard). */
+    capexBackfilled: boolean;
+    /** FEAT-dynamic-bailout — the ONE-WAY once-only dynamic bailout latch. */
+    dynamicBailoutUsed: boolean;
     /** FEAT-crime-mechanic-2026-09-02 — last month-boundary-snapshotted crime rate. */
     crimeRatePreviousMonth: number;
     /** FEAT-congestion-teeth-2026-09-02 (AC-1) — per road-line-spec sustained-congestion tick counters. */
@@ -537,6 +543,10 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   recoveryStreak: 'sim.recoveryStreak',
   recentFundsWindow: 'sim.recentFundsWindow',
   playModeLatched: 'sim.playModeLatched',
+  // FEAT-dynamic-bailout.
+  cumulativeCapexSpent: 'sim.cumulativeCapexSpent',
+  capexBackfilled: 'sim.capexBackfilled',
+  dynamicBailoutUsed: 'sim.dynamicBailoutUsed',
   // FEAT-crime-mechanic-2026-09-02.
   crimeRatePreviousMonth: 'sim.crimeRatePreviousMonth',
   // FEAT-congestion-teeth-2026-09-02 (AC-1).
@@ -790,6 +800,12 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       recoveryStreak: s.recoveryStreak ?? 0,
       recentFundsWindow: s.recentFundsWindow ?? [],
       playModeLatched: s.playModeLatched ?? false,
+      // FEAT-dynamic-bailout: backward tolerance for a legacy state predating
+      // these fields (sanitizeTreasury migrates them properly on the next
+      // reducer() pass; this raw debug-snapshot read just needs a safe default).
+      cumulativeCapexSpent: s.cumulativeCapexSpent ?? 0,
+      capexBackfilled: s.capexBackfilled ?? false,
+      dynamicBailoutUsed: s.dynamicBailoutUsed ?? false,
       // FEAT-crime-mechanic-2026-09-02 (round-1 F1, GR#16): sanitizeCrimeRate
       // covers BOTH backward tolerance for a legacy state predating this
       // field AND a corrupt save's non-number value (a raw `?? default`
