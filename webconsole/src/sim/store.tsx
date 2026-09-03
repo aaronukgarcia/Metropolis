@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { reducer, initialState, SPEED_MS, sanitizeTreasury } from './engine';
+import { reducer, initialState, SPEED_MS, sanitizeTreasury, nextSafeBuildingId } from './engine';
 import type { Action } from './engine';
+import type { SimState } from './types';
 import { getGlobalTickTracker, recordTickDuration } from './perfhud';
 import type { TickTrackerState } from './perfhud';
 import {
@@ -12,6 +13,7 @@ import {
   createJournalPersister,
   type Journal,
   type JournalPersister,
+  type JournalEntry,
 } from './journal';
 import {
   AUTOSAVE_INTERVAL_MS,
@@ -21,6 +23,10 @@ import {
   readAllSavepoints,
   mostRecentSavepoint,
   restampSavepointsBuildVersion,
+  prepareRestoreForChunkedTail,
+  replayTailChunked,
+  checkConsistencyRecoveringStaleFlows,
+  LARGE_TAIL_REPLAY_THRESHOLD,
 } from './replay';
 import {
   needsRebuild,
@@ -230,6 +236,53 @@ export function SimProvider({ children }: { children: ReactNode }) {
     const running = currentBuildVersion();
     const crossBuild = !!most && needsRebuild(most.buildVersion, running);
 
+    // BUG-617 (P1, 2026-09-03): a savepoint whose journal tail has grown past
+    // LARGE_TAIL_REPLAY_THRESHOLD is the silent-autosave-failure shape (an
+    // over-quota autosave — e.g. a BUG-607-class oversized debugQueue — keeps
+    // REJECTING every persist, so lastSaveIndex never advances and the tail
+    // balloons to thousands of actions needed to grow a stale small snapshot
+    // back to the real city). Replaying that tail synchronously HERE (inside
+    // this lazy initializer, which MUST return before the very first render)
+    // is exactly what wedged the tab for 20+ minutes. Skip the tail replay
+    // NOW — boot the fast PRE-TAIL state instantly — and let the effect below
+    // (mirroring onRebuild's own chunked-generator pattern) replay it CHUNKED,
+    // behind a progress overlay, after the app has already mounted.
+    //
+    // F2 FIX (independent round REJECT, 2026-09-03, "the shipping paradox"):
+    // this branch used to be gated `!crossBuild`, on the theory that the
+    // cross-build path "already has its own chunked flow". It does NOT — the
+    // cross-build path fell straight through to the plain synchronous
+    // `restoreFromSavepoint` below, which is exactly the unchunked,
+    // first-render-blocking loop this bug exists to eliminate. Worse: EVERY
+    // savepoint in existence at the instant this fix ships is cross-build
+    // (its buildVersion is the previous bundle's), so Aaron's wedged city
+    // would have taken the `!crossBuild` branch on NO boot until something
+    // re-stamped the savepoint — the rescue would never have fired on the
+    // boot that actually needed it. Fix: apply the SAME instant pre-tail
+    // boot regardless of crossBuild; if it WAS cross-build, remember that
+    // (`crossBuildAfter`) so the effect below offers the Rebuild-from-genesis
+    // prompt AFTER the chunked tail replay lands the old-engine state — never
+    // instead of the instant boot.
+    if (most && most.journalTail.length > LARGE_TAIL_REPLAY_THRESHOLD) {
+      const prepared = prepareRestoreForChunkedTail(window.localStorage);
+      if (prepared.success && prepared.state && prepared.tail) {
+        const loadedJournal = loadJournal(window.localStorage);
+        return {
+          state: sanitizeTreasury(prepared.state),
+          journal: loadedJournal,
+          saveIndex: loadedJournal.entries.length,
+          pendingRebuild: null,
+          pendingTailReplay: {
+            tail: prepared.tail,
+            camera: prepared.camera ?? null,
+            crossBuildAfter: crossBuild ? { savedVersion: most.buildVersion ?? null, currentVersion: running } : null,
+          },
+        };
+      }
+      // prepare failed — fall through to the normal path below, which will
+      // independently fail the same way and degrade to a fresh/dev-city boot.
+    }
+
     const restoreResult = restoreFromSavepoint(window.localStorage);
     if (restoreResult.success && restoreResult.state) {
       const loadedJournal = loadJournal(window.localStorage);
@@ -240,13 +293,20 @@ export function SimProvider({ children }: { children: ReactNode }) {
         pendingRebuild: crossBuild
           ? { savedVersion: most?.buildVersion ?? null, currentVersion: running, camera: most?.camera ?? null, kind: 'rebuild' as StandbyKind }
           : null,
+        pendingTailReplay: null,
       };
     }
     const fresh =
       typeof process !== 'undefined' && process.env.NODE_TEST_CONTEXT
         ? initialState()
         : loadDevCity1();
-    return { state: sanitizeTreasury(fresh), journal: emptyJournal(), saveIndex: 0, pendingRebuild: null };
+    return {
+      state: sanitizeTreasury(fresh),
+      journal: emptyJournal(),
+      saveIndex: 0,
+      pendingRebuild: null,
+      pendingTailReplay: null,
+    };
   });
 
   const [state, dispatch] = useReducer(reducer, boot.state);
@@ -305,6 +365,22 @@ export function SimProvider({ children }: { children: ReactNode }) {
   }, [rebuildDecision]);
   const [rebuildPhase, setRebuildPhase] = useState<RebuildPhase>('prompt');
   const [rebuildReportState, setRebuildReportState] = useState<RebuildReport | null>(null);
+  // BUG-617: a large savepoint-tail replay deferred out of the boot
+  // initializer (see boot's own BUG-617 comment) — non-null means the effect
+  // further below (after dispatch/stateRefForDispatch exist) still needs to
+  // chunk-replay `tail` onto the already-mounted pre-tail state. `camera` is
+  // carried through so the self-healing fresh savepoint this produces keeps
+  // the player's view exactly like every other savepoint-writing path does.
+  // F2: `crossBuildAfter` is non-null when the ORIGINAL savepoint (before
+  // this tail replay) was itself cross-build — the effect defers offering
+  // the Rebuild-from-genesis prompt until AFTER the chunked tail replay
+  // lands the old-engine state, rather than skipping the instant boot
+  // entirely (the "shipping paradox" REJECT finding).
+  const [pendingTailReplay, setPendingTailReplay] = useState<{
+    tail: JournalEntry[];
+    camera: MapViewState | null;
+    crossBuildAfter: { savedVersion: string | null; currentVersion: string } | null;
+  } | null>(boot.pendingTailReplay);
   // FEAT-2326609720 inc1: registers RebuildPrompt with the app-wide blocking-
   // overlay resolver (overlayManager.tsx) at BLOCKING_OVERLAY_ID.REBUILD_PROMPT
   // priority — the highest of the four known candidates, since the boot-time
@@ -866,6 +942,181 @@ export function SimProvider({ children }: { children: ReactNode }) {
       }
     };
   }, [wrappedDispatch]);
+
+  // BUG-617 (P1, 2026-09-03): drive the deferred large-tail replay (see
+  // boot's own comment and pendingTailReplay's declaration above) CHUNKED,
+  // exactly mirroring onRebuild's own generator-driven pattern below —
+  // requestAnimationFrame between chunks so the tab stays responsive and the
+  // player sees live "Loading city — N/M actions" progress via the SAME
+  // RebuildPrompt overlay `applyLoadedSave` already uses for a plain Load
+  // (busyLabel keys off `rebuildDecision.kind === 'load'`, see the provider
+  // value's JSX below). Runs exactly once per pendingTailReplay instance
+  // (the effect clears it on completion/failure, so it can never re-fire for
+  // the same tail) — mount-time only, never re-triggered by ordinary play.
+  //
+  // F4 FIX (independent round REJECT, 2026-09-03): the original version of
+  // this effect abandoned its generator on cleanup with a bare
+  // `cancelled = true` — no `gen.return()`, no generation guard, no
+  // rebuildInProgress reset. The attacker's A3 pinned the BUG-460-class
+  // consequence directly (an abandoned generator that skips its own
+  // try/finally can leave module-scoped replay state stuck, and — even
+  // without that specific leak after F1's setReplayMode removal — a
+  // never-closed generator is a lifecycle bug on general principle, exactly
+  // as BUG-460 FIX A already established for onRebuild's own chain below).
+  // This now shares onRebuild's `rebuildGenRef` counter (mutual exclusion:
+  // the two chunked chains — tail-replay and genesis-rebuild — never race
+  // state ownership) and calls `gen.return()` on every exit path.
+  useEffect(() => {
+    if (!pendingTailReplay) return;
+    let cancelled = false;
+    rebuildGenRef.current += 1;
+    const myGen = rebuildGenRef.current;
+    const running = currentBuildVersion();
+    setRebuildDecision({ savedVersion: running, currentVersion: running, camera: pendingTailReplay.camera, kind: 'load' });
+    setRebuildPhase('running');
+    setRebuildProgress(null);
+    setRebuildInProgress(true);
+
+    const gen = replayTailChunked(stateRefForDispatch.current, pendingTailReplay.tail);
+
+    const closeGen = () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the
+        // return value is discarded; only the generator-close side effect matters.
+        gen.return(undefined as any);
+      } catch {
+        // Closing an already-finished/closed generator is a no-op; ignore.
+      }
+    };
+
+    // F2 FIX: on SUCCESS (no msg), if the tail's ORIGINAL savepoint was
+    // itself cross-build, hand off to the Rebuild-from-genesis prompt now
+    // that the old-engine state has landed — never silently drop the
+    // player's pending rebuild decision just because a large tail also
+    // needed chunking.
+    const finish = (msg?: string) => {
+      setRebuildInProgress(false);
+      setRebuildProgress(null);
+      setPendingTailReplay(null);
+      if (msg) {
+        recordError(msg, { type: 'app', action: 'load' });
+        showCaptureError(msg, 'load');
+        setRebuildDecision(null);
+        setRebuildPhase('prompt');
+        return;
+      }
+      if (pendingTailReplay.crossBuildAfter) {
+        setRebuildDecision({
+          savedVersion: pendingTailReplay.crossBuildAfter.savedVersion,
+          currentVersion: pendingTailReplay.crossBuildAfter.currentVersion,
+          camera: pendingTailReplay.camera,
+          kind: 'rebuild',
+        });
+        setRebuildPhase('prompt');
+        return;
+      }
+      setRebuildDecision(null);
+      setRebuildPhase('prompt');
+    };
+
+    const processChunk = () => {
+      // F4: generation guard (mirrors onRebuild's BAR-3 guard exactly) — a
+      // newer chain (this effect re-firing on a fresh pendingTailReplay, or
+      // onRebuild starting a genesis rebuild) has superseded this one. Abort
+      // with no setState/persist and close the generator so it can't leak.
+      if (isStaleRebuildChain(myGen, rebuildGenRef.current)) {
+        closeGen();
+        return;
+      }
+      if (cancelled) return;
+      let chunk: ReturnType<typeof gen.next>;
+      try {
+        chunk = gen.next();
+      } catch (e) {
+        // Strict, non-defensive (replayTailChunked's contract): a throw here
+        // means real corruption in the tail, not an expected rules
+        // divergence — abort exactly like restoreFromSavepoint's own
+        // catch-all, leaving the ALREADY-MOUNTED pre-tail state intact (never
+        // a blank app) and surfacing the failure like any other load error.
+        const detail = e instanceof Error ? e.message : String(e);
+        finish(`Load aborted — could not replay recent actions: ${detail}. Your city is still usable from an earlier point.`);
+        return;
+      }
+      if (chunk.done) {
+        const result = chunk.value as { state: SimState; replayed: number };
+        let finalState = { ...result.state, nextId: nextSafeBuildingId(result.state.buildings) };
+        finalState = sanitizeTreasury(finalState);
+        const afterReport = checkConsistencyRecoveringStaleFlows(finalState);
+        if (afterReport.failures > 0) {
+          finish(
+            `Load aborted — replayed city failed consistency (${afterReport.failures} failures). Your city is still usable from an earlier point.`,
+          );
+          return;
+        }
+        invalidateInFlightWorkerTick();
+        dispatch({ type: 'hydrate', state: finalState });
+        // Self-healing (BUG-617): persist a FRESH savepoint with an EMPTY
+        // tail now that the replay succeeded — the NEXT boot then has
+        // nothing large left to replay, rescuing this city permanently
+        // after this one chunked load.
+        //
+        // F3 FIX (GR#1, independent round REJECT): `persistSavepoint` NEVER
+        // throws on quota — it returns `false`. The original version of this
+        // code only had a `try/catch` around the call, so a quota failure (or
+        // any other non-throwing rejection — e.g. BUG-469's stale-overwrite
+        // protection) was swallowed with zero signal: the self-heal silently
+        // did not happen, and the player would hit this exact same large-tail
+        // wedge again next boot with no idea why. Check the boolean and
+        // surface it through the SAME visible path `saveGame()`/the autosave
+        // timer already use for a quota failure (`recordError` + the
+        // `autoSaveError` "⚠ save" indicator) — never silent.
+        try {
+          const healed = createSavepoint(finalState, [], new Date(), running, pendingTailReplay.camera);
+          const healedOk = persistSavepoint(window.localStorage, healed);
+          if (!healedOk) {
+            recordError(
+              'Self-heal save failed after a large-tail load (storage quota). The replayed city is active now, but the large tail may reappear on the next load — clear journal in Config, then Save.',
+              { type: 'app', action: 'load' },
+            );
+            setAutoSaveError(true);
+          } else {
+            setAutoSaveError(false);
+          }
+        } catch (e) {
+          // Genuine throw (corrupt storage, serialization failure) — still
+          // best-effort for the LOAD itself (the player's city is already
+          // safely in memory), but must not be silent either.
+          const msg = e instanceof Error ? e.message : String(e);
+          recordError(`Self-heal save failed after a large-tail load: ${msg}. The replayed city is active now.`, {
+            type: 'app',
+            action: 'load',
+          });
+          setAutoSaveError(true);
+        }
+        finish();
+        return;
+      }
+      setRebuildProgress(chunk.value as ReplayProgress);
+      requestAnimationFrame(processChunk);
+    };
+
+    processChunk();
+    return () => {
+      cancelled = true;
+      closeGen();
+      // F4: only clear the shared busy flag / bump the generation if this
+      // chain still owns it — if something newer (onRebuild, or a fresh
+      // pendingTailReplay) already superseded it, that chain owns cleanup.
+      if (rebuildGenRef.current === myGen) {
+        setRebuildInProgress(false);
+        rebuildGenRef.current += 1;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally
+    // keyed ONLY on pendingTailReplay: dispatch/stateRefForDispatch/etc. are
+    // stable across renders, and re-running this on every render would
+    // restart the chunked replay from scratch.
+  }, [pendingTailReplay]);
 
   // Autosave timer: every AUTOSAVE_INTERVAL_MS, persist a savepoint.
   // FEAT-1972079854: rolling autosave with fail-safe error handling.

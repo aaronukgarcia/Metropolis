@@ -118,6 +118,17 @@ const DEFAULT_TIMEOUT_SEC = process.env.SCOPED_TIMEOUT_MS
 // file basename -> cap in seconds. See SLOW_TEST_CAPS_SEC note above.
 const SLOW_TEST_CAPS_SEC = new Map([
   ['chunked-replay.test.mjs', 600],
+  // BUG-617 r2 stability finding (2026-09-03): these three tsx tests each
+  // drive a real requestAnimationFrame-chained chunked replay (2,400 actions
+  // in some cases) inside jsdom/React, and widened their own internal
+  // waitFor bounds to 90s/60s (from 20-30s/10s) after measuring occasional
+  // timeouts when this file runs alongside its bug617/attack siblings in one
+  // contended node:test process (multiple heavy chunked-replay tests starve
+  // each other's rAF cadence). 300s covers the widest internal wait plus
+  // this file's other tests, with margin.
+  ['bug617-boot-wiring.test.tsx', 300],
+  ['attack-bug617-crossbuild.test.tsx', 300],
+  ['attack-bug617-lifecycle.test.tsx', 300],
 ]);
 
 // The exact webconsole test set CI's node-test coverage depends on, kept in

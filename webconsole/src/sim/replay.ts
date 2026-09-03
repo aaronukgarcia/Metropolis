@@ -15,6 +15,7 @@ import type { MapViewState } from './uistate.ts';
 import { reducer, initialState as getInitialState, nextSafeBuildingId, computeFlows } from './engine.ts';
 import { runConsistencyChecks } from './consistency.ts';
 import type { ConsistencyReport, RecomputedFlowsOverride } from './consistency.ts';
+import type { ReplayProgress } from './genesisReplay.ts';
 import { SPECS } from './data.ts';
 import { emptyJournal } from './journal.ts';
 import { safeSetItem } from './safeStorage.ts';
@@ -363,12 +364,187 @@ function recomputeFlowsOverride(state: SimState): RecomputedFlowsOverride {
  * lastFlows accounts for) still fails on the retry exactly as it did before
  * this fix, because conservation is never handed the override.
  */
-function checkConsistencyRecoveringStaleFlows(state: SimState): ConsistencyReport {
+export function checkConsistencyRecoveringStaleFlows(state: SimState): ConsistencyReport {
   const report = runConsistencyChecks(state);
   if (report.failures === 0) return report;
   const override = recomputeFlowsOverride(state);
   const retryReport = runConsistencyChecks(state, override);
   return retryReport.failures === 0 ? retryReport : report;
+}
+
+/**
+ * BUG-617 (P1, 2026-09-03, Aaron's live city hard-wedged 20+ minutes on load):
+ * the ORIGINAL root cause was a fixed-size chunk on the cross-build GENESIS
+ * replay path (fixed — see genesisReplay.ts's CHUNK_TIME_BUDGET_MS). The
+ * REAL-WORLD shape then turned out worse: an 8MB debugQueue blew the
+ * localStorage quota (a BUG-607-class silent autosave failure), so
+ * `persistSavepoint` kept REJECTING every autosave for hours — `lastSaveIndex`
+ * (store.tsx) only advances on a SUCCESSFUL persist, so the on-disk
+ * savepoint's `snapshot` stayed a STALE, SMALL city while its `journalTail`
+ * (computed fresh every failed attempt against that same stuck
+ * `lastSaveIndex`) grew to thousands of actions — hundreds of KB of `place`/
+ * `tick` entries needed to grow that small snapshot back up to the real
+ * 13,000-building city. `restoreFromSavepoint`'s tail-replay loop below has
+ * NO chunking at all (unlike the genesis path) and runs SYNCHRONOUSLY inside
+ * store.tsx's `useState` lazy boot initializer — every one of those thousands
+ * of `reducer()` calls, each paying real per-building work (flows/monitors/
+ * road-connectivity) at whatever building count the tail has grown the city
+ * to by that point, blocks the very first render.
+ *
+ * FIX: `restoreFromSavepoint` ITSELF is UNCHANGED (every existing caller/test
+ * keeps its exact synchronous, all-tail-replayed contract — small tails are
+ * still the overwhelming common case and stay exactly as fast as before).
+ * For the LARGE-tail case, store.tsx instead: (1) calls
+ * `prepareRestoreForChunkedTail` to get the pre-tail snapshot state
+ * SYNCHRONOUSLY (fast — no tail loop) as the initial boot state, so the app
+ * mounts immediately; (2) drives `replayTailChunked` from a `useEffect`
+ * (mirroring the existing onRebuild chunked-generator pattern exactly,
+ * including its progress/ETA/watchdog/generation-guard machinery and the
+ * SAME RebuildPrompt overlay, `kind: 'load'`) to replay the tail with the
+ * main thread yielding between chunks; (3) once complete, applies the result
+ * via `hydrate` and IMMEDIATELY persists a FRESH savepoint with an EMPTY tail
+ * (self-healing — the NEXT boot then has nothing large to replay, rescuing
+ * the city permanently after one successful chunked load).
+ *
+ * `LARGE_TAIL_REPLAY_THRESHOLD` actions is the cut line between "replay
+ * inline, synchronously, exactly as always" and "replay chunked, behind a
+ * progress overlay" — chosen well above any tail a HEALTHY autosave cadence
+ * (AUTOSAVE_INTERVAL_MS = 30s) would ever accumulate, so normal play is
+ * COMPLETELY unaffected; it only engages for the pathological
+ * silent-autosave-failure shape this bug documents.
+ */
+export const LARGE_TAIL_REPLAY_THRESHOLD = 150;
+
+/**
+ * Prepare a savepoint restore up to (but NOT including) the tail replay:
+ * reads the most recent savepoint, strips any smuggled placeholder building,
+ * fixes `nextId`, and runs the BEFORE-replay consistency gate — everything
+ * `restoreFromSavepoint` does before its tail loop. Returns the tail
+ * UN-REPLAYED so a large one can be replayed CHUNKED by the caller (BUG-617)
+ * instead of blocking the synchronous boot path. Fail-safe: any error
+ * degrades to `{ success: false }`, exactly like `restoreFromSavepoint`.
+ */
+export function prepareRestoreForChunkedTail(storage: StorageLike): {
+  success: boolean;
+  state?: SimState;
+  tail?: JournalEntry[];
+  buildVersion?: string;
+  camera?: MapViewState | null;
+  reason?: string;
+} {
+  try {
+    const savepoints = readAllSavepoints(storage);
+    if (savepoints.length === 0) {
+      return { success: false, reason: 'No savepoint found' };
+    }
+    const most = mostRecentSavepoint(savepoints);
+    if (!most) {
+      return { success: false, reason: 'No valid savepoint found' };
+    }
+
+    let state = most.snapshot;
+    {
+      const clean = state.buildings.filter((b) => SPECS[b.spec]?.placeholder !== true);
+      if (clean.length !== state.buildings.length) {
+        state = { ...state, buildings: clean };
+      }
+    }
+    state = { ...state, nextId: nextSafeBuildingId(state.buildings) };
+
+    const beforeReport = checkConsistencyRecoveringStaleFlows(state);
+    if (beforeReport.failures > 0) {
+      return {
+        success: false,
+        reason: `Snapshot failed consistency (${beforeReport.failures} failures)`,
+      };
+    }
+
+    return {
+      success: true,
+      state,
+      tail: most.journalTail,
+      buildVersion: most.buildVersion,
+      camera: most.camera ?? null,
+    };
+  } catch (e) {
+    return { success: false, reason: `Restore error: ${String(e)}` };
+  }
+}
+
+/**
+ * BUG-617: chunk boundary tuning for `replayTailChunked` — identical
+ * reasoning to genesisReplay.ts's ACTIONS_PER_CHUNK/CHUNK_TIME_BUDGET_MS
+ * (a fixed action-count alone under-chunks an expensive tail at high
+ * building count; a chunk ends at whichever of the two bounds comes first).
+ * Kept as a SEPARATE constant from genesisReplay.ts's (rather than shared)
+ * because the two replay paths are independent BUG-617 fixes for two
+ * different real-world shapes — tuning one must not silently retune the other.
+ */
+const TAIL_ACTIONS_PER_CHUNK = 50;
+const TAIL_CHUNK_TIME_BUDGET_MS = 40;
+
+/**
+ * Chunked, STRICT (non-defensive) replay of a savepoint's journal tail onto
+ * an already-prepared snapshot state. Unlike genesisReplay's chunked
+ * replayer, an action that THROWS is NOT skipped-and-logged — it propagates
+ * out of the generator, exactly matching `restoreFromSavepoint`'s existing
+ * fail-fast contract (a tail is same-build history, not a cross-build
+ * rules-change replay, so an action failing here is real corruption, not an
+ * expected rules divergence). Callers should wrap `gen.next()` calls in
+ * try/catch and treat a thrown error as a restore failure.
+ *
+ * Purity note (mirrors genesisReplay.ts's CHUNK_TIME_BUDGET_MS comment):
+ * performance.now() decides ONLY the chunk boundary, never which actions are
+ * applied or in what order — the resulting STATE is chunking-invariant.
+ *
+ * F1 FIX (independent round REJECT, 2026-09-03): an earlier version of this
+ * function wrapped the loop in `setReplayMode(true)` and did a single
+ * roadConnectivity recompute at the end (mirroring genesisReplay.ts's chunked
+ * genesis replay), on the premise that "nothing reads `state.roadConnectivity`
+ * BETWEEN actions during a replay". That premise is FALSE for a savepoint
+ * TAIL: BUG-606 added the `resolveDemand`/`resolveDemandAll` reducer cases,
+ * which derive their build plan from `demandFixPlan(state)` ->
+ * `serviceCoverageOf(state)` -> `isOnline(state, b)`, which reads
+ * `state.roadConnectivity` DIRECTLY, INSIDE the reducer, between actions. The
+ * independent round's A2 attack proved the divergence directly: a
+ * `[place road][resolveDemand gp]` tail — the ordinary "finish the road, then
+ * click Fix" player sequence — makes the CHUNKED replay see a STALE
+ * (pre-road) connectivity graph and build an extra clinic the SYNCHRONOUS
+ * `restoreFromSavepoint` loop never would. `setReplayMode` was DROPPED
+ * entirely rather than patched at the resolveDemand call sites (which would
+ * touch engine.ts) — measured cost of a plain per-action recompute at
+ * 13,000-building scale is only ~2-6ms/action on top of the already-dominant
+ * monthly-boundary sweep cost (see scale-gate.test.mjs's LOAD_CHUNK_BOUND_MS
+ * derivation), i.e. affordable, and this now runs the IDENTICAL reducer path
+ * `restoreFromSavepoint`'s own unchunked loop runs — byte-identity is
+ * TAUTOLOGICAL (same function, same inputs, same order), not an argued
+ * property. (genesisReplay.ts's chunked GENESIS replay has the SAME stale
+ * premise, pre-existing and outside this fix's diff — flagged as a separate
+ * follow-up finding, not fixed here.)
+ */
+export function* replayTailChunked(
+  initialTailState: SimState,
+  tail: JournalEntry[]
+): Generator<ReplayProgress, { state: SimState; replayed: number }, void> {
+  let state = initialTailState;
+  const total = tail.length;
+  let i = 0;
+  while (i < total) {
+    const chunkClockStart = performance.now();
+    let processedInChunk = 0;
+    while (i < total && processedInChunk < TAIL_ACTIONS_PER_CHUNK) {
+      state = reducer(state, tail[i].action);
+      i++;
+      processedInChunk++;
+      if (performance.now() - chunkClockStart >= TAIL_CHUNK_TIME_BUDGET_MS) break;
+    }
+    yield {
+      actionsDone: i,
+      actionsTotal: total,
+      phaseLabel: `Replaying your recent actions... ${i.toLocaleString()}/${total.toLocaleString()} actions`,
+    };
+  }
+  return { state, replayed: total };
 }
 
 /**

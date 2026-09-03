@@ -324,10 +324,51 @@ export interface ReplayProgress {
 }
 
 /**
- * Actions per chunk: a UI frame typically runs ~60fps = ~16ms. We process this
- * many actions per frame before yielding to allow renders. Tunable per performance.
+ * Actions per chunk (UPPER BOUND): a UI frame typically runs ~60fps = ~16ms.
+ * This is a CEILING on how many actions one chunk may contain — the actual
+ * chunk boundary is whichever of this count or CHUNK_TIME_BUDGET_MS (below)
+ * is reached FIRST. Tunable per performance.
  */
 const ACTIONS_PER_CHUNK = 50;
+
+/**
+ * BUG-617 (P1, 2026-09-03, Aaron's live 1.4M-pop/~13,000-building city):
+ * ACTIONS_PER_CHUNK alone assumed every action costs roughly the same — true
+ * for a small/starter city, catastrophically false at scale. The reducer's
+ * per-action cost (dominated by 'tick', which walks every building doing
+ * flows/monitors/growth/road-connectivity work) is O(buildings): measured
+ * ~0.7ms per 1,000 buildings on this machine, i.e. ~9ms/tick at 13,000
+ * buildings and ~17ms/tick at 26,000 — LINEAR in building count, not
+ * quadratic, but a fixed ACTIONS_PER_CHUNK=50 batches 50 of those together
+ * regardless, so a chunk anywhere in a mature 13k-building city's tail costs
+ * ~450-600ms of uninterrupted main-thread time — 10-30x the ~16-50ms a
+ * chunk is supposed to cost, and the exact mechanism behind "the tab freezes
+ * for minutes" during a hard-reset-replay / cross-build rebuild (the
+ * documented dogfood hot-upgrade workflow — a hot-upgraded badge keeps the
+ * OLD engine running until a hard reset + genesis replay picks up new
+ * logic), which walks the WHOLE journal (placements interleaved with many
+ * thousands of ticks) from an empty city up to full scale, so the LATTER
+ * portion of any real replay is exactly this worst case.
+ *
+ * FIX: chunk by a TIME BUDGET as well as the existing action-count ceiling —
+ * whichever bound is hit FIRST ends the chunk. A chunk of cheap actions (a
+ * small/starter city, or a burst of 'place' calls) still batches up to
+ * ACTIONS_PER_CHUNK exactly as before (preserves the existing multi-boundary
+ * coverage test at 600 cheap actions / 50-per-chunk = 12 chunks); a chunk of
+ * expensive actions (ticks at high building count) now yields far short of
+ * 50, bounding wall-clock chunk cost regardless of city size. The time check
+ * runs AFTER each individual action (not pre-estimated), so worst-case
+ * overshoot is the cost of exactly one action — at 26,000 buildings that is
+ * ~17ms, comfortably under the <100ms scale-test bound.
+ *
+ * PURITY NOTE (GR#21): performance.now() here decides ONLY the chunk
+ * boundary (how many actions this yield contains) — it never influences
+ * which actions are applied or in what order, so the REPLAYED STATE stays
+ * fully deterministic and chunking-invariant, exactly as before (proven by
+ * test/chunked-replay.test.mjs's byte-identity assertions and the new
+ * test/bug617-chunked-replay-scale.test.mjs timing-vs-correctness split).
+ */
+const CHUNK_TIME_BUDGET_MS = 40;
 
 /**
  * Chunked defensive genesis replay: yields progress after each chunk of actions
@@ -377,23 +418,37 @@ export function* replayFromGenesisDefensiveChunked(
   // from). Only meaningful when `engine` is the REAL reducer.
   setReplayMode(true);
   try {
-    // Yield progress after each chunk of ACTIONS_PER_CHUNK actions.
-    for (let i = 0; i < total; i += ACTIONS_PER_CHUNK) {
-      const chunkEnd = Math.min(i + ACTIONS_PER_CHUNK, total);
-      for (let j = i; j < chunkEnd; j++) {
-        const entry = entries[j];
+    // BUG-617: yield after ACTIONS_PER_CHUNK actions OR CHUNK_TIME_BUDGET_MS of
+    // wall-clock, whichever comes first — see the constants' header comments.
+    let i = 0;
+    while (i < total) {
+      const chunkClockStart = performance.now();
+      let processedInChunk = 0;
+      while (i < total && processedInChunk < ACTIONS_PER_CHUNK) {
+        const entry = entries[i];
         try {
           state = engine.reduce(state, entry.action);
         } catch (e) {
           // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
           skipped.push({
-            index: j,
+            index: i,
             tick: entry.tick,
             type: (entry.action as { type?: string }).type ?? 'unknown',
             error: errMsg(e),
           });
         }
+        i++;
+        processedInChunk++;
+        // BUG-617: time-budget early exit — checked AFTER every single action so
+        // an expensive action (a 'tick' at high building count) can never be
+        // followed by another before this chunk yields. Never breaks with zero
+        // actions processed (processedInChunk >= 1 is guaranteed by the outer
+        // while condition + this being checked only after the reduce above), so
+        // forward progress is always made even if one action alone exceeds the
+        // budget.
+        if (performance.now() - chunkClockStart >= CHUNK_TIME_BUDGET_MS) break;
       }
+      const chunkEnd = i;
 
       // After each chunk, derive a human-readable phase label from the action
       // type of the action we just applied (if any in this chunk).
