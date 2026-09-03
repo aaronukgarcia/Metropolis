@@ -30,10 +30,11 @@
 // browser this project targets) rather than importing 'node:perf_hooks' —
 // this file is also meant to run unmodified in a real browser via
 // runInBrowserConsoleSnippet(), where a Node-specific import would fail.
-import { SPECS, isOnline, blockOccupancy, utilisationOf, densityTier, isRoadSpec } from '../sim/data.ts';
-import type { SimState } from '../sim/types.ts';
+import { SPECS, buildingDisplayStates, footprintOf, isRoadSpec } from '../sim/data.ts';
+import type { Building, SimState } from '../sim/types.ts';
 import { buildInstances, rebuildDynamicOnly, buildingInstanceFilter, roadInstanceFilter } from './instanceBuilder.ts';
 import { MapRenderer } from './mapRenderer.ts';
+import { viewportTileRect, visibleBuildingsOf, type TileRect } from './viewportCull.ts';
 
 export interface PerfSample {
   label: string;
@@ -93,51 +94,95 @@ export function makeCountingCtx2D(): CountingCtx2D {
 }
 
 /**
- * Replays the JS-side shape of MapView.tsx's CURRENT per-frame work at the
- * given state: the main building loop's per-building derivations
- * (isOnline/blockOccupancy/utilisationOf/densityTier — the same calls
- * MapView.tsx makes, §1.1) plus 3-4 fillRect/strokeRect calls per building,
- * plus the disconnected-road-flash full scan (§1.1's second full pass).
- * This is the JS cost that runs regardless of whether Canvas2D's own
- * rasteriser is GPU- or software-backed — it is main-thread work no browser
- * can parallelise away, and it is what Phase 1 aims to shrink to "1 draw call
- * + a camera-uniform update".
+ * Replays the JS-side shape of MapView.tsx's per-frame draw effect at the
+ * given state, over a given pre-filtered `buildings` list: the main building
+ * loop's per-building work (a `buildingDisplayStates` Map.get() plus the
+ * fillRect/strokeRect calls — mirrors MapView.tsx's draw effect main loop),
+ * the disconnected-road-flash full pass, and the station-connectivity-dot
+ * pass. This is the JS cost that runs regardless of whether Canvas2D's own
+ * rasteriser is GPU- or software-backed — main-thread work no browser can
+ * parallelise away.
+ *
+ * `buildings` is a parameter (not always `state.buildings`) so this same
+ * shape can be timed BOTH against the full city (the BUG-659 "before" cost)
+ * and against a viewport-culled subset (the "after" cost) — see
+ * measureCurrentDrawLoopJsCost / measureCulledDrawLoopJsCost below.
+ */
+function replayDrawLoopShape(state: SimState, buildings: readonly Building[], ctx: CountingCtx2D): void {
+  // Main building loop — mirrors MapView.tsx's draw effect main loop. Reads
+  // the memoised BuildingDisplayState map exactly as MapView.tsx does (a
+  // Map.get() per building, not a fresh isOnline/blockOccupancy/
+  // utilisationOf/densityTier call — those were memoised into this map by
+  // BUG-630; re-deriving them here would measure a cost MapView.tsx no
+  // longer pays).
+  const displayStates = buildingDisplayStates(state);
+  for (const b of buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    const ds = displayStates.get(b.id);
+    const online = ds ? ds.online : false;
+    footprintOf(b, sp);
+    ctx.fillRect();
+    if (ds && ds.occupancy != null) ctx.fillRect();
+    if (sp.kind !== 'residential' && online && ds && ds.utilisation !== null) ctx.fillRect();
+    if (!online) {
+      ctx.beginPath();
+      ctx.stroke();
+    }
+    if (sp.w > 1 || sp.h > 1) ctx.strokeRect();
+    if (sp.category === 'zones') ctx.strokeRect();
+  }
+  // Disconnected-road-flash pass — mirrors MapView.tsx's flash pass.
+  const connected = new Set(state.roadConnectivity?.connectedRoadTiles ?? []);
+  for (const b of buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp || !isRoadSpec(sp)) continue;
+    if (connected.has(`${b.x},${b.y}`)) continue;
+    ctx.fillRect();
+  }
+  // Station-connectivity-dot pass — mirrors MapView.tsx's station loop.
+  for (const b of buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp || sp.kind !== 'station') continue;
+    ctx.beginPath();
+    ctx.fillRect();
+    ctx.stroke();
+  }
+}
+
+/**
+ * BUG-659 "before": the draw loop's JS cost over the FULL, UNCULLED city —
+ * what every repaint paid regardless of camera position prior to the
+ * viewport-culling fix.
  */
 export function measureCurrentDrawLoopJsCost(state: SimState, iterations = 10): PerfSample {
   const ctx = makeCountingCtx2D();
-  return timeIt('current-canvas2d-draw-loop (JS-side cost)', iterations, () => {
-    // Main building loop — mirrors MapView.tsx:291-389.
-    for (const b of state.buildings) {
-      const sp = SPECS[b.spec];
-      if (!sp) continue;
-      const online = isOnline(state, b);
-      const occ = online ? blockOccupancy(state, b) : null;
-      ctx.fillRect();
-      if (occ != null) ctx.fillRect();
-      if (sp.kind !== 'residential' && online) {
-        const util = utilisationOf(state, b);
-        if (util !== null) ctx.fillRect();
-      }
-      if (!online) {
-        ctx.beginPath();
-        ctx.stroke();
-      }
-      if (sp.w > 1 || sp.h > 1) ctx.strokeRect();
-      if (sp.category === 'zones') {
-        densityTier(sp);
-        ctx.strokeRect();
-      }
-    }
-    // Disconnected-road-flash full scan — mirrors MapView.tsx:402-413.
-    const connected = new Set(state.roadConnectivity?.connectedRoadTiles ?? []);
-    for (const b of state.buildings) {
-      const sp = SPECS[b.spec];
-      if (!sp || !isRoadSpec(sp)) continue;
-      if (connected.has(`${b.x},${b.y}`)) continue;
-      ctx.fillRect();
-    }
-  });
+  return timeIt('current-canvas2d-draw-loop, uncalled (JS-side cost)', iterations, () =>
+    replayDrawLoopShape(state, state.buildings, ctx)
+  );
 }
+
+/**
+ * BUG-659 "after": the SAME draw loop shape, but over the viewport-culled
+ * building set (viewportCull.ts) a real MapView.tsx repaint now uses. `rect`
+ * defaults to a representative "zoomed in on a corner" viewport so the
+ * measured win is not an artefact of picking a full-map rect that culls to
+ * everything.
+ */
+export function measureCulledDrawLoopJsCost(
+  state: SimState,
+  rect: TileRect,
+  iterations = 10
+): PerfSample & { visibleCount: number } {
+  const ctx = makeCountingCtx2D();
+  const visible = visibleBuildingsOf(state.buildings as Building[], rect);
+  const sample = timeIt('current-canvas2d-draw-loop, viewport-culled (JS-side cost)', iterations, () =>
+    replayDrawLoopShape(state, visible, ctx)
+  );
+  return { ...sample, visibleCount: visible.length };
+}
+
+export { viewportTileRect };
 
 /**
  * Measures the FULL REBUILD path's JS cost (buildInstances for both batches

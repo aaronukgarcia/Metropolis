@@ -31,6 +31,7 @@ import {
   footprintOf,
 } from '../sim/data';
 import { computePath, type Tile } from '../sim/roadTracker';
+import { viewportTileRect, visibleBuildingsOf } from '../render/viewportCull';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim } from '../sim/simContext';
 import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets, TICKS_PER_YEAR } from '../sim/engine';
@@ -329,8 +330,26 @@ export function MapView() {
     }
     ctx.textAlign = 'start';
 
+    // BUG-659 (P0, 2026-09-04): Aaron's 49,174-building dogfood city stalled
+    // the map 6.1s per repaint even though the sim itself (engine tick +
+    // every derivation) sums to well under 700ms — the render path was doing
+    // THREE full unconditional O(buildings) passes every frame (this main
+    // loop, the disconnected-road-flash pass below, and the station-dot
+    // pass) regardless of camera position. `visibleBuildings` is the exact
+    // set of buildings whose real footprint (footprintOf — a grown building
+    // can occupy more tiles than its spec's base w/h) intersects the current
+    // viewport, computed via a cached spatial grid (viewportCull.ts) rather
+    // than a linear scan+filter, so panning/zooming a redraw with the SAME
+    // `state.buildings` reference reuses the grid instead of rebucketing.
+    // See viewportCull.ts's header for the full correctness contract (never
+    // a superset that drops the culling's perf value, never — and this is
+    // the non-negotiable part — a subset that clips something that should
+    // be on screen) and test/attack-bug659-viewport-cull.test.mjs for the
+    // proof.
+    const viewportRect = viewportTileRect(geom, size);
+    const visibleBuildings = visibleBuildingsOf(state.buildings, viewportRect);
     const displayStates = buildingDisplayStates(state);
-    for (const b of state.buildings) {
+    for (const b of visibleBuildings) {
       const sp = SPECS[b.spec];
       if (!sp) continue;
       const ds = displayStates.get(b.id);
@@ -451,7 +470,9 @@ export function MapView() {
       const FLASH_COLOR = '#ffd166'; // PLACEHOLDER (DD2)
       // Deterministic pulse from the sim tick (per AC-6 placeholder formula).
       const alpha = 0.5 + 0.3 * Math.sin(((state.tick * SPEED_MS[state.speed]) / 500) * Math.PI * 2);
-      for (const b of state.buildings) {
+      // BUG-659: an off-screen disconnected road still flashes, just not on
+      // screen — visibleBuildings is the correct set to scan here too.
+      for (const b of visibleBuildings) {
         const sp = SPECS[b.spec];
         if (!sp || !isRoadSpec(sp)) continue;
         if (connected.has(`${b.x},${b.y}`)) continue; // connected road — no flash.
@@ -504,10 +525,11 @@ export function MapView() {
       // classification (overlaySubsetsOf) instead of a fresh full-buildings
       // scan every redraw.
       const { pylonIds, pylons } = overlaySubsetsOf(state.buildings);
-      // Dim pass: all non-power infrastructure at 0.4× alpha. Still O(all
-      // buildings) by necessity (it dims everything that ISN'T a pylon), but
-      // no longer pays a SEPARATE full scan just to build pylonIds first.
-      for (const b of state.buildings) {
+      // Dim pass: all non-power infrastructure at 0.4× alpha, restricted to
+      // the visible set (BUG-659) — no longer pays a SEPARATE full-city scan
+      // just to build pylonIds first, AND no longer dims off-screen buildings
+      // nobody will see.
+      for (const b of visibleBuildings) {
         const sp = SPECS[b.spec];
         if (!sp || pylonIds.has(b.id)) continue;
         const px = geom.ox + b.x * geom.s;
@@ -571,9 +593,9 @@ export function MapView() {
       ctx.globalAlpha = 1;
     }
 
-    // station connectivity dots
+    // station connectivity dots (BUG-659: off-screen stations don't need a dot).
     const links = stationLinks(state);
-    for (const b of state.buildings) {
+    for (const b of visibleBuildings) {
       const sp = SPECS[b.spec];
       if (!sp || sp.kind !== 'station') continue;
       const px = geom.ox + (b.x + sp.w / 2) * geom.s;
