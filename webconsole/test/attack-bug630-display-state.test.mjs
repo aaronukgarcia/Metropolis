@@ -189,8 +189,13 @@ test('BUG-630 perf: buildingDisplayStates at the 13k scale fixture — measured 
   // (memo-hit) redraw cost. Bounded at 4x a locally-observed order of
   // magnitude margin for CI-hardware variance (mirrors scale-gate.test.mjs's
   // own bound-derivation convention).
-  const COLD_PASS_BOUND_MS = 120;
-  const WARM_PASS_BOUND_MS = 60;
+  // RE-DERIVED against real CI (run 33746807961, 2026-09-03): CI measured the
+  // cold pass at 220.73ms (direct sweep 198.47ms on the same run) vs ~67ms
+  // locally — the same ~3x-slower-runner class the scale gate hit. Bounds are
+  // now ~4x the CI-MEASURED figures: smoke gates for the order-of-magnitude
+  // O(n^2) class (the pre-fix figure was ~14,000ms), never micro-benchmarks.
+  const COLD_PASS_BOUND_MS = 900;
+  const WARM_PASS_BOUND_MS = 200;
 
   assert.ok(
     afterColdMs < COLD_PASS_BOUND_MS,
