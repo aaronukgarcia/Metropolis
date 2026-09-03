@@ -51,7 +51,14 @@ import { fmtMoney, fmtNum, formatPower } from '../sim/utils';
 import { buildingProfile, specClassLabel, buildingCopyPayload, type ProfileLine } from '../sim/profile';
 import { useBlockingOverlay, useEscapeKey } from './overlayManager';
 import { BLOCKING_OVERLAY_ID, BLOCKING_OVERLAY_RANK } from './overlayLayers';
-import { formatBuildingCount, DEMAND_FIX_SERVICE_LABELS, worstDemandFix, demandFixMessage } from './demandFixUi';
+import {
+  formatBuildingCount,
+  DEMAND_FIX_SERVICE_LABELS,
+  worstDemandFix,
+  demandFixMessage,
+  zoneDemandFix,
+  zoneDemandMessage,
+} from './demandFixUi';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 48;
@@ -880,6 +887,26 @@ export function MapView() {
 
     if (income - expense < 0 && s.funds < 12000)
       return { text: 'The treasury is bleeding — raise tax rates (right dock) or take the municipal loan.', go: undefined };
+
+    // BUG-641 (Aaron, 2026-09-03, THIRD time on the same complaint: "'citizens
+    // want shops' no help - how much what type a clue would be nice is this one
+    // hypermarket or 50?"). BUG-606 sized the twelve COVERAGE services above but
+    // left the three ZONE demands on these unsized legacy banners, so his literal
+    // example — shops — still read "paint Commercial zones" with no quantity, no
+    // type and no cost. zoneDemandFix() sizes a zone gap the same way
+    // demandFixPlan() sizes a coverage gap (AUTO_BUILD_DEMAND_FRACTION of a
+    // PHYSICAL jobs/residents shortfall, cheapest unlocked provider, alternative
+    // named), and zoneDemandMessage() renders it in the identical BUG-606 shape
+    // from that same item — agreement-by-construction, never a re-derivation.
+    //
+    // ORDERING: coverage first (this branch is only reached when worstDemandFix
+    // returned null), deliberately NOT worstAnyDemandFix's combined ranking —
+    // that compares a -100..100 zone INDEX against a coverage gap measured in
+    // PEOPLE, so a trivial shops index can outrank a real hospital shortfall
+    // (BUG-647). Keeping the two tiers separate makes the ranking question moot
+    // here; wire the combined ranker only once BUG-647 gives it a common basis.
+    const zoneFix = zoneDemandFix(s);
+    if (zoneFix) return { text: zoneDemandMessage(zoneFix), go: undefined };
 
     const d = demandOf(s);
     if (d.residential > 40) return { text: 'High housing demand — paint more Residential zones.', go: undefined };
