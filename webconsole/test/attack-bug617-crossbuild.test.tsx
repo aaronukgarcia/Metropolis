@@ -178,17 +178,17 @@ test('ATTACK BUG-617 r2: a CROSS-BUILD savepoint with a large tail boots instant
 // unresolved prompt recurs on the next boot instead of being silently lost.
 // This test asks whether an unresolved cross-build decision survives a reload.
 //
-// VERDICT: it does NOT. Verified failing against r2 — the healed savepoint
-// carried buildVersion v0.3.0.386 (the running badge) wrapped around the
-// pre-rebuild OLD-ENGINE state, so a reload at that moment computes
-// needsRebuild=false and the prompt never returns. Filed as BUG-635 (P2, not
-// data loss: the city is intact, the window is a reload during an unresolved
-// prompt, and a rebuild can still be forced later). PARKED AS A SKIP, mirroring
-// this repo's own scale-gate HALF B pattern — the gate is written now so it is
-// ready to arm the day BUG-635's one-line remedy lands (stamp the healed
-// savepoint with crossBuildAfter.savedVersion rather than `running` while a
-// cross-build decision is pending). Un-skip to arm.
-test.skip('ATTACK BUG-617 r2 / BUG-635 (parked): does an UNRESOLVED cross-build decision survive a reload after the self-heal write?', async () => {
+// VERDICT: originally it did NOT — verified failing against r2, the healed
+// savepoint carried buildVersion v0.3.0.386 (the running badge) wrapped
+// around the pre-rebuild OLD-ENGINE state, so a reload at that moment
+// computed needsRebuild=false and the prompt never returned. Filed as
+// BUG-635 (P2, not data loss: the city is intact, the window is a reload
+// during an unresolved prompt, and a rebuild can still be forced later).
+// BUG-635's remedy landed (store.tsx's chunked-tail self-heal now stamps the
+// healed savepoint with `crossBuildAfter.savedVersion` instead of `running`
+// while the cross-build decision is pending, re-stamping to `running` only
+// on resolution via onKeep/onResume) — un-skipped as the regression gate.
+test('ATTACK BUG-617 r2 / BUG-635: does an UNRESOLVED cross-build decision survive a reload after the self-heal write?', async () => {
   const dom = installJsdom();
   try {
     const { initialState } = await import('../src/sim/engine.ts');

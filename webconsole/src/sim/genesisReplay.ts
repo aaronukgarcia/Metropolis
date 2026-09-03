@@ -18,7 +18,7 @@
 
 import type { SimState } from './types.ts';
 import type { Journal } from './journal.ts';
-import { initialState, reducer, setReplayMode } from './engine.ts';
+import { initialState, reducer } from './engine.ts';
 import { computeRoadConnectivity } from './data.ts';
 
 /**
@@ -39,19 +39,26 @@ import { computeRoadConnectivity } from './data.ts';
  */
 export function replayFromGenesis(journal: Journal): SimState {
   let state = initialState();
-  // BUG-460 FIX A: no UI reads happen between actions during a headless replay,
-  // so the reducer's per-action roadConnectivity recompute is pure allocation
-  // churn here — skip it for the duration of the loop and do ONE final recompute
-  // below so the returned state is correct for the live game to resume from.
-  // Cleared in finally even on a thrown error (setReplayMode is a shared flag —
-  // leaving it set would silently break connectivity freshness for normal play).
-  setReplayMode(true);
-  try {
-    for (const entry of journal.entries) {
-      state = reducer(state, entry.action);
-    }
-  } finally {
-    setReplayMode(false);
+  // BUG-631 FIX (mirrors replay.ts's replayTailChunked F1 fix, 2026-09-03):
+  // this loop USED to wrap itself in `setReplayMode(true)` on the premise that
+  // "no UI reads happen between actions during a headless replay" — a premise
+  // that was already false once BUG-606 landed the `resolveDemand` /
+  // `resolveDemandAll` reducer cases, which derive their build plan from
+  // `demandFixPlan(state)` -> `serviceCoverageOf(state)` -> `isOnline(state, b)`,
+  // reading `state.roadConnectivity` DIRECTLY, INSIDE the reducer, between
+  // actions. A genesis journal containing `[place road][resolveDemand]` — the
+  // ordinary "finish the road, then click Fix" player sequence — would see a
+  // STALE (pre-road) connectivity graph under the skipped-recompute regime,
+  // the identical BUG-617-round divergence class already proven and fixed on
+  // the savepoint-tail path. `setReplayMode` is dropped entirely rather than
+  // patched at the resolveDemand call sites (which would touch engine.ts):
+  // this now runs the reducer's ordinary per-action roadConnectivity
+  // recompute, so genesis replay is byte-identical to an action-by-action run
+  // by construction (same function, same inputs, same order) rather than an
+  // argued property. The trailing recompute below stays as a harmless
+  // idempotent final refresh.
+  for (const entry of journal.entries) {
+    state = reducer(state, entry.action);
   }
   return { ...state, roadConnectivity: computeRoadConnectivity(state) };
 }
@@ -262,30 +269,27 @@ export function replayFromGenesisDefensive(
     };
   }
 
-  // BUG-460 FIX A: see replayFromGenesis above — skip the wrapper's per-action
-  // roadConnectivity recompute for the duration of this headless replay loop;
-  // cleared in finally (even on a thrown error) and followed by one final
-  // recompute so the returned state is correct for the live game to resume from.
-  // Only meaningful when `engine` is the REAL reducer — a test-injected engine
-  // ignores the module-scoped flag entirely.
-  setReplayMode(true);
-  try {
-    journal.entries.forEach((entry, index) => {
-      try {
-        state = engine.reduce(state, entry.action);
-      } catch (e) {
-        // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
-        skipped.push({
-          index,
-          tick: entry.tick,
-          type: (entry.action as { type?: string }).type ?? 'unknown',
-          error: errMsg(e),
-        });
-      }
-    });
-  } finally {
-    setReplayMode(false);
-  }
+  // BUG-631 FIX: see replayFromGenesis above — `setReplayMode` is dropped
+  // here too, for the identical reason (BUG-606's resolveDemand/
+  // resolveDemandAll reducer cases read state.roadConnectivity DIRECTLY,
+  // INSIDE the reducer, between actions, so skipping the recompute can
+  // diverge a genesis replay from an action-by-action run exactly the way
+  // the BUG-617 round proved on the savepoint-tail path). Only meaningful
+  // when `engine` is the REAL reducer — a test-injected engine ignores the
+  // module-scoped flag entirely regardless.
+  journal.entries.forEach((entry, index) => {
+    try {
+      state = engine.reduce(state, entry.action);
+    } catch (e) {
+      // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
+      skipped.push({
+        index,
+        tick: entry.tick,
+        type: (entry.action as { type?: string }).type ?? 'unknown',
+        error: errMsg(e),
+      });
+    }
+  });
 
   if (engine === REAL_ENGINE) {
     state = { ...state, roadConnectivity: computeRoadConnectivity(state) };
@@ -411,75 +415,76 @@ export function* replayFromGenesisDefensiveChunked(
   const entries = journal.entries;
   const total = entries.length;
 
-  // BUG-460 FIX A: see replayFromGenesis above — skip the wrapper's per-action
-  // roadConnectivity recompute for the duration of this headless replay
-  // (cleared in finally below, even on a thrown error, and followed by one
-  // final recompute so the returned state is correct for live play to resume
-  // from). Only meaningful when `engine` is the REAL reducer.
-  setReplayMode(true);
-  try {
-    // BUG-617: yield after ACTIONS_PER_CHUNK actions OR CHUNK_TIME_BUDGET_MS of
-    // wall-clock, whichever comes first — see the constants' header comments.
-    let i = 0;
-    while (i < total) {
-      const chunkClockStart = performance.now();
-      let processedInChunk = 0;
-      while (i < total && processedInChunk < ACTIONS_PER_CHUNK) {
-        const entry = entries[i];
-        try {
-          state = engine.reduce(state, entry.action);
-        } catch (e) {
-          // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
-          skipped.push({
-            index: i,
-            tick: entry.tick,
-            type: (entry.action as { type?: string }).type ?? 'unknown',
-            error: errMsg(e),
-          });
-        }
-        i++;
-        processedInChunk++;
-        // BUG-617: time-budget early exit — checked AFTER every single action so
-        // an expensive action (a 'tick' at high building count) can never be
-        // followed by another before this chunk yields. Never breaks with zero
-        // actions processed (processedInChunk >= 1 is guaranteed by the outer
-        // while condition + this being checked only after the reduce above), so
-        // forward progress is always made even if one action alone exceeds the
-        // budget.
-        if (performance.now() - chunkClockStart >= CHUNK_TIME_BUDGET_MS) break;
+  // BUG-631 FIX: see replayFromGenesis above — `setReplayMode` is dropped
+  // here too (no more try/finally guarding it either, since there is nothing
+  // left for the generator's early-return path to clean up), for the
+  // identical reason: BUG-606's resolveDemand/resolveDemandAll reducer cases
+  // read state.roadConnectivity DIRECTLY, INSIDE the reducer, between
+  // actions, so skipping the recompute across a chunk boundary can diverge a
+  // chunked genesis replay from an action-by-action run — the same class the
+  // BUG-617 round proved on the savepoint-tail path (replay.ts's
+  // replayTailChunked F1 fix). Only meaningful when `engine` is the REAL
+  // reducer.
+  //
+  // BUG-617: yield after ACTIONS_PER_CHUNK actions OR CHUNK_TIME_BUDGET_MS of
+  // wall-clock, whichever comes first — see the constants' header comments.
+  let i = 0;
+  while (i < total) {
+    const chunkClockStart = performance.now();
+    let processedInChunk = 0;
+    while (i < total && processedInChunk < ACTIONS_PER_CHUNK) {
+      const entry = entries[i];
+      try {
+        state = engine.reduce(state, entry.action);
+      } catch (e) {
+        // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
+        skipped.push({
+          index: i,
+          tick: entry.tick,
+          type: (entry.action as { type?: string }).type ?? 'unknown',
+          error: errMsg(e),
+        });
       }
-      const chunkEnd = i;
-
-      // After each chunk, derive a human-readable phase label from the action
-      // type of the action we just applied (if any in this chunk).
-      let phaseLabel = 'Replaying actions';
-      if (chunkEnd > 0) {
-        const lastAction = entries[chunkEnd - 1].action as { type?: string };
-        const actionType = lastAction.type ?? 'unknown';
-        // Capitalize and pluralize common action types.
-        const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-        const plural = {
-          place: 'Placing buildings',
-          bulldoze: 'Bulldozing',
-          tax: 'Adjusting taxes',
-          tick: 'Advancing ticks',
-          policy: 'Adjusting policies',
-          road: 'Building roads',
-          rail: 'Building rail',
-          water: 'Building water',
-          reset: 'Resetting',
-        }[actionType] || `Replaying ${capitalize(actionType)}s`;
-        phaseLabel = `${plural}... ${chunkEnd.toLocaleString()}/${total.toLocaleString()} actions`;
-      }
-
-      yield {
-        actionsDone: chunkEnd,
-        actionsTotal: total,
-        phaseLabel,
-      };
+      i++;
+      processedInChunk++;
+      // BUG-617: time-budget early exit — checked AFTER every single action so
+      // an expensive action (a 'tick' at high building count) can never be
+      // followed by another before this chunk yields. Never breaks with zero
+      // actions processed (processedInChunk >= 1 is guaranteed by the outer
+      // while condition + this being checked only after the reduce above), so
+      // forward progress is always made even if one action alone exceeds the
+      // budget.
+      if (performance.now() - chunkClockStart >= CHUNK_TIME_BUDGET_MS) break;
     }
-  } finally {
-    setReplayMode(false);
+    const chunkEnd = i;
+
+    // After each chunk, derive a human-readable phase label from the action
+    // type of the action we just applied (if any in this chunk).
+    let phaseLabel = 'Replaying actions';
+    if (chunkEnd > 0) {
+      const lastAction = entries[chunkEnd - 1].action as { type?: string };
+      const actionType = lastAction.type ?? 'unknown';
+      // Capitalize and pluralize common action types.
+      const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+      const plural = {
+        place: 'Placing buildings',
+        bulldoze: 'Bulldozing',
+        tax: 'Adjusting taxes',
+        tick: 'Advancing ticks',
+        policy: 'Adjusting policies',
+        road: 'Building roads',
+        rail: 'Building rail',
+        water: 'Building water',
+        reset: 'Resetting',
+      }[actionType] || `Replaying ${capitalize(actionType)}s`;
+      phaseLabel = `${plural}... ${chunkEnd.toLocaleString()}/${total.toLocaleString()} actions`;
+    }
+
+    yield {
+      actionsDone: chunkEnd,
+      actionsTotal: total,
+      phaseLabel,
+    };
   }
 
   if (engine === REAL_ENGINE) {

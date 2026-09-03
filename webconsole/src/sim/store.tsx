@@ -1071,7 +1071,22 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // timer already use for a quota failure (`recordError` + the
         // `autoSaveError` "⚠ save" indicator) — never silent.
         try {
-          const healed = createSavepoint(finalState, [], new Date(), running, pendingTailReplay.camera);
+          // BUG-635: on the CROSS-BUILD path (crossBuildAfter non-null) the
+          // Rebuild-from-genesis prompt fires immediately after this write via
+          // `finish()` below but is NOT YET resolved — stamping the healed
+          // savepoint with `running` here would make a reload during that
+          // unresolved window compute needsRebuild(saved=running, running) ===
+          // false, silently dropping the prompt forever and leaving the player
+          // on the OLD-ENGINE state believing it is current (the same class
+          // BUG-468 already guards on the resolution paths, onKeep/onResume).
+          // Carry the ORIGINAL pre-rebuild version instead so an unresolved
+          // cross-build decision survives a reload exactly as it did before
+          // BUG-617 r2; onKeep/onResume re-stamp to `running` once the player
+          // actually resolves the prompt (either choice).
+          const healedVersion = pendingTailReplay.crossBuildAfter
+            ? pendingTailReplay.crossBuildAfter.savedVersion ?? running
+            : running;
+          const healed = createSavepoint(finalState, [], new Date(), healedVersion, pendingTailReplay.camera);
           const healedOk = persistSavepoint(window.localStorage, healed);
           if (!healedOk) {
             recordError(
