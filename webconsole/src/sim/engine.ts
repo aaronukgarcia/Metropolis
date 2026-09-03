@@ -61,6 +61,7 @@ import {
   MILESTONES,
   MILESTONE_REWARDS,
   sanitizeClaimedMilestones,
+  filledJobsBySector,
 } from './data.ts';
 import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -77,7 +78,7 @@ import type {
   BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -601,7 +602,24 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   let outflows: FlowItem[] = Object.entries(buckets)
     .filter(([, v]) => v > 0)
     .map(([label, value]) => ({ label, value }));
-  outflows.push({ label: 'Wages', value: wagesPerTick(s.population) });
+  // FEAT-wage-stage1 (Q100067/Q100086, 2026-09-03): the flat population-based
+  // wagesPerTick() is REPLACED here by fiscal.ts's per-sector decomposition.
+  // F1 FIX (independent round REJECT): the FIRST cut of this wiring fed
+  // sectorWagesPerTick() raw job CAPACITY (totalJobsBySector(), vacancy-
+  // inclusive) — a population-0 city with one big office tower was charged a
+  // real wage for its empty desks. The correct basis is data.ts's
+  // filledJobsBySector(), which caps capacity at the actual workforce
+  // (population * WORKING_AGE_FRACTION) before apportioning by sector — only
+  // jobs actually FILLED by a person get paid (see data.ts's own doc comment
+  // for the full workers/filled/apportionment rule). The OUTFLOW LINE LABEL
+  // and shape are kept IDENTICAL ('Wages', one aggregate value) — the doc's
+  // Stage 1 does not call for a per-sector ledger split, so consistency.ts's
+  // flows-vs-recompute checks and every existing fixture keep working
+  // against one 'Wages' number, just now sourced differently. wagesPerTick()
+  // itself is untouched (byte-identical signature/body) and stays exported
+  // from fiscal.ts for its own tests / any grandfathered caller — this WAS
+  // its only production call site, and that call site has moved.
+  outflows.push({ label: 'Wages', value: sectorWagesPerTick(filledJobsBySector(s)).totalPerTick });
   // FEAT-2326609711 inc1 (AC-2/AC-6): the Grid Import outflow, computed above
   // — pushed exactly once, here, never a second side-channel debit.
   if (gridImportOn && gridImportCost > 0) {

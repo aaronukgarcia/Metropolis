@@ -14,11 +14,13 @@ import {
   PALETTE_FLAT,
   countByKindOnline,
   isOnline,
+  totalJobsBySector,
+  filledJobsFromCapacityAndPopulation,
 } from './data.ts';
 import {
   councilTaxPerTick,
   businessTaxPerTick,
-  wagesPerTick,
+  sectorWagesPerTick,
   applyOutflowPolicies,
   UPKEEP_BUCKET,
   GRID_IMPORT_OUTFLOW_LABEL,
@@ -394,16 +396,41 @@ export function runConsistencyChecks(
   });
 
   // Recompute Wages using shared formula (fiscal.ts).
-  // BUG-419: use the START-of-tick basis (flowBasisPop) the engine charged wages on.
-  // The engine charges wages on the workforce present at tick start; new arrivals from
-  // this tick's growth aren't paid yet. Recomputing against end-of-tick s.population
-  // (which is larger after growth) is what made this check diverge (computed > actual).
+  // FEAT-wage-stage1 (Q100067/Q100086, 2026-09-03): the engine now sources the
+  // 'Wages' outflow from sectorWagesPerTick(filledJobsBySector(s)) — a
+  // BUILDINGS-AND-POPULATION-derived figure (F1 FIX: filled jobs, capped at
+  // the workforce, not raw vacancy-inclusive capacity), not the old
+  // population-only wagesPerTick().
+  //
+  // SCALE-GATE FIX (independent round, 2026-09-03 — a real BUG-419-class
+  // timing bug the 13k-building fixture's own consistency check caught):
+  // BUILDINGS don't drift within a tick (matching Business Tax's existing
+  // `c = countByKindOnline(s)` current-state recompute above), but
+  // POPULATION DOES — computeFlows() inside advance() runs against the
+  // START-of-tick population; migration/growth for THIS tick is applied
+  // LATER, so by the time this check runs, `s.population` already reads the
+  // GROWN end-of-tick figure. Recomputing the workforce cap against CURRENT
+  // s.population (as a first cut of this fix did) overestimates it and
+  // false-reds the check the same way BUG-419 originally did for the old
+  // pure-population formula. Fixed by reusing the SAME flowBasisPop
+  // (start-of-tick population, captured on lastFlows.population) already
+  // established above for Council Tax, via filledJobsFromCapacityAndPopulation()
+  // — capacity comes from CURRENT buildings (totalJobsBySector(s), safe,
+  // buildings don't drift), the WORKFORCE CAP comes from flowBasisPop (the
+  // historical snapshot the engine actually charged wages against).
   // BUG-422: the engine applies POLICY MULTIPLIERS to outflows AFTER building the raw
   // amount (austerity ×0.9; Wages is not in the recycling 0.93 set). Recompute the raw
-  // wage on the BUG-419 start-of-tick basis, then run it through the SAME shared policy
-  // pipeline the engine used so the comparison is post-policy vs post-policy.
+  // wage, then run it through the SAME shared policy pipeline the engine used so the
+  // comparison is post-policy vs post-policy.
   const recomputedWages = applyOutflowPolicies(
-    [{ label: 'Wages', value: wagesPerTick(flowBasisPop) }],
+    [
+      {
+        label: 'Wages',
+        value: sectorWagesPerTick(
+          filledJobsFromCapacityAndPopulation(totalJobsBySector(s), flowBasisPop),
+        ).totalPerTick,
+      },
+    ],
     s.policies,
   )[0].value;
   const actualWages = actualFlows.outflows.find((f) => f.label === 'Wages')?.value ?? 0;
@@ -413,7 +440,13 @@ export function runConsistencyChecks(
     ok: wagesOk,
     detail: wagesOk
       ? `Wages: computed ${recomputedWages} = actual ${actualWages}`
-      : `Wages diverged: computed ${recomputedWages} vs actual ${actualWages} (pop change without reflow?)`,
+      // F4 FIX (independent round, 2026-09-03): the old "(pop change without
+      // reflow?)" wording dated from when Wages was purely population-based
+      // (BUG-419). Wages is now buildings-AND-population derived (filled
+      // jobs), so the honest divergence causes are a building change
+      // (placed/demolished/came online or offline) OR a population change,
+      // read against a stale (un-recomputed) actual flow.
+      : `Wages diverged: computed ${recomputedWages} vs actual ${actualWages} (building or population change without reflow?)`,
   });
 
   // Recompute total upkeep: sum of ONLINE building upkeeps only.

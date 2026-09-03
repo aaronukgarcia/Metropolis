@@ -819,3 +819,278 @@ export function computeDynamicBailoutOffer(
   offer = Math.trunc(Math.min(offer, Number.MAX_SAFE_INTEGER));
   return { offer, opexAllowance, capexAllowance, branch };
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-wage-stage1 (Q100067, Aaron "rec-on-all" ruling / Q100086 "Stage 1 GO",
+// 2026-09-03) — per-sector wage bands, Stage 1 of
+// docs/planning/proposals/wage-ownership-model-2026-09-02.md's 4-stage plan.
+//
+// SCOPE NOTE (webconsole side vs the doc's own Stage 1): the doc's §4 Stage 1
+// is a Go-engine plumbing fix — gate PostWages' existing Treasury-payer path
+// to Sector==SectorPublic only, add an AcctFirms→AcctHouseholds private-wage
+// leg keyed by Sector, collapse the two broken tax legs into one. This
+// webconsole has no account/ownership ledger at all yet — wagesPerTick() above
+// is a single flat Treasury outflow, full stop. The webconsole-side "Stage 1"
+// (Bev's status-file label, Q100086) takes the doc's SECTOR taxonomy
+// (Primary/Secondary/Tertiary/Public, §0 "citizens.Sector") and uses it to
+// DIFFERENTIATE THE WAGE RATE rather than the payer account — still one
+// aggregate outflow, no per-building/per-firm ledger (that is Stage 2/3
+// ownership-graph territory, explicitly held back post-BL1 by Q100086=B).
+//
+// F2 FIX (independent round REJECT, 2026-09-03, GR#6): this section originally
+// claimed "wagesPerTick() is left BYTE-IDENTICAL so engine.ts's call-site
+// needs no edit" and "the eventual caller... derives them" — both were true
+// ONLY for the first (unwired) landing. Stage 1 IS NOW WIRED into the live
+// tick: engine.ts's computeFlows() calls sectorWagesPerTick(filledJobsBySector(s))
+// instead of wagesPerTick(s.population) for the 'Wages' outflow line, and
+// consistency.ts's flows-vs-recompute check was updated to the same formula
+// (see both files' own FEAT-wage-stage1 comments). wagesPerTick() itself is
+// STILL byte-identical/untouched (kept only for its own tests / any
+// grandfathered caller) — but it is NO LONGER engine.ts's production wage
+// source, and this comment must not claim otherwise (a stale "not wired"
+// claim next to code that IS wired is exactly the kind of lying doc GR#6
+// exists to catch).
+//
+// CYCLE AVOIDANCE (mirrors verifyGridTariffInvariant's existing pattern
+// above): fiscal.ts must NOT import data.ts at module scope — data.ts already
+// imports FROM engine.ts, and engine.ts already imports FROM fiscal.ts, so a
+// fiscal.ts -> data.ts import would complete a module-eval-time cycle. The
+// per-sector job counts are therefore an INJECTED parameter — data.ts's
+// totalJobsBySector()/filledJobsBySector() derive them from the live SPECS
+// catalogue via isOnline()/capacityAtTier() (the SAME inputs data.ts's
+// totalJobs() already uses) and engine.ts/consistency.ts pass the result in —
+// fiscal.ts itself never reaches into data.ts. sectorWagesPerTick() and
+// allocateFilledJobs() below stay pure/injectable, exactly like
+// verifyGridTariffInvariant.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The four employment domains, mirroring the Go engine's citizens.Sector enum
+ * (Primary/Secondary/Tertiary/Public — wage-ownership-model doc §0/§1.1) so
+ * the two sides of the project use the same vocabulary (GR#3) even though the
+ * webconsole does not share the Go engine's runtime.
+ */
+export type WageSector = 'primary' | 'secondary' | 'tertiary' | 'public';
+
+/**
+ * SSOT (GR#3) classification of a catalogue building `kind` (data.ts's
+ * `ZoneKind`, kept as a bare string here to avoid importing the type from
+ * data.ts at module scope — see the cycle-avoidance note above) into the wage
+ * sector it employs into. Documents the DECOMPOSITION BASIS for whoever wires
+ * this into data.ts/engine.ts: the same building-kind dispatch data.ts's
+ * totalJobs() already switches on (`sp.kind === 'commercial'`/`'industrial'`
+ * fallback branches, plus every kind that carries an explicit `sp.jobs`
+ * count in the live catalogue: commercial, office, industrial, mine,
+ * transport). Kinds with NO jobs field in today's catalogue (school, health,
+ * police, fire, civic, power, water, pylon, road, station) are still listed
+ * here as their real-world employer domain for completeness/documentation —
+ * they currently contribute 0 jobs because data.ts's own catalogue has no
+ * staff-headcount field for civic-service buildings yet (a catalogue gap, not
+ * a fiscal.ts gap; out of this lane's scope to add — data.ts is claimed by
+ * another lane). `residential`/`park`/`landmark`/`leisure` are deliberately
+ * OMITTED: they are not employers in the catalogue today.
+ *
+ * F6 NOTE (independent round, 2026-09-03, flagged for the balance table —
+ * NOT a kind remap, do not action now): every `farm_*` spec in today's live
+ * catalogue (farm_wheat/farm_cattle/farm_orchard/farm_estate) is cataloged
+ * with `kind: 'industrial'`, not a distinct agriculture kind — so farm jobs
+ * land in the SECONDARY band, not primary, even though real-world farming
+ * is agriculture (arguably primary-sector). Combined with `public` having no
+ * `sp.jobs`-bearing catalogue kind at all today (see above), the PRACTICAL
+ * effect on typical fixtures/playthroughs is that `primary` (mine only) and
+ * `public` (zero today) are both thin-to-dead bands versus `secondary`
+ * (industrial + all farms) and `tertiary` (commercial + office) doing most
+ * of the real work. This is a catalogue-shape fact, not a fiscal.ts bug —
+ * recorded here so the balance pass (and whoever eventually gives farming
+ * its own kind, if ever) has the pointer.
+ */
+export const KIND_TO_WAGE_SECTOR: Readonly<Record<string, WageSector>> = Object.freeze({
+  mine: 'primary',
+  industrial: 'secondary',
+  commercial: 'tertiary',
+  office: 'tertiary',
+  transport: 'public',
+  station: 'public',
+  school: 'public',
+  health: 'public',
+  police: 'public',
+  fire: 'public',
+  civic: 'public',
+  power: 'public',
+  water: 'public',
+  pylon: 'public',
+  road: 'public',
+});
+
+/** Per-sector job counts — the injected decomposition-basis input to
+ * sectorWagesPerTick(). All-zero is a valid input (a jobless/genesis city). */
+export interface SectorJobs {
+  primary: number;
+  secondary: number;
+  tertiary: number;
+  public: number;
+}
+
+export const ZERO_SECTOR_JOBS: Readonly<SectorJobs> = Object.freeze({
+  primary: 0,
+  secondary: 0,
+  tertiary: 0,
+  public: 0,
+});
+
+/**
+ * ⚠ PLACEHOLDER-balance (Aaron's row-by-row pass pending, GR#15/§5 spirit of
+ * the doc — no new Go literal, retunable as one table): ONS-inspired
+ * DIRECTIONAL monthly gross-wage anchors per sector (not a literal ONS
+ * citation — the exact £/month figures are illustrative placeholders in the
+ * same spirit as REAL_NET_WAGE_PER_CITIZEN_PER_MONTH above, which this table
+ * deliberately brackets rather than replaces):
+ *   - primary   (mining/quarrying) — ONS mining & quarrying consistently
+ *     reports the highest UK sector average, hence the premium above the rest.
+ *   - secondary (manufacturing/industrial) — mid-table, above retail.
+ *   - tertiary  (commercial retail + office/professional, blended) — the
+ *     doc's own worked examples (§6a corner-shop £1,600/mo, §6b supermarket
+ *     £1,800/mo) bracket this ONE coarse Stage-1 band from both sides; 1,700
+ *     sits between them (a deliberate Stage-1 SIMPLIFICATION — one flat rate
+ *     per sector, not a per-firm negotiated wage, matching the doc's own §5
+ *     "keep it that way" coarsening spirit for other flat-rate legs).
+ *   - public    (civil service — teachers/nurses/police/fire/etc.) — matches
+ *     the doc's own §6c teacher example (£2,000/mo) exactly.
+ */
+export const SECTOR_WAGE_PER_MONTH: Readonly<Record<WageSector, number>> = Object.freeze({
+  primary: 2500,
+  secondary: 2000,
+  tertiary: 1700,
+  public: 2000,
+});
+
+export interface SectorWageLine {
+  sector: WageSector;
+  jobs: number;
+  wagePerMonth: number;
+  wagePerTick: number;
+}
+
+export interface SectorWageBreakdown {
+  lines: SectorWageLine[];
+  totalPerTick: number;
+}
+
+/** GR#16 storage-boundary coercion for a formula INPUT (mirrors
+ * sanitizePositiveFiniteInput above, but 0 is a legitimate job count, unlike
+ * a bailout allowance): a non-number/non-finite/negative input sanitizes to
+ * 0 (no phantom jobs from a garbage reading); fractional job counts are
+ * truncated (a building either employs a whole person or it doesn't). */
+function sanitizeJobsInput(n: unknown): number {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return 0;
+  return Math.trunc(n);
+}
+
+/**
+ * Stage 1 per-sector wage decomposition (wage-ownership-model doc §4 Stage 1
+ * / Q100067 / Q100086). Pure, deterministic (GR#21: no Date/Math.random) —
+ * same jobsBySector input always produces the same breakdown.
+ *
+ * Per-line rounding happens ONCE, at the per-sector wagePerTick — `totalPerTick`
+ * is the SUM of those already-rounded lines, never a separate re-round of the
+ * total. This is the doc's own rounding rule read across from every other
+ * SSOT formula in this file (councilTaxPerTick/wagesPerTick/etc. round once,
+ * at the leaf): it guarantees `totalPerTick === Σ line.wagePerTick` EXACTLY,
+ * by construction, with no separate reconciliation step needed — conservation
+ * (the task's "no rounding drift" requirement) holds trivially rather than
+ * needing a corrective remainder distribution.
+ */
+export function sectorWagesPerTick(jobsBySector: SectorJobs): SectorWageBreakdown {
+  const sectors: WageSector[] = ['primary', 'secondary', 'tertiary', 'public'];
+  const lines: SectorWageLine[] = sectors.map((sector) => {
+    const jobs = sanitizeJobsInput(jobsBySector[sector]);
+    const wagePerMonth = SECTOR_WAGE_PER_MONTH[sector];
+    const wagePerTick = Math.round((jobs * wagePerMonth) / TICKS_PER_MONTH_REF);
+    return { sector, jobs, wagePerMonth, wagePerTick };
+  });
+  const totalPerTick = lines.reduce((sum, line) => sum + line.wagePerTick, 0);
+  return { lines, totalPerTick };
+}
+
+/**
+ * F1 FIX (independent round REJECT, 2026-09-03) — blocking money defect: the
+ * original wiring fed sectorWagesPerTick() raw job CAPACITY (data.ts's
+ * totalJobs()-shaped counts, vacancy-inclusive), so a population-0 city with
+ * one off_towers_downtown (2,000 job slots, all vacant) was charged
+ * £113,333/tick, and the 13k-building fixture (3.0M job slots against a
+ * 1.42M-pop city) paid 2.49x the old flat formula — jobs that don't exist as
+ * PEOPLE were being paid wages anyway.
+ *
+ * FIX: sectorWagesPerTick() must be fed FILLED jobs, never raw capacity.
+ * `workers = population * WORKING_AGE_FRACTION` (data.ts's own SSOT constant,
+ * unemploymentOf()'s basis — this file cannot import it directly without
+ * completing the documented data.ts/engine.ts/fiscal.ts cycle, so the CALLER
+ * — data.ts's filledJobsBySector(), which already owns WORKING_AGE_FRACTION —
+ * passes the pre-computed `workers` figure in). `filled = min(workers,
+ * totalCapacity)`, floored at 0 and rounded ONCE to an integer headcount (you
+ * cannot pay half a worker) — this is the single money-relevant rounding
+ * point; every downstream step is exact-integer apportionment, never a
+ * second independent rounding pass.
+ *
+ * DETERMINISTIC ALLOCATION RULE (the "how" the reject asked to be
+ * documented): `filled` is spread across sectors proportional to each
+ * sector's CAPACITY share (a sector with more job slots gets a
+ * proportionally larger cut of the filled headcount) via the largest-
+ * remainder method (Hamilton apportionment) — floor every sector's exact
+ * share, then hand out the leftover headcount (an integer <= the number of
+ * sectors) one-by-one to the sectors with the LARGEST fractional remainder;
+ * a tie in fractional remainder is broken by SECTOR_ORDER (primary before
+ * secondary before tertiary before public — a fixed, arbitrary-but-
+ * documented order, never Math.random/insertion-order-of-the-day). This
+ * guarantees `Σ allocated === filled` EXACTLY (integer conservation, no
+ * rounding drift) for every input, including the two edges the reject named:
+ *   - jobs > workers: filled === workers (capped), spread by capacity share.
+ *   - workers > jobs: filled === totalCapacity (== Σ weights), so every
+ *     sector's exact share already equals its own capacity — floors sum to
+ *     totalCapacity with ZERO remainder to distribute, i.e. allocated ===
+ *     capacity verbatim (the pre-fix, correct-for-this-one-case behaviour).
+ *   - totalCapacity === 0 (no job-bearing buildings at all): every share is
+ *     0/0 — returns ZERO_SECTOR_JOBS rather than dividing by zero.
+ */
+export const SECTOR_ORDER: readonly WageSector[] = ['primary', 'secondary', 'tertiary', 'public'];
+
+export function allocateFilledJobs(filled: number, capacityBySector: SectorJobs): SectorJobs {
+  const safeFilled = Math.max(0, Math.trunc(sanitizeJobsInput(filled)));
+  const totalCapacity = SECTOR_ORDER.reduce(
+    (sum, sector) => sum + sanitizeJobsInput(capacityBySector[sector]),
+    0,
+  );
+  if (totalCapacity <= 0 || safeFilled <= 0) return { ...ZERO_SECTOR_JOBS };
+
+  // Cap the target at totalCapacity — allocateFilledJobs is a pure apportionment
+  // primitive and must not silently invent jobs beyond the given capacity even
+  // if a caller passes a `filled` value larger than the capacity sum (GR#16:
+  // never trust a caller's arithmetic, clamp defensively at the boundary).
+  const target = Math.min(safeFilled, totalCapacity);
+
+  const shares = SECTOR_ORDER.map((sector) => {
+    const capacity = sanitizeJobsInput(capacityBySector[sector]);
+    const exact = (target * capacity) / totalCapacity;
+    const floor = Math.floor(exact);
+    return { sector, capacity, floor, remainder: exact - floor };
+  });
+
+  let allocatedSoFar = shares.reduce((sum, s) => sum + s.floor, 0);
+  let leftover = target - allocatedSoFar;
+
+  // Largest-remainder-first, tie-broken by SECTOR_ORDER (the array's own
+  // original order — Array.prototype.sort is stable in every engine this
+  // project targets, so equal remainders keep primary/secondary/tertiary/
+  // public order deterministically, never insertion-order-of-the-day).
+  const byRemainderDesc = [...shares].sort((a, b) => b.remainder - a.remainder);
+  const bump = new Set<WageSector>();
+  for (let i = 0; i < byRemainderDesc.length && leftover > 0; i++, leftover--) {
+    bump.add(byRemainderDesc[i].sector);
+  }
+
+  const result: SectorJobs = { ...ZERO_SECTOR_JOBS };
+  for (const s of shares) {
+    result[s.sector] = s.floor + (bump.has(s.sector) ? 1 : 0);
+  }
+  return result;
+}

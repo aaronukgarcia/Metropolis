@@ -22,6 +22,17 @@ import { scaleConstructionTicks } from './debugBuildSpeed.ts';
 // FEAT-2326609711 inc1: fiscal.ts is a leaf module (imports only ./types.ts),
 // so importing GRID_IMPORT_ENABLED_DEFAULT here creates no cycle.
 import { GRID_IMPORT_ENABLED_DEFAULT, STARTING_TREASURY } from './fiscal.ts';
+// FEAT-wage-stage1 (Q100067/Q100086, 2026-09-03): same leaf-module guarantee
+// as the import above — fiscal.ts's KIND_TO_WAGE_SECTOR/SectorJobs are pulled
+// in here (not the other way around) so totalJobsBySector() below can bucket
+// jobs by sector using fiscal.ts's SSOT kind->sector classification, with no
+// eval-time cycle risk.
+import {
+  KIND_TO_WAGE_SECTOR,
+  type SectorJobs,
+  ZERO_SECTOR_JOBS,
+  allocateFilledJobs,
+} from './fiscal.ts';
 // BUG-511: registry-sourced (GR#7) fail-loud guard for the residential
 // no-`residents` trap below (assertResidentialSpecsHaveResidents). backend.ts
 // is a leaf for this purpose too — it imports only commitqueue.ts and a
@@ -2474,6 +2485,127 @@ export function totalJobs(s: SimState): number {
   }
   return jobs;
 }
+
+/**
+ * FEAT-wage-stage1 (Q100067/Q100086, 2026-09-03) — the SAME building-jobs
+ * basis as totalJobs() immediately above (identical loop shape, identical
+ * BUG-525 isOnline gate, identical sp.jobs/commercial/industrial-fallback
+ * job-count rule — GR#3, no re-derivation of the counting rule), but
+ * bucketed by wage sector via fiscal.ts's KIND_TO_WAGE_SECTOR SSOT map
+ * instead of summed to one grand total. Feeds engine.ts's computeFlows() so
+ * the wage outflow line can be computed from fiscal.ts's sectorWagesPerTick()
+ * instead of the old flat population-based wagesPerTick().
+ *
+ * A job-bearing building whose kind has no KIND_TO_WAGE_SECTOR entry
+ * contributes to neither bucket NOR the grand total mismatch: every kind
+ * that can carry `sp.jobs` in today's live catalogue (commercial, office,
+ * industrial, mine, transport) IS mapped — asserted by a test
+ * (KIND_TO_WAGE_SECTOR coverage test in wage-sector-bands.test.mjs) — so
+ * `Object.values(totalJobsBySector(s)).reduce(sum) === totalJobs(s)` holds
+ * for the live catalogue; an unmapped future kind would silently underrepresent
+ * only the wage total, never crash, matching this codebase's fail-soft
+ * posture for cosmetic/derived aggregates (a hard-fail here would take down
+ * the whole tick over a wage line).
+ *
+ * Memoised (memoOnState) — mirrors countByKindOnline/serviceCapacityAggregates
+ * immediately below/above: this walks the FULL buildings array exactly like
+ * totalJobs(), and computeFlows() calling it every tick at city scale (the
+ * scale-gate's 13k-building bound) must not double the per-tick building-walk
+ * cost that totalJobs() itself already pays once.
+ *
+ * F5 HARDENING (independent round, 2026-09-03): memoOnState caches this
+ * object by STATE REFERENCE and hands the SAME object back to every caller
+ * on the money path (engine.ts computeFlows / consistency.ts recompute) —
+ * without freezing, one careless caller mutating its copy (`result.tertiary
+ * += x`) would corrupt every OTHER caller's cached read for that same tick,
+ * silently, with no error. Object.freeze() at the return boundary makes a
+ * mutation attempt throw (this module runs under ES-module strict mode)
+ * instead of silently corrupting the shared cache — a mutation test in
+ * wage-sector-bands.test.mjs proves this.
+ */
+export const totalJobsBySector: (s: SimState) => SectorJobs = memoOnState((s) => {
+  const bySector: SectorJobs = { ...ZERO_SECTOR_JOBS };
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    let jobs = 0;
+    if (sp.jobs) jobs = capacityAtTier(sp, b.capacityTier ?? 0);
+    else if (sp.kind === 'commercial') jobs = 12;
+    else if (sp.kind === 'industrial') jobs = 18;
+    if (jobs <= 0) continue;
+    const sector = KIND_TO_WAGE_SECTOR[sp.kind];
+    if (!sector) continue;
+    bySector[sector] += jobs;
+  }
+  return Object.freeze(bySector);
+});
+
+/**
+ * F1 FIX (independent round REJECT, 2026-09-03, blocking money defect): the
+ * ORIGINAL Stage-1 wiring fed sectorWagesPerTick() raw job CAPACITY
+ * (totalJobsBySector() above, vacancy-inclusive) — a population-0 city with
+ * one off_towers_downtown (2,000 vacant job slots) was charged £113,333/tick,
+ * and the 13k-building scale fixture (3.0M job-slot capacity against a
+ * 1.42M-pop city) paid 2.49x the old flat formula. Jobs that exist only as
+ * unfilled VACANCIES were being paid a wage as if a person occupied them.
+ *
+ * filledJobsBySector() is the CORRECTED basis engine.ts/consistency.ts must
+ * use instead of totalJobsBySector() for anything money-facing:
+ *   workers = population * WORKING_AGE_FRACTION (this file's own SSOT,
+ *             already unemploymentOf()'s basis — GR#3, no second working-age
+ *             constant)
+ *   filled  = round(clamp(min(workers, totalCapacity), 0, totalCapacity))
+ *             — the ONE integer-rounding point (you can't pay half a worker);
+ *             everything downstream is exact apportionment, never re-rounded.
+ *   result  = allocateFilledJobs(filled, capacity) — fiscal.ts's deterministic
+ *             largest-remainder apportionment (see its own doc comment for
+ *             the full rule + the three edge cases: empty city -> £0 all
+ *             round; jobs > workers -> pays exactly `workers`, capacity-
+ *             weighted; workers > jobs -> pays exactly `totalCapacity`,
+ *             i.e. every sector's own capacity verbatim, zero remainder).
+ *
+ * Memoised (memoOnState) exactly like totalJobsBySector() — this is a THIN
+ * wrapper around the already-memoised capacity walk (no second buildings-array
+ * pass), so it adds a fixed O(4) apportionment cost per tick, not another
+ * O(buildings) walk, keeping the scale-gate bound intact. Frozen at the
+ * return boundary for the same F5 shared-cache-corruption reason as
+ * totalJobsBySector() (allocateFilledJobs already returns a fresh object, but
+ * freezing here too keeps the invariant "every SectorJobs this module hands
+ * out on the money path is immutable" uniform and cheap to audit).
+ *
+ * SCALE-GATE FIX (independent round, 2026-09-03 — found by the 13k-building
+ * fixture's flows.wages-matches check, a real BUG-419-class timing bug, NOT a
+ * new invention): computeFlows(s) inside advance() runs against the
+ * START-of-tick `s.population` (migration/growth for THIS tick applies
+ * LATER in advance(), producing a NEW `population` local — see BUG-419's own
+ * comment trail in engine.ts/consistency.ts), and that start-of-tick figure
+ * is snapshotted onto `lastFlows.population`. consistency.ts's Wages
+ * recompute must cap workers against that SAME snapshotted population, not
+ * whatever `s.population` happens to read at CHECK time (which, after even
+ * one settled tick, is already the GROWN end-of-tick figure) — otherwise the
+ * recompute silently overestimates the workforce and floods the check red on
+ * every real city. `filledJobsFromCapacityAndPopulation()` below is the
+ * UNMEMOISED, population-parameterised core so consistency.ts can pass the
+ * correct historical basis in; `filledJobsBySector()` is the memoised
+ * per-tick convenience wrapper that always uses `s.population` (correct for
+ * engine.ts's OWN call site, which calls computeFlows/filledJobsBySector on
+ * exactly the same start-of-tick `s` that later gets snapshotted).
+ */
+export function filledJobsFromCapacityAndPopulation(
+  capacity: SectorJobs,
+  population: number,
+): SectorJobs {
+  const totalCapacity =
+    capacity.primary + capacity.secondary + capacity.tertiary + capacity.public;
+  const workers = population * WORKING_AGE_FRACTION;
+  const filled = Math.max(0, Math.round(Math.min(workers, totalCapacity)));
+  return Object.freeze(allocateFilledJobs(filled, capacity));
+}
+
+export const filledJobsBySector: (s: SimState) => SectorJobs = memoOnState((s) =>
+  filledJobsFromCapacityAndPopulation(totalJobsBySector(s), s.population),
+);
 
 /**
  * BUG-524 (Q100046 C1) — unemployment / jobs-deficit measure, the SSOT
