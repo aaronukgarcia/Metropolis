@@ -590,8 +590,33 @@ const ORTHO: readonly [number, number][] = [
  * the result is a full reachability set (order-independent) and the output is
  * sorted, so it can never depend on buildings[] iteration order (no map-range-break
  * nondeterminism). No Date/Math.random.
+ *
+ * BUG-643 — memoised keyed on s.buildings (a WeakMap<object, T>, NOT memoOnState's
+ * WeakMap<SimState, T>), the SAME idiom roadTileSetOf() above already uses: this
+ * function reads ONLY s.buildings (grepped — no other field), so caching on the
+ * buildings array reference is both sufficient and safe, and it is the right key
+ * (not `s`) because callers repeatedly build `{ ...s, roadConnectivity: <this> }`
+ * from the SAME buildings array — keying on the whole state object would be a
+ * permanent cache miss on the very call this exists to speed up. FINDING: today's
+ * engine.ts/genesisReplay.ts call sites already gate this behind a
+ * `buildings !== previous.buildings` check (the `roadTopologyMayHaveChanged`
+ * flag, engine.ts ~3085) before invoking it, so within the current codebase this
+ * mainly guards against a FUTURE or indirect duplicate call on an unchanged
+ * buildings array (e.g. a debug/consistency pass) rather than removing an
+ * observed redundant call today — kept because engine.ts is contended for this
+ * commit and the guard is free, safe, and exactly the precedent this file
+ * already established.
  */
+const roadConnectivityCache = new WeakMap<object, { connectedRoadTiles: string[] }>();
 export function computeRoadConnectivity(s: SimState): { connectedRoadTiles: string[] } {
+  const cached = roadConnectivityCache.get(s.buildings);
+  if (cached) return cached;
+  const result = computeRoadConnectivityUncached(s);
+  roadConnectivityCache.set(s.buildings, result);
+  return result;
+}
+
+function computeRoadConnectivityUncached(s: SimState): { connectedRoadTiles: string[] } {
   const roadTiles = new Set<string>();
   const trunkTiles = new Set<string>();
   for (const b of s.buildings) {
@@ -2039,7 +2064,17 @@ export interface StationLinkInfo {
   connectedIds: Set<number>;
 }
 
-export function stationLinks(s: SimState): StationLinkInfo {
+// BUG-643 — memoOnState. stationLinks() is called from FOUR separate sites in
+// engine.ts (approvalOf, wellbeingOf, computeFlows, and the resolveDemand path
+// — grepped, none of them cache their own result) plus lineUsageOf() below in
+// this file, each re-walking the ENTIRE buildings array twice (once to collect
+// roads, once to scan stations) on every call. Profiled at 228ms self time on
+// Aaron's 29,831-building city. Pure function of s.buildings only, so the
+// state-identity key is sound by the same reasoning as every other memo in
+// this file — and because engine.ts is not edited by this fix, every existing
+// call site benefits automatically the moment this export starts returning a
+// cached answer for an unchanged state object.
+export const stationLinks: (s: SimState) => StationLinkInfo = memoOnState((s) => {
   const roads = new Set<string>();
   for (const b of s.buildings) {
     const sp = SPECS[b.spec];
@@ -2069,7 +2104,7 @@ export function stationLinks(s: SimState): StationLinkInfo {
     if (linked) connectedIds.add(b.id);
   }
   return { total, connectedIds };
-}
+});
 
 // ════════════════════════════════════════════════════════════════════════════
 // FEAT-1972079902 — RAIL NETWORK inc1: LINE CAPACITY + COMMUTER-FLOW USAGE +
@@ -3011,8 +3046,16 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
  * crimeRateOf/wellbeingOf behaviour exactly, so calling this from a new site
  * cannot silently change what those two already-verified computations do.
  * Pure/deterministic (GR#21): unconditional forward scan, no early break.
+ *
+ * BUG-643 — memoOnState. Called TWICE in the same serviceCoverageOf() 'parks'
+ * row expression (once for `cap`, once again inside the optimalProvider shortfall
+ * argument) plus again from crimeRateOf/engine.ts's wellbeingOf's own Parks &
+ * leisure term every tick — a hidden O(buildings) fan-out with no memoisation.
+ * Exported (previously module-private) only so this file's own identity-test
+ * suite can compare it directly against a re-implemented oracle; no other
+ * behaviour change.
  */
-function parksCapacityOf(s: SimState): number {
+export const parksCapacityOf: (s: SimState) => number = memoOnState((s) => {
   let capacity = 0;
   // FOLLOW-UP (r3 round note (b), non-blocking): sp.w*sp.h, not
   // footprintOf(b, sp) — harmless ONLY because no park spec carries a
@@ -3024,7 +3067,7 @@ function parksCapacityOf(s: SimState): number {
     if (sp?.kind === 'park') capacity += sp.w * sp.h;
   }
   return capacity;
-}
+});
 
 /**
  * Demand index from a coverage ratio: a monotone, bounded map of
@@ -3284,8 +3327,18 @@ function specJobs(sp: Spec): number {
  * live population, so the figure is a per-building online-gated quantity (a needed
  * property — "offline buildings generate no waste"). A live-occupancy refinement
  * (population / capacity) is a later increment. PLACEHOLDER-balance rates.
+ *
+ * BUG-643 (tier 2 of BUG-642) — memoOnState (WeakMap<SimState, T> keyed on the
+ * state object itself, the house idiom — see memoOnState's doc comment). This is
+ * the base of the waste-family CHAIN: wasteStatsOf calls this + collectionCapacityOf,
+ * processingMixOf calls wasteStatsOf, and computeFlows/DemandDock/demandFixPlan each
+ * call several of those PER TICK — before this fix the waste family alone measured
+ * 3,176ms INCLUSIVE on Aaron's 29,831-building city. Pure function of
+ * (s.buildings, isOnline(s,·)) only, so the state-identity key is sound by the
+ * same reasoning as waterCaps'/serviceCapacityAggregates' (every mutating reducer
+ * case returns a fresh top-level state object — verified above, unchanged here).
  */
-export function wasteGeneratedOf(s: SimState): number {
+export const wasteGeneratedOf: (s: SimState) => number = memoOnState((s) => {
   let tonnes = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
@@ -3303,14 +3356,16 @@ export function wasteGeneratedOf(s: SimState): number {
     }
   }
   return tonnes;
-}
+});
 
 /**
  * Total refuse COLLECTION capacity this tick, tonnes (Σ online depot wasteCapacity).
  * Only ONLINE depots collect — an under-construction / disconnected depot runs no
  * rounds. Order-independent sum, pure.
+ *
+ * BUG-643 — memoOnState, same reasoning as wasteGeneratedOf() immediately above.
  */
-export function collectionCapacityOf(s: SimState): number {
+export const collectionCapacityOf: (s: SimState) => number = memoOnState((s) => {
   let cap = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
@@ -3318,7 +3373,7 @@ export function collectionCapacityOf(s: SimState): number {
     if (sp?.wasteCapacity) cap += sp.wasteCapacity;
   }
   return cap;
-}
+});
 
 /** Derived waste read-out for a state (brief §2). All quantities tonnes/tick. */
 export interface WasteStats {
@@ -3341,15 +3396,25 @@ export interface WasteStats {
  * Collection coverage + uncollected tonnage (brief §2), the twin of waterCaps /
  * serviceCoverageOf. coverage = min(1, capacity/generated); no depots and any
  * generation ⇒ coverage 0 (everything uncollected). Pure/deterministic.
+ *
+ * BUG-643 — memoOnState. wasteGeneratedOf/collectionCapacityOf are already
+ * memoised (O(1) after their own first call this state), so wrapping this too
+ * is cheap insurance rather than the main win — but it is called from
+ * demandFixPlan, DemandDock's refuse row, AND processingMixOf every tick
+ * (several times each), so caching the whole {generated,capacity,collected,...}
+ * object avoids re-deriving the trivial arithmetic and — per GR#21's "same
+ * reference on a repeat call proves a real cache hit" test — gives every
+ * caller within one state THE SAME object reference, matching the waterCaps
+ * precedent exactly.
  */
-export function wasteStatsOf(s: SimState): WasteStats {
+export const wasteStatsOf: (s: SimState) => WasteStats = memoOnState((s) => {
   const generated = wasteGeneratedOf(s);
   const capacity = collectionCapacityOf(s);
   const coverage = generated > 0 ? Math.min(1, capacity / generated) : 1;
   const collected = Math.min(generated, capacity);
   const uncollected = Math.max(0, generated - collected);
   return { generated, capacity, collected, coverage, uncollected, uncollectedFraction: 1 - coverage };
-}
+});
 
 /** Collection coverage 0..1 (brief §2) — min(1, depotCapacity/generated). */
 export function collectionCoverageOf(s: SimState): number {
@@ -3403,21 +3468,46 @@ export const COMPOST_REVENUE_PER_TONNE = 15;
 /** MW added to the grid per tonne of residual burned in an EfW plant. PLACEHOLDER. */
 export const EFW_MW_PER_TONNE = 0.5;
 
+/** Four per-processor online capacity sums, tonnes/tick — see processCapacitiesOf(). */
+interface ProcessCapacities {
+  efw: number;
+  mrf: number;
+  compost: number;
+  landfill: number;
+}
+
 /**
- * Total ONLINE processing throughput for one processor spec, tonnes/tick (Σ of that
- * spec's `processCapacity` over online buildings). Only ONLINE processors process —
- * an under-construction / disconnected plant takes nothing. Order-independent, pure.
+ * Total ONLINE processing throughput per processor spec, tonnes/tick (Σ of each
+ * spec's `processCapacity` over online buildings of that spec). Only ONLINE
+ * processors process — an under-construction / disconnected plant takes nothing.
+ * Order-independent, pure.
+ *
+ * BUG-643 — this used to be `processCapacityOf(s, specId)`, called FOUR separate
+ * times from processingMixOf (once per processor spec), each re-walking the whole
+ * buildings array: 4 full O(buildings) passes to answer one processingMixOf()
+ * call. Folded into a SINGLE pass over s.buildings computing all four sums at
+ * once (same technique as serviceCapacityAggregates' 7-sums-in-one-pass fix
+ * above), then memoOnState so repeat processingMixOf() calls on the same state
+ * hit the cache entirely. Not exported — processCapacityOf had no external
+ * callers or tests (grepped clean), so this is a pure internal refactor with no
+ * public-API change.
  */
-function processCapacityOf(s: SimState, specId: string): number {
-  let cap = 0;
+const processCapacitiesOf: (s: SimState) => ProcessCapacities = memoOnState((s) => {
+  let efw = 0;
+  let mrf = 0;
+  let compost = 0;
+  let landfill = 0;
   for (const b of s.buildings) {
-    if (b.spec !== specId) continue;
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
-    if (sp?.processCapacity) cap += sp.processCapacity;
+    if (!sp?.processCapacity) continue;
+    if (b.spec === 'waste_incinerator') efw += sp.processCapacity;
+    else if (b.spec === 'waste_recycling') mrf += sp.processCapacity;
+    else if (b.spec === 'waste_compost') compost += sp.processCapacity;
+    else if (b.spec === 'waste_landfill') landfill += sp.processCapacity;
   }
-  return cap;
-}
+  return { efw, mrf, compost, landfill };
+});
 
 /** Derived processing read-out for a state (brief §2/§3). All tonnages tonnes/tick. */
 export interface ProcessingMix {
@@ -3446,13 +3536,18 @@ export interface ProcessingMix {
  * Processing mix of the collected tonnage (brief §2/§3). Diverting processors
  * (EfW/MRF/compost) take up to their combined capacity, split PROPORTIONALLY by
  * capacity (order-independent); landfill absorbs the remainder. Pure/deterministic.
+ *
+ * BUG-643 — memoOnState. Callers (efwPowerOf/landfillTippingOf/recyclingRevenueOf/
+ * compostRevenueOf, plus computeFlows/panels calling this directly) each pull
+ * their own field several times per tick from this SAME derivation; before this
+ * fix every one of those calls re-ran the full collected/capacities/split/
+ * landfill-remainder computation (and, pre-processCapacitiesOf, 4 more full
+ * building-array passes underneath it) from scratch.
  */
-export function processingMixOf(s: SimState): ProcessingMix {
+export const processingMixOf: (s: SimState) => ProcessingMix = memoOnState((s) => {
   const collected = wasteStatsOf(s).collected;
-  const efwCapacity = processCapacityOf(s, 'waste_incinerator');
-  const mrfCapacity = processCapacityOf(s, 'waste_recycling');
-  const compostCapacity = processCapacityOf(s, 'waste_compost');
-  const landfillCapacity = processCapacityOf(s, 'waste_landfill');
+  const { efw: efwCapacity, mrf: mrfCapacity, compost: compostCapacity, landfill: landfillCapacity } =
+    processCapacitiesOf(s);
   const divertCapacity = efwCapacity + mrfCapacity + compostCapacity;
   const diverted = Math.min(collected, divertCapacity);
   const share = (cap: number) => (divertCapacity > 0 ? diverted * (cap / divertCapacity) : 0);
@@ -3477,7 +3572,7 @@ export function processingMixOf(s: SimState): ProcessingMix {
     diverted,
     diversionRate,
   };
-}
+});
 
 /** Diversion rate 0..1 (brief §3) = 1 − landfill share = diverted/collected. The KPI. */
 export function diversionRateOf(s: SimState): number {
