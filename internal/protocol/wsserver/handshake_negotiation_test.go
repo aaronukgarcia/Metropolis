@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,8 +57,21 @@ func TestHandshake_NegotiatesClientCeilingBelowCurrent(t *testing.T) {
 	defer func() { protocol.CurrentWireVersion = original }()
 	protocol.CurrentWireVersion = protocol.WireVersion{Major: 1, Minor: 5}
 
-	url, _, cleanup := newTestServer(t, "v1.2.3", time.Second)
-	defer cleanup()
+	// BUG-636: built manually (not via newTestServer) so ServeHTTP can be
+	// wrapped in a WaitGroup -- this test mutates the package-global
+	// protocol.CurrentWireVersion and restores it via defer, which races
+	// the server-side per-connection goroutine's reads of that same global
+	// unless the test proves that goroutine has returned first. See
+	// closeAndWaitForServer's doc comment in shim_test.go.
+	transport := protocol.NewInProcTransport(protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer, protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer)
+	srv := New(transport, "v1.2.3", time.Second)
+	var srvWG sync.WaitGroup
+	httpSrv := httptest.NewServer(wrapServeHTTPWithWaitGroup(srv, &srvWG))
+	defer func() {
+		httpSrv.Close()
+		_ = transport.Close()
+	}()
+	url := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
 	conn := dial(t, url)
 	defer func() { _ = conn.Close() }()
 
@@ -76,6 +90,8 @@ func TestHandshake_NegotiatesClientCeilingBelowCurrent(t *testing.T) {
 	if len(result.Capabilities) != 0 {
 		t.Fatalf("Capabilities = %v, want an empty intersection (client declared none)", result.Capabilities)
 	}
+
+	closeAndWaitForServer(t, &srvWG, conn)
 }
 
 // TestHandshake_NoNewFields_NegotiatesCurrent proves an old client that
@@ -186,8 +202,18 @@ func TestDeterminism_SameCommandDifferentNegotiatedVersion_DecodesIdentically(t 
 	defer func() { protocol.CurrentWireVersion = original }()
 	protocol.CurrentWireVersion = protocol.WireVersion{Major: 1, Minor: 5}
 
-	url, transport, cleanup := newTestServer(t, "v1.2.3", time.Second)
-	defer cleanup()
+	// BUG-636: built manually (not via newTestServer) so ServeHTTP can be
+	// wrapped in a WaitGroup -- see the comment on the same pattern in
+	// TestHandshake_NegotiatesClientCeilingBelowCurrent above.
+	transport := protocol.NewInProcTransport(protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer, protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer)
+	srv := New(transport, "v1.2.3", time.Second)
+	var srvWG sync.WaitGroup
+	httpSrv := httptest.NewServer(wrapServeHTTPWithWaitGroup(srv, &srvWG))
+	defer func() {
+		httpSrv.Close()
+		_ = transport.Close()
+	}()
+	url := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
 
 	connCurrent := dial(t, url)
 	defer func() { _ = connCurrent.Close() }()
@@ -260,4 +286,6 @@ func TestDeterminism_SameCommandDifferentNegotiatedVersion_DecodesIdentically(t 
 	if _, ok := gotFromOlder.Payload.(protocol.PausePayload); !ok {
 		t.Fatalf("expected protocol.PausePayload, got %T", gotFromOlder.Payload)
 	}
+
+	closeAndWaitForServer(t, &srvWG, connCurrent, connOlder)
 }

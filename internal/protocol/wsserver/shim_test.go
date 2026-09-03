@@ -2,10 +2,14 @@ package wsserver
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
@@ -208,6 +212,61 @@ func TestShim_DecodesIdenticallyToUnshimmedCommand(t *testing.T) {
 	}
 }
 
+// --- BUG-636: synchronizing tests that mutate protocol.CurrentWireVersion
+// against an httptest server ------------------------------------------
+//
+// Every test below temporarily overrides the package-global
+// protocol.CurrentWireVersion for the duration of an httptest.Server's
+// life, then restores it via a deferred write. That restore races the
+// SERVER-SIDE per-connection goroutine's reads of the same global
+// (negotiateVersion/handshake's window check, and pump's own shim-offset
+// computation) unless the test can PROVE every such goroutine has already
+// returned before the restore runs.
+//
+// httptest.Server.Close() does NOT provide that proof here: Upgrade()
+// hijacks the TCP connection before handshake() ever runs (server.go),
+// which takes the connection out of net/http's own in-flight-request
+// tracking -- Close() can return while a hijacked connection's ServeHTTP
+// call (successful handshake+pump, OR an early handshake refusal) is
+// still executing. The client having already read a response over the
+// socket does not help either: the race detector does not treat plain
+// socket I/O as a happens-before edge, only real synchronization
+// primitives (channels, WaitGroup, mutex, atomic, `go`) count.
+//
+// wrapServeHTTPWithWaitGroup + closeAndWaitForServer give the detector a
+// real edge: every ServeHTTP call increments the WaitGroup on entry and
+// decrements it on return (whichever path returns -- refused handshake or
+// a fully pumped-and-torn-down connection), and the test waits on that
+// WaitGroup, AFTER closing every client conn, before its own defers
+// restore protocol.CurrentWireVersion / close the server. That wait is a
+// genuine happens-before edge, so the race detector can see that every
+// global read this connection's handling could ever perform strictly
+// precedes the restore write.
+func wrapServeHTTPWithWaitGroup(h http.Handler, wg *sync.WaitGroup) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wg.Add(1)
+		defer wg.Done()
+		h.ServeHTTP(w, r)
+	})
+}
+
+func closeAndWaitForServer(t *testing.T, wg *sync.WaitGroup, conns ...*websocket.Conn) {
+	t.Helper()
+	for _, c := range conns {
+		_ = c.Close()
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("BUG-636: timed out waiting for server-side ServeHTTP goroutines to return")
+	}
+}
+
 // --- AC-3/AC-4 end-to-end: window negotiation + in-window shim --------
 
 // TestWindowNegotiation_CurrentAndOneBack_NegotiateOwnMajor_TwoBack_Refused
@@ -227,7 +286,8 @@ func TestWindowNegotiation_CurrentAndOneBack_NegotiateOwnMajor_TwoBack_Refused(t
 
 	transport := protocol.NewInProcTransport(protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer, protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer)
 	srv := New(transport, "v1.2.3", time.Second, WithVersionWindowDepth(1))
-	httpSrv := httptest.NewServer(srv)
+	var srvWG sync.WaitGroup
+	httpSrv := httptest.NewServer(wrapServeHTTPWithWaitGroup(srv, &srvWG))
 	defer func() {
 		httpSrv.Close()
 		_ = transport.Close()
@@ -288,6 +348,11 @@ func TestWindowNegotiation_CurrentAndOneBack_NegotiateOwnMajor_TwoBack_Refused(t
 	if resp.Error.Data["windowFloorMajor"] != float64(2) {
 		t.Fatalf("(c) expected windowFloorMajor=2 in error context, got %+v", resp.Error.Data)
 	}
+
+	// BUG-636: wait for every ServeHTTP call (a, b, and c's refusal) to
+	// return before the deferred restore of protocol.CurrentWireVersion
+	// runs -- see the doc comment on closeAndWaitForServer.
+	closeAndWaitForServer(t, &srvWG, connCurrent, connOneBack, connTwoBack)
 }
 
 // TestWindowNegotiation_FloorItself_Accepted is AC-4's boundary-inclusive
@@ -300,7 +365,8 @@ func TestWindowNegotiation_FloorItself_Accepted(t *testing.T) {
 
 	transport := protocol.NewInProcTransport(protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer, protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer)
 	srv := New(transport, "v1.2.3", time.Second, WithVersionWindowDepth(1))
-	httpSrv := httptest.NewServer(srv)
+	var srvWG sync.WaitGroup
+	httpSrv := httptest.NewServer(wrapServeHTTPWithWaitGroup(srv, &srvWG))
 	defer func() {
 		httpSrv.Close()
 		_ = transport.Close()
@@ -314,6 +380,11 @@ func TestWindowNegotiation_FloorItself_Accepted(t *testing.T) {
 	if result.NegotiatedVersion != floor {
 		t.Fatalf("expected the floor version itself to be accepted and negotiated as-is, got %+v", result.NegotiatedVersion)
 	}
+
+	// BUG-636: wait for the ServeHTTP call to return before the deferred
+	// restore of protocol.CurrentWireVersion runs -- see the doc comment
+	// on closeAndWaitForServer.
+	closeAndWaitForServer(t, &srvWG, conn)
 }
 
 // TestInWindowOlderClient_RealCommandRoundTrips_ViaShim proves the other
@@ -329,7 +400,8 @@ func TestInWindowOlderClient_RealCommandRoundTrips_ViaShim(t *testing.T) {
 
 	transport := protocol.NewInProcTransport(protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer, protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer)
 	srv := New(transport, "v1.2.3", time.Second, WithVersionWindowDepth(1))
-	httpSrv := httptest.NewServer(srv)
+	var srvWG sync.WaitGroup
+	httpSrv := httptest.NewServer(wrapServeHTTPWithWaitGroup(srv, &srvWG))
 	defer func() {
 		httpSrv.Close()
 		_ = transport.Close()
@@ -376,6 +448,16 @@ func TestInWindowOlderClient_RealCommandRoundTrips_ViaShim(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for the shimmed command to reach the transport")
 	}
+
+	// BUG-636: wait for the ServeHTTP call (handshake + pump, including the
+	// command just round-tripped above) to return before the deferred
+	// restore of protocol.CurrentWireVersion runs -- see the doc comment
+	// on closeAndWaitForServer. Without this, the server-side pump
+	// goroutine's read of protocol.CurrentWireVersion (server.go's shim-
+	// offset computation) races this test's own restore under -race,
+	// intermittently, since httptest.Server.Close() does not wait for
+	// hijacked websocket connections.
+	closeAndWaitForServer(t, &srvWG, conn)
 }
 
 // TestInWindowOlderClient_MalformedLegacyShape_Refused proves the shim
@@ -388,7 +470,8 @@ func TestInWindowOlderClient_MalformedLegacyShape_Refused(t *testing.T) {
 
 	transport := protocol.NewInProcTransport(protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer, protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer)
 	srv := New(transport, "v1.2.3", time.Second, WithVersionWindowDepth(1))
-	httpSrv := httptest.NewServer(srv)
+	var srvWG sync.WaitGroup
+	httpSrv := httptest.NewServer(wrapServeHTTPWithWaitGroup(srv, &srvWG))
 	defer func() {
 		httpSrv.Close()
 		_ = transport.Close()
@@ -421,4 +504,9 @@ func TestInWindowOlderClient_MalformedLegacyShape_Refused(t *testing.T) {
 	if ack.Error.Code != protocol.ErrCommandDecodeFailed {
 		t.Fatalf("expected code %s, got %s", protocol.ErrCommandDecodeFailed, ack.Error.Code)
 	}
+
+	// BUG-636: wait for the ServeHTTP call to return before the deferred
+	// restore of protocol.CurrentWireVersion runs -- see the doc comment
+	// on closeAndWaitForServer.
+	closeAndWaitForServer(t, &srvWG, conn)
 }
