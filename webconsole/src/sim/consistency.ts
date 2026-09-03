@@ -6,7 +6,7 @@
 //     to actual lastFlows entries — catches silent data corruption
 // (3) PALETTE-VS-SPEC: placed buildings' colors exist in SPECS
 
-import type { SimState } from './types.ts';
+import type { SimState, FlowItem } from './types.ts';
 import {
   SPECS,
   TIER_COLORS,
@@ -37,10 +37,43 @@ export interface ConsistencyReport {
 }
 
 /**
- * Run all consistency checks on a SimState. Returns a deterministic report
- * that never mutates the state.
+ * BUG-603 (Aaron ruling Q100079=A, tightened after a REJECT round caught the
+ * conservation check being laundered): a hand-tampered `fundsAtTickEnd`/
+ * `fundsAtTickStart` must NEVER be waved through by a "policy went stale"
+ * recovery path. The split is:
+ *   - CONSERVATION (funds-vs-flows, #1 below) is the LAST TICK's historical
+ *     story — funds + the stored lastFlows it was computed from. A post-tick
+ *     discretionary action (policy toggle, tax change, build) changes NEITHER
+ *     of those, so conservation never legitimately goes stale; it must always
+ *     read the STORED lastFlows/funds triplet, never a recompute. A tampered
+ *     fundsAtTickEnd must keep failing here no matter what else is retried.
+ *   - The PER-LINE POLICY-SENSITIVE checks (Council Tax / Business Tax /
+ *     Wages / Upkeep total — flows-vs-recompute, #2 below) are the ones that
+ *     legitimately go stale after a non-tick action, because they compare
+ *     the stored "actual" value against a LIVE recompute of current
+ *     policies/taxRates/buildings. `actualFlowsOverride` lets a caller (see
+ *     replay.ts's checkConsistencyRecoveringStaleFlows) supply a freshly
+ *     recomputed { inflows, outflows, population } to use as the "actual"
+ *     side of ONLY these per-line checks on retry — conservation and every
+ *     other check (shape validation, palette, lastFlows shape/finite) always
+ *     read the real state, override or not.
  */
-export function runConsistencyChecks(s: SimState): ConsistencyReport {
+export interface RecomputedFlowsOverride {
+  inflows: FlowItem[];
+  outflows: FlowItem[];
+  population?: number;
+}
+
+/**
+ * Run all consistency checks on a SimState. Returns a deterministic report
+ * that never mutates the state. `actualFlowsOverride` (BUG-603) is consumed
+ * ONLY by the per-line policy-sensitive recompute checks — see the interface
+ * doc above; conservation and every other check always use the real `s`.
+ */
+export function runConsistencyChecks(
+  s: SimState,
+  actualFlowsOverride?: RecomputedFlowsOverride
+): ConsistencyReport {
   const checks: ConsistencyCheck[] = [];
 
   // ===== SHAPE VALIDATION LAYER (existing) =====
@@ -317,7 +350,10 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   });
 
   // ===== 2. FLOWS-VS-RECOMPUTE: Cross-check key flows against recomputed values =====
-  // Path A (actual): what's recorded in lastFlows
+  // Path A (actual): what's recorded in lastFlows — OR, on a BUG-603 retry, the
+  // caller-supplied actualFlowsOverride recomputed fresh against the CURRENT
+  // state (see runConsistencyChecks' doc comment). Conservation above never
+  // uses this override; only the per-line checks below do.
   // Path B (derived): what we'd compute now from placed[] + policies
 
   // Recompute fiscal flows using shared formulas (fiscal.ts) for single source of truth.
@@ -327,12 +363,13 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   // actual flow and falsely redden the consistency gate.
   const c = countByKindOnline(s);
   const t = s.taxRates;
+  const actualFlows = actualFlowsOverride ?? s.lastFlows;
   // BUG-419: recompute against the START-of-tick population the engine actually charged
   // (recorded in lastFlows.population), not the grown end-of-tick s.population. Fall back
   // to s.population for states recorded before this field existed.
-  const flowBasisPop = s.lastFlows.population ?? s.population;
+  const flowBasisPop = actualFlowsOverride?.population ?? actualFlows.population ?? s.population;
   const recomputedCouncilTax = councilTaxPerTick(flowBasisPop, t.residential);
-  const actualCouncilTax = s.lastFlows.inflows.find((f) => f.label === 'Council Tax')?.value ?? 0;
+  const actualCouncilTax = actualFlows.inflows.find((f) => f.label === 'Council Tax')?.value ?? 0;
   const councilTaxOk = recomputedCouncilTax === actualCouncilTax;
   checks.push({
     id: 'flows.council-tax-matches',
@@ -346,7 +383,7 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   // NOTE: Business Tax can be reduced by brownout, so we allow some tolerance.
   // If it's LOWER than recomputed, that's OK (brownout). If HIGHER, that's a bug.
   const recomputedBusinessTax = businessTaxPerTick(c.commercial, t.commercial);
-  const actualBusinessTax = s.lastFlows.inflows.find((f) => f.label === 'Business Tax')?.value ?? 0;
+  const actualBusinessTax = actualFlows.inflows.find((f) => f.label === 'Business Tax')?.value ?? 0;
   const businessTaxOk = actualBusinessTax <= recomputedBusinessTax;
   checks.push({
     id: 'flows.business-tax-matches',
@@ -369,7 +406,7 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
     [{ label: 'Wages', value: wagesPerTick(flowBasisPop) }],
     s.policies,
   )[0].value;
-  const actualWages = s.lastFlows.outflows.find((f) => f.label === 'Wages')?.value ?? 0;
+  const actualWages = actualFlows.outflows.find((f) => f.label === 'Wages')?.value ?? 0;
   const wagesOk = recomputedWages === actualWages;
   checks.push({
     id: 'flows.wages-matches',
@@ -407,7 +444,7 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   // Sum actual upkeep from all outflow buckets (Roads, Power, Healthcare, etc.).
   // Excludes: Wages, Loan Interest, Overdraft Interest, Transit Subsidy (non-upkeep flows).
   let actualUpkeep = 0;
-  for (const flow of s.lastFlows.outflows) {
+  for (const flow of actualFlows.outflows) {
     // FEAT-1972079907 inc2: 'Road Auto-Scale' is a monthly one-off capital spend
     // (road tier upgrades), NOT recurring building upkeep — exclude it from the
     // upkeep-total reconciliation exactly like Wages/interest/subsidy.

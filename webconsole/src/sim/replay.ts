@@ -12,8 +12,9 @@
 import type { SimState } from './types.ts';
 import type { Journal, JournalEntry } from './journal.ts';
 import type { MapViewState } from './uistate.ts';
-import { reducer, initialState as getInitialState, nextSafeBuildingId } from './engine.ts';
+import { reducer, initialState as getInitialState, nextSafeBuildingId, computeFlows } from './engine.ts';
 import { runConsistencyChecks } from './consistency.ts';
+import type { ConsistencyReport, RecomputedFlowsOverride } from './consistency.ts';
 import { SPECS } from './data.ts';
 import { emptyJournal } from './journal.ts';
 import { safeSetItem } from './safeStorage.ts';
@@ -287,6 +288,90 @@ export function restampSavepointsBuildVersion(
 }
 
 /**
+ * BUG-603 (P1, data-loss class; Aaron ruling Q100079=A, TIGHTENED after an
+ * independent REJECT round): `lastFlows` only refreshes on a real tick. A
+ * savepoint whose journal tail — or whose baked-in SNAPSHOT — ends on a
+ * discretionary, non-tick action (a policy toggle, a tax-rate change, a
+ * build/demolish) leaves the PER-LINE `lastFlows` entries (Council Tax,
+ * Business Tax, Wages, Upkeep) describing the PRE-action world while every
+ * other field (taxRates, policies, buildings) already reflects the action.
+ * `runConsistencyChecks`' flows-vs-recompute layer (`flows.*-matches`)
+ * always recomputes those specific lines LIVE from current state, so they
+ * then diverge from the now-stale stored values and the whole savepoint is
+ * rejected as "inconsistent" — a false-positive rejection that loses a save
+ * that was never actually broken.
+ *
+ * THE KEY SPLIT (the first attempt at this fix got this wrong and was
+ * REJECTed for it): `lastFlows` + the funds triplet (fundsAtTickStart/End)
+ * are the LAST TICK's historical story. A post-tick policy toggle changes
+ * NEITHER of them — conservation (consistency.ts #1, fundsAtTickEnd ===
+ * fundsAtTickStart + Σinflows − Σoutflows) NEVER legitimately goes stale
+ * from a discretionary action, because it is checked against what actually
+ * happened at tick time, not against current policy. Only the four PER-LINE
+ * checks go stale, because they compare stored history against a LIVE
+ * recompute of CURRENT policies/taxRates/buildings.
+ *
+ * So this NEVER derives or touches fundsAtTickStart/fundsAtTickEnd (an
+ * earlier version of this fix back-derived fundsAtTickStart from the new
+ * flow sums to keep conservation "true" — that made conservation a
+ * tautology against ANY value of fundsAtTickEnd, so a hand-tampered
+ * fundsAtTickEnd (+1,000,000 / −500,000) was silently laundered through the
+ * retry. Conservation must always see the REAL stored funds triplet, so a
+ * tampered one still fails no matter what else is retried).
+ *
+ * Ruling: on restore, if the raw check fails, retry ONLY the per-line checks
+ * against flows recomputed fresh via the exact same SSOT pipeline
+ * (`engine.computeFlows`) the next real tick would use — passed to
+ * `runConsistencyChecks` as `actualFlowsOverride`, which conservation and
+ * every other check (shape validation, palette, lastFlows shape/finite)
+ * ignore. A genuinely corrupt save (bad building data, an out-of-range tax
+ * rate, a duplicate id, a smuggled placeholder spec, a tampered funds
+ * triplet) is untouched by this and still fails on retry — the check keeps
+ * its teeth.
+ *
+ * NOT written into the restored state: the stored `lastFlows` stays as the
+ * historical record it always was — the Flows UI is stale only until the
+ * next tick, exactly as before this bug existed. Keeping the stored triplet
+ * untouched and re-deriving the override fresh on every restore attempt
+ * means a SECOND restore of the same (still-unticked) state goes through
+ * this identical, non-laundering retry again — never a "fixed" value baked
+ * in that could itself drift from a later tampering.
+ */
+function recomputeFlowsOverride(state: SimState): RecomputedFlowsOverride {
+  const { inflows, outflows } = computeFlows(state);
+  return { inflows, outflows, population: state.population };
+}
+
+/**
+ * Run the consistency gate, and ONLY if it fails, retry once passing a fresh
+ * `actualFlowsOverride` (recomputeFlowsOverride) so ONLY the four per-line
+ * policy-sensitive checks re-evaluate against current-state flows;
+ * conservation and every other check keep reading the real, untouched state
+ * both times. The returned state is ALWAYS the input state, unmodified —
+ * this function only decides which report to trust.
+ *
+ * A state whose lastFlows was already fresh (the overwhelmingly common
+ * case — a tick just ran, nothing discretionary happened after it) never
+ * even reaches the retry, so its report is byte-identical to
+ * runConsistencyChecks(state) alone — no behaviour change for the common
+ * path.
+ *
+ * A failure the override does NOT fix (a duplicate building id, an
+ * out-of-range tax rate, a smuggled placeholder spec, a non-finite funds
+ * value, or — the tampered-funds attack this split exists to stop — a
+ * fundsAtTickEnd/fundsAtTickStart hand-edited beyond what the REAL stored
+ * lastFlows accounts for) still fails on the retry exactly as it did before
+ * this fix, because conservation is never handed the override.
+ */
+function checkConsistencyRecoveringStaleFlows(state: SimState): ConsistencyReport {
+  const report = runConsistencyChecks(state);
+  if (report.failures === 0) return report;
+  const override = recomputeFlowsOverride(state);
+  const retryReport = runConsistencyChecks(state, override);
+  return retryReport.failures === 0 ? retryReport : report;
+}
+
+/**
  * Restore from the most recent savepoint. Replays the journal tail to reconstruct
  * the end state, verifies consistency, and returns the restored state. Always fail-safe:
  * any error (missing savepoint, corrupt JSON, consistency check failure) returns
@@ -328,7 +413,11 @@ export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
     state = { ...state, nextId: nextSafeBuildingId(state.buildings) };
 
     // Verify consistency BEFORE replay (snapshot should already be consistent).
-    const beforeReport = runConsistencyChecks(state);
+    // BUG-603: a baked-in-snapshot autosave (a policy toggle etc. happened,
+    // then autosave fired with no further journal tail) leaves this snapshot's
+    // lastFlows stale relative to its own taxRates/policies/buildings — retry
+    // with a recompute before failing (see checkConsistencyRecoveringStaleFlows).
+    const beforeReport = checkConsistencyRecoveringStaleFlows(state);
     if (beforeReport.failures > 0) {
       return {
         success: false,
@@ -348,7 +437,10 @@ export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
     state = { ...state, nextId: nextSafeBuildingId(state.buildings) };
 
     // Verify consistency AFTER replay (should still be consistent after deterministic replay).
-    const afterReport = runConsistencyChecks(state);
+    // BUG-603: the journal tail can itself end on a non-tick action (e.g. tick,
+    // then a policy toggle, then autosave) — retry with a recompute before
+    // failing, exactly like the pre-replay gate above.
+    const afterReport = checkConsistencyRecoveringStaleFlows(state);
     if (afterReport.failures > 0) {
       return {
         success: false,

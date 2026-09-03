@@ -503,6 +503,295 @@ describe('savepoint: persistence and restoration', () => {
   });
 });
 
+// ===== BUG-603: stale lastFlows must not reject a savepoint on restore =====
+//
+// Repro (integration soak, deterministic): a save whose journal tail — or
+// whose baked-in snapshot — ends on a NON-TICK discretionary action (a
+// policy toggle, a tax-rate change, a build) is REJECTED on load, because
+// runConsistencyChecks' flows-vs-recompute layer (flows.upkeep-total-matches
+// / flows.business-tax-matches / flows.wages-matches) compares LIVE-
+// recomputed flows (reflecting the post-action state) against the STORED
+// lastFlows (which only refreshes on 'tick'). Aaron ruling Q100079=A: on
+// restore, RECOMPUTE before the consistency gate — never weaken the check,
+// make it true by recomputing.
+//
+// TIGHTENED after an independent REJECT round: the first version of this fix
+// back-derived fundsAtTickStart from the recomputed flow sums to keep the
+// funds-vs-flows conservation check "true", which made conservation a
+// tautology — a hand-tampered fundsAtTickEnd was silently laundered through
+// the retry. The corrected split (replay.ts's
+// checkConsistencyRecoveringStaleFlows / recomputeFlowsOverride,
+// consistency.ts's runConsistencyChecks actualFlowsOverride param):
+// conservation ALWAYS reads the real, stored lastFlows + funds triplet
+// (never legitimately goes stale from a post-tick action, so it never needs
+// recovering); ONLY the four per-line policy-sensitive checks (Council Tax /
+// Business Tax / Wages / Upkeep) retry against a fresh recompute. Nothing is
+// written back into the restored state — the stored lastFlows stays the
+// historical record it always was.
+
+describe('BUG-603: restore recovers from a stale-lastFlows false-positive rejection', () => {
+  class MockStorage {
+    constructor() {
+      this.data = {};
+    }
+    getItem(key) {
+      return this.data[key] || null;
+    }
+    setItem(key, value) {
+      this.data[key] = value;
+    }
+    removeItem(key) {
+      delete this.data[key];
+    }
+  }
+
+  /**
+   * A state with real population/upkeep/tax so toggling a policy or tax rate
+   * actually changes the recomputed flows (an all-zero city would toggle
+   * austerity against 0-value flows and the check would never diverge —
+   * proving nothing). Roads + a residential + a commercial building, ticked
+   * forward until population/taxes are flowing.
+   */
+  function buildPopulatedState() {
+    let s = initialState();
+    // Deterministic debug funds + full catalogue unlock (same idiom as
+    // gamesave-roundtrip-fidelity.test.mjs's buildRichState) so the specs
+    // below are affordable/placeable regardless of the fresh city's starting
+    // level/treasury — not the gameplay path under test, just a way to get a
+    // populated, flow-bearing city.
+    s = reducer(s, { type: 'debugFunds', amount: 500_000_000 });
+    s = reducer(s, { type: 'unlockAll' });
+    const roadTiles = [];
+    for (let x = 0; x <= 20; x++) roadTiles.push({ x, y: 10 });
+    roadTiles.push({ x: 10, y: 11 });
+    roadTiles.push({ x: 15, y: 11 });
+    s = reducer(s, { type: 'placeRoadPath', spec: 'road', tiles: roadTiles });
+    s = reducer(s, { type: 'place', spec: 'res_estate', x: 10, y: 12 });
+    s = reducer(s, { type: 'place', spec: 'com_shop', x: 15, y: 12 });
+    for (let i = 0; i < 100; i++) s = reducer(s, { type: 'tick' });
+    // Sanity: prove the fixture actually exercises real flows before relying
+    // on it to reproduce the bug.
+    assert.ok(s.population > 0, 'expected population to have grown');
+    assert.ok(s.lastFlows.outflows.some((f) => f.value > 0), 'expected non-zero outflows');
+    return s;
+  }
+
+  test('1. soak repro: tick -> policy toggle (austerity) in the TAIL -> savepoint -> restore SUCCEEDS', () => {
+    const storage = new MockStorage();
+    const snapshotState = buildPopulatedState();
+
+    // Tail: one more tick, then a discretionary policy toggle — no tick
+    // after it, so lastFlows is stale relative to the toggled policies by
+    // the time the savepoint is taken.
+    let tailState = reducer(snapshotState, { type: 'tick' });
+    tailState = reducer(tailState, { type: 'policy', id: 'austerity' });
+    assert.equal(tailState.policies.austerity, true, 'expected austerity turned on');
+
+    const tail = [
+      { tick: snapshotState.tick, action: { type: 'tick' } },
+      { tick: tailState.tick, action: { type: 'policy', id: 'austerity' } },
+    ];
+
+    // Prove this WOULD have failed pre-fix: the post-replay state's live
+    // recompute (austerity ON) diverges from its own stored lastFlows
+    // (austerity OFF, from the 'tick' before the toggle).
+    const rawReport = runConsistencyChecks(tailState);
+    assert.ok(rawReport.failures > 0, 'expected the raw (unrecovered) state to fail consistency');
+
+    const savepoint = createSavepoint(snapshotState, tail, new Date('2026-09-03T00:00:00Z'));
+    persistSavepoint(storage, savepoint);
+
+    const result = restoreFromSavepoint(storage);
+    assert.ok(result.success, `restore should succeed, reason: ${result.reason}`);
+    assert.equal(result.replayed, 2);
+    assert.equal(result.state.policies.austerity, true);
+    // NOTE: nothing is written back into result.state (see the ruling above),
+    // so a bare runConsistencyChecks(result.state) call — with no override —
+    // is EXPECTED to still report the same per-line staleness until the next
+    // real tick refreshes lastFlows; that is not a regression, it is the
+    // documented trade-off. The only thing that must hold is that
+    // restoreFromSavepoint itself (which runs the split retry) succeeds,
+    // asserted above.
+  });
+
+  test('2. autosave-after-action shape: the toggle is BAKED INTO the snapshot itself (empty tail) -> restore SUCCEEDS', () => {
+    const storage = new MockStorage();
+    let s = buildPopulatedState();
+    // The toggle happens, then autosave fires immediately — no further tick,
+    // no journal tail at all. The SNAPSHOT itself carries stale lastFlows.
+    s = reducer(s, { type: 'policy', id: 'austerity' });
+
+    const rawReport = runConsistencyChecks(s);
+    assert.ok(rawReport.failures > 0, 'expected the raw baked-in-snapshot state to fail consistency');
+
+    const savepoint = createSavepoint(s, [], new Date('2026-09-03T00:01:00Z'));
+    persistSavepoint(storage, savepoint);
+
+    const result = restoreFromSavepoint(storage);
+    assert.ok(result.success, `restore should succeed, reason: ${result.reason}`);
+    assert.equal(result.replayed, 0);
+    assert.equal(result.state.policies.austerity, true);
+  });
+
+  test('3. tax + place as the tail action -> restore SUCCEEDS (same class as the policy toggle)', () => {
+    const storage = new MockStorage();
+    const snapshotState = buildPopulatedState();
+
+    let tailState = reducer(snapshotState, { type: 'tick' });
+    tailState = reducer(tailState, { type: 'tax', which: 'commercial', rate: 25 });
+    tailState = reducer(tailState, { type: 'place', spec: 'res_estate', x: 20, y: 12 });
+
+    const tail = [
+      { tick: snapshotState.tick, action: { type: 'tick' } },
+      { tick: tailState.tick, action: { type: 'tax', which: 'commercial', rate: 25 } },
+      { tick: tailState.tick, action: { type: 'place', spec: 'res_estate', x: 20, y: 12 } },
+    ];
+
+    const rawReport = runConsistencyChecks(tailState);
+    assert.ok(rawReport.failures > 0, 'expected the raw (unrecovered) state to fail consistency');
+
+    const savepoint = createSavepoint(snapshotState, tail, new Date('2026-09-03T00:02:00Z'));
+    persistSavepoint(storage, savepoint);
+
+    const result = restoreFromSavepoint(storage);
+    assert.ok(result.success, `restore should succeed, reason: ${result.reason}`);
+    assert.equal(result.replayed, 3);
+    assert.equal(result.state.taxRates.commercial, 25);
+  });
+
+  test('4. RED-PROOF: a GENUINELY corrupt save (beyond policy staleness) is STILL rejected', () => {
+    const storage = new MockStorage();
+    const s = buildPopulatedState();
+
+    // Corrupt something the flows recompute cannot ever paper over: an
+    // out-of-range tax rate (shape-validation layer, taxRates.commercial,
+    // consistency.ts) — independent of the flows-vs-recompute layer this fix
+    // touches, so recomputing lastFlows must not make this pass.
+    const corrupted = { ...s, taxRates: { ...s.taxRates, commercial: 250 } };
+    assert.ok(
+      runConsistencyChecks(corrupted).failures > 0,
+      'sanity: the hand-broken state must fail consistency raw'
+    );
+
+    const savepoint = createSavepoint(corrupted, [], new Date('2026-09-03T00:03:00Z'));
+    persistSavepoint(storage, savepoint);
+
+    const result = restoreFromSavepoint(storage);
+    assert.ok(!result.success, 'a genuinely corrupt save must still be rejected');
+    assert.match(result.reason, /Snapshot failed consistency/);
+  });
+
+  test('4b. RED-PROOF: duplicate building ids (beyond policy staleness) is STILL rejected', () => {
+    const storage = new MockStorage();
+    const s = buildPopulatedState();
+    assert.ok(s.buildings.length >= 2, 'need at least 2 buildings to duplicate an id');
+
+    // Corrupt a second building's id to collide with the first — the
+    // buildings.ids-unique shape check, wholly unrelated to lastFlows.
+    const corruptedBuildings = s.buildings.map((b, i) => (i === 1 ? { ...b, id: s.buildings[0].id } : b));
+    const corrupted = { ...s, buildings: corruptedBuildings };
+    assert.ok(
+      runConsistencyChecks(corrupted).failures > 0,
+      'sanity: the hand-broken state must fail consistency raw'
+    );
+
+    const savepoint = createSavepoint(corrupted, [], new Date('2026-09-03T00:04:00Z'));
+    persistSavepoint(storage, savepoint);
+
+    const result = restoreFromSavepoint(storage);
+    assert.ok(!result.success, 'a genuinely corrupt save must still be rejected');
+  });
+
+  // ===== TAMPER REGRESSIONS (independent REJECT round finding) =====
+  //
+  // The FIRST version of this fix back-derived fundsAtTickStart from the
+  // recomputed flow sums so the conservation check would always come out
+  // "true" — which made it a tautology: a hand-tampered fundsAtTickEnd was
+  // silently ACCEPTED through the exact same retry path that legitimately
+  // recovers a stale-policy save. These two cases are the attacker's
+  // reproduction (+1,000,000 and -500,000) and must PERMANENTLY reject,
+  // specifically while the retry path is genuinely engaged (a real,
+  // legitimate policy-staleness condition is present too) — proving
+  // conservation is checked against the REAL stored funds triplet on every
+  // attempt, retry included, never against a value derived from the
+  // recomputed override.
+
+  function tamperFundsRejectionCase(delta) {
+    const storage = new MockStorage();
+    let s = buildPopulatedState();
+    // Legitimate staleness (same shape as test 2) — this alone WOULD restore
+    // successfully (proven by test 2 above), so the retry path is genuinely
+    // engaged here, not skipped because the raw check already passed.
+    s = reducer(s, { type: 'policy', id: 'austerity' });
+
+    const tampered = { ...s, fundsAtTickEnd: s.fundsAtTickEnd + delta };
+    const savepoint = createSavepoint(tampered, [], new Date('2026-09-03T00:09:00Z'));
+    persistSavepoint(storage, savepoint);
+
+    const result = restoreFromSavepoint(storage);
+    assert.ok(
+      !result.success,
+      `a fundsAtTickEnd tampered by ${delta} must be rejected even under a legitimate stale-flows retry`
+    );
+    assert.match(result.reason, /Snapshot failed consistency/);
+  }
+
+  test('6. TAMPER REGRESSION: fundsAtTickEnd +1,000,000 is REJECTED through the retry path', () => {
+    tamperFundsRejectionCase(1_000_000);
+  });
+
+  test('7. TAMPER REGRESSION: fundsAtTickEnd -500,000 is REJECTED through the retry path', () => {
+    tamperFundsRejectionCase(-500_000);
+  });
+
+  test('5. determinism: restore -> save -> restore is byte-stable', () => {
+    const storage = new MockStorage();
+    const snapshotState = buildPopulatedState();
+    let tailState = reducer(snapshotState, { type: 'tick' });
+    tailState = reducer(tailState, { type: 'policy', id: 'austerity' });
+    const tail = [
+      { tick: snapshotState.tick, action: { type: 'tick' } },
+      { tick: tailState.tick, action: { type: 'policy', id: 'austerity' } },
+    ];
+    persistSavepoint(storage, createSavepoint(snapshotState, tail, new Date('2026-09-03T00:05:00Z')));
+
+    const first = restoreFromSavepoint(storage);
+    assert.ok(first.success, `first restore should succeed, reason: ${first.reason}`);
+
+    // Re-save the restored state (empty tail — it is already fully replayed)
+    // and restore again; the two restored states must be identical.
+    const storage2 = new MockStorage();
+    persistSavepoint(storage2, createSavepoint(first.state, [], new Date('2026-09-03T00:06:00Z')));
+    const second = restoreFromSavepoint(storage2);
+    assert.ok(second.success, `second restore should succeed, reason: ${second.reason}`);
+
+    assert.deepEqual(second.state, first.state, 'restore -> save -> restore must be byte-stable');
+  });
+
+  test('unaffected path: a savepoint whose lastFlows is already fresh restores byte-identical to the snapshot (no regression)', () => {
+    const storage = new MockStorage();
+    const s1 = buildPopulatedState();
+    const savepoint = createSavepoint(s1, [], new Date('2026-09-03T00:07:00Z'));
+    persistSavepoint(storage, savepoint);
+
+    const result = restoreFromSavepoint(storage);
+    assert.ok(result.success, `restore should succeed, reason: ${result.reason}`);
+    // Normalise both sides through the same JSON round-trip the savepoint
+    // storage itself uses (encode(JSON.stringify(...)) / JSON.parse(decode(...)))
+    // before comparing — matches the precedent in
+    // gamesave-roundtrip-fidelity.test.mjs: JSON turns a stray `-0` ledger
+    // amount (e.g. a free-zone placement) into `0` on BOTH sides equally, a
+    // pre-existing storage-format quirk unrelated to BUG-603, so normalising
+    // identically on both sides still catches a genuine field drop/mistype
+    // without masking one.
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(result.state)),
+      JSON.parse(JSON.stringify(s1)),
+      'a consistent snapshot must restore untouched, byte-identical'
+    );
+  });
+});
+
 // ===== BUG-437 BAR-2: persistJournal quota coverage =====
 //
 // journal.ts:166-190's real contract: pre-shrink BEFORE any setItem is attempted
