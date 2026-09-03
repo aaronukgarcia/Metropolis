@@ -52,6 +52,20 @@ test('GR#15 completeness: every PALETTE family has an explicit domain in PALETTE
   }
 });
 
+test('BUG-608 reverse-completeness: every PALETTE_DOMAIN key matches a live PALETTE family title (no stale/orphan mapping)', async () => {
+  const { PALETTE, PALETTE_DOMAIN } = await import('../src/sim/data.ts');
+  const liveTitles = new Set(PALETTE.map((fam) => fam.title));
+  for (const key of Object.keys(PALETTE_DOMAIN)) {
+    assert.ok(
+      liveTitles.has(key),
+      `PALETTE_DOMAIN key "${key}" does not match any live PALETTE family title — this is a stale/orphan mapping ` +
+        'left behind after a family was renamed or removed from PALETTE. It currently persists undetected forever ' +
+        '(the forward completeness check above only proves every PALETTE family HAS a domain, never that every ' +
+        'domain entry still points at a real family) and silently wastes a slot that will never render.',
+    );
+  }
+});
+
 test('paletteByDomain is a lossless repartition of PALETTE (no family dropped, none duplicated)', async () => {
   const { PALETTE, paletteByDomain } = await import('../src/sim/data.ts');
   const grouped = paletteByDomain();

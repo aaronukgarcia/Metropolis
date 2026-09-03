@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState } from 'react';
+import { createContext, useCallback, useContext, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { codedError } from '../sim/backend';
 
@@ -19,6 +19,19 @@ const WORKING_CHIP_DELAY_MS = 250;
 
 export function BusyProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
+  // BUG-614: overlapping run() calls each had their own unconditional
+  // setBusy(false) at the end of their 60ms linger — the LAST call to settle
+  // would win, but a call that settles EARLIER (while a sibling call is
+  // still in flight) would flip busy=false out from under the still-running
+  // sibling, flickering the chip off mid-action. activeRef is a plain
+  // in-flight counter (not React state — it must not itself trigger a
+  // render, and reads/writes here are always inside the same macrotask
+  // callback so there is no concurrent-mutation hazard): every run() call
+  // increments it once it starts (after the existing 30ms defer, matching
+  // where its chip timer starts) and decrements it once its own 60ms linger
+  // elapses. setBusy(false) fires only when the decrement brings the count
+  // to zero, i.e. only the LAST outstanding call's linger can hide the chip.
+  const activeRef = useRef(0);
   const run = useCallback((fn: () => void | Promise<void>) => {
     // UNCHANGED scheduling semantics: this 30ms defer lets React paint
     // before the (possibly synchronous, blocking) fn runs — it has nothing
@@ -31,6 +44,7 @@ export function BusyProvider({ children }: { children: ReactNode }) {
       // chip never appears for a fast (<250ms) action. If it fires first,
       // the chip shows and stays up through the existing 60ms linger below.
       let settled = false;
+      activeRef.current += 1;
       const chipTimer = setTimeout(() => {
         if (!settled) setBusy(true);
       }, WORKING_CHIP_DELAY_MS);
@@ -41,9 +55,14 @@ export function BusyProvider({ children }: { children: ReactNode }) {
         } finally {
           settled = true;
           clearTimeout(chipTimer);
-          // Existing 60ms linger — unchanged. A harmless no-op setBusy(false)
-          // when the chip was never shown (fast path).
-          setTimeout(() => setBusy(false), 60);
+          // Existing 60ms linger — unchanged. BUG-614: the setBusy(false) at
+          // the end of it is now guarded by the refcount — it only fires
+          // when THIS call's decrement is the one that brings the in-flight
+          // count to zero, i.e. no sibling call is still outstanding.
+          setTimeout(() => {
+            activeRef.current = Math.max(0, activeRef.current - 1);
+            if (activeRef.current === 0) setBusy(false);
+          }, 60);
         }
       })();
     }, 30);
