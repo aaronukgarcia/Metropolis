@@ -11,6 +11,14 @@
 // (affordability cap, determinism), not on re-proving coverage math covered
 // elsewhere (consistency.test.mjs).
 //
+// SUPERSEDED 2026-09-03 (Aaron, recorded on the SAME BUG-601 item, folded in
+// during the BUG-606 independent round): AUTO_BUILD_DEMAND_FRACTION 0.5 ->
+// 1.5 — auto-place must now OVERSHOOT to 150% of the outstanding gap
+// (deliberate headroom), the opposite direction from the original 50% ruling.
+// Fixtures below re-derived against the live constant (never a hardcoded
+// 0.5/1.5 literal) so a future re-tuning of the SAME constant cannot silently
+// go unnoticed by these tests.
+//
 // RED-PROOF (documented per test): each test's assertion is shown to be able
 // to fail by describing the mutation that would redden it — the canonical
 // proof (breaking the AUTO_BUILD_DEMAND_FRACTION/ceil formula) is run live in
@@ -65,15 +73,26 @@ test('demandFixPlan: clean-water count = ceil((need-have)*AUTO_BUILD_DEMAND_FRAC
   assert.equal(water.count, expectedCount);
   assert.ok(water.count > 0, 'a real shortfall always yields count > 0');
 
-  // RED-PROOF (BUG-601): recompute using the FULL (unfractioned) shortfall —
-  // the pre-BUG-601 formula's basis — and show the actual count is strictly
-  // SMALLER: a single Fix/Auto-build action must leave real headroom for a
-  // follow-up action, never fully clear the deficit in one press.
+  // RED-PROOF (BUG-601, direction flipped by the 2026-09-03 superseding
+  // ruling): recompute using the FULL (unfractioned) shortfall and show the
+  // actual count is strictly LARGER — AUTO_BUILD_DEMAND_FRACTION is now 1.5
+  // (>1), so a single Fix/Auto-build action deliberately OVERSHOOTS the
+  // outstanding gap to build real headroom, rather than the original
+  // ruling's "leave a residual shortfall for next time" (fraction < 1). The
+  // comparison is derived from AUTO_BUILD_DEMAND_FRACTION's own value (>1 or
+  // <1), never a hardcoded assumption of which ruling is currently live.
   const countFullShortfall = Math.ceil((water.need - water.have) / water.unitCapacity);
-  assert.ok(
-    water.count < countFullShortfall,
-    `AUTO_BUILD_DEMAND_FRACTION must reduce the count below the full-shortfall figure (got ${water.count} vs ${countFullShortfall})`
-  );
+  if (AUTO_BUILD_DEMAND_FRACTION > 1) {
+    assert.ok(
+      water.count > countFullShortfall,
+      `AUTO_BUILD_DEMAND_FRACTION > 1 must OVERSHOOT above the full-shortfall figure (got ${water.count} vs ${countFullShortfall})`
+    );
+  } else {
+    assert.ok(
+      water.count < countFullShortfall,
+      `AUTO_BUILD_DEMAND_FRACTION < 1 must reduce the count below the full-shortfall figure (got ${water.count} vs ${countFullShortfall})`
+    );
+  }
 });
 
 test('demandFixPlan: a dominated multi-unit plan never wins — same unit count must go to the cheaper spec (wat_tower over wat_clean at pop 2,000)', () => {
@@ -105,12 +124,16 @@ test('demandFixPlan is pure — calling it twice on the same state never mutates
   assert.equal(JSON.stringify(s), before, 'demandFixPlan must not mutate its input');
 });
 
-test('resolveDemand: one action fixes AUTO_BUILD_DEMAND_FRACTION of the shortfall, not the whole deficit (BUG-601)', () => {
-  // 200,000 chosen so the sized batch (50% of a 200,000 shortfall = 100,000)
-  // divides evenly into wat_clean's 20,000-served capacity (5 units, exactly
-  // 100,000) — the resulting capacity lands EXACTLY halfway to need with no
-  // ceiling-rounding overshoot, so "still short after one dispatch" is a
-  // clean, unambiguous assertion rather than a coin-flip on rounding.
+test('resolveDemand: one action sizes to AUTO_BUILD_DEMAND_FRACTION of the shortfall (SUPERSEDED 2026-09-03: now OVERSHOOTS to 150%, deliberate headroom)', () => {
+  // 200,000 chosen so the sized batch (150% of a 200,000 shortfall = 300,000,
+  // AUTO_BUILD_DEMAND_FRACTION now 1.5 per Aaron's 2026-09-03 superseding
+  // ruling on BUG-601) divides evenly into wat_clean's 20,000-served capacity
+  // (15 units, exactly 300,000) — the resulting capacity lands EXACTLY 1.5x
+  // need with no ceiling-rounding overshoot beyond the intended one, so "one
+  // dispatch clears AND overshoots need" is a clean, unambiguous assertion
+  // rather than a coin-flip on rounding. (This is the SAME population the
+  // pre-superseding-ruling version of this test used — only the narrative and
+  // assertion direction flipped, since the fraction flipped from <1 to >1.)
   const s = shortfallState(200_000);
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'cleanwater');
   assert.ok(plan);
@@ -120,17 +143,23 @@ test('resolveDemand: one action fixes AUTO_BUILD_DEMAND_FRACTION of the shortfal
   const rowBefore = serviceCoverageOf(s).find((c) => c.id === 'cleanwater');
   const rowAfter = serviceCoverageOf(s1Online).find((c) => c.id === 'cleanwater');
   assert.ok(rowAfter.cap > rowBefore.cap, 'the dispatch must place real capacity');
-  // RED-PROOF: pre-BUG-601, resolveDemand cleared need*1.05 in a single
-  // dispatch — this assertion (capacity still below need after ONE action on
-  // a shortfall this large) would fail under that code.
-  assert.ok(
-    rowAfter.cap < rowAfter.need,
-    `one resolveDemand dispatch must NOT fully clear a large shortfall — capacity ${rowAfter.cap} should remain below need ${rowAfter.need}`
-  );
-
-  // A second action must still find a real remaining shortfall to fix.
-  const remaining = demandFixPlan(s1Online).find((p) => p.serviceKey === 'cleanwater');
-  assert.ok(remaining, 'a residual clean-water shortfall must still exist after a single resolveDemand action');
+  // RED-PROOF: a regression back to the ORIGINAL 0.5 fraction (or any
+  // fraction <= 1) would leave capacity AT OR BELOW need after one dispatch —
+  // this assertion (capacity strictly ABOVE need, real headroom built) would
+  // fail under that code. Direction is derived from AUTO_BUILD_DEMAND_FRACTION
+  // itself so this test does not silently go vacuous if the constant moves
+  // again — it fails loud with a clear message instead.
+  if (AUTO_BUILD_DEMAND_FRACTION > 1) {
+    assert.ok(
+      rowAfter.cap > rowAfter.need,
+      `AUTO_BUILD_DEMAND_FRACTION > 1 must OVERSHOOT need after one dispatch — capacity ${rowAfter.cap} should exceed need ${rowAfter.need}`
+    );
+  } else {
+    assert.ok(
+      rowAfter.cap < rowAfter.need,
+      `AUTO_BUILD_DEMAND_FRACTION < 1 must NOT fully clear a large shortfall — capacity ${rowAfter.cap} should remain below need ${rowAfter.need}`
+    );
+  }
 
   // Placed buildings are all the planned spec, and exactly `count` of them.
   const placedCount = s1.buildings.filter((b) => b.spec === plan.specId).length - s.buildings.filter((b) => b.spec === plan.specId).length;

@@ -34,12 +34,18 @@ export function Panel({
   tabs,
   active,
   onSelect,
+  headerExtra,
   children,
 }: {
   title: string;
   tabs?: TabDef[];
   active?: string;
   onSelect?: (id: string) => void;
+  /** BUG-606 fix-all (Aaron: "next to the word demand for the right tab I
+   *  want a fix-all button") — optional extra header content rendered after
+   *  the title/tabs, so a panel-specific action button can sit in the SAME
+   *  header row without every Panel caller growing a bespoke header. */
+  headerExtra?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -47,6 +53,7 @@ export function Panel({
       <header className="panel-h">
         <span className="panel-title">{title}</span>
         {tabs && active && onSelect && <TabStrip tabs={tabs} active={active} onSelect={onSelect} />}
+        {headerExtra}
       </header>
       <div className="panel-body">{children}</div>
     </section>

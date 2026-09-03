@@ -95,6 +95,11 @@ export function isStateAffecting(action: Action): boolean {
     // (funds/buildings/xp change) — must journal + replay identically.
     case 'resolveDemand':
       return true;
+    // BUG-606 fix-all: same mutation path as 'resolveDemand'/'place' (funds/
+    // buildings/xp change across multiple services in one action) — must
+    // journal + replay identically.
+    case 'resolveDemandAll':
+      return true;
     case 'bulldoze':
       return true;
     // FEAT-1972079923 inc2 (AC-4): forced asset sale — removes a building and

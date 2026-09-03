@@ -25,6 +25,7 @@ import {
   isRoadSpec,
   isRailSpec,
   computeFailedGates,
+  AUTO_BUILD_DEMAND_PERCENT,
 } from '../sim/data';
 import { computePath, type Tile } from '../sim/roadTracker';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
@@ -48,7 +49,7 @@ import { fmtMoney, fmtNum, formatPower } from '../sim/utils';
 import { buildingProfile, specClassLabel, buildingCopyPayload, type ProfileLine } from '../sim/profile';
 import { useBlockingOverlay, useEscapeKey } from './overlayManager';
 import { BLOCKING_OVERLAY_ID, BLOCKING_OVERLAY_RANK } from './overlayLayers';
-import { formatBuildingCount, DEMAND_FIX_SERVICE_LABELS, worstDemandFix } from './demandFixUi';
+import { formatBuildingCount, DEMAND_FIX_SERVICE_LABELS, worstDemandFix, demandFixMessage } from './demandFixUi';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 48;
@@ -801,8 +802,19 @@ export function MapView() {
         // wording BUG-583 landed for the same reason — no English pluralisation
         // rule survives the full SPECS catalogue (e.g. "Water Works").
         const buildingLabel = formatBuildingCount(sp.name, fix.count);
+        // BUG-606 (Aaron, 2026-09-03: "'citizens want shops' no help - how
+        // much what type ... is this one hypermarket or 50?"): append the
+        // SIZED, plan-derived detail (raw shortfall + the chosen pick's cost
+        // + the next-best alternative when one exists) — demandFixMessage()
+        // reads the SAME `fix` object this branch's click handler dispatches
+        // against, so the two can never disagree (agreement-by-construction).
+        // The original "Do you want to place N x Name? (fixes P% of X
+        // demand)" prefix is kept in shape so it stays a real question with a
+        // click affordance; the detail is additive. `AUTO_BUILD_DEMAND_PERCENT`
+        // (GR#15) so this sentence can never hardcode a stale "50%" once
+        // Aaron's 2026-09-03 superseding ruling changed the real fraction.
         return {
-          text: `Do you want to place ${buildingLabel}? (fixes 50% of ${label} demand)`,
+          text: `Do you want to place ${buildingLabel}? (fixes ${AUTO_BUILD_DEMAND_PERCENT}% of ${label} demand) — ${demandFixMessage(fix)}`,
           go: () => {
             run(() => {
               dispatch({ type: 'resolveDemand', serviceKey: fix.serviceKey });

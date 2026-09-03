@@ -128,21 +128,22 @@ test('FEAT-2326609728 inc2 (a): advisor shows "place N <building>s" with the cor
     const { demandFixPlan, SPECS } = await import('../src/sim/data.ts');
     const { MapView } = await import('../src/components/MapView.tsx');
 
-    // population 16,800: every population-scaled service (gp/hosp/police/
-    // fire/cleanwater/waste) ties on raw gap (need-have = 16,800), and
-    // 'cleanwater' wins the alphabetical tie-break. BUG-601: demandFixPlan()
-    // sizes to AUTO_BUILD_DEMAND_FRACTION (50%) of that gap = a fixAmount of
-    // 8,400 — the SAME 8,400 the pre-BUG-601 full-shortfall version of this
-    // test used at population 8,000, so the "1 dam not 20 towers" spec choice
-    // is unchanged: optimalProvider() picks Water Works (wat_clean, served
-    // 20,000, the cheapest total plan among the units that can singlehandedly
-    // clear 8,400) over Water Tower — a single unit, count 1.
-    const state = shortfallState(initialState, 16_800);
+    // population 13,000: every population-scaled service (gp/hosp/police/
+    // fire/cleanwater/waste) ties on raw gap (need-have = 13,000), and
+    // 'cleanwater' wins the alphabetical tie-break. SUPERSEDED 2026-09-03:
+    // AUTO_BUILD_DEMAND_FRACTION is now 1.5 (was 0.5) — demandFixPlan() sizes
+    // to 1.5 * that gap = a fixAmount of 19,500, so the "1 dam not 20 towers"
+    // spec choice is unchanged: optimalProvider() picks Water Works
+    // (wat_clean, served 20,000, the cheapest total plan among the units that
+    // can singlehandedly clear 19,500) over Water Tower — a single unit,
+    // count 1. (Population re-derived from the pre-superseding-ruling 16,800
+    // so a single unit still clears the NEW, larger fixAmount.)
+    const state = shortfallState(initialState, 13_000);
     const plan = demandFixPlan(state);
     const top = expectedWorstFix(plan);
-    assert.ok(top, 'precondition: population 16,800 with zero service buildings must yield a real shortfall');
+    assert.ok(top, 'precondition: population 13,000 with zero service buildings must yield a real shortfall');
     assert.equal(top.serviceKey, 'cleanwater', 'precondition: cleanwater must win the deterministic tie-break at this population');
-    assert.equal(top.count, 1, 'precondition: one Water Works (served 20,000) clears the 8,400 fixAmount in a single unit');
+    assert.equal(top.count, 1, 'precondition: one Water Works (served 20,000) clears the 19,500 fixAmount in a single unit');
     const spName = SPECS[top.specId].name;
     assert.equal(spName, 'Water Works');
 
@@ -197,13 +198,13 @@ test('FEAT-2326609728 inc2 (b): a DEMAND-panel row in shortfall shows a "Fix (N)
     const { demandFixPlan, SPECS } = await import('../src/sim/data.ts');
     const { DemandDock } = await import('../src/components/left/DemandDock.tsx');
 
-    const state = shortfallState(initialState, 16_800);
+    const state = shortfallState(initialState, 13_000);
     const plan = demandFixPlan(state);
     const water = plan.find((p: any) => p.serviceKey === 'cleanwater');
     assert.ok(water, 'precondition: cleanwater must be in the plan (row-lookup key must actually exist — a typo would silently show zero buttons)');
-    // FEAT-demanddock-overhaul / BUG-601: at pop 16,800 (50% fixAmount 8,400)
-    // optimalProvider() picks Water Works (1 unit clears the 8,400 fixAmount)
-    // over Water Tower — see (a).
+    // FEAT-demanddock-overhaul / BUG-601 (SUPERSEDED 2026-09-03, fraction now
+    // 1.5): at pop 13,000 (fixAmount 19,500) optimalProvider() picks Water
+    // Works (1 unit clears the 19,500 fixAmount) over Water Tower — see (a).
     assert.equal(water.count, 1);
     assert.equal(SPECS[water.specId].name, 'Water Works');
 
@@ -321,20 +322,19 @@ test('BUG-587 (d): "Water Works" x2 renders as "2 x Water Works" (never "Water W
     const { MapView } = await import('../src/components/MapView.tsx');
     const { DemandDock } = await import('../src/components/left/DemandDock.tsx');
 
-    // Population 42,000: BUG-601's 50% fixAmount (21,000) needs 2x Water
-    // Works (served 20,000/unit) — the SAME 21,000 the pre-BUG-601
-    // full-shortfall version of this test used at population 20,000 — and
-    // cleanwater independently wins the worst-gap ranking. Verified by direct
-    // exploration of demandFixPlan() at this population during development
-    // (see PR notes); re-verified here as a precondition so a future
+    // Population 20,000: SUPERSEDED 2026-09-03 (AUTO_BUILD_DEMAND_FRACTION
+    // 0.5 -> 1.5) fixAmount (30,000) needs 2x Water Works (served
+    // 20,000/unit) — and cleanwater independently wins the worst-gap ranking.
+    // Verified by direct exploration of demandFixPlan() at this population
+    // during development; re-verified here as a precondition so a future
     // SPECS/optimalProvider() rebalance that changes the winning service or
     // count fails LOUD rather than silently making this test vacuous.
-    const state = shortfallState(initialState, 42_000);
+    const state = shortfallState(initialState, 20_000);
     const plan = demandFixPlan(state);
     const top = expectedWorstFix(plan);
-    assert.ok(top, 'precondition: population 42,000 must yield a real shortfall');
+    assert.ok(top, 'precondition: population 20,000 must yield a real shortfall');
     assert.equal(top.serviceKey, 'cleanwater', 'precondition: cleanwater must win the worst-gap ranking at this population');
-    assert.equal(top.count, 2, 'precondition: 2x Water Works must be needed to clear the 21,000 fixAmount (50% of the 42,000 shortfall)');
+    assert.equal(top.count, 2, 'precondition: 2x Water Works must be needed to clear the 30,000 fixAmount (AUTO_BUILD_DEMAND_FRACTION of the 20,000 shortfall)');
     assert.equal(SPECS[top.specId].name, 'Water Works');
 
     const { ctx: mapCtx } = makeCtx(state);

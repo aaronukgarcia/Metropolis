@@ -3373,15 +3373,47 @@ export function pickAutoSpec(
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
- * ⚠ BALANCE-NUMBER PLACEHOLDER — Aaron ruling BUG-601 (2026-09-02): a
- * shortfall-clearing action (the Fix (N) button, and now the Auto-build
- * click too) sizes to THIS fraction of the OUTSTANDING shortfall per action,
- * funds-capped otherwise — never the whole deficit in one press. Replaces
- * the prior `need*1.05` (fill to 100% + 5% headroom) behaviour, which Aaron
- * read as building far too much per click. Directional only, pending
- * Aaron's row-by-row balance pass.
+ * ⚠ BALANCE-NUMBER PLACEHOLDER — Aaron ruling BUG-601 (2026-09-02, SUPERSEDED
+ * 2026-09-03): a shortfall-clearing action (the Fix (N) button, Fix All, and
+ * Auto-build) sizes to THIS fraction of the OUTSTANDING shortfall per action,
+ * funds-capped otherwise — never a hand-picked absolute amount. Originally
+ * 0.5 (leave real headroom for a follow-up action, never fully resolve in one
+ * press); Aaron's 2026-09-03 superseding ruling on the SAME BUG-601 item
+ * raised it to 1.5 — auto-place must OVERSHOOT to 150% of the outstanding
+ * gap, deliberately building HEADROOM instead of leaving a shortfall, the
+ * opposite intent of the original 50% ruling but the SAME mechanism (one
+ * named constant, every caller derives its wording/count from it — GR#15,
+ * never a hardcoded "50%"/"150%" string). The funds-cap semantics are
+ * unchanged either way: this constant sizes the TARGET only; `placePlanItem`'s
+ * cost>0 && funds<cost guard still caps what actually gets PLACED. Directional
+ * only, pending Aaron's row-by-row balance pass.
  */
-export const AUTO_BUILD_DEMAND_FRACTION = 0.5;
+export const AUTO_BUILD_DEMAND_FRACTION = 1.5;
+
+/** Display-only percentage form of AUTO_BUILD_DEMAND_FRACTION (GR#15: every
+ *  "builds N%" string in the UI derives from the SAME constant above, never a
+ *  hand-typed "50%"/"150%" literal that could silently drift from the real
+ *  sizing arithmetic). */
+export const AUTO_BUILD_DEMAND_PERCENT = Math.round(AUTO_BUILD_DEMAND_FRACTION * 100);
+
+/**
+ * ⚠ BALANCE/PERF-NUMBER PLACEHOLDER (Aaron, independent round r2 follow-up,
+ * 2026-09-03) — a single 'resolveDemand'/'resolveDemandAll' dispatch places
+ * at most this many building UNITS in total, across however many services it
+ * touches. Without a cap, a real dogfood city (Aaron's own, ~1.4M population)
+ * can plan tens of thousands of units in one click (measured: pop 3M ->
+ * 18,718 planned units, 46.6s synchronous at pop 400k and DNF at pop 3M) —
+ * each unit walks findSpot()'s O(map) search plus a full 'place' mutation, so
+ * the whole click blocks the tab for the length of the batch, and the
+ * JOURNALED action then replays that same cost on every future load/replay
+ * forever. Deliberately a FIXED CONSTANT (no clock/RNG) — capping by unit
+ * COUNT keeps 'resolveDemand'/'resolveDemandAll' fully deterministic and
+ * replay-safe; a wall-clock or elapsed-time cap would NOT be (GR#21,
+ * Vestige "never wall-clock bounds"). 250 is a directional guess pending
+ * Aaron's real-city perf profiling — the right number depends on the actual
+ * findSpot()/place() cost per unit on real hardware, not guessed here.
+ */
+export const RESOLVE_DEMAND_ALL_MAX_UNITS = 250;
 
 /**
  * One shortfall-clearing build plan for a single service (BUG-601: sized to
@@ -3402,6 +3434,18 @@ export interface DemandFixPlanItem {
   /** Units to place to close AUTO_BUILD_DEMAND_FRACTION of the (need-have) gap
    *  (BUG-601) — always > 0 when this item is present. */
   count: number;
+  /** BUG-606: total cost (`count` * specId's placementCost) of the CHOSEN plan
+   *  — the same total-plan-cost optimalProvider()/rankedProviders() scored
+   *  this pick against, exposed so a demand notice can show a real £ figure
+   *  without re-deriving it. */
+  planCost: number;
+  /** BUG-606 ("is this one hypermarket or 50?") — the next-best scored
+   *  provider for the SAME fixAmount (rankedProviders()'s runner-up), so a
+   *  demand notice can show a concrete alternative ("N x <Name> or M x
+   *  <OtherName>") alongside the cheapest pick, agreement-by-construction
+   *  (never re-derived independently by the UI). Null only when a single
+   *  unlocked provider exists for this service. */
+  alternative: { specId: string; count: number; planCost: number } | null;
 }
 
 /**
@@ -3489,51 +3533,94 @@ const DEMAND_FIX_PROVIDERS: Record<
  * candidate set (step 1, unlocked+enterable) is empty — identical null
  * contract to cheapestProvider(), so no caller-side handling changes.
  */
-export function optimalProvider(s: SimState, serviceKey: string, budget: number, shortfall: number): Spec | null {
-  const rule = DEMAND_FIX_PROVIDERS[serviceKey];
-  if (!rule) return null;
+/** One scored candidate spec for a service's shortfall — see rankedProviders(). */
+export interface ProviderOption {
+  sp: Spec;
+  /** Units of `sp` needed to clear the shortfall this candidate was scored against. */
+  units: number;
+  /** units * placementCost(sp) — what the player is ACTUALLY charged for the
+   *  whole plan (D1 fix, BUG-606 independent round REJECT, 2026-09-03):
+   *  previously `units * sp.cost`, the catalogue price, which is £0-blind for
+   *  any 'zones'-category spec (parks) — a park plan priced at its FULL
+   *  catalogue cost (e.g. £150,000) when placementCost() (the field's own
+   *  doc comment, data.ts) says zoning is free. placementCost() is the SAME
+   *  function 'place'/placePlanItem() actually charge against, so this total
+   *  can never diverge from the real bill again. */
+  planCost: number;
+}
 
-  const candidates: { sp: Spec; units: number; planCost: number }[] = [];
+/**
+ * BUG-606 ("is this one hypermarket or 50?" — Aaron, 2026-09-03): the full,
+ * deterministically-ordered candidate ranking optimalProvider() picks its
+ * winner from. Extracted so demandFixPlan() can expose a concrete SECOND
+ * option (the runner-up) alongside the winner, letting a demand notice read
+ * "N x A or M x B" instead of a single unexplained pick — a pure ADDITION
+ * (optimalProvider()'s own contract/return value is unchanged, see below).
+ *
+ * Preference order (identical to the pre-existing optimalProvider() logic,
+ * now expressed as three concatenated, internally-sorted tiers instead of
+ * three independent "best so far" trackers — same winner, same tie-breaks):
+ *   1. every candidate whose OWN total plan cost fits `budget` wholesale,
+ *      cheapest plan first;
+ *   2. every candidate whose single-unit cost is affordable, cheapest first
+ *      (covers a plan that doesn't fit wholesale but can still be started);
+ *   3. everything else, cheapest single-unit cost first.
+ * A candidate that already appeared in an earlier tier is not repeated.
+ * Tie-break within a tier: fewer units, then spec id ascending (GR#21).
+ */
+export function rankedProviders(s: SimState, serviceKey: string, budget: number, shortfall: number): ProviderOption[] {
+  const rule = DEMAND_FIX_PROVIDERS[serviceKey];
+  if (!rule) return [];
+
+  // D1 fix: unitCost is placementCost(sp) — what 'place'/placePlanItem()
+  // actually charge — never sp.cost (the catalogue price, £0-blind for
+  // 'zones'-category specs). A £0 unitCost means EVERY unit count "fits"
+  // any budget, which also delivers the free-zone tie-break design guard
+  // below for free: with planCost tied at £0 across every unlocked park
+  // spec, the next comparator key (units ascending) naturally prefers the
+  // FEWEST units — i.e. the biggest park spec — over carpeting the map with
+  // many small ones (Aaron, 2026-09-03: "a few big parks instead of
+  // hundreds of 1x1s"). ⚠ BALANCE-NUMBER NOTE for Aaron's pass: this row is
+  // the free-zone selection path — confirm "biggest spec wins" is the
+  // intended aesthetic before any future re-score touches this tie-break.
+  const candidates: (ProviderOption & { unitCost: number })[] = [];
   for (const sp of Object.values(SPECS)) {
     if (!canEnterSim(sp) || !specUnlocked(s, sp)) continue;
     if (!rule.match(sp)) continue;
     const unitCapacity = rule.unitCapacity(sp);
     if (unitCapacity <= 0) continue;
     const units = Math.max(1, Math.ceil(shortfall / unitCapacity));
-    candidates.push({ sp, units, planCost: units * sp.cost });
+    const unitCost = placementCost(sp);
+    candidates.push({ sp, units, unitCost, planCost: units * unitCost });
   }
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) return [];
 
-  const better = (
-    a: { sp: Spec; units: number; planCost: number },
-    b: { sp: Spec; units: number; planCost: number },
-    key: 'planCost' | 'cost'
-  ): boolean => {
-    const av = key === 'planCost' ? a.planCost : a.sp.cost;
-    const bv = key === 'planCost' ? b.planCost : b.sp.cost;
-    if (av !== bv) return av < bv;
-    if (a.units !== b.units) return a.units < b.units;
-    return a.sp.id < b.sp.id;
+  const cmp = (a: (typeof candidates)[number], b: (typeof candidates)[number], key: 'planCost' | 'cost'): number => {
+    const av = key === 'planCost' ? a.planCost : a.unitCost;
+    const bv = key === 'planCost' ? b.planCost : b.unitCost;
+    if (av !== bv) return av - bv;
+    if (a.units !== b.units) return a.units - b.units;
+    return a.sp.id < b.sp.id ? -1 : a.sp.id > b.sp.id ? 1 : 0;
   };
 
-  // Step 1: cheapest WHOLE PLAN that fits the budget wholesale.
-  let bestFittingPlan: { sp: Spec; units: number; planCost: number } | null = null;
-  // Step 2 fallback: cheapest single-unit-affordable spec.
-  let bestSingleAffordable: { sp: Spec; units: number; planCost: number } | null = null;
-  // Step 3 fallback: globally cheapest spec, regardless of affordability.
-  let bestGlobalCheapest: { sp: Spec; units: number; planCost: number } | null = null;
+  const fitting = candidates.filter((c) => c.planCost <= budget).sort((a, b) => cmp(a, b, 'planCost'));
+  const singleAffordable = candidates.filter((c) => c.unitCost <= budget).sort((a, b) => cmp(a, b, 'cost'));
+  const rest = [...candidates].sort((a, b) => cmp(a, b, 'cost'));
 
-  for (const c of candidates) {
-    if (!bestGlobalCheapest || better(c, bestGlobalCheapest, 'cost')) bestGlobalCheapest = c;
-    if (c.sp.cost <= budget && (!bestSingleAffordable || better(c, bestSingleAffordable, 'cost'))) {
-      bestSingleAffordable = c;
-    }
-    if (c.planCost <= budget && (!bestFittingPlan || better(c, bestFittingPlan, 'planCost'))) {
-      bestFittingPlan = c;
+  const seen = new Set<string>();
+  const ranked: ProviderOption[] = [];
+  for (const tier of [fitting, singleAffordable, rest]) {
+    for (const c of tier) {
+      if (seen.has(c.sp.id)) continue;
+      seen.add(c.sp.id);
+      ranked.push(c);
     }
   }
+  return ranked;
+}
 
-  return (bestFittingPlan ?? bestSingleAffordable ?? bestGlobalCheapest)!.sp;
+export function optimalProvider(s: SimState, serviceKey: string, budget: number, shortfall: number): Spec | null {
+  return rankedProviders(s, serviceKey, budget, shortfall)[0]?.sp ?? null;
 }
 
 /**
@@ -3569,16 +3656,55 @@ export function demandFixPlan(s: SimState): DemandFixPlanItem[] {
     const shortfall = row.need - row.have;
     if (shortfall <= 0) continue; // already at/above need — nothing to fix
     const fixAmount = shortfall * AUTO_BUILD_DEMAND_FRACTION;
-    const sp = optimalProvider(s, row.serviceKey, s.funds, fixAmount);
-    if (!sp) continue; // no unlocked provider yet — omit (needs-unlock)
+    // BUG-606: rankedProviders() (not the bare optimalProvider() Spec-only
+    // return) so the runner-up candidate is available for the `alternative`
+    // field below — SAME scoring/tie-break optimalProvider() uses, this is
+    // its top pick by construction (ranked[0]).
+    const ranked = rankedProviders(s, row.serviceKey, s.funds, fixAmount);
+    if (ranked.length === 0) continue; // no unlocked provider yet — omit (needs-unlock)
+    const chosen = ranked[0];
     const rule = DEMAND_FIX_PROVIDERS[row.serviceKey];
-    const unitCapacity = rule.unitCapacity(sp);
+    const unitCapacity = rule.unitCapacity(chosen.sp);
     if (unitCapacity <= 0) continue;
-    const count = Math.ceil(fixAmount / unitCapacity);
+    const count = chosen.units;
     if (count <= 0) continue;
-    plan.push({ serviceKey: row.serviceKey, specId: sp.id, unitCapacity, need: row.need, have: row.have, count });
+    const alt = ranked.find((c) => c.sp.id !== chosen.sp.id) ?? null;
+    plan.push({
+      serviceKey: row.serviceKey,
+      specId: chosen.sp.id,
+      unitCapacity,
+      need: row.need,
+      have: row.have,
+      count,
+      planCost: chosen.planCost,
+      alternative: alt ? { specId: alt.sp.id, count: alt.units, planCost: alt.planCost } : null,
+    });
   }
   return plan;
+}
+
+/**
+ * BUG-606 fix-all: demandFixPlan() ordered by Aaron's established priority —
+ * Health (gp/hosp) pinned together at the top, sorted between themselves by
+ * raw outstanding gap (worse-covered leads), then every other service by raw
+ * gap descending, id tie-break (GR#21 determinism). SAME comparator shape
+ * DemandDock.tsx's `sortedServices` already applies to serviceDemandOf() rows
+ * (GR#3 SSOT — reused here against demandFixPlan() items rather than
+ * re-deriving a second priority rule), so a "Fix All" build order can never
+ * disagree with what the DemandDock row list visually shows as most-pressing.
+ * Pure (GR#21): no mutation, no Date/Math.random.
+ */
+export function orderedDemandFixPlan(s: SimState): DemandFixPlanItem[] {
+  const plan = demandFixPlan(s);
+  return [...plan].sort((a, b) => {
+    const aHealth = a.serviceKey === 'gp' || a.serviceKey === 'hosp';
+    const bHealth = b.serviceKey === 'gp' || b.serviceKey === 'hosp';
+    if (aHealth !== bHealth) return aHealth ? -1 : 1;
+    const gapA = a.need - a.have;
+    const gapB = b.need - b.have;
+    if (gapB !== gapA) return gapB - gapA;
+    return a.serviceKey < b.serviceKey ? -1 : a.serviceKey > b.serviceKey ? 1 : 0;
+  });
 }
 
 // ---------- milestones / policies / misc ----------

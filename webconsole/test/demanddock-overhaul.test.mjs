@@ -31,6 +31,16 @@ function shortfallState(population, fundsOverride = 1_000_000_000) {
   return { ...base, population, unlockedAll: true, funds: fundsOverride, administrationState: null };
 }
 
+/** Mirrors demand-fix.test.mjs's forceOnline(): a freshly-placed building is
+ *  legitimately still "under construction" for a few ticks (isOnline(),
+ *  data.ts), which is orthogonal to the AUTO_BUILD_DEMAND_FRACTION sizing
+ *  arithmetic this file tests — force every building online (isOnline()'s
+ *  documented `b.builtTick == null` escape hatch) so a "does this fully clear
+ *  the shortfall" check reflects capacity math, not construction timing. */
+function forceOnline(state) {
+  return { ...state, buildings: state.buildings.map((b) => ({ ...b, builtTick: null })) };
+}
+
 // ---------------------------------------------------------------------------
 // AC-7/AC-8 — optimalProvider(): "1 dam not 20 towers".
 // ---------------------------------------------------------------------------
@@ -172,31 +182,31 @@ test('AC-5: fire routes through optimalProvider and never recommends a locked ti
 // confirm the accepted BUG-571 behaviour survives the total-plan-cost rewrite
 // of optimalProvider() — these are the two canonical tiers the round verified.
 test('BUG-571 regression: level 2 (fire_post only) picks fire_post, sized 2 units', () => {
-  // BUG-601: sized to AUTO_BUILD_DEMAND_FRACTION (50%) of the 10,000
-  // shortfall = a 5,000 fixAmount; fire_post (served 4,000) needs
-  // ceil(5,000/4,000) = 2 units.
+  // SUPERSEDED 2026-09-03: AUTO_BUILD_DEMAND_FRACTION is now 1.5 (was 0.5) —
+  // population re-derived (5,000, not the old 10,000) so the fixAmount
+  // (5,000 * 1.5 = 7,500) still needs a clean ceil(7,500/4,000) = 2 units of
+  // fire_post (served 4,000).
   const base = initialState();
-  const s = { ...base, population: 10_000, unlockedAll: false, xp: xpForLevel(2), funds: 1_000_000_000, administrationState: null };
+  const s = { ...base, population: 5_000, unlockedAll: false, xp: xpForLevel(2), funds: 1_000_000_000, administrationState: null };
   assert.equal(levelOf(s.xp), 2, 'precondition: level 2 unlocks fire_post only');
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'fire');
   assert.ok(plan);
   assert.equal(plan.specId, 'fire_post');
-  assert.equal(plan.count, 2, 'fire_post (served 4,000) needs 2 units for a 5,000 fixAmount (50% of the 10,000 shortfall)');
+  const fixAmount = 5_000 * AUTO_BUILD_DEMAND_FRACTION;
+  assert.equal(plan.count, Math.ceil(fixAmount / SPECS.fire_post.served), `fire_post (served ${SPECS.fire_post.served}) needs ${Math.ceil(fixAmount / SPECS.fire_post.served)} units for a ${fixAmount} fixAmount (AUTO_BUILD_DEMAND_FRACTION of the 5,000 shortfall)`);
 });
 
 test('BUG-571 regression: level 4 (fire_post + fire_station unlocked) picks fire_station when its TOTAL plan cost is genuinely cheaper', () => {
-  // BUG-601: sized to AUTO_BUILD_DEMAND_FRACTION (50%) of the shortfall.
-  // Population 37,800 gives a fixAmount of 18,900 (37,800 * 0.5) — the SAME
-  // 18,900 target the pre-BUG-601 (full-shortfall) version of this test used
-  // at population 18,000, so the total-plan-cost comparison is unchanged:
-  // fire_post would need 5 units (5 * £1.8M = £9.0M); fire_station clears it
-  // in 1 unit (£8.64M) — fire_station's WHOLE PLAN is cheaper, which is
-  // exactly the comparison the REJECTed draft never made (it only compared
-  // per-unit/cost-per-capacity among clears-in-one candidates, or fell back
-  // to bare per-unit cost — never a real total-cost comparison across
-  // differently-sized plans).
+  // SUPERSEDED 2026-09-03: AUTO_BUILD_DEMAND_FRACTION is now 1.5 (was 0.5) —
+  // population re-derived (12,000, not the old 37,800) so fire_post's
+  // 5-unit plan (£9.0M) is still genuinely more expensive than fire_station's
+  // 1-unit plan (£8.64M) at the NEW fixAmount (12,000 * 1.5 = 18,000) — the
+  // comparison the REJECTed draft never made (it only compared per-unit/
+  // cost-per-capacity among clears-in-one candidates, or fell back to bare
+  // per-unit cost — never a real total-cost comparison across differently
+  // sized plans).
   const base = initialState();
-  const s = { ...base, population: 37_800, unlockedAll: false, xp: xpForLevel(4), funds: 1_000_000_000, administrationState: null };
+  const s = { ...base, population: 12_000, unlockedAll: false, xp: xpForLevel(4), funds: 1_000_000_000, administrationState: null };
   assert.equal(levelOf(s.xp), 4, 'precondition: level 4 unlocks fire_post + fire_station (fire_hq still locked)');
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'fire');
   assert.ok(plan);
@@ -204,7 +214,7 @@ test('BUG-571 regression: level 4 (fire_post + fire_station unlocked) picks fire
   assert.equal(plan.count, 1);
 
   // Sanity: prove fire_post really would have been the worse TOTAL plan here.
-  const fixAmount = 37_800 * AUTO_BUILD_DEMAND_FRACTION; // 18,900
+  const fixAmount = 12_000 * AUTO_BUILD_DEMAND_FRACTION; // 18,000
   const postUnits = Math.ceil(fixAmount / SPECS.fire_post.served);
   const postTotal = postUnits * SPECS.fire_post.cost;
   const stationTotal = SPECS.fire_station.cost; // 1 unit
@@ -252,11 +262,14 @@ test('AC-9: demandFixPlan emits a fire entry sized ceil((need-have)*AUTO_BUILD_D
 });
 
 test('AC-10: resolveDemand for fire respects affordability — places only what funds allow, never goes negative', () => {
-  // Population large enough that the cheapest TOTAL plan (BUG-601: sized to
-  // 50% of the shortfall) is still a multi-unit fire_post plan, not a
-  // single fire_hq unit, forcing the affordability-capping path with
-  // count > 1.
-  const s = shortfallState(100_000);
+  // SUPERSEDED 2026-09-03: AUTO_BUILD_DEMAND_FRACTION is now 1.5 (was 0.5) —
+  // population re-derived (60,000, not the old 100,000) so the cheapest
+  // TOTAL plan is still a multi-unit fire_post plan (not a single fire_hq
+  // unit) AND the spec choice stays STABLE at half the real spend (halving
+  // the budget must not flip the winning spec, or the "placed count of the
+  // ORIGINAL spec" assertion below would be vacuously 0 — re-verified live
+  // at this population during development).
+  const s = shortfallState(60_000);
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'fire');
   assert.ok(plan && plan.count >= 2, 'need a fire plan needing 2+ units to prove a partial affordability cap');
 
@@ -510,7 +523,7 @@ test('BUG-572 completeness (GR#15, data-derived not hand-listed): every serviceC
 // runAuto() routing through the SAME demandFixPlan-sized batch.
 // ---------------------------------------------------------------------------
 
-test('BUG-601: ample funds — demandFixPlan sizes a gp fix to exactly ceil((need-have)*0.5/unitCapacity), and resolveDemand places exactly that many, leaving real residual demand', () => {
+test('BUG-601: ample funds — demandFixPlan sizes a gp fix to exactly ceil((need-have)*AUTO_BUILD_DEMAND_FRACTION/unitCapacity) (SUPERSEDED 2026-09-03: fraction now 1.5, deliberate overshoot)', () => {
   const s = shortfallState(50_000);
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'gp');
   assert.ok(plan, 'a gp shortfall with an unlocked provider must yield a demandFixPlan entry');
@@ -519,19 +532,36 @@ test('BUG-601: ample funds — demandFixPlan sizes a gp fix to exactly ceil((nee
   const fixAmount = (row.need - row.cap) * AUTO_BUILD_DEMAND_FRACTION;
   const expectedCount = Math.ceil(fixAmount / plan.unitCapacity);
   assert.equal(plan.count, expectedCount);
-  // Sanity the fraction is genuinely ~50%, not a no-op or a full clear.
-  assert.ok(plan.count * plan.unitCapacity < row.need - row.cap, 'the sized batch must be LESS than the full outstanding shortfall');
-  assert.ok(plan.count * plan.unitCapacity >= (row.need - row.cap) * 0.4, 'the sized batch must be a REAL fraction, not negligible');
+  // Sanity the fraction is genuinely a REAL fraction of the gap, not a no-op
+  // — direction depends on AUTO_BUILD_DEMAND_FRACTION's own value (>1
+  // overshoots past the gap on purpose since 2026-09-03; <1 stays under it,
+  // the original 2026-09-02 ruling) rather than a hardcoded assumption of
+  // which ruling is currently live.
+  const sizedAmount = plan.count * plan.unitCapacity;
+  const gap = row.need - row.cap;
+  if (AUTO_BUILD_DEMAND_FRACTION > 1) {
+    assert.ok(sizedAmount > gap, 'AUTO_BUILD_DEMAND_FRACTION > 1 must size the batch ABOVE the outstanding gap (deliberate headroom)');
+  } else {
+    assert.ok(sizedAmount < gap, 'AUTO_BUILD_DEMAND_FRACTION < 1 must size the batch BELOW the outstanding gap (deliberate residual)');
+  }
 
   const result = reducer(s, { type: 'resolveDemand', serviceKey: 'gp' });
   const placedCount = result.buildings.filter((b) => b.spec === plan.specId).length -
     s.buildings.filter((b) => b.spec === plan.specId).length;
   assert.equal(placedCount, plan.count, 'ample funds must place exactly the planned count, no more no less');
 
-  // A residual shortfall (a second action's worth) must remain — one
-  // ample-funds dispatch never fully resolves the service.
-  const remaining = demandFixPlan(result).find((p) => p.serviceKey === 'gp');
-  assert.ok(remaining, 'a real gp shortfall must remain after a single ample-funds resolveDemand dispatch');
+  // Whether a residual shortfall remains depends on the SAME fraction sign:
+  // fraction > 1 (current ruling) deliberately clears the whole gap PLUS
+  // headroom in one ample-funds dispatch — the ORIGINAL <1 ruling instead
+  // guaranteed a residual for a follow-up action. Assert whichever is true,
+  // once the just-placed buildings are forced online (forceOnline() doc) so
+  // this reads capacity math, not construction-timer noise.
+  const remaining = demandFixPlan(forceOnline(result)).find((p) => p.serviceKey === 'gp');
+  if (AUTO_BUILD_DEMAND_FRACTION > 1) {
+    assert.equal(remaining, undefined, 'AUTO_BUILD_DEMAND_FRACTION > 1 must fully clear gp (plus headroom) in one ample-funds dispatch');
+  } else {
+    assert.ok(remaining, 'AUTO_BUILD_DEMAND_FRACTION < 1 must leave a real gp shortfall after a single ample-funds resolveDemand dispatch');
+  }
 });
 
 test('BUG-601: funds-capped — a poor city places only what it can afford, still sized off the 50% target, never overspends', () => {

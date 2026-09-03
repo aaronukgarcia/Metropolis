@@ -1,9 +1,9 @@
-import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, isBrownoutActive, demandFixPlan } from '../../sim/data';
+import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, isBrownoutActive, demandFixPlan, orderedDemandFixPlan, AUTO_BUILD_DEMAND_PERCENT } from '../../sim/data';
 import { useSim } from '../../sim/simContext';
 import { demandOf, levelOf } from '../../sim/engine';
 import { useBusy } from '../Busy';
 import { Panel } from '../Tabs';
-import { formatBuildingCount } from '../demandFixUi';
+import { formatBuildingCount, demandFixMessage } from '../demandFixUi';
 
 export function DemandDock() {
   const { state, dispatch } = useSim();
@@ -34,6 +34,18 @@ export function DemandDock() {
   function runResolveDemand(serviceKey: string) {
     run(() => {
       dispatch({ type: 'resolveDemand', serviceKey });
+    });
+  }
+
+  // BUG-606 fix-all (Aaron, 2026-09-03): the SAME priority-ordered plan the
+  // 'resolveDemandAll' reducer case walks (GR#3 SSOT — never re-derived here),
+  // so the button is enabled/disabled by EXACTLY the condition the dispatch
+  // will act on, and the tooltip names the real order.
+  const fixAllOrder = orderedDemandFixPlan(state);
+  function runFixAll() {
+    if (fixAllOrder.length === 0) return;
+    run(() => {
+      dispatch({ type: 'resolveDemandAll' });
     });
   }
   // BUG-393: visible brownout signal — banner + power-row highlight while
@@ -69,7 +81,24 @@ export function DemandDock() {
   }
 
   return (
-    <Panel title="Demand">
+    <Panel
+      title="Demand"
+      headerExtra={
+        <button
+          type="button"
+          className="btn tiny fix-all-btn"
+          disabled={fixAllOrder.length === 0}
+          title={
+            fixAllOrder.length === 0
+              ? 'Nothing is in shortfall right now'
+              : `Fix every shown shortfall, Health first: ${fixAllOrder.map((p) => SPECS[p.specId].name).join(', ')}`
+          }
+          onClick={runFixAll}
+        >
+          Fix All
+        </button>
+      }
+    >
       <div className="demand-strip vertical">
         {brownoutActive && (
           <div className="brownout-banner" role="alert">
@@ -95,8 +124,13 @@ export function DemandDock() {
               // action now sizes to 50% of the outstanding shortfall (not a
               // full clear+5% headroom) — the copy says so, matching what
               // demandFixPlan()/resolveDemand actually place.
-              fixTitle={fix ? `Place ${formatBuildingCount(SPECS[fix.specId].name, fix.count)} to fix 50% of this shortfall` : undefined}
+              fixTitle={fix ? `Place ${formatBuildingCount(SPECS[fix.specId].name, fix.count)} to fix ${AUTO_BUILD_DEMAND_PERCENT}% of this shortfall` : undefined}
               onFix={fix ? () => runResolveDemand(m.id) : undefined}
+              // BUG-606 ("no help - how much what type ... one hypermarket or
+              // 50?"): a visible (not just hover-title) sizing + alternative
+              // line, built from the SAME fix plan item the button dispatches
+              // against (agreement-by-construction).
+              fixMessage={fix ? demandFixMessage(fix) : undefined}
             />
           );
         })}
@@ -129,6 +163,7 @@ function DemandMeter({
   fixCount,
   fixTitle,
   onFix,
+  fixMessage,
 }: {
   label: string;
   value: number;
@@ -139,41 +174,50 @@ function DemandMeter({
   fixCount?: number;
   fixTitle?: string;
   onFix?: () => void;
+  /** BUG-606: demandFixMessage(fix) — a visible sizing+alternative line
+   *  ("<N> short — Fix builds <P>%: ... or ... — cheapest picked"), rendered
+   *  BELOW the meter row itself (not just as a hover title) so the shortfall
+   *  size and the concrete build recommendation are on-screen without
+   *  hovering. undefined = no shortfall for this row -> no line rendered. */
+  fixMessage?: string;
 }) {
   const w = Math.min(Math.abs(value), 100) / 2;
   const pos = value >= 0;
   return (
-    <div
-      className={`demand${alert ? ' alert' : ''}`}
-      title={`${label}: ${value > 0 ? '+' : ''}${value}${alert ? ' — BROWNOUT' : ''}`}
-    >
-      <span className="swatch" style={{ background: color }} />
-      <span className="d-label">{label}</span>
-      <div className="d-bar">
-        {pos ? (
-          <span className="d-fill pos" style={{ left: '50%', width: `${w}%` }} />
-        ) : (
-          <span className="d-fill neg" style={{ right: '50%', width: `${w}%` }} />
+    <div className="demand-row">
+      <div
+        className={`demand${alert ? ' alert' : ''}`}
+        title={`${label}: ${value > 0 ? '+' : ''}${value}${alert ? ' — BROWNOUT' : ''}`}
+      >
+        <span className="swatch" style={{ background: color }} />
+        <span className="d-label">{label}</span>
+        <div className="d-bar">
+          {pos ? (
+            <span className="d-fill pos" style={{ left: '50%', width: `${w}%` }} />
+          ) : (
+            <span className="d-fill neg" style={{ right: '50%', width: `${w}%` }} />
+          )}
+          <span className="d-zero" />
+        </div>
+        <span className={`mono d-val ${pos ? 'in' : 'out'}`}>
+          {value > 0 ? '+' : ''}
+          {value}
+        </span>
+        {onFix && (
+          <button
+            type="button"
+            className="btn tiny demand-fix-btn"
+            title={fixTitle}
+            onClick={(e) => {
+              e.stopPropagation();
+              onFix();
+            }}
+          >
+            Fix ({fixCount})
+          </button>
         )}
-        <span className="d-zero" />
       </div>
-      <span className={`mono d-val ${pos ? 'in' : 'out'}`}>
-        {value > 0 ? '+' : ''}
-        {value}
-      </span>
-      {onFix && (
-        <button
-          type="button"
-          className="btn tiny demand-fix-btn"
-          title={fixTitle}
-          onClick={(e) => {
-            e.stopPropagation();
-            onFix();
-          }}
-        >
-          Fix ({fixCount})
-        </button>
-      )}
+      {fixMessage && <p className="fix-hint">{fixMessage}</p>}
     </div>
   );
 }

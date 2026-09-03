@@ -48,6 +48,8 @@ import {
   residentsCapacity,
   onlineResidentsCapacity,
   demandFixPlan,
+  orderedDemandFixPlan,
+  RESOLVE_DEMAND_ALL_MAX_UNITS,
   findSpot,
   noBuildableSiteReason,
   crimeRateOf,
@@ -60,7 +62,7 @@ import {
   MILESTONE_REWARDS,
   sanitizeClaimedMilestones,
 } from './data.ts';
-import type { Spec, RoadTier } from './data.ts';
+import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
 import { planConnector } from './roadConnect.ts';
 import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
 import type {
@@ -2937,6 +2939,14 @@ export type Action =
   // FEAT-2326609728 — one-click demand fix: bulk-place demandFixPlan(state)'s
   // count for one service, via the existing single-tile 'place' path.
   | { type: 'resolveDemand'; serviceKey: string }
+  // BUG-606 fix-all (Aaron, 2026-09-03): runs the SAME per-service fix for
+  // EVERY service orderedDemandFixPlan(state) currently lists (Health first,
+  // then demand-descending), one journaled action so the DemandDock's "Fix
+  // All" button reports ONE aggregate placeNotice ("built X, Y skipped")
+  // instead of N per-service dispatches silently overwriting each other's
+  // notice — see the reducer case below (a thin loop over the SAME
+  // placePlanItem() helper 'resolveDemand' uses, no second placement path).
+  | { type: 'resolveDemandAll' }
   | { type: 'bulldoze'; x: number; y: number }
   | { type: 'sellAsset'; id: number }
   | { type: 'enterAdministration' }
@@ -2989,6 +2999,88 @@ let roadTopologyMayHaveChanged = true;
 // whether the name is singular, plural, or ends in 's'.
 function formatPlacedCount(count: number, specName: string): string {
   return `${count} x ${specName}`;
+}
+
+/**
+ * D2 (BUG-606 independent round REJECT, Aaron 2026-09-03): the true reason a
+ * demandFixPlan() item's placement stopped short — 'resolveDemand' and
+ * 'resolveDemandAll' both used to skip straight to noBuildableSiteReason()
+ * whenever funds were ample, even when the REAL cause was Administration
+ * Mode's discretionary-spend freeze (a player under administration with £1T
+ * on hand would see "no free area on the map", or resolveDemandAll's blanket
+ * "funds ran out", for a service the map had plenty of room for). Priority
+ * mirrors placePlanItem()'s own gate order: administration block (checked
+ * FIRST there) > insufficient funds > no buildable site. A £0 (free-zone)
+ * spec can never be administration- or funds-blocked (cost>0 guards both),
+ * so it always resolves to the real site reason.
+ */
+function shortfallReason(state: SimState, sp: Spec, specId: string): string {
+  const cost = placementCost(sp);
+  if (cost > 0 && state.administrationState) return ADMINISTRATION_PLACE_BLOCKED_MESSAGE;
+  if (cost > 0 && state.funds < cost) return 'insufficient funds';
+  return noBuildableSiteReason(specId);
+}
+
+/**
+ * Shared bulk-placement core for ONE demandFixPlan() item — extracted from
+ * 'resolveDemand' (BUG-606) so the new 'resolveDemandAll' (Fix All) reducer
+ * case can loop over MULTIPLE services through the exact same per-tile
+ * 'place' path/affordability/road-topology-flag logic, with no second
+ * placement mechanism (GR#3 SSOT). Places up to `item.count` units of
+ * `item.specId`, stopping the moment funds/administration-mode/findSpot
+ * decline — identical contract 'resolveDemand' always had, just factored out.
+ * Never mutates `cur`; returns the (possibly unchanged) resulting state.
+ */
+/**
+ * PERF CAP (independent round r2, Aaron 2026-09-03): `unitCap` bounds how
+ * many units THIS SINGLE CALL may place, regardless of `item.count` — a real
+ * dogfood city can plan tens of thousands of units for one service alone
+ * (pop 3M -> 1,000 parks units measured), and each unit walks a full
+ * findSpot()/'place' pass, so an uncapped loop is the synchronous-freeze
+ * hazard (measured 46.6s at pop 400k, DNF at pop 3M). Defaults to Infinity
+ * (no cap) only for callers that have their own reason not to need one; both
+ * real call sites ('resolveDemand'/'resolveDemandAll' below) always pass a
+ * real number. `cappedByUnitLimit` is true ONLY when the cap itself (not
+ * funds/administration/no-site) is what stopped this call short — i.e. every
+ * one of the `unitCap` attempted units actually placed — so the caller can
+ * report the TRUE reason (GR#1 aggressive error trapping: never blame
+ * "insufficient funds" for a perf guard).
+ */
+function placePlanItem(
+  cur: SimState,
+  item: DemandFixPlanItem,
+  unitCap: number = Infinity
+): { state: SimState; placed: number; roadTopologyChange: boolean; cappedByUnitLimit: boolean } {
+  const sp = SPECS[item.specId];
+  if (!canEnterSim(sp) || !specUnlocked(cur, sp)) {
+    return { state: cur, placed: 0, roadTopologyChange: false, cappedByUnitLimit: false };
+  }
+  const cost = placementCost(sp);
+  let s2 = cur;
+  let placed = 0;
+  // See BUG-566 FIX note (originally on 'resolveDemand', preserved here
+  // verbatim): aggregate the shared roadTopologyMayHaveChanged hazard with OR
+  // across every placement in this item's batch, not just the last iteration.
+  let anyRoadTopologyChange = isRoadOrTrunkSpec(sp);
+  const target = Math.min(item.count, unitCap);
+  for (let i = 0; i < target; i++) {
+    if (cost > 0 && s2.administrationState) break;
+    if (cost > 0 && s2.funds < cost) break;
+    const spot = findSpot(s2, item.specId);
+    if (!spot) break; // findSpot() widened its search to the whole map (BUG-593) and still found nothing
+    const beforeLen = s2.buildings.length;
+    const next = reduceCore(s2, { type: 'place', spec: item.specId, x: spot.x, y: spot.y });
+    if (next === s2) break; // defensive: 'place' declined for a reason not checked above
+    if (next.buildings.length > beforeLen + 1) anyRoadTopologyChange = true;
+    s2 = next;
+    placed++;
+  }
+  // Placed EVERY attempted unit (none of the funds/administration/no-site
+  // guards fired) AND there is genuinely more of `item.count` left to do ->
+  // the cap itself, not any of those other reasons, is what stopped this
+  // call. If placed < unitCap, some OTHER guard broke the loop first.
+  const cappedByUnitLimit = placed === unitCap && placed < item.count;
+  return { state: s2, placed, roadTopologyChange: anyRoadTopologyChange, cappedByUnitLimit };
 }
 
 function reduceCore(state: SimState, action: Action): SimState {
@@ -3223,45 +3315,138 @@ function reduceCore(state: SimState, action: Action): SimState {
       if (!plan) return state;
       const sp = SPECS[plan.specId];
       if (!canEnterSim(sp) || !specUnlocked(state, sp)) return state;
-      const cost = placementCost(sp);
+
+      // BUG-566 FIX (independent-round REJECT), preserved via placePlanItem():
+      // resolveDemand bulk-places via the SAME recursive reduceCore('place')
+      // pattern placeMany uses, so it is exposed to the identical FIX-2
+      // hazard — each inner 'place' call flips the shared module-level
+      // `roadTopologyMayHaveChanged` flag as a side effect, and without
+      // aggregating across the WHOLE batch the wrapper would only see the
+      // LAST iteration's verdict (a run where an EARLY building lays a road
+      // connector but the FINAL one doesn't would wrongly skip
+      // computeRoadConnectivity). placePlanItem() aggregates with OR itself.
+      //
+      // PERF CAP (independent round r2, 2026-09-03): a SINGLE service can
+      // itself exceed RESOLVE_DEMAND_ALL_MAX_UNITS in a big-enough city
+      // (measured: parks alone hits 1,000 planned units at pop 3M) — the same
+      // per-action unit cap applies here, not only inside 'resolveDemandAll',
+      // so one Fix (N) click can never freeze the tab either.
+      const result = placePlanItem(state, plan, RESOLVE_DEMAND_ALL_MAX_UNITS);
+      roadTopologyMayHaveChanged = result.roadTopologyChange;
+
+      if (result.placed >= plan.count) return result.state; // full shortfall cleared — 'place' already cleared placeNotice
+      // D2 FIX: shortfallReason() distinguishes administration-blocked from a
+      // real funds shortfall from a real site shortage — see its doc comment.
+      // The per-action unit cap is a FOURTH, distinct reason (never blamed on
+      // funds/site) — checked first since placePlanItem() only sets it when
+      // the cap itself (not funds/admin/site) is what stopped this call.
+      const shortBy = result.cappedByUnitLimit
+        ? `reached the ${RESOLVE_DEMAND_ALL_MAX_UNITS}-unit per-click build limit — click Fix again for the rest`
+        : shortfallReason(result.state, sp, plan.specId);
+      return {
+        ...result.state,
+        placeNotice: `Placed ${result.placed} of ${formatPlacedCount(plan.count, sp.name)} — ${shortBy}`,
+      };
+    }
+
+    // BUG-606 fix-all (Aaron, 2026-09-03): "next to the word demand ... a
+    // fix-all button" — runs the SAME placePlanItem() bulk-place for EVERY
+    // service orderedDemandFixPlan(state) lists, in that priority order
+    // (Health first, then demand-descending), as ONE journaled action so the
+    // result is a single coherent placeNotice ("Fix All: built X, Y skipped")
+    // instead of N sequential resolveDemand dispatches silently overwriting
+    // each other's notice. Each service's plan is RE-DERIVED against the
+    // already-updated `cur` state before it is attempted — funds spent on an
+    // earlier, higher-priority service in this same batch are reflected
+    // before the next service's affordability check runs, exactly as if the
+    // player had clicked every Fix (N) button in this order by hand. No
+    // second placement mechanism: placePlanItem() is the SAME helper
+    // 'resolveDemand' above uses.
+    case 'resolveDemandAll': {
+      const order = orderedDemandFixPlan(state);
+      if (order.length === 0) return state;
 
       let cur = state;
-      let placed = 0;
-      // BUG-566 FIX (independent-round REJECT): resolveDemand bulk-places via
-      // the SAME recursive reduceCore('place') pattern placeMany uses, so it
-      // is exposed to the identical FIX-2 hazard — each inner 'place' call
-      // flips the shared module-level `roadTopologyMayHaveChanged` flag as a
-      // side effect, and without this aggregation the wrapper only sees the
-      // LAST iteration's verdict. A run where an EARLY building lays a road
-      // connector (flag -> true) but the FINAL building doesn't (flag -> false)
-      // would leave the flag false when the loop exits, so the wrapper skips
-      // computeRoadConnectivity even though the graph genuinely changed —
-      // roadConnectivity goes stale (connector tiles missing), and anything
-      // reachable only through that connector reads as disconnected -> wrongly
-      // offline. Aggregate with OR across every placement in the batch, same
-      // as placeMany: true if ANY iteration touched the road/trunk graph.
-      let anyRoadTopologyChange = isRoadOrTrunkSpec(sp);
-      for (let i = 0; i < plan.count; i++) {
-        if (cost > 0 && cur.administrationState) break;
-        if (cost > 0 && cur.funds < cost) break;
-        const spot = findSpot(cur, plan.specId);
-        if (!spot) break; // findSpot() widened its search to the whole map (BUG-593) and still found nothing
-        const beforeLen = cur.buildings.length;
-        const next = reduceCore(cur, { type: 'place', spec: plan.specId, x: spot.x, y: spot.y });
-        if (next === cur) break; // defensive: 'place' declined for a reason not checked above
-        if (next.buildings.length > beforeLen + 1) anyRoadTopologyChange = true;
-        cur = next;
-        placed++;
+      let anyRoadTopologyChange = false;
+      const built: string[] = [];
+      let skippedCount = 0;
+      // D2 FIX: the true, per-item reason each shortfall or skip stopped —
+      // never a blanket "funds ran out" when the real cause (this session)
+      // was Administration Mode or a real site shortage. Set preserves
+      // insertion order (deterministic — GR#21) and collapses repeats so a
+      // batch that failed for ONE reason across many services still reads as
+      // one reason, not the same sentence N times.
+      const reasons = new Set<string>();
+
+      // PERF CAP (independent round r2, Aaron 2026-09-03): a GLOBAL unit
+      // budget shared across the WHOLE batch, walked in the SAME Health-first
+      // priority order — measured 46.6s synchronous at pop 400k and DNF
+      // (18,718 planned units) at pop 3M without this. Deterministic (a fixed
+      // constant, never a clock/elapsed-time bound — GR#21): the same journal
+      // replays to the same partial result every time. `totalPlanned` is the
+      // sum of every service's OWN target count (`item.count`, from the SAME
+      // orderedDemandFixPlan(state) snapshot used for priority order) — the
+      // honest "Y" a capped notice reports, even though later services in
+      // the order are re-derived against `cur` and may end up wanting a
+      // slightly different count by the time (if ever) they're reached.
+      const totalPlanned = order.reduce((sum, item) => sum + item.count, 0);
+      let remainingUnitBudget = RESOLVE_DEMAND_ALL_MAX_UNITS;
+      let totalPlaced = 0;
+      let hitUnitCap = false;
+
+      for (const item of order) {
+        if (remainingUnitBudget <= 0) {
+          // The cap was exhausted by an EARLIER, higher-priority service —
+          // this and every remaining service in the order is skipped WITHOUT
+          // even being attempted (no findSpot()/'place' cost paid for it).
+          hitUnitCap = true;
+          skippedCount++;
+          continue;
+        }
+        const plan = demandFixPlan(cur).find((p) => p.serviceKey === item.serviceKey);
+        if (!plan) continue; // already cleared by an earlier service's side-effect (rare) — nothing left to do
+        const sp = SPECS[plan.specId];
+        if (!canEnterSim(sp) || !specUnlocked(cur, sp)) {
+          skippedCount++;
+          reasons.add('not currently unlocked');
+          continue;
+        }
+        const result = placePlanItem(cur, plan, remainingUnitBudget);
+        cur = result.state;
+        anyRoadTopologyChange = anyRoadTopologyChange || result.roadTopologyChange;
+        totalPlaced += result.placed;
+        remainingUnitBudget -= result.placed;
+        if (result.placed > 0) built.push(formatPlacedCount(result.placed, sp.name));
+        if (result.placed < plan.count) {
+          skippedCount++;
+          if (result.cappedByUnitLimit) {
+            hitUnitCap = true;
+          } else {
+            reasons.add(shortfallReason(cur, sp, plan.specId));
+          }
+        }
       }
       roadTopologyMayHaveChanged = anyRoadTopologyChange;
 
-      if (placed >= plan.count) return cur; // full shortfall cleared — 'place' already cleared placeNotice
-      const shortBy =
-        cost > 0 && cur.funds < cost ? 'insufficient funds' : noBuildableSiteReason(plan.specId);
-      return {
-        ...cur,
-        placeNotice: `Placed ${placed} of ${formatPlacedCount(plan.count, sp.name)} — ${shortBy}`,
-      };
+      // The unit cap is reported as its OWN honest, actionable reason — never
+      // folded into the generic funds/admin/site reasons above, and never
+      // silently reported as "insufficient funds" (the exact D2-class defect
+      // this whole reason-plumbing exists to prevent).
+      if (hitUnitCap) {
+        return {
+          ...cur,
+          placeNotice: `Fix All: built ${totalPlaced} of ${totalPlanned} planned — click Fix All again for the rest`,
+        };
+      }
+
+      const reasonSummary = [...reasons].join('; ');
+      if (built.length === 0) {
+        return { ...cur, placeNotice: `Fix All: nothing built — ${reasonSummary || 'insufficient funds'}` };
+      }
+      const summary = skippedCount > 0
+        ? `Fix All: built ${built.join(', ')} — ${skippedCount} service(s) skipped or partial (${reasonSummary})`
+        : `Fix All: built ${built.join(', ')}`;
+      return { ...cur, placeNotice: summary };
     }
 
     case 'placeRoadPath': {

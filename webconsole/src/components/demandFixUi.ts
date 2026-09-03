@@ -6,8 +6,9 @@
 // sim/data.ts / sim/engine.ts (inc1's engine core is landed + rounded and is
 // not touched by this increment) — this file only reads demandFixPlan()'s
 // output and formats it; it never mutates SimState.
-import { demandFixPlan, type DemandFixPlanItem } from '../sim/data';
+import { demandFixPlan, SPECS, AUTO_BUILD_DEMAND_PERCENT, type DemandFixPlanItem } from '../sim/data';
 import type { SimState } from '../sim/types';
+import { fmtMoney, fmtNum } from '../sim/utils';
 
 /**
  * BUG-587: the old pluralizeBuildingName() applied an English -s/-x/-z/-ch/-sh
@@ -76,4 +77,77 @@ export function worstDemandFix(s: SimState): DemandFixPlanItem | null {
     .map((item) => ({ item, gap: item.need - item.have }))
     .sort((a, b) => b.gap - a.gap || a.item.serviceKey.localeCompare(b.item.serviceKey));
   return ranked[0].item;
+}
+
+/**
+ * D3 (BUG-606 independent round REJECT r1 AND r2, Aaron 2026-09-03) —
+ * "'citizens want shops' no help" round 1 got a sized message, but
+ * `fmtNum()` (thousands-separated INTEGER) silently truncated any real
+ * sub-1 gap to "0 short" while the row still recommended a genuine purchase
+ * — the exact original complaint, reintroduced at small scale. The r1 fix
+ * (`gap.toFixed(1)` for any 0<gap<1) was ITSELF still wrong at the low end:
+ * the independent round's r2 attack found 0.046 rendering as "0.0 short" —
+ * one decimal place is not enough resolution below roughly 0.05, and "0.0"
+ * reads exactly as misleadingly as "0" did.
+ *
+ * FIX: three display bands, never a THIRD row-existence threshold (see
+ * below) —
+ *   gap <  0.05           -> "<1"                (too small for ANY decimal
+ *                                                  rendering to read honestly;
+ *                                                  "<1" is itself the honest
+ *                                                  answer to "how much?")
+ *   0.05 <= gap < 1        -> 2 significant figures via toPrecision(2)
+ *                            (0.46 -> "0.46", 0.096 -> "0.096" — never
+ *                             rounds a real sub-1 gap down to a bare "0")
+ *   gap >= 1               -> fmtNum() (thousands-separated integer, SSOT)
+ *
+ * This is DISPLAY PRECISION, not suppression: demandFixPlan()'s own
+ * `shortfall <= 0` gate remains the ONLY threshold deciding whether a row
+ * EXISTS at all (see its doc comment) — the 0.05 boundary here only chooses
+ * how a real, already-decided-to-exist gap is WORDED, never whether the row
+ * itself is shown. Adding a second row-EXISTENCE threshold here would risk
+ * this function and demandFixPlan() disagreeing about whether a row should
+ * exist (exactly the class of divergence this whole feature exists to
+ * prevent) — that risk does not apply to a pure wording choice.
+ */
+function fmtShortfall(gap: number): string {
+  if (gap > 0 && gap < 0.05) return '<1';
+  if (gap > 0 && gap < 1) return gap.toPrecision(2);
+  return fmtNum(gap);
+}
+
+/**
+ * BUG-606 (Aaron, 2026-09-03, twice: "'citizens want shops' no help - how
+ * much what type a clue would be nice is this one hypermarket or 50?") — a
+ * quantified, SIZED demand-fix message built ENTIRELY from a
+ * DemandFixPlanItem's own fields (need/have/count/specId/planCost/
+ * alternative), never re-derived independently — so this text and the
+ * Fix/Auto-build/Fix-All button that executes the SAME plan object can never
+ * disagree (agreement-by-construction). Format (Aaron-proposed, Q100093):
+ *   "<label>: <N> short — Fix builds <P>%: <count> x <Name> (<£cost>)
+ *    or <count> x <AltName> (<£cost>) — cheapest picked"
+ * `<P>` is AUTO_BUILD_DEMAND_PERCENT (data.ts), derived from the SAME
+ * AUTO_BUILD_DEMAND_FRACTION demandFixPlan() sizes against — GR#15, never a
+ * hand-typed "50%"/"150%" that could drift from the real sizing arithmetic
+ * (Aaron's 2026-09-03 superseding ruling moved the fraction 0.5 -> 1.5; this
+ * string updated itself with zero code change here). The " or ... — cheapest
+ * picked" clause is only appended when a real alternative provider exists (a
+ * single-unlocked-provider service, e.g. a new city with only one tier of a
+ * facility unlocked, shows just the chosen option). `planCost`/alternative's
+ * `planCost` are placementCost()-derived (D1 fix) — a £0 free-zone plan (e.g.
+ * parks) renders honestly as "£0", never the catalogue price. Pure
+ * formatting: no Date/Math.random (GR#21), no mutation.
+ */
+export function demandFixMessage(item: DemandFixPlanItem): string {
+  const rawLabel = DEMAND_FIX_SERVICE_LABELS[item.serviceKey] ?? item.serviceKey;
+  const label = rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1);
+  const shortfall = fmtShortfall(item.need - item.have);
+  const chosenName = SPECS[item.specId]?.name ?? item.specId;
+  const chosen = `${formatBuildingCount(chosenName, item.count)} (${fmtMoney(item.planCost)})`;
+  if (!item.alternative) {
+    return `${label}: ${shortfall} short — Fix builds ${AUTO_BUILD_DEMAND_PERCENT}%: ${chosen}`;
+  }
+  const altName = SPECS[item.alternative.specId]?.name ?? item.alternative.specId;
+  const alt = `${formatBuildingCount(altName, item.alternative.count)} (${fmtMoney(item.alternative.planCost)})`;
+  return `${label}: ${shortfall} short — Fix builds ${AUTO_BUILD_DEMAND_PERCENT}%: ${chosen} or ${alt} — cheapest picked`;
 }
