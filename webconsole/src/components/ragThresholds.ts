@@ -43,6 +43,14 @@ export const RAG_THRESHOLDS = {
   UNEMPLOYMENT: { GREEN: 0.07, AMBER: 0.15 },
   /** §2 row 9 — housing headroom = (onlineResidentsCapacity - population) / capacity. */
   HOUSING_HEADROOM: { GREEN: 0.2, AMBER: 0.05 },
+  /**
+   * BUG-645 — TopBar AT-CAPACITY indicator: population / onlineResidentsCapacity
+   * ratio at/above which the population figure is flagged "at capacity" (Aaron's
+   * live city sat at 99.7% online capacity with births/deaths/moves all still
+   * moving but net population pinned). ONE named constant (GR#3) — never a
+   * second 0.99 literal at any call site; isAtCapacity() below is the sole reader.
+   */
+  AT_CAPACITY: { RATIO: 0.99 },
 } as const;
 
 const GREEN = 'var(--done)';
@@ -134,6 +142,19 @@ export function ragForInsolvency(band: string | undefined): RagState {
   if (!band || band === 'solvent') return 'green';
   if (band === 'warning') return 'amber';
   return 'red'; // crisis / administration / bailout_second / decline
+}
+
+/**
+ * BUG-645 — is a population figure "at capacity" for the TopBar indicator?
+ * `capacity` must be the ONLINE residents capacity (onlineResidentsCapacity,
+ * sim/data.ts) — never the gross figure that includes still-building/
+ * disconnected dwellings, or a city genuinely full of vacant offline housing
+ * would wrongly read as roomy. A zero-or-negative capacity (no residential
+ * built yet) never reads as "at capacity" — there is nothing to be full of.
+ */
+export function isAtCapacity(population: number, onlineCapacity: number): boolean {
+  if (onlineCapacity <= 0) return false;
+  return population / onlineCapacity >= RAG_THRESHOLDS.AT_CAPACITY.RATIO;
 }
 
 /** STUB rows (§2 rows 13-15, AC-10): NEVER a colour, always the 'stub' marker

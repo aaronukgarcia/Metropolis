@@ -16,10 +16,12 @@ import { wellbeingOf, approvalOf } from '../../../sim/engine';
 import {
   onlineResidentsCapacity,
   offlineResidentsByReason,
+  residentialConstructionSummary,
   totalJobs,
   unemploymentOf,
   WORKING_AGE_FRACTION,
 } from '../../../sim/data';
+import { isAtCapacity } from '../../ragThresholds';
 import { fmtNum, fmtPct } from '../../../sim/utils';
 import { PopulationSankey } from '../../PopulationSankey';
 import { ArrivalsByModeSankey } from '../../ArrivalsByModeSankey';
@@ -119,30 +121,125 @@ export function HousingTab() {
   );
 }
 
+/** BUG-645 — natural increase (births - deaths) and net migration
+ *  (moveIns - moveOuts) for a DemographicFlow-shaped object, plus their sum
+ *  (the actual population delta the two forces net out to). Pure arithmetic
+ *  over already-computed fields (GR#15) — never re-derived from anything
+ *  else, so it is exactly consistent with the tiles above/below it. */
+function netsOf(flow: { births: number; deaths: number; moveIns: number; moveOuts: number }) {
+  const natural = flow.births - flow.deaths;
+  const migration = flow.moveIns - flow.moveOuts;
+  return { natural, migration, net: natural + migration };
+}
+
+function signed(n: number): string {
+  return n >= 0 ? `+${fmtNum(n)}` : fmtNum(n);
+}
+
 // §1 row 11 — direct move of the old RightDock `population` tab.
+//
+// BUG-645 (Aaron: "as the days go past with 1.9m people the population stays
+// the same — why do births and deaths not make it go up and down per day or
+// at month end?"). The mechanic was always correct — births beat deaths, but
+// move-outs almost exactly cancel that natural increase once the city sits
+// at online housing capacity — the DEFECT was that nothing showed the two
+// forces or explained why they net to ~zero. This tab now shows BOTH asked-
+// for granularities (last tick AND month-to-date, state.lastDemographics /
+// state.demographicAccum — both already computed by engine.ts, no new
+// derivation) plus the NET row that makes "+569 natural increase vs -569 net
+// migration = 0 net change" legible, and repeats the at-capacity explanation
+// (mirrored from TopBar's badge, same isAtCapacity/onlineResidentsCapacity
+// SSOT) for the player who opens this tab looking for the reason.
 export function DemographicsTab() {
   const { state } = useSim();
-  const last = state.lastDemographics;
+  const last = state.lastDemographics ?? { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 };
+  const monthSoFar = state.demographicAccum ?? { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 };
+  const lastNets = netsOf(last);
+  const monthNets = netsOf(monthSoFar);
+  const onlineCapacity = onlineResidentsCapacity(state);
+  const atCapacity = isAtCapacity(state.population, onlineCapacity);
+  const underConstruction = residentialConstructionSummary(state);
   return (
     <>
+      {atCapacity && (
+        <p className="hint warn-text">
+          At online housing capacity ({fmtNum(state.population)} of {fmtNum(onlineCapacity)}) — births/deaths/
+          moves below are all real, but arrivals can only replace departures, not grow the total, until more
+          housing comes online.
+          {underConstruction.count > 0 &&
+            ` ${fmtNum(underConstruction.count)} homes under construction adding ${fmtNum(underConstruction.capacity)} capacity when they finish.`}
+        </p>
+      )}
+      <h4>Last tick</h4>
       <div className="tiles">
         <div className="tile pos">
-          <div className="n">{fmtNum(last?.births ?? 0)}</div>
-          <div className="l">Births (last tick)</div>
+          <div className="n">{fmtNum(last.births)}</div>
+          <div className="l">Births</div>
         </div>
         <div className="tile acc">
-          <div className="n">{fmtNum(last?.moveIns ?? 0)}</div>
-          <div className="l">Move-ins (last tick)</div>
+          <div className="n">{fmtNum(last.moveIns)}</div>
+          <div className="l">Move-ins</div>
         </div>
         <div className="tile neg">
-          <div className="n">{fmtNum(last?.deaths ?? 0)}</div>
-          <div className="l">Deaths (last tick)</div>
+          <div className="n">{fmtNum(last.deaths)}</div>
+          <div className="l">Deaths</div>
         </div>
         <div className="tile neg">
-          <div className="n">{fmtNum(last?.moveOuts ?? 0)}</div>
-          <div className="l">Move-outs (last tick)</div>
+          <div className="n">{fmtNum(last.moveOuts)}</div>
+          <div className="l">Move-outs</div>
         </div>
       </div>
+      <div className="tiles" data-testid="demographics-last-nets">
+        <div className={`tile ${lastNets.natural >= 0 ? 'pos' : 'neg'}`}>
+          <div className="n">{signed(lastNets.natural)}</div>
+          <div className="l">Natural increase (births − deaths)</div>
+        </div>
+        <div className={`tile ${lastNets.migration >= 0 ? 'pos' : 'neg'}`}>
+          <div className="n">{signed(lastNets.migration)}</div>
+          <div className="l">Net migration (moves in − out)</div>
+        </div>
+        <div className={`tile ${lastNets.net >= 0 ? 'pos' : 'neg'}`}>
+          <div className="n">{signed(lastNets.net)}</div>
+          <div className="l">Net population change</div>
+        </div>
+      </div>
+      <h4>This month so far</h4>
+      <div className="tiles" data-testid="demographics-month-accum">
+        <div className="tile pos">
+          <div className="n">{fmtNum(monthSoFar.births)}</div>
+          <div className="l">Births</div>
+        </div>
+        <div className="tile acc">
+          <div className="n">{fmtNum(monthSoFar.moveIns)}</div>
+          <div className="l">Move-ins</div>
+        </div>
+        <div className="tile neg">
+          <div className="n">{fmtNum(monthSoFar.deaths)}</div>
+          <div className="l">Deaths</div>
+        </div>
+        <div className="tile neg">
+          <div className="n">{fmtNum(monthSoFar.moveOuts)}</div>
+          <div className="l">Move-outs</div>
+        </div>
+      </div>
+      <div className="tiles" data-testid="demographics-month-nets">
+        <div className={`tile ${monthNets.natural >= 0 ? 'pos' : 'neg'}`}>
+          <div className="n">{signed(monthNets.natural)}</div>
+          <div className="l">Natural increase (births − deaths)</div>
+        </div>
+        <div className={`tile ${monthNets.migration >= 0 ? 'pos' : 'neg'}`}>
+          <div className="n">{signed(monthNets.migration)}</div>
+          <div className="l">Net migration (moves in − out)</div>
+        </div>
+        <div className={`tile ${monthNets.net >= 0 ? 'pos' : 'neg'}`}>
+          <div className="n">{signed(monthNets.net)}</div>
+          <div className="l">Net population change</div>
+        </div>
+      </div>
+      <p className="hint">
+        Resets to zero at the start of each in-game month; last month's totals are recorded below in the
+        demographic flow history.
+      </p>
       <h4>Demographic flow</h4>
       <PopulationSankey history={state.demographicHistory} />
       <h4>Arrivals by mode</h4>

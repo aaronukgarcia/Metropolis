@@ -1831,6 +1831,45 @@ export const onlineResidentsCapacity: (s: SimState) => number = memoOnState((s) 
 });
 
 /**
+ * BUG-645 — count AND capacity of RESIDENTIAL buildings withheld ONLY
+ * because they are still under construction (the G1 gate in
+ * computeIsOnline/computeFailedGates), so the TopBar at-capacity indicator
+ * can name the concrete relief already queued: "N homes under construction
+ * adding M capacity when they finish". Reuses computeFailedGates() — the SAME
+ * classification offlineResidentsByReason() below partitions into its
+ * 'construction' bucket — so this NEVER drifts from that already-shipped
+ * number (GR#3 SSOT): for any state, this function's `capacity` is exactly
+ * offlineResidentsByReason(s).construction, just paired with a building
+ * COUNT that selector does not track.
+ *
+ * Pure derivation of s (GR#21): no Date/Math.random. memoOnState (the
+ * BUG-642/BUG-622 idiom this file already uses throughout) because TopBar
+ * reads this every render on Aaron's 29,831-building city — an unmemoised
+ * per-building scan here would repeat the full O(buildings) walk every tick
+ * exactly the class of cost BUG-642/BUG-622 exist to prevent. The inner
+ * computeFailedGates() call only runs for buildings isOnline() has already
+ * gated OFFLINE (a small minority — 56 of 29,831 on Aaron's city), so the
+ * memoised pass stays cheap.
+ */
+export const residentialConstructionSummary: (s: SimState) => { count: number; capacity: number } = memoOnState(
+  (s) => {
+    let count = 0;
+    let capacity = 0;
+    for (const b of s.buildings) {
+      const sp = SPECS[b.spec];
+      if (sp?.kind !== 'residential') continue;
+      if (isOnline(s, b)) continue;
+      const gates = computeFailedGates(s, b);
+      if (gates.some((g) => g.gate === 'construction')) {
+        count++;
+        capacity += sp.residents ?? 8;
+      }
+    }
+    return { count, capacity };
+  }
+);
+
+/**
  * BUG-417 — housing capacity that is NOT yet live: residents that will come
  * online once currently offline / under-construction dwellings finish. Pure
  * derivation (GR#21): gross residential capacity minus the online-gated figure

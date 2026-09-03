@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSim } from '../sim/simContext';
 import { levelOf, xpForLevel, wellbeingOf, UNLOCK_ALL_COST } from '../sim/engine';
-import { ragForWellbeing, ragColor } from './ragThresholds';
+import { ragForWellbeing, ragColor, isAtCapacity } from './ragThresholds';
+import { onlineResidentsCapacity, residentialConstructionSummary } from '../sim/data';
 import { fmtMoney, fmtNum, gameDate } from '../sim/utils';
 import { useLiveVersion } from '../sim/liveVersion';
 import { TrendArrows } from './Trend';
@@ -176,6 +177,16 @@ export function TopBar() {
   // consumes the SAME ragForWellbeing/ragColor pair, so a future retune of
   // RAG_THRESHOLDS.WELLBEING moves both.
   const wbColor = ragColor(ragForWellbeing(wb.overall));
+  // BUG-645 — Aaron: "as the days go past with 1.9m people the population
+  // stays the same — why do births and deaths not make it go up and down".
+  // The mechanic is correct (births beat deaths, but move-outs exactly
+  // cancel the natural increase) — the defect was that NOTHING told the
+  // player their city is pinned at online housing capacity. onlineCapacity /
+  // underConstruction are both memoOnState-backed (data.ts) so this costs one
+  // cached read per render, not a fresh O(buildings) scan (BUG-642 idiom).
+  const onlineCapacity = onlineResidentsCapacity(state);
+  const atCapacity = isAtCapacity(state.population, onlineCapacity);
+  const underConstruction = residentialConstructionSummary(state);
   return (
     <header className="topbar">
       {/* FEAT-2326609725 / BUG-564: StaleBuildBanner UNMOUNTED (Aaron, 2026-09-02).
@@ -216,6 +227,20 @@ export function TopBar() {
         <span className="stat">
           {fmtNum(state.population)} citizens
           <TrendArrows series={state.history.map((h) => h.population)} gentle={0.05} fast={1} label="Population" />
+          {atCapacity && (
+            <span
+              className="stat-badge warn-text"
+              title={
+                `At ${fmtNum(onlineCapacity)} online housing capacity (${((state.population / Math.max(1, onlineCapacity)) * 100).toFixed(1)}%). ` +
+                (underConstruction.count > 0
+                  ? `${fmtNum(underConstruction.count)} homes under construction adding ${fmtNum(underConstruction.capacity)} capacity when they finish. `
+                  : '') +
+                `Births/deaths/moves are still happening (see the Demographics tab) but a full city means arrivals can only replace departures, not grow the total.`
+              }
+            >
+              {' '}(at capacity)
+            </span>
+          )}
         </span>
         <span className="stat" title={`Wellbeing ${wb.overall}/100`}>
           <span className="wb-dot" style={{ background: wbColor }} />

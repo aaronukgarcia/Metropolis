@@ -563,6 +563,13 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   letter-spacing: 0.03em;
 }
 
+/* BUG-645 — TopBar population "(at capacity)" badge: nested inside the
+   population .stat span, so it inherits that span's layout; font-weight only
+   distinguishes it, colour comes from the shared .warn-text utility. */
+.stat-badge {
+  font-weight: 600;
+}
+
 /* ---------- IMF insolvency flow inc2 (FEAT-1972079923) ---------- */
 /* Forced Asset Sales panel (AC-2/AC-3/AC-4) — visible for the whole active
    bailout, listing sellable assets by capital value descending.
