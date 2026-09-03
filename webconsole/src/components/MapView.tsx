@@ -20,6 +20,7 @@ import {
   blockOccupancy,
   PIPE_TIERS,
   utilisationOf,
+  constructionTicks,
   lineUsageOf,
   isLineSpec,
   isRoadSpec,
@@ -1589,7 +1590,11 @@ function Compass() {
   );
 }
 
-function BuildingCard({
+// Exported (not just used internally) so the Q100092 display tests can render
+// it directly against a hand-built SimContext fixture without mounting the
+// whole map canvas — mirrors constructionQueueOf's export-for-testability idiom
+// in ConstructionQueue.tsx.
+export function BuildingCard({
   building,
   connected,
   showRefs,
@@ -1605,6 +1610,26 @@ function BuildingCard({
   const sp = SPECS[building.spec];
   if (!sp) return null;
   const util = utilisationOf(state, building);
+  // Q100092 (Aaron, confirmed design, BUG-569 display half): while a building
+  // fails the 'construction' gate it must show CONSTRUCTION PROGRESS, never
+  // utilisation/output/served/revenue — those start truthfully at 0 the day it
+  // actually comes online. `failedGates`/`underConstruction` reuse the SAME
+  // SSOT the Construction Queue tab uses (computeFailedGates + constructionTicks,
+  // both imported here, never re-derived — GR#3) so this can never drift from
+  // the map's own WHY-offline tooltip or the queue panel's ticks-remaining.
+  const failedGates = isOnline(state, building) ? [] : computeFailedGates(state, building);
+  const underConstruction = failedGates.some((g) => g.gate === 'construction');
+  // Percent complete = ticks elapsed / constructionTicks(sp), clamped 0-100.
+  // constructionTicks() is the SAME flag-scaled helper the gate itself calls
+  // (BUG-613 fast-build scaling), so a scaled build shows a consistent percent
+  // — no second formula.
+  const constructionPct = (() => {
+    if (!underConstruction || building.builtTick == null) return 0;
+    const total = constructionTicks(sp);
+    if (total <= 0) return 100;
+    const elapsed = state.tick - building.builtTick;
+    return Math.min(100, Math.max(0, Math.round((elapsed / total) * 100)));
+  })();
   // FEAT-1972079903: when the Refs overlay is on, append the building ref to the
   // panel's name·provision label (e.g. "Small Holding · #44") so the visible
   // report number matches the map overlay and the debug JSON's buildings[].id.
@@ -1657,7 +1682,10 @@ function BuildingCard({
           {sp.dims.z < 0 ? `depth ${Math.abs(sp.dims.z)} m` : `${sp.dims.z} m tall`}
         </p>
       )}
-      {util && (
+      {/* Q100092: never utilisation while under construction — the failed-gates
+          block below carries "Under construction — N ticks remaining (X%)"
+          instead. Once online, utilisation renders as it always has. */}
+      {util && !underConstruction && (
         <p>
           Utilisation {Math.round(util.ratio * 100)}% ({util.basis})
         </p>
@@ -1669,25 +1697,30 @@ function BuildingCard({
               ? 'Source: aquifer abstraction pipe (cyan stub, north)'
               : 'Discharge: sea outfall pipe (olive stub, south)'}
           </p>
-          <p className="mono">
-            Pipe {PIPE_TIERS[state.pipeTier[building.id] ?? 0].label} · serves{' '}
-            {fmtNum(plantEffServed(state, building))}
-          </p>
+          {/* Q100092: "serves N" is a live output figure — suppressed while
+              under construction, same as utilisation above. */}
+          {!underConstruction && (
+            <p className="mono">
+              Pipe {PIPE_TIERS[state.pipeTier[building.id] ?? 0].label} · serves{' '}
+              {fmtNum(plantEffServed(state, building))}
+            </p>
+          )}
         </>
       )}
       {/* FEAT-1972079891 inc1 (AC-5) — WHY offline: list the failed activation
-          gate(s). Construction keeps its existing wording; the road gates add the
-          "not road-side" / "road not connected" reasons. Falls back to a generic
-          line if the building is offline for a reason inc1 doesn't itemise. */}
+          gate(s). Construction keeps its existing wording (plus the Q100092
+          percent-complete, computed above from the SAME constructionTicks() the
+          gate itself calls); the road gates add the "not road-side" / "road not
+          connected" reasons. Falls back to a generic line if the building is
+          offline for a reason inc1 doesn't itemise. */}
       {!isOnline(state, building) &&
         (() => {
-          const failed = computeFailedGates(state, building);
-          if (failed.length === 0) {
+          if (failedGates.length === 0) {
             return <p className="out">Offline</p>;
           }
-          return failed.map((g) => (
+          return failedGates.map((g) => (
             <p key={g.gate} className="out">
-              {g.reason}
+              {g.gate === 'construction' ? `${g.reason} (${constructionPct}%)` : g.reason}
             </p>
           ));
         })()}
@@ -1698,7 +1731,7 @@ function BuildingCard({
             : 'Not connected — no road touches this station yet'}
         </p>
       )}
-      <BuildingProfileView spec={sp} taxRates={state.taxRates} />
+      <BuildingProfileView spec={sp} taxRates={state.taxRates} hideProduces={underConstruction} />
     </div>
   );
 }
@@ -1731,7 +1764,21 @@ function ProfileLineRow({ line }: { line: ProfileLine }) {
   );
 }
 
-function BuildingProfileView({ spec, taxRates }: { spec: Spec; taxRates: TaxRates }) {
+function BuildingProfileView({
+  spec,
+  taxRates,
+  hideProduces,
+}: {
+  spec: Spec;
+  taxRates: TaxRates;
+  // Q100092 (Aaron, confirmed design): PRODUCES is the spec's nameplate output
+  // (e.g. "Power 1120") — Aaron's original repro ("pow_nuke showing produces
+  // power 1120... while still being built") was this very line reading as a
+  // live figure. Suppressed while the instance it's attached to is under
+  // construction; REQUIRES/CAPEX/OPEX (inputs + cost) are catalogue facts, not
+  // output, and stay visible.
+  hideProduces?: boolean;
+}) {
   const profile = buildingProfile(spec, taxRates);
   return (
     <div className="building-profile">
@@ -1748,16 +1795,19 @@ function BuildingProfileView({ spec, taxRates }: { spec: Spec; taxRates: TaxRate
           </ul>
         </div>
       )}
-      {profile.produces.length > 0 && (
-        <div>
-          <p className="profile-heading">PRODUCES</p>
-          <ul className="profile-list">
-            {profile.produces.map((line) => (
-              <ProfileLineRow key={line.key} line={line} />
-            ))}
-          </ul>
-        </div>
-      )}
+      {profile.produces.length > 0 &&
+        (hideProduces ? (
+          <p className="muted">PRODUCES — available once construction completes</p>
+        ) : (
+          <div>
+            <p className="profile-heading">PRODUCES</p>
+            <ul className="profile-list">
+              {profile.produces.map((line) => (
+                <ProfileLineRow key={line.key} line={line} />
+              ))}
+            </ul>
+          </div>
+        ))}
     </div>
   );
 }
