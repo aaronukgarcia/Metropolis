@@ -74,11 +74,17 @@ import { runConsistencyChecks } from '../src/sim/consistency.ts';
  * first as a CI job timeout long before this assertion mattered. */
 const FIXTURE_BUILD_BOUND_MS = 60_000;
 
-/** See file header BOUND DERIVATION. */
-const TICK_MEDIAN_BOUND_MS = 100;
+/** See file header BOUND DERIVATION — then RE-DERIVED against real CI
+ * (run 33736133023, 2026-09-03): the first CI run measured wellbeingOf at
+ * 54.66ms vs ~7.5ms locally (~7x slower hardware/cold caches), reddening the
+ * original 3x-local bounds. Bounds are now ~4x the CI-MEASURED figures: these
+ * are smoke gates for order-of-magnitude cliffs (the BUG-602 class was
+ * 30-100x), not micro-benchmarks — a 2x hardware wobble must never red them,
+ * a 10x regression always must. */
+const TICK_MEDIAN_BOUND_MS = 400;
 
-/** See file header BOUND DERIVATION. */
-const RENDER_PATH_BOUND_MS = 40;
+/** ~4x CI-measured 61.39ms combined (see above). */
+const RENDER_PATH_BOUND_MS = 250;
 
 const TICK_SAMPLE_COUNT = 30;
 
