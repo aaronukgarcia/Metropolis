@@ -15,6 +15,11 @@
 // drained entries from that queue (same POST route, upserted on `id` so a
 // drain can never double-insert).
 //
+// Start alongside dev: from webconsole/, run `npm run dev:full` (which launches
+// both the Vite dev server and this server concurrently via dev-with-sink.mjs),
+// or start this server standalone: `node tools/debugsink/server.js` (listens on
+// port 8642, falls back to browser queue when unreachable).
+//
 // Connection: uses the project's shared metro MariaDB helper (claude-db.js,
 // FEAT-123) exactly as claude-sync.js does — same env vars
 // (METRO_DB_HOST/PORT/USER/PASSWORD/NAME), same defaults
