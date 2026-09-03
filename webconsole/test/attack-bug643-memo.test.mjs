@@ -498,8 +498,15 @@ test('PERF: stationLinks median (1 cold + 19 cached calls/run, fresh state per r
 
 test('PERF: computeRoadConnectivity median (cold, no intra-run reuse, fresh state per run) stays under the derived bound', () => {
   const m = timeRuns(computeRoadConnectivity, 7, 1, perfFreshState);
-  console.log(`[PERF] computeRoadConnectivity median=${m.toFixed(2)}ms (bound 8ms)`);
-  assert.ok(m < 8, `computeRoadConnectivity median ${m.toFixed(2)}ms exceeded the 8ms bound`);
+  // BOUND HISTORY: the original 8ms was ~4x the DEV-BOX median — the exact
+  // dev-box-derived-bound class this project has now shipped THREE times (the
+  // wage-drift and BUG-617 gates before this one). CI run 33807725893 measured
+  // the true CI median at 8.02ms, reddening main by 0.02ms. Re-derived as ~4x
+  // the CI-MEASURED median (house rule: bounds come from the machine that
+  // enforces them): 32ms. Still comfortably reddens the unmemoised revert,
+  // which the RED-PROOF below measures at ~40ms+ on CI-class hardware.
+  console.log(`[PERF] computeRoadConnectivity median=${m.toFixed(2)}ms (bound 32ms)`);
+  assert.ok(m < 32, `computeRoadConnectivity median ${m.toFixed(2)}ms exceeded the 32ms bound`);
 });
 
 // ────────────────────────────────────────────────────────────────────────
