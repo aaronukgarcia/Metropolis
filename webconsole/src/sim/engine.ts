@@ -14,7 +14,8 @@ import {
   isOnline,
   memoOnState,
   occupiedSet,
-  roadTileSetOf,
+  occupiedSetIncremental,
+  roadTileSetIncremental,
   isRoadOrTrunkSpec,
   placementCost,
   serviceCoverageOf,
@@ -54,7 +55,7 @@ import {
   demandFixPlan,
   orderedDemandFixPlan,
   RESOLVE_DEMAND_ALL_MAX_UNITS,
-  findSpot,
+  createSpotSearchContext,
   noBuildableSiteReason,
   crimeRateOf,
   lineUsageOf,
@@ -3393,15 +3394,33 @@ function placePlanItem(
   // across every placement in this item's batch, not just the last iteration.
   let anyRoadTopologyChange = isRoadOrTrunkSpec(sp);
   const target = Math.min(item.count, unitCap);
+  // BUG-646 (Aaron, 2026-09-03, raising the cap 250 -> 2000): a batched
+  // spot-search context (data.ts createSpotSearchContext) replaces the
+  // per-unit findSpot(s2, ...) call here — findSpot() itself recomputes
+  // occupiedSet(s2)/tagged/resList from s2.buildings on EVERY call, an
+  // O(buildings) cost that used to be paid AGAIN for every single unit
+  // because s2.buildings is a new array reference after each placement
+  // (measured: 68ms/unit at 29,831 buildings, dominated by that rebuild, not
+  // by the O(window) scanWindow() search itself). The context instead builds
+  // occ/tagged/resList ONCE from `cur` and updates them incrementally via
+  // occupy() with exactly the buildings 'place' actually added (the target
+  // unit AND any auto-connector tiles), so every subsequent findNext() call
+  // sees the true, up-to-date occupied set without re-scanning the whole
+  // buildings array — collapsing the per-unit cost to O(window), matching
+  // scanWindow()'s own bound. See createSpotSearchContext()'s doc comment
+  // (data.ts) for the full measurement and the one assumption (never a
+  // residential spec) this depends on.
+  const spotCtx = createSpotSearchContext(s2, item.specId);
   for (let i = 0; i < target; i++) {
     if (cost > 0 && s2.administrationState) break;
     if (cost > 0 && s2.funds < cost) break;
-    const spot = findSpot(s2, item.specId);
+    const spot = spotCtx.findNext();
     if (!spot) break; // findSpot() widened its search to the whole map (BUG-593) and still found nothing
     const beforeLen = s2.buildings.length;
     const next = reduceCore(s2, { type: 'place', spec: item.specId, x: spot.x, y: spot.y });
     if (next === s2) break; // defensive: 'place' declined for a reason not checked above
     if (next.buildings.length > beforeLen + 1) anyRoadTopologyChange = true;
+    spotCtx.occupy(next.buildings.slice(beforeLen)); // sync ctx with what 'place' ACTUALLY added
     s2 = next;
     placed++;
   }
@@ -3511,9 +3530,20 @@ function reduceCore(state: SimState, action: Action): SimState {
       // ref) and hand them to autoConnect as prebuiltBoard, so the single-
       // placement path no longer pays autoConnect's OWN from-scratch O(n) rebuild
       // (engine.ts:1692-1698) on top of this one — same contents, one pass.
+      // BUG-646 FIX (2026-09-03): occupiedSet(placedState)/roadTileSetOf(placedState)
+      // used to be a fresh O(buildings) rebuild EVERY placement (placedState.buildings
+      // is always a new array reference), measured as the single largest cost in a
+      // big-city resolveDemandAll batch (5.2s of a 7.7s/250-unit run at Aaron's real
+      // 29,831-building savepoint). placedState.buildings is ALWAYS exactly
+      // `[...state.buildings, placedBuilding]` (built two lines above), so
+      // occupiedSetIncremental()/roadTileSetIncremental() (data.ts) clone the
+      // ALREADY-CACHED occupiedSet(state)/roadTileSetOf(state) — a cache HIT here in
+      // any append-only loop (resolveDemand's placePlanItem, drag-placeMany) since
+      // `state` is the previous iteration's `placedState` — and add just this one
+      // building's own footprint (O(w*h)) instead of re-scanning every building.
       const connected = autoConnect(placedState, placedBuilding, sp, undefined, {
-        occupied: occupiedSet(placedState),
-        roads: roadTileSetOf(placedState),
+        occupied: occupiedSetIncremental(state, placedState.buildings),
+        roads: roadTileSetIncremental(state, placedState.buildings),
       });
       // FEAT-1972079902 inc3: if this is a GATEWAY (Ashford International /
       // International Airport), auto-lay deterministic branch lines to the nearest

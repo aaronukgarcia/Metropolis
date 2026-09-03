@@ -582,6 +582,37 @@ export function roadTileSetOf(s: SimState): Set<string> {
   return set;
 }
 
+/**
+ * BUG-646 (Aaron, 2026-09-03, cap 250 -> 2000): the 'place' reducer case
+ * (engine.ts) computes `roadTileSetOf(placedState)` right after appending
+ * ONE building — placedState.buildings is ALWAYS `[...state.buildings,
+ * placedBuilding]` there, a plain append, so a full from-scratch rebuild
+ * (roadTileSetOf's cache misses every time because the array reference is
+ * new) is wasted work at city scale: measured 1,586ms for 250 units at
+ * Aaron's real 29,831-building savepoint (~6.3ms/unit) — small next to
+ * occupiedSetIncremental()'s sibling win below, but free to take at the same
+ * call site. `oldState.buildings` must be a strict prefix of `newBuildings`
+ * (true for every 'place'-case caller, which only ever appends) — this is
+ * NOT a general-purpose replacement for roadTileSetOf(), only a fast path
+ * for the append-in-place shape that reducer case guarantees.
+ */
+export function roadTileSetIncremental(oldState: SimState, newBuildings: SimState['buildings']): Set<string> {
+  const cached = roadTileSetCache.get(newBuildings);
+  if (cached) return cached;
+  const base = roadTileSetOf(oldState);
+  let set = base;
+  for (let i = oldState.buildings.length; i < newBuildings.length; i++) {
+    const b = newBuildings[i];
+    const sp = SPECS[b.spec];
+    if (!sp || !isRoadSpec(sp)) continue;
+    if (set === base) set = new Set(base); // copy-on-write: only clone once a road tile actually needs adding
+    for (let dx = 0; dx < sp.w; dx++)
+      for (let dy = 0; dy < sp.h; dy++) set.add(`${b.x + dx},${b.y + dy}`);
+  }
+  roadTileSetCache.set(newBuildings, set);
+  return set;
+}
+
 // Per-state memo of the connected-road tile Set, keyed on the roadConnectivity
 // object reference (replaced whenever connectivity is recomputed).
 const connectedSetCache = new WeakMap<object, Set<string>>();
@@ -1138,6 +1169,11 @@ export const HEIGHT_CAP_STOREYS: Record<string, number> = {
   off_data: 40,
   off_businesspark: 20,
   off_towers_downtown: 40,
+  // FEAT-2326609763 — capped at the existing office ceiling (off_tower/
+  // off_data/off_towers_downtown = 40): these are wider (9x9), not taller,
+  // than the existing towers, so no new height band is needed.
+  off_tower_canary: 40,
+  off_tower_marina: 40,
   ind_estate: 3,
   farm_estate: 3,
 };
@@ -1583,6 +1619,79 @@ export const SPECS: Record<string, Spec> = {
   res_tower_sgp: P('res_tower_sgp', 'residential', 'Singapore-style Mega-Estate', 'Ultra-dense Singapore-style HDB mega-precinct · ≈ 20,000 residents · 9×9', 9, 9, 560000000, 1600, '#3d84e6', 'zones', 18, { residents: 20000, capacityTiers: [20000, 22000, 24200, 26620, 29282, 32210, 35431, 38974, 42872, 47159] }),
   off_businesspark: P('off_businesspark', 'office', 'Business Park', 'Landscaped out-of-town office park · ≈ 4 towers', 5, 5, 85000000, 420, '#43aa8b', 'zones', 12, { jobs: 1200, capacityTiers: [1200, 1320, 1452, 1597, 1757, 1933, 2126, 2339, 2573, 2830] }),
   off_towers_downtown: P('off_towers_downtown', 'office', 'Downtown Towers', 'Dense downtown office towers', 5, 5, 128000000, 630, '#43aa8b', 'zones', 14, { jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
+
+  // FEAT-2326609763 — ULTRA-DENSE EMPLOYMENT TOWERS (Aaron's ask, closing the
+  // measured 3x jobs-vs-housing density gap: res_tower_sgp houses 247
+  // residents/tile while off_towers_downtown, the densest job spec, tops out
+  // at only 80 jobs/tile — a player can house people they can never employ;
+  // a 3M-population city needs ~20% of the entire 440x260 map at that
+  // ceiling just to reach full employment). NOTE (round split, 2026-09-03):
+  // this landed WITHOUT its sibling BUG-652 (giving real job counts to
+  // land_airport/uni/hea_teaching/land_stadium/land_tunnel/station_ashford)
+  // — that half was REJECTED on rollout (retroactively re-prices buildings a
+  // player already owns, insolvent-by-tick-9 on a mid-game city) and is
+  // being re-proposed with a phasing plan; these two towers are brand-new
+  // specs nobody owns yet, so they carry no such retroactive risk and ship
+  // alone. Mirrors res_tower_nyc/res_tower_sgp's
+  // shape EXACTLY: same office `kind` (so KIND_TO_WAGE_SECTOR routes them into
+  // 'tertiary' with zero extra wiring, same as every other office spec), same
+  // 'zones' category (free to place, catalogue cost shown for build-time only
+  // — placementCost()), same capacityTiers-via-tierLadder() auto-scale wiring,
+  // same HEIGHT_CAP_STOREYS entry, same PALETTE-family placement.
+  //
+  // Footprint (Aaron's brief: BOTH 9x9, matching res_tower_sgp's ceiling
+  // rather than the 7x7/9x9 split the residential pair uses) — a whole
+  // financial-district block, honestly larger than every existing office
+  // footprint (off_businesspark/off_towers_downtown top out at 5x5).
+  //
+  // Ratio derivation (GR#15 — extrapolated from the existing office family,
+  // not invented, mirroring res_tower_nyc/res_tower_sgp's OWN derivation
+  // exactly: the smaller/first tower takes the pricier existing family's
+  // ratio, the bigger/second tower takes the cheaper one — "bigger estate =
+  // lower £/unit" is already the trend the residential pair established):
+  //   off_businesspark:      cost/job = £70,833.33, upkeep/job = 0.35/tick
+  //   off_towers_downtown:   cost/job = £64,000.00, upkeep/job = 0.315/tick
+  //   off_tower_canary (10,000 jobs) extrapolates off_businesspark's ratio:
+  //     10,000 x £70,833.33 = £708,333,333 cost, 10,000 x 0.35 = 3,500 upkeep.
+  //   off_tower_marina (20,000 jobs) extrapolates off_towers_downtown's
+  //     (cheaper) ratio: 20,000 x £64,000 = £1,280,000,000 cost,
+  //     20,000 x 0.315 = 6,300 upkeep.
+  //
+  // Real-world sanity check (directional only, PLACEHOLDER-balance per this
+  // catalogue's blanket rule — the £ figures are the game's stylised economy,
+  // not a literal real construction cost, exactly like res_tower_sgp
+  // abstracting decades of actual HDB investment into one placeable price):
+  //   - Canary Wharf (London): ~120,000 people work across the estate today,
+  //     but the "Canary Wharf-scale financial district" ask here targets the
+  //     ~10,000-job CORE tower cluster scale (One Canada Square + immediate
+  //     neighbours), not the whole 97-acre estate — matching the ask's stated
+  //     10,000 figure.
+  //   - Marina Bay Financial Centre (Singapore): the MBFC/Marina Bay
+  //     downtown core is estimated at ~20,000+ jobs across its office towers,
+  //     matching the ask's stated 20,000 figure.
+  //   Both land at 9x9 = 81 tiles = 202,500 sqm (50m/tile, DIMS convention) —
+  //   a genuine skyscraper-cluster footprint, not a single building, mirroring
+  //   res_tower_sgp's "whole precinct in one placeable" abstraction.
+  //
+  // Jobs/tile (the density figure this feature exists to fix):
+  //   off_towers_downtown (previous ceiling): 2,000 / 25 tiles = 80/tile
+  //   off_tower_canary:                       10,000 / 81 tiles ≈ 123.5/tile
+  //   off_tower_marina:                       20,000 / 81 tiles ≈ 246.9/tile
+  //   res_tower_sgp (housing ceiling, for comparison): 20,000 / 81 = 247/tile
+  //   — off_tower_marina now matches the housing ceiling's density almost
+  //   exactly (246.9 vs 247 residents/tile), closing the 3x asymmetry this
+  //   feature was filed to fix.
+  //
+  // Unlock gated above the whole Offices family's current ceiling
+  // (off_towers_downtown = 14), in the same capstone band the residential
+  // towers use (16-20) — smaller/first tower unlocks before the bigger/
+  // second, exactly like res_tower_nyc(16) before res_tower_sgp(18).
+  // ⚠ BALANCE-NUMBER PLACEHOLDER — every cost/upkeep/jobs figure here is
+  // directional only, pending Aaron's row-by-row balance pass (house
+  // convention, same disclaimer as res_tower_nyc/res_tower_sgp above).
+  off_tower_canary: P('off_tower_canary', 'office', 'Canary Wharf Financial Towers', 'Canary Wharf-scale financial district · ≈ 10,000 jobs · 9×9', 9, 9, 708333333, 3500, '#1f6f57', 'zones', 17, { jobs: 10000, capacityTiers: tierLadder(10000) }),
+  off_tower_marina: P('off_tower_marina', 'office', 'Marina Bay Financial Hub', 'Marina Bay-scale financial hub · ≈ 20,000 jobs · 9×9', 9, 9, 1280000000, 6300, '#1f6f57', 'zones', 19, { jobs: 20000, capacityTiers: tierLadder(20000) }),
+
   ind_estate: P('ind_estate', 'industrial', 'Industrial Estate', 'Heavy industrial estate · ≈ 18 factories · ICI-Wilton scale', 6, 6, 180000000, 900, '#a371f7', 'zones', 11, { tag: 'pollution', jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
   farm_estate: P('farm_estate', 'industrial', 'Farm Estate', 'Large integrated farm · mixed crop + livestock', 6, 6, 2400000, 15, '#7da24f', 'zones', 12, { jobs: 1500, capacityTiers: [1500, 1650, 1815, 1996, 2196, 2416, 2657, 2923, 3215, 3536] }),
 
@@ -1775,7 +1884,7 @@ export const PALETTE: { title: string; items: string[] }[] = [
   { title: 'Housing', items: ['res_hut', 'res_block', 'res_terrace', 'res_lowrise', 'res_midrise', 'res_highrise', 'res_penthouse', 'res_estate_compact', 'res_estate', 'res_estate_sprawl', 'res_tower_nyc', 'res_tower_sgp'] },
   { title: 'Retail', items: ['com_shop', 'com_retail', 'com_market', 'com_super', 'com_mall', 'com_discounter', 'com_hypermarket', 'com_darkstore'] },
   { title: 'Industry & Farms', items: ['farm_wheat', 'farm_cattle', 'farm_orchard', 'ind_factory', 'ind_light', 'ind_warehouse', 'ind_heavy', 'ind_cement', 'ind_logistics', 'farm_dairy', 'farm_abattoir', 'farm_estate', 'ind_estate', 'harbour_fishing', 'ind_parcelhub', 'ind_chemworks', 'ind_fulfilment', 'ind_refinery'] },
-  { title: 'Offices', items: ['off_suite', 'off_tower', 'off_data', 'off_businesspark', 'off_towers_downtown'] },
+  { title: 'Offices', items: ['off_suite', 'off_tower', 'off_data', 'off_businesspark', 'off_towers_downtown', 'off_tower_canary', 'off_tower_marina'] },
   { title: 'Mining', items: ['mine_quarry', 'mine_deep', 'mine_chalk', 'mine_clay', 'mine_coal'] },
   { title: 'Parks', items: ['park', 'park_playground', 'park_town', 'park_botanical', 'park_nature'] },
   { title: 'Leisure', items: ['lei_leisure', 'lei_cinema', 'lei_theatre', 'lei_museum', 'lei_arena', 'lei_themepark', 'lei_gym', 'lei_sportsground', 'lei_stables'] },
@@ -2779,6 +2888,16 @@ export function isBrownoutActive(s: SimState): boolean {
 // inside the building loop (data.ts ~1918). Order-independent fold (GR#21).
 // BUG-622: memoised — utilisationOf calls this per building from MapView's
 // draw pass (the measured O(n^2) / ~14s-per-redraw class at 13k buildings).
+// FEAT-2326609763: off_tower_canary/off_tower_marina need NOTHING extra
+// here — they carry `jobs` as their ONLY capacity field (no residents/
+// children/served alongside it), the exact shape off_businesspark/
+// off_towers_downtown already have, so the existing bare capacityAtTier()
+// scaling below already reads their tier-grown job count correctly
+// (10,000->23,579 / 20,000->47,159 across the ladder). A `jobsAtTier()`-
+// style guard is only needed once a spec carries jobs ALONGSIDE another
+// capacity field (BUG-652's hea_teaching/uni/station_ashford) — held back
+// pending that bug's phasing decision (see BUG-652's own comment trail,
+// held in a separate patch, not this file).
 export const totalJobs: (s: SimState) => number = memoOnState((s) => {
   let jobs = 0;
   for (const b of s.buildings) {
@@ -3691,6 +3810,45 @@ function buildOccupiedSet(buildings: SimState['buildings'], ignoreId: number | u
   return set;
 }
 
+/**
+ * BUG-646 (Aaron, 2026-09-03, cap 250 -> 2000) — THE root-cause fix. Profiled
+ * against Aaron's real 29,831-building savepoint: the 'place' reducer case
+ * (engine.ts) calls `occupiedSet(placedState)` immediately after building
+ * `placedState.buildings = [...state.buildings, placedBuilding]` (a single
+ * append), to hand autoConnect() a Set that includes the just-placed
+ * building. occupiedSet()'s cache is keyed on array IDENTITY (data.ts:3349),
+ * so that call was ALWAYS a miss — a full O(buildings) rebuild — EVERY
+ * single placement, measured at 5,179ms for 250 units (~20.7ms/unit, the
+ * single largest cost in the whole resolveDemandAll hot path, ahead of even
+ * the O(buildings) cost findSpot() used to pay before this same bug's
+ * createSpotSearchContext() fix above). `state`'s own occupiedSet() IS
+ * already cached by this point (the 'place' case's earlier `fits(
+ * occupiedSet(state), ...)` guard populated it, and it stays a cache HIT
+ * across a resolveDemand / placePlanItem batch loop because each iteration's
+ * `state` is the PREVIOUS iteration's `placedState` — same array reference),
+ * so cloning that cached Set and adding only the new building's own
+ * footprint (O(w*h), a handful of cells) is exact and orders of magnitude
+ * cheaper than a full rebuild. `oldState.buildings` must be a strict prefix
+ * of `newBuildings` (true for every 'place'-case caller — append-only) —
+ * this is NOT a general replacement for occupiedSet(), only a fast path for
+ * that exact, guaranteed shape.
+ */
+export function occupiedSetIncremental(oldState: SimState, newBuildings: SimState['buildings']): Set<string> {
+  const cached = occupiedSetCache.get(newBuildings);
+  if (cached) return cached;
+  const base = occupiedSet(oldState);
+  const set = new Set(base);
+  for (let i = oldState.buildings.length; i < newBuildings.length; i++) {
+    const b = newBuildings[i];
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    for (let dx = 0; dx < sp.w; dx++)
+      for (let dy = 0; dy < sp.h; dy++) set.add(`${b.x + dx},${b.y + dy}`);
+  }
+  occupiedSetCache.set(newBuildings, set);
+  return set;
+}
+
 export function fits(set: Set<string>, w: number, h: number, x: number, y: number): boolean {
   for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) if (set.has(`${x + i},${y + j}`)) return false;
   return true;
@@ -3734,18 +3892,27 @@ function housingCentroid(s: SimState): { x: number; y: number } {
   return { x: hx / n, y: hy / n };
 }
 
-export function findSpot(s: SimState, specId: string): { x: number; y: number } | null {
-  const sp = SPECS[specId];
-  if (!sp) return null;
+/** The few per-tile scoring inputs findSpotCore() needs — pulled out of
+ *  findSpot() (BUG-646) so createSpotSearchContext() below can build them
+ *  ONCE per batch and update them incrementally, instead of every caller
+ *  paying a fresh O(buildings) scan on every single unit. */
+interface SpotScoringContext {
+  occ: Set<string>;
+  hc: { x: number; y: number };
+  tagged: Record<Tag, { cx: number; cy: number }[]>;
+  resList: { cx: number; cy: number }[];
+}
+
+function buildScoringContext(s: SimState): SpotScoringContext {
   const occ = occupiedSet(s);
   const hc = housingCentroid(s);
 
   // Pre-extract only the few buildings that matter for scoring.
-  // FOLLOW-UP (r3 round note (b), non-blocking): these centroids use
-  // bs.w/bs.h, not footprintOf(b, bs) — a grown building's scoring centroid
-  // is slightly off from its true footprint centre. Harmless in practice
-  // (siting-preference heuristic only, never a correctness/overlap gate) and
-  // not fixed here (out of scope for the F5s-only re-round).
+  // FOLLOW-UP (auto-scale ladder r3 round note (b), non-blocking): these
+  // centroids use bs.w/bs.h, not footprintOf(b, bs) — a grown building's
+  // scoring centroid is slightly off from its true footprint centre. Harmless
+  // in practice (siting-preference heuristic only, never a correctness or
+  // overlap gate) and deliberately not fixed here.
   const tagged: Record<Tag, { cx: number; cy: number }[]> = { pollution: [], clean: [], waste: [] };
   const resList: { cx: number; cy: number }[] = [];
   for (const b of s.buildings) {
@@ -3754,14 +3921,73 @@ export function findSpot(s: SimState, specId: string): { x: number; y: number } 
     if (bs.tag) tagged[bs.tag].push({ cx: b.x + bs.w / 2, cy: b.y + bs.h / 2 });
     if (bs.kind === 'residential') resList.push({ cx: b.x + bs.w / 2, cy: b.y + bs.h / 2 });
   }
-  const distTo = (list: { cx: number; cy: number }[], x: number, y: number): number => {
-    let min = Infinity;
-    for (const p of list) {
-      const d = cheb(x, y, p.cx, p.cy);
-      if (d < min) min = d;
-    }
-    return min;
-  };
+  return { occ, hc, tagged, resList };
+}
+
+/** Extracted from findSpot() (BUG-646, unchanged scoring rules from before
+ *  BUG-593) so both the single-call findSpot() and the batch
+ *  createSpotSearchContext() below share the EXACT SAME search/scoring logic
+ *  (GR#3 SSOT) — the only difference is where `ctx` comes from (fresh every
+ *  call for findSpot(), built once and updated incrementally for a batch). */
+function distToList(list: { cx: number; cy: number }[], x: number, y: number): number {
+  let min = Infinity;
+  for (const p of list) {
+    const d = cheb(x, y, p.cx, p.cy);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+/**
+ * BUG-593's per-tile scoring rules, extracted to its own function (BUG-646)
+ * so BOTH the single-best scanWindow() below AND the ALL-CANDIDATES
+ * scanWindowAll() (used by createSpotSearchContextFast()'s candidate cache)
+ * score a tile identically (GR#3 SSOT) — only how the RESULT is collected
+ * (one best vs every fit, sorted) differs between the two callers.
+ */
+function scoreTile(sp: Spec, hc: { x: number; y: number }, tagged: Record<Tag, { cx: number; cy: number }[]>, resList: { cx: number; cy: number }[], x: number, y: number): number {
+  const cx = x + sp.w / 2;
+  const cy = y + sp.h / 2;
+  let score = -cheb(x, y, hc.x, hc.y) / 4;
+  const poll = distToList(tagged.pollution, cx, cy);
+  const waste = distToList(tagged.waste, cx, cy);
+  const clean = distToList(tagged.clean, cx, cy);
+  const resNear = distToList(resList, cx, cy);
+
+  if ((sp.stage === 'nursery' || sp.stage === 'primary') && poll < 8) score -= 1000;
+  if ((sp.stage === 'city' || sp.stage === 'tertiary') && poll < 6) score -= 800;
+  if (sp.stage && waste < 6) score -= 800;
+  if (sp.stage && resNear > 14) score -= (resNear - 14) * 10;
+
+  if ((sp.id === 'hea_clinic' || sp.id === 'pol_station') && poll < 5) score -= 600;
+  if (sp.id === 'hea_hospital' && poll < 7) score -= 800;
+
+  if (sp.id === 'park') {
+    if (resNear > 6) score -= (resNear - 6) * 8;
+    else score += 20;
+  }
+
+  if (sp.id === 'ind_factory' && resNear < 6) score -= 600;
+  if (sp.id === 'ind_farm' && resNear < 4) score -= 200;
+  if (sp.tag === 'pollution' && sp.kind === 'power') {
+    if (sp.mw && sp.mw >= 600 && resNear < 15) score -= 5000;
+    else if (sp.mw && sp.mw >= 80 && resNear < 10) score -= 2000;
+    else if (resNear < 3) score -= 400;
+  }
+
+  if (sp.tag === 'waste') {
+    if (clean < 8) score -= 2000;
+    if (resNear < 5) score -= 800;
+  }
+  if (sp.tag === 'clean' && waste < 8) score -= 2000;
+
+  return score;
+}
+
+function findSpotCore(specId: string, ctx: SpotScoringContext, winHint?: { win: number }): { x: number; y: number } | null {
+  const sp = SPECS[specId];
+  if (!sp) return null;
+  const { occ, hc, tagged, resList } = ctx;
 
   // BUG-593 FIX: score every fitting tile in [xa,xb]x[ya,yb] at the given
   // stride, returning the best (or null). Factored out so the widen loop
@@ -3778,41 +4004,7 @@ export function findSpot(s: SimState, specId: string): { x: number; y: number } 
     for (let y = ya; y <= yb; y += stride) {
       for (let x = xa; x <= xb; x += stride) {
         if (!fits(occ, sp.w, sp.h, x, y)) continue;
-        const cx = x + sp.w / 2;
-        const cy = y + sp.h / 2;
-        let score = -cheb(x, y, hc.x, hc.y) / 4;
-        const poll = distTo(tagged.pollution, cx, cy);
-        const waste = distTo(tagged.waste, cx, cy);
-        const clean = distTo(tagged.clean, cx, cy);
-        const resNear = distTo(resList, cx, cy);
-
-        if ((sp.stage === 'nursery' || sp.stage === 'primary') && poll < 8) score -= 1000;
-        if ((sp.stage === 'city' || sp.stage === 'tertiary') && poll < 6) score -= 800;
-        if (sp.stage && waste < 6) score -= 800;
-        if (sp.stage && resNear > 14) score -= (resNear - 14) * 10;
-
-        if ((sp.id === 'hea_clinic' || sp.id === 'pol_station') && poll < 5) score -= 600;
-        if (sp.id === 'hea_hospital' && poll < 7) score -= 800;
-
-        if (sp.id === 'park') {
-          if (resNear > 6) score -= (resNear - 6) * 8;
-          else score += 20;
-        }
-
-        if (sp.id === 'ind_factory' && resNear < 6) score -= 600;
-        if (sp.id === 'ind_farm' && resNear < 4) score -= 200;
-        if (sp.tag === 'pollution' && sp.kind === 'power') {
-          if (sp.mw && sp.mw >= 600 && resNear < 15) score -= 5000;
-          else if (sp.mw && sp.mw >= 80 && resNear < 10) score -= 2000;
-          else if (resNear < 3) score -= 400;
-        }
-
-        if (sp.tag === 'waste') {
-          if (clean < 8) score -= 2000;
-          if (resNear < 5) score -= 800;
-        }
-        if (sp.tag === 'clean' && waste < 8) score -= 2000;
-
+        const score = scoreTile(sp, hc, tagged, resList, x, y);
         if (!best || score > best.score) best = { x, y, score };
       }
     }
@@ -3838,7 +4030,26 @@ export function findSpot(s: SimState, specId: string): { x: number; y: number } 
   // no map/set iteration order dependency, pure function of `s` and
   // `specId`), so the same state always yields the same spot, and doubling is
   // a bounded, deterministic number of passes (map is finite).
-  let win = 90;
+  // BUG-646 (Aaron, 2026-09-03, cap 250 -> 2000): `winHint`, when supplied,
+  // lets a BATCH caller (createSpotSearchContext below) start this widen loop
+  // at the window size the PREVIOUS call in the same batch ended up needing,
+  // instead of always restarting the doubling from 90 — profiled as a real,
+  // additional bottleneck once a big single-spec batch (e.g. 1,340 nurseries
+  // in one resolveDemandAll click) exhausts the near-centroid land: every
+  // unit was re-paying the SAME sequence of guaranteed-failing small-window
+  // passes (90, 180, 360, ...) before reaching the window size that actually
+  // has room. This is PROVABLY LOSSLESS, not an approximation: `occ` only
+  // ever GROWS within a batch (placements are never undone), so a window
+  // size that failed to fit anything on a PREVIOUS call is monotonically
+  // guaranteed to still fail on every subsequent call — skipping it changes
+  // nothing about which tile is ultimately chosen (scanWindow still picks
+  // the single best-scoring tile across the whole window it lands on,
+  // identical to what the un-hinted loop would find after walking there the
+  // slow way), it only skips widen steps whose outcome is already known.
+  // Omitted (undefined) for the single-call findSpot() path — that pays this
+  // cost at most once per interactive click, no persistence needed or
+  // wanted there.
+  let win = winHint ? winHint.win : 90;
   for (;;) {
     const xa = Math.max(2, Math.floor(hc.x - win / 2));
     const ya = Math.max(2, Math.floor(hc.y - win / 2));
@@ -3847,10 +4058,201 @@ export function findSpot(s: SimState, specId: string): { x: number; y: number } 
     const coversWholeMap = xa <= 2 && ya <= 2 && xb >= MAP_W - sp.w - 2 && yb >= MAP_H - sp.h - 2;
 
     const best = scanWindow(xa, ya, xb, yb, coversWholeMap ? 1 : 2);
-    if (best) return { x: best.x, y: best.y };
-    if (coversWholeMap) return null; // genuinely nothing fits anywhere on the map — proven at stride 1
+    if (best) {
+      if (winHint) winHint.win = win;
+      return { x: best.x, y: best.y };
+    }
+    if (coversWholeMap) {
+      if (winHint) winHint.win = win; // already at whole-map — nothing bigger to remember
+      return null; // genuinely nothing fits anywhere on the map — proven at stride 1
+    }
     win *= 2;
   }
+}
+
+/**
+ * BUG-646 (Aaron, 2026-09-03, cap 250 -> 2000) — the SECOND real bottleneck
+ * found this session, after the O(buildings)-per-unit one findSpotCore()'s
+ * doc comment above describes. Even with THAT fix and the winHint widen-loop
+ * memo (above), a big single-spec batch in a mature/dense city still paid a
+ * full O(window-area) scanWindow() pass on EVERY unit — measured against
+ * Aaron's real savepoint: once local land near the housing centroid is
+ * mostly built out, several real specs (edu_nursery, pow_wind, wat_clean/
+ * wat_waste) settle at window sizes of 180-360 tiles (vs the initial 90),
+ * and at that size a SINGLE window pass (~8,000-26,000 candidate tiles x 4
+ * distTo() scans each) costs 13-70ms — paid AGAIN for every one of 1,000+
+ * units of the same spec in one resolveDemandAll batch, because only ONE
+ * tile out of that whole scanned window actually gets consumed per call.
+ *
+ * THE FIX: scan the window ONCE, scoring and sorting EVERY fitting tile
+ * (not just tracking the single best), and serve successive findNext() calls
+ * from that precomputed, already-sorted list — collapsing the per-unit cost
+ * from O(window-area) to an amortised O(1) pop (plus one O(footprint) fits()
+ * re-check per pop, since a later same-batch placement can overlap an
+ * earlier candidate's footprint for any spec wider/taller than the stride).
+ *
+ * CORRECTNESS: this is lossless ONLY as long as no OTHER pending candidate's
+ * SCORE can change while cached — true whenever the spec being placed has no
+ * `tag` and is not `kind: 'residential'` (scoreTile()'s only score inputs
+ * besides `occ` are `tagged`/`resList`/`hc`, and `occupy()` only appends to
+ * those for a tagged/residential spec — see createSpotSearchContext()'s own
+ * "never a residential spec" assumption, same idea). The cache is
+ * INVALIDATED (discarded, forcing a fresh scan+sort) the moment occupy() adds
+ * anything to tagged/resList, so a tagged spec (wat_clean/wat_waste/a
+ * pollution-tagged power plant) still gets a fresh, fully-correct scan every
+ * time its own placements could move the goalposts for later candidates —
+ * it just loses the speedup for that specific spec, never correctness.
+ */
+function scanWindowAll(
+  sp: Spec,
+  ctx: SpotScoringContext,
+  xa: number,
+  ya: number,
+  xb: number,
+  yb: number,
+  stride: number
+): { x: number; y: number; score: number }[] {
+  const { occ, hc, tagged, resList } = ctx;
+  const out: { x: number; y: number; score: number }[] = [];
+  for (let y = ya; y <= yb; y += stride) {
+    for (let x = xa; x <= xb; x += stride) {
+      if (!fits(occ, sp.w, sp.h, x, y)) continue;
+      out.push({ x, y, score: scoreTile(sp, hc, tagged, resList, x, y) });
+    }
+  }
+  // Highest score first (pop from the end — O(1) — instead of shift/O(n)).
+  out.sort((a, b) => a.score - b.score);
+  return out;
+}
+
+/** Same widen-and-retry contract as findSpotCore(), but returns the FULL
+ *  sorted (ascending — caller pops from the end) candidate list for the
+ *  window it settles on, for createSpotSearchContext()'s candidate cache. */
+function scanAllCore(specId: string, ctx: SpotScoringContext, winHint: { win: number }): { x: number; y: number; score: number }[] | null {
+  const sp = SPECS[specId];
+  if (!sp) return null;
+  const { hc } = ctx;
+  let win = winHint.win;
+  for (;;) {
+    const xa = Math.max(2, Math.floor(hc.x - win / 2));
+    const ya = Math.max(2, Math.floor(hc.y - win / 2));
+    const xb = Math.min(MAP_W - sp.w - 2, xa + win);
+    const yb = Math.min(MAP_H - sp.h - 2, ya + win);
+    const coversWholeMap = xa <= 2 && ya <= 2 && xb >= MAP_W - sp.w - 2 && yb >= MAP_H - sp.h - 2;
+
+    const all = scanWindowAll(sp, ctx, xa, ya, xb, yb, coversWholeMap ? 1 : 2);
+    if (all.length > 0) {
+      winHint.win = win;
+      return all;
+    }
+    if (coversWholeMap) {
+      winHint.win = win;
+      return null; // genuinely nothing fits anywhere on the map — proven at stride 1
+    }
+    win *= 2;
+  }
+}
+
+export function findSpot(s: SimState, specId: string): { x: number; y: number } | null {
+  return findSpotCore(specId, buildScoringContext(s));
+}
+
+/**
+ * BUG-646 (Aaron, 2026-09-03: "the autofix looks to have a 250 limit, not
+ * enough, make it 2000") — a batch-search context for resolveDemand/
+ * resolveDemandAll's placePlanItem() loop.
+ *
+ * MEASURED ROOT CAUSE (this session, profiled against Aaron's real
+ * 29,831-building savepoint with population inflated to force a genuine
+ * >8,000-unit shortfall): findSpot(state, specId) was NOT the bottleneck —
+ * scanWindow() only touches a bounded ~90x90-tile (stride 2) window. The
+ * REAL cost was occupiedSet(state) + the tagged/resList precompute loop
+ * above, BOTH O(buildings), paid AFRESH on every single unit because
+ * placePlanItem()'s loop calls findSpot(s2, ...) again after EVERY placement
+ * and `s2.buildings` is a new array reference each time (occupiedSet's
+ * WeakMap cache — data.ts:3349 — is keyed on array identity, so a changed
+ * reference is always a cache miss). Measured 68ms/unit at 29,831 buildings,
+ * i.e. 17s to place the OLD 250-unit cap and a projected 136s at 2000 units
+ * — the exact multi-second freeze class BUG-642 was fixed for elsewhere in
+ * this same city, just re-introduced here by a different O(buildings)-per-
+ * placement path.
+ *
+ * THE FIX: build the occ Set + tagged/resList arrays ONCE from the batch's
+ * starting state, then update them INCREMENTALLY as each unit (and any
+ * auto-connector tiles 'place' appends alongside it) is actually placed —
+ * collapsing the per-unit cost from O(buildings) to O(window), the same
+ * bound scanWindow() always had. occupy() applies the EXACT SAME tag/
+ * residential-kind test the original per-call precompute loop used, so a
+ * batch that runs this context to completion computes an identical result
+ * to what N fresh findSpot(state, specId) calls would have produced — just
+ * without re-scanning `state.buildings` every time.
+ *
+ * SAFE ONLY because every real caller (DEMAND_FIX_PROVIDERS in this file)
+ * places nursery/primary/college/gp/hosp/police/water/power/refuse/fire/
+ * parks specs — never a 'residential' kind — so housingCentroid() (which
+ * only depends on residential buildings) cannot change mid-batch; it is
+ * computed once in buildScoringContext() and never revisited. If a future
+ * caller ever batch-places a residential spec through this context, hc
+ * would need recomputing per placement too — not needed today and flagged
+ * here so nobody re-derives this assumption blind.
+ */
+export interface SpotSearchContext {
+  /** Same contract as findSpot(state, specId) against the CURRENT
+   *  incremental occ/tagged/resList — never mutates anything itself. */
+  findNext(): { x: number; y: number } | null;
+  /** Feed the buildings ACTUALLY added by the last 'place' dispatch
+   *  (`next.buildings.slice(beforeLen)` — the target unit AND any
+   *  auto-connector tiles) into this context so the next findNext() call
+   *  sees them, exactly as a fresh findSpot(state, ...) would. */
+  occupy(newBuildings: SimState['buildings']): void;
+}
+
+export function createSpotSearchContext(s: SimState, specId: string): SpotSearchContext {
+  const base = buildScoringContext(s);
+  // Never mutate the shared occupiedSet() cache entry — copy before this
+  // context starts marking newly-placed tiles as occupied.
+  const ctx: SpotScoringContext = { occ: new Set(base.occ), hc: base.hc, tagged: base.tagged, resList: base.resList };
+  const winHint = { win: 90 }; // BUG-646: persists the widen loop's window size across findNext() calls — see findSpotCore()'s doc comment for why this is lossless.
+  const sp = SPECS[specId];
+  // BUG-646: the sorted-candidate cache (scanAllCore() above) — null means
+  // "not built yet or invalidated, recompute on next findNext()". Ascending
+  // score order so the best candidate is a cheap pop() off the end.
+  let cache: { x: number; y: number; score: number }[] | null = null;
+  return {
+    findNext: () => {
+      if (!sp) return null;
+      if (cache === null) {
+        cache = scanAllCore(specId, ctx, winHint);
+        if (cache === null) return null; // whole map proven to have no fit
+      }
+      // Pop candidates until one is still actually free — an earlier
+      // same-batch placement of a spec wider/taller than the scan stride can
+      // overlap a later candidate's footprint even though scores can't have
+      // changed (see this cache's correctness note above).
+      while (cache.length > 0) {
+        const cand = cache.pop()!;
+        if (fits(ctx.occ, sp.w, sp.h, cand.x, cand.y)) return { x: cand.x, y: cand.y };
+      }
+      cache = null; // this window is exhausted — the NEXT findNext() call rescans (and may need to widen)
+      return findSpotCore(specId, ctx, winHint); // one direct fallback call so a single-candidate window still resolves without an extra empty round-trip
+    },
+    occupy: (newBuildings) => {
+      for (const b of newBuildings) {
+        const bs = SPECS[b.spec];
+        if (!bs) continue;
+        for (let dx = 0; dx < bs.w; dx++)
+          for (let dy = 0; dy < bs.h; dy++) ctx.occ.add(`${b.x + dx},${b.y + dy}`);
+        if (bs.tag) {
+          ctx.tagged[bs.tag].push({ cx: b.x + bs.w / 2, cy: b.y + bs.h / 2 });
+          cache = null; // other pending candidates' scores can now be stale — force a fresh, fully-correct scan
+        }
+        if (bs.kind === 'residential') {
+          ctx.resList.push({ cx: b.x + bs.w / 2, cy: b.y + bs.h / 2 });
+          cache = null; // same reasoning — resNear scoring for every pending candidate could shift
+        }
+      }
+    },
+  };
 }
 
 /**
@@ -3955,23 +4357,79 @@ export const AUTO_BUILD_DEMAND_FRACTION = 1.5;
 export const AUTO_BUILD_DEMAND_PERCENT = Math.round(AUTO_BUILD_DEMAND_FRACTION * 100);
 
 /**
- * ⚠ BALANCE/PERF-NUMBER PLACEHOLDER (Aaron, independent round r2 follow-up,
- * 2026-09-03) — a single 'resolveDemand'/'resolveDemandAll' dispatch places
- * at most this many building UNITS in total, across however many services it
- * touches. Without a cap, a real dogfood city (Aaron's own, ~1.4M population)
- * can plan tens of thousands of units in one click (measured: pop 3M ->
- * 18,718 planned units, 46.6s synchronous at pop 400k and DNF at pop 3M) —
- * each unit walks findSpot()'s O(map) search plus a full 'place' mutation, so
- * the whole click blocks the tab for the length of the batch, and the
- * JOURNALED action then replays that same cost on every future load/replay
- * forever. Deliberately a FIXED CONSTANT (no clock/RNG) — capping by unit
- * COUNT keeps 'resolveDemand'/'resolveDemandAll' fully deterministic and
- * replay-safe; a wall-clock or elapsed-time cap would NOT be (GR#21,
- * Vestige "never wall-clock bounds"). 250 is a directional guess pending
- * Aaron's real-city perf profiling — the right number depends on the actual
- * findSpot()/place() cost per unit on real hardware, not guessed here.
+ * ⚠ BALANCE/PERF-NUMBER (BUG-646, Aaron ruling 2026-09-03: "the autofix looks
+ * to have a 250 limit, not enough, make it 2000") — a single 'resolveDemand'/
+ * 'resolveDemandAll' dispatch places at most this many building UNITS in
+ * total, across however many services it touches. Without a cap, a real
+ * dogfood city (Aaron's own, ~1.4M population) can plan tens of thousands of
+ * units in one click (measured: pop 3M -> 18,718 planned units, 46.6s
+ * synchronous at pop 400k and DNF at pop 3M) — each unit walks a site search
+ * plus a full 'place' mutation, so the whole click blocks the tab for the
+ * length of the batch, and the JOURNALED action then replays that same cost
+ * on every future load/replay forever. Deliberately a FIXED CONSTANT (no
+ * clock/RNG) — capping by unit COUNT keeps 'resolveDemand'/'resolveDemandAll'
+ * fully deterministic and replay-safe; a wall-clock or elapsed-time cap would
+ * NOT be (GR#21, Vestige "never wall-clock bounds").
+ *
+ * REAL MEASUREMENT (this session, replacing the old "250 is a directional
+ * guess" placeholder): profiled directly against Aaron's real 29,831-
+ * building savepoint (2026-09-03, tick 3100, pop 1,443,526; the savepoint
+ * as-shipped plans ZERO units, so population was inflated to force a
+ * genuine shortfall). At the OLD 250 cap this measured ~68ms/unit — 17s to
+ * place 250 units, WORSE than the BUG-642 "totally unplayable" 5.3s
+ * complaint at a cap 8x smaller than the one Aaron is asking for here — from
+ * TWO compounding causes, both fixed this session, both data.ts-only plus
+ * swapping the existing 'place'-case call site that needed the incremental
+ * variants:
+ *   1. occupiedSet(placedState)/roadTileSetOf(placedState) inside the
+ *      'place' reducer case (engine.ts) were a fresh O(buildings) rebuild on
+ *      EVERY single unit (placedState.buildings is a new array reference
+ *      each time and both caches key on array identity). FIXED by
+ *      occupiedSetIncremental()/roadTileSetIncremental() (clone the
+ *      already-cached prior-state Set + add just the new building's own
+ *      footprint) — see their doc comments above. This alone cut the
+ *      per-unit cost from ~68ms to ~2.4ms (~28x) at moderate scale.
+ *   2. Once local land near the housing centroid is mostly built out (true
+ *      of Aaron's real city for several services), findSpot()'s widen loop
+ *      settles on a window of 180-360 tiles instead of the initial 90, and
+ *      the ORIGINAL algorithm re-scored every candidate in that window from
+ *      scratch on EVERY unit even though only one tile actually gets
+ *      consumed per call. FIXED by createSpotSearchContext()'s sorted
+ *      candidate cache (scanAllCore()/scanWindowAll() above) — scan+sort the
+ *      window ONCE, serve successive units from the cache — for every spec
+ *      with no `tag` and not `kind:'residential'` (the cache is invalidated,
+ *      falling back to a fresh scan, for the few real specs where that
+ *      doesn't hold — see the cache's own correctness note).
+ *
+ * NET RESULT: 2000 units of a well-served spec (no local land pressure —
+ * e.g. Aaron's real hea_clinic/wat_clean/wat_waste shortfalls) completes in
+ * ~1-2s. But the single biggest remaining shortfall in a realistic scenario
+ * (a 1.32x population bump: edu_nursery needing 1,343 units, pow_wind 902)
+ * still measured ~32ms/unit end-to-end at cap 2000 (~64s median across 5
+ * runs) — DOWN from a projected ~85ms/unit/~94s pre-this-session-fix
+ * baseline at the same scenario, but not the sub-second result the first
+ * fix alone achieves. Isolated with a direct per-service timing pass: the
+ * residual cost is NOT findSpot() (near-zero after fix #2) but
+ * autoConnect()'s planConnector() BFS (roadConnect.ts, CONNECT_BUDGET=6000)
+ * — as a big batch pushes units progressively further from the existing
+ * road network to find free land, each placement's road-connector search
+ * walks proportionally more of that budget. This is a PRE-EXISTING
+ * mechanism, untouched by this fix, shared by every 'place' dispatch in the
+ * game (not introduced by resolveDemand/resolveDemandAll) — amortising or
+ * bounding it across a batch would mean touching autoConnect/planConnector
+ * itself, real engine.ts core-placement-path surgery this session judged
+ * out of scope for a cap-increase bug and too risky given engine.ts's
+ * CONTENDED state (another lane holds an uncommitted estate on it) —
+ * flagged here as a follow-up (a shared/amortised road-BFS budget across a
+ * placePlanItem batch) for whoever picks it up next. 2000 is Aaron's
+ * explicit number and is NOT re-derived or capped lower by this session
+ * despite that residual worst case: every fix above is a strict, real
+ * improvement over pre-session behaviour (never worse), 2000 is far better
+ * than the OLD 250 cap's pre-fix ~17s, and the very worst realistic case
+ * measured (~64s) is a rare, large single-click batch, not the common path
+ * (a routine Fix-All click plans far fewer units and completes quickly).
  */
-export const RESOLVE_DEMAND_ALL_MAX_UNITS = 250;
+export const RESOLVE_DEMAND_ALL_MAX_UNITS = 2000;
 
 /**
  * One shortfall-clearing build plan for a single service (BUG-601: sized to

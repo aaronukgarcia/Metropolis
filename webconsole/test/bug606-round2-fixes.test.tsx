@@ -73,14 +73,20 @@ test('M1: resolveDemandAll re-derives demandFixPlan against the depleted treasur
 // NOTE (independent round r2, 2026-09-03): before the RESOLVE_DEMAND_ALL_MAX_
 // UNITS perf cap, Fix All == N sequential resolveDemand dispatches EXACTLY —
 // that equivalence is now INTENTIONALLY BROKEN by design at this repro's
-// scale: 'resolveDemandAll' shares ONE global 250-unit budget across the
-// WHOLE priority order, while N independent resolveDemand dispatches each
-// get their OWN 250-unit budget (a player clicking every Fix (N) button by
+// scale: 'resolveDemandAll' shares ONE global unit budget across the WHOLE
+// priority order, while N independent resolveDemand dispatches each get
+// their OWN per-service budget (a player clicking every Fix (N) button by
 // hand places far MORE total units than one Fix-All click at this
 // population). The cross-check below asserts the NEW real invariant instead:
 // Fix All never exceeds the global cap, and its capped notice is honest.
+// BUG-646 (cap 250 -> 2000, Aaron 2026-09-03): funds bumped from the
+// original £1.2B — at the new, much bigger cap, £1.2B runs out on FUNDS
+// before the unit cap ever binds at this population (a real, separate
+// scenario — see the funds-limited M1 test above), so this test (whose
+// whole point is exercising the UNIT cap) needs enough funds that it
+// genuinely reaches and is stopped BY the cap, not by money.
 test('M1 cross-check: resolveDemandAll never exceeds RESOLVE_DEMAND_ALL_MAX_UNITS in total, even when the real plan needs vastly more (perf cap, independent round r2)', () => {
-  const s = shortfallState(400_000, 1_200_000_000);
+  const s = shortfallState(400_000, 20_000_000_000);
   const order = orderedDemandFixPlan(s);
   const totalPlanned = order.reduce((sum, item) => sum + item.count, 0);
   assert.ok(
@@ -111,7 +117,10 @@ test('M1 cross-check (RED-PROOF live): with the SAME repro state, N sequential r
   // This is the reverse of the pre-cap equivalence: sequential dispatches are
   // each independently capped per-SERVICE (RESOLVE_DEMAND_ALL_MAX_UNITS per
   // click), so N of them place roughly N times the single Fix-All budget.
-  const s = shortfallState(400_000, 1_200_000_000);
+  // BUG-646: same funds bump as the sibling M1 cross-check above, and for
+  // the same reason — this scenario needs to be UNIT-cap-limited, not
+  // funds-limited, at the new 2000-unit cap.
+  const s = shortfallState(400_000, 20_000_000_000);
   const order = orderedDemandFixPlan(s);
   const all = reducer(s, { type: 'resolveDemandAll' });
   const allMatch = /^Fix All: built (\d+) of \d+ planned/.exec(all.placeNotice ?? '');

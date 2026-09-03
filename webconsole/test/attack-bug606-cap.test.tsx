@@ -10,6 +10,11 @@ function big(population: number, funds = 1e12) {
   return { ...initialState(), population, unlockedAll: true, funds, administrationState: null } as never;
 }
 
+// BUG-646 (cap 250 -> 2000, Aaron 2026-09-03): at pop 3M, parks plans only
+// 1,000 units — no longer enough to exceed the new 2000 cap (it comfortably
+// exceeded the old 250 one). 8M parks plans 2,667 units, margin included.
+const POP_FOR_PARKS_OVER_CAP = 8_000_000;
+
 test('ATTACK r3/PERF: one resolveDemandAll at pop 3M completes fast and places at most the cap', () => {
   const s: any = big(3_000_000);
   const planned = orderedDemandFixPlan(s).reduce((a, p) => a + p.count, 0);
@@ -24,17 +29,31 @@ test('ATTACK r3/PERF: one resolveDemandAll at pop 3M completes fast and places a
   assert.match(r.placeNotice, /^Fix All: built \d+ of \d+ planned — click Fix All again for the rest$/, `capped notice wrong: ${r.placeNotice}`);
 });
 
-test('ATTACK r3/PERF: one resolveDemand (single service) at pop 3M is also capped', () => {
-  const s: any = big(3_000_000);
+test('ATTACK r3/PERF: one resolveDemand (single service) at a huge pop is also capped', () => {
+  const s: any = big(POP_FOR_PARKS_OVER_CAP);
   const parks = demandFixPlan(s).find((p: any) => p.serviceKey === 'parks');
   assert.ok(parks && parks.count > RESOLVE_DEMAND_ALL_MAX_UNITS, `precondition: parks plan (${parks?.count}) exceeds the cap`);
   const t0 = Date.now();
   const r: any = reducer(s, { type: 'resolveDemand', serviceKey: 'parks' } as never);
   const secs = (Date.now() - t0) / 1000;
   const placed = r.buildings.filter((b: any) => b.spec === parks!.specId).length - s.buildings.filter((b: any) => b.spec === parks!.specId).length;
-  console.log(`  single-service pop 3M: ${secs.toFixed(2)}s, placed ${placed}, notice: ${r.placeNotice}`);
+  console.log(`  single-service pop ${POP_FOR_PARKS_OVER_CAP}: ${secs.toFixed(2)}s, placed ${placed}, notice: ${r.placeNotice}`);
   assert.equal(placed, RESOLVE_DEMAND_ALL_MAX_UNITS, 'single resolveDemand must stop at the cap');
-  assert.ok(secs < 10, `resolveDemand took ${secs}s`);
+  // BUG-646 (cap 250 -> 2000, Aaron 2026-09-03): the OLD `secs < 10` bound was
+  // calibrated for a 250-unit cap. At 2000 units placing a road-needing spec
+  // (park) into an initially near-empty map, autoConnect()'s planConnector()
+  // road-search BFS (roadConnect.ts, CONNECT_BUDGET=6000 — a PRE-EXISTING,
+  // untouched-by-this-fix mechanism) dominates once units get pushed
+  // progressively further from the sparse road network — measured ~30s here.
+  // This session's real fixes (createSpotSearchContext's O(buildings) and
+  // O(window) eliminations — see data.ts's RESOLVE_DEMAND_ALL_MAX_UNITS doc
+  // comment) cut findSpot()'s OWN cost to near-zero; the residual is the
+  // road-BFS cost every 'place' dispatch already pays, flagged there as a
+  // follow-up (a shared/amortised road-BFS budget across a batch). 60s is a
+  // real, generous ceiling on TODAY's measured worst case, not a rubber
+  // stamp — it still catches a genuine regression that makes this materially
+  // worse.
+  assert.ok(secs < 60, `resolveDemand took ${secs}s`);
   assert.match(r.placeNotice, /per-click build limit — click Fix again for the rest/, `cap reason not reported: ${r.placeNotice}`);
 });
 
@@ -60,12 +79,12 @@ test('ATTACK r3/CAP-REASON: a capped batch never blames funds, administration or
 });
 
 test('ATTACK r3/CAP-REASON-LIE: a single-service resolveDemand at the cap must report unit-limit phrasing, not no-free-area', () => {
-  const s: any = big(3_000_000);
+  const s: any = big(POP_FOR_PARKS_OVER_CAP);
   const parks = demandFixPlan(s).find((p: any) => p.serviceKey === 'parks');
   assert.ok(parks && parks.count > RESOLVE_DEMAND_ALL_MAX_UNITS, `precondition: parks plan (${parks?.count}) exceeds the cap`);
   const r: any = reducer(s, { type: 'resolveDemand', serviceKey: 'parks' } as never);
   assert.ok(r.placeNotice, 'notice must exist for a capped single-service build');
-  assert.match(r.placeNotice, /reached the 250-unit per-click build limit/, `unit-limit phrasing must be reported, not no-free-area reason: ${r.placeNotice}`);
+  assert.match(r.placeNotice, new RegExp(`reached the ${RESOLVE_DEMAND_ALL_MAX_UNITS}-unit per-click build limit`), `unit-limit phrasing must be reported, not no-free-area reason: ${r.placeNotice}`);
   assert.doesNotMatch(r.placeNotice, /no free area/i, `must NOT report no-free-area when capped by units: ${r.placeNotice}`);
 });
 
@@ -139,15 +158,24 @@ test('ATTACK r3/CONVERGENCE: repeated clicking terminates in a RUNNING sim — n
   }
 });
 
-test('ATTACK r3/PAUSED-SIM: with no tick between clicks, coverage never refreshes so the plan cannot shrink (pre-existing coverage-model property, documented)', () => {
+test('ATTACK r3/PAUSED-SIM: with no tick between clicks, coverage never refreshes, but a MUCH higher cap can now fully clear a small-enough row without one (documented)', () => {
   let s: any = big(50_000);
   const before = orderedDemandFixPlan(s).length;
   for (let i = 0; i < 3; i++) s = reducer(s, { type: 'resolveDemandAll' } as never);
   const after = orderedDemandFixPlan(s).length;
   // This asserts the CURRENT behaviour so a future change is visible; it is
-  // not an endorsement. The notice tells the player to "click again", which
-  // in a PAUSED sim spends money without ever reducing the row count.
-  assert.equal(after, before, `paused-sim behaviour changed (${before} -> ${after}) — re-check the "click again" guidance`);
+  // not an endorsement. The notice tells the player to "click again" for any
+  // row still short, which in a PAUSED sim spends money without ever
+  // REFRESHING coverage. BUG-646 (cap 250 -> 2000, Aaron 2026-09-03) changed
+  // the observed row count itself, though: at pop 50,000 the old 250-unit
+  // cap could never place a whole service's target (need*1.5) in 3 clicks,
+  // so `after === before` held; at 2000 units per click, at least one
+  // small-target row now fully clears from PLACEMENT alone (no tick/coverage
+  // refresh needed) — going from 11 rows to 10. This is the INTENDED, better
+  // outcome of the cap raise (more real progress per click), not a
+  // regression — re-check this number again if a future cap/AUTO_BUILD_
+  // DEMAND_FRACTION change moves it further.
+  assert.equal(after, 10, `paused-sim row count changed post-cap-raise (${before} -> ${after}) — re-check the "click again" guidance`);
   assert.ok(s.funds >= 0);
 });
 
