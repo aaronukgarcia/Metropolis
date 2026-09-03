@@ -129,6 +129,14 @@ const SLOW_TEST_CAPS_SEC = new Map([
   ['bug617-boot-wiring.test.tsx', 300],
   ['attack-bug617-crossbuild.test.tsx', 300],
   ['attack-bug617-lifecycle.test.tsx', 300],
+  // BUG-646 (2026-09-03): the Fix-All cap rose 250 -> 2000 (Aaron's ruling),
+  // so these two suites' capped-batch scenarios legitimately do ~8x the
+  // placement work they were written for (a >2000-unit resolveDemandAll each,
+  // through the real reducer). Measured ~35s alone but past the 240s default
+  // when batched with siblings in one contended node:test process. Same
+  // shape as the bug617 entries above: not a hang, just honest work.
+  ['attack-bug606-cap.test.tsx', 600],
+  ['bug606-round2-fixes.test.tsx', 600],
 ]);
 
 // The exact webconsole test set CI's node-test coverage depends on, kept in
