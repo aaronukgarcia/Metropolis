@@ -22,7 +22,7 @@ import {
   DEBUG_JSON_FORMAT,
 } from '../src/sim/debugjson.ts';
 import { EMPTY_MAP_UI } from '../src/sim/uistate.ts';
-import { initialState, reducer } from '../src/sim/engine.ts';
+import { initialState, reducer, computeFlows } from '../src/sim/engine.ts';
 import { powerStats } from '../src/sim/data.ts';
 
 /** Fixed, deterministic non-sim inputs for the builder. */
@@ -279,4 +279,170 @@ test('BUG-595: a corrupt crimeRatePreviousMonth (non-number) emits the sanitised
     'a corrupt (non-number) crimeRatePreviousMonth must emit the sanitised baseline, not the raw garbage value'
   );
   assert.notStrictEqual(parsed.sim.crimeRatePreviousMonth, 'abc', 'the raw corrupt string must never reach the serialized debug.json');
+});
+
+// ---------- BUG-629: solvent -> cashPositiveThisTick rename ----------
+//
+// info.status.solvent (this-tick cashflow, net >= 0) used to read beside
+// sim.insolvencyState="solvent" (the exposed multi-tick funds-band state
+// machine) as a direct contradiction: a city mid-'crisis' with one positive
+// tick showed "solvent: true" right next to "insolvencyState: crisis". The
+// field is renamed to cashPositiveThisTick — additive rename, nothing parsed
+// the old debug export field back in, so no migration/back-compat path is
+// needed (see the field's own doc comment in debugjson.ts for the full
+// rationale).
+test('BUG-629: info.status exposes cashPositiveThisTick (renamed from solvent), never the old name', () => {
+  const state = initialState();
+  const dj = buildDebugJson(state, testUi());
+  assert.ok(
+    Object.prototype.hasOwnProperty.call(dj.info.status, 'cashPositiveThisTick'),
+    'info.status.cashPositiveThisTick must be present'
+  );
+  assert.ok(
+    !Object.prototype.hasOwnProperty.call(dj.info.status, 'solvent'),
+    'the old field name "solvent" must NOT survive the rename'
+  );
+  const text = debugJsonText(dj);
+  const parsed = JSON.parse(text);
+  assert.ok(
+    Object.prototype.hasOwnProperty.call(parsed.info.status, 'cashPositiveThisTick'),
+    'the renamed field must survive serialization'
+  );
+  assert.ok(
+    !Object.prototype.hasOwnProperty.call(parsed.info.status, 'solvent'),
+    'the old field name must not reappear in the serialized text either'
+  );
+});
+
+test('BUG-629: cashPositiveThisTick tracks this-tick net >= 0, independent of the exposed insolvencyState band', () => {
+  const s0 = initialState();
+  // A city mid-'crisis' (multi-tick funds band) that nonetheless has a
+  // POSITIVE net this tick — cashPositiveThisTick must read true even though
+  // insolvencyState says 'crisis', proving the two are genuinely independent
+  // signals (the whole point of the rename: they are NOT the same fact).
+  const s1 = { ...s0, insolvencyState: 'crisis', funds: -999_999_999 };
+  const dj = buildDebugJson(s1, testUi());
+  const net = dj.info.status.netPerTick;
+  assert.equal(
+    dj.info.status.cashPositiveThisTick,
+    net >= 0,
+    'cashPositiveThisTick must equal (netPerTick >= 0), matching its own doc contract'
+  );
+  assert.equal(dj.sim.insolvencyState, 'crisis', 'sanity: the exposed band is untouched by this fix');
+});
+
+// ---------- BUG-628: Roads upkeep display asymmetry ----------
+//
+// structuresByFamily's per-family `upkeep` used to be an independent raw
+// re-sum of sp.upkeep over EVERY building of the family — including
+// offline/under-construction ones — with no recycling/austerity policy
+// discount applied. The fiscal outflows 'Roads' line (booked by
+// engine.computeFlows via fiscal.ts's UPKEEP_BUCKET SSOT) filters to
+// isOnline() buildings only and runs through applyOutflowPolicies. The two
+// numbers drifted (Aaron's export: 28,192 vs 28,024, a 0.6% display-only
+// gap). Fix: structuresByFamily now reads the ALREADY-COMPUTED outflow
+// bucket value for any family that is the SOLE owner of its UPKEEP_BUCKET
+// label (road -> 'Roads' is 1:1) instead of re-deriving a second number.
+test('BUG-628: structuresByFamily Roads upkeep equals the fiscal outflows Roads line under policies + a mixed online/offline fixture', () => {
+  const s0 = initialState();
+  // 5 online roads (genesis, builtTick: null -> always online per isOnline())
+  // + 5 roads still under construction (builtTick: tick 0, rd_dual's
+  // constructionTicks = max(3, round(96000/1500000)) = 3 > 0 elapsed at
+  // tick 0, so isOnline() is false for these). rd_dual upkeep = 5/tick.
+  const onlineRoads = Array.from({ length: 5 }, (_, i) => ({
+    id: 20000 + i,
+    spec: 'rd_dual',
+    x: i + 1,
+    y: 1,
+    builtTick: null,
+  }));
+  const offlineRoads = Array.from({ length: 5 }, (_, i) => ({
+    id: 20100 + i,
+    spec: 'rd_dual',
+    x: i + 1,
+    y: 2,
+    builtTick: 0,
+  }));
+  const state = {
+    ...s0,
+    tick: 0,
+    buildings: [...onlineRoads, ...offlineRoads],
+    // Both policies stack (recycling's rounded result then austerity-rounded)
+    // per fiscal.ts's applyOutflowPolicies — exercising BOTH multipliers, not
+    // just one, so a fix that only handled the online-filter half (or only
+    // one policy) would still fail this test.
+    policies: { ...s0.policies, recycling: true, austerity: true },
+  };
+  state.lastFlows = computeFlows(state);
+
+  const dj = buildDebugJson(state, testUi());
+  const roadFamily = dj.info.status.structuresByFamily.find((f) => f.kind === 'road');
+  const roadsOutflow = dj.fiscal.flowShares.outflows.find((f) => f.label === 'Roads');
+
+  assert.ok(roadFamily, 'road family row present (10 rd_dual built)');
+  assert.equal(roadFamily.count, 10, 'count still includes the offline/under-construction roads');
+  assert.ok(roadsOutflow, 'Roads outflow line present (5 online roads charged)');
+  assert.equal(
+    roadFamily.upkeep,
+    roadsOutflow.value,
+    'BUG-628: structuresByFamily Roads upkeep must equal the flows Roads outflow — same SSOT, zero drift'
+  );
+
+  // Prove the equal figure genuinely went through BOTH the online filter and
+  // the policy multipliers, not an accidental match with an unmodified formula.
+  const rawSumAllRoads = 10 * 5; // all 10 roads, raw upkeep, online or not
+  const rawSumOnlineOnly = 5 * 5; // online-only, but no policy discount
+  assert.notEqual(roadFamily.upkeep, rawSumAllRoads, 'must not be the raw unfiltered sum (would ignore isOnline)');
+  assert.notEqual(roadFamily.upkeep, rawSumOnlineOnly, 'must not be the undiscounted online-only sum (would ignore policies)');
+  assert.equal(roadFamily.upkeep, Math.round(Math.round(rawSumOnlineOnly * 0.93) * 0.9), 'exact expected value: online sum, recycling, then austerity, each rounded');
+});
+
+test('BUG-628 MUTATION-PROVE target: a shared-bucket family (commercial, part of Commerce & Industry with office/industrial/mine) keeps its independent raw per-family sum, unaffected by this fix', () => {
+  const s0 = initialState();
+  // com_shop: upkeep 2/tick, constructionTicks = max(3, round(320000/1500000)) = 3.
+  // 3 online (genesis) + 2 still under construction at tick 0.
+  const onlineShops = Array.from({ length: 3 }, (_, i) => ({
+    id: 30000 + i,
+    spec: 'com_shop',
+    x: i + 1,
+    y: 1,
+    builtTick: null,
+  }));
+  const offlineShops = Array.from({ length: 2 }, (_, i) => ({
+    id: 30100 + i,
+    spec: 'com_shop',
+    x: i + 1,
+    y: 2,
+    builtTick: 0,
+  }));
+  const state = {
+    ...s0,
+    tick: 0,
+    buildings: [...onlineShops, ...offlineShops],
+    // austerity discounts EVERY outflow (not just the recycling-labelled set,
+    // which excludes 'Commerce & Industry' anyway) — included to prove the
+    // shared-bucket family is genuinely untouched by ANY policy multiplier,
+    // not just missed one of the two.
+    policies: { ...s0.policies, recycling: true, austerity: true },
+  };
+  state.lastFlows = computeFlows(state);
+
+  const dj = buildDebugJson(state, testUi());
+  const commercialFamily = dj.info.status.structuresByFamily.find((f) => f.kind === 'commercial');
+  assert.ok(commercialFamily, 'commercial family row present (5 com_shop built)');
+  assert.equal(commercialFamily.count, 5, 'count includes both online and offline shops');
+
+  const rawSumAll = 5 * 2; // all 5 shops, raw upkeep, online or not, no policy
+  const onlineOnlyRaw = 3 * 2; // what the SOLE-OWNER substitution path would use if wrongly applied
+  assert.equal(
+    commercialFamily.upkeep,
+    rawSumAll,
+    'shared-bucket family keeps the pre-existing raw, unfiltered, undiscounted sum — the SOLE-OWNER guard must not fire for a bucket ' +
+      '(Commerce & Industry) owned by 4 ZoneKinds'
+  );
+  assert.notEqual(
+    commercialFamily.upkeep,
+    onlineOnlyRaw,
+    'must NOT have been mistakenly substituted with an online-only figure — that would misattribute the shared bucket to one family'
+  );
 });

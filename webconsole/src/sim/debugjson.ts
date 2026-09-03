@@ -89,7 +89,12 @@ import {
 import { SNAPSHOT_REFRESH_MS } from './throttle.ts';
 import type { MapUiState } from './uistate.ts';
 import { runConsistencyChecks } from './consistency.ts';
-import { businessTaxPerTick, councilTaxPerTick, GRID_IMPORT_ENABLED_DEFAULT } from './fiscal.ts';
+import {
+  businessTaxPerTick,
+  councilTaxPerTick,
+  GRID_IMPORT_ENABLED_DEFAULT,
+  UPKEEP_BUCKET,
+} from './fiscal.ts';
 import { getPerformanceSnapshot } from './perfhud.ts';
 import { getLiveVersion } from './liveVersionRef.ts';
 
@@ -349,7 +354,15 @@ export interface DebugJson {
       /** BUG-417: gross residential capacity incl. offline dwellings (residentsCapacity). */
       housingCapacityGross: number;
       jobs: number;
-      solvent: boolean;
+      /** BUG-629: renamed from `solvent` — this is net >= 0 for THIS TICK's
+       *  cashflow only, not the exposed insolvency band (sim.insolvencyState,
+       *  a multi-tick/administration/bailout state machine). The old name read
+       *  as a direct contradiction beside insolvencyState when a city was
+       *  mid-crisis but had a single positive-net tick (or vice versa) —
+       *  "solvent: false" next to "insolvencyState: solvent" looked like a
+       *  bug report on its own. Additive rename: nothing parsed the old debug
+       *  export field back in, so no migration is needed. */
+      cashPositiveThisTick: boolean;
       netPerTick: number;
       structuresByFamily: { kind: ZoneKind; label: string; count: number; upkeep: number }[];
     };
@@ -627,7 +640,32 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
           };
         })();
 
-  // Status tab structures table (nonzero families, matching the tab)
+  // Status tab structures table (nonzero families, matching the tab).
+  //
+  // BUG-628: `upkeep` here used to be an independent raw re-sum of sp.upkeep
+  // over EVERY building of the family, regardless of online/offline state and
+  // with no policy discount applied. The fiscal outflows line for the SAME
+  // family (e.g. 'Roads') is booked by engine.computeFlows via UPKEEP_BUCKET
+  // (fiscal.ts SSOT) — it (a) skips buildings failing isOnline() and (b) runs
+  // through applyOutflowPolicies (recycling/austerity multipliers). Two
+  // independent formulas for "what does this family cost" drifted apart —
+  // e.g. Roads read 28,192 here against 28,024 on the actual outflow line, a
+  // display-only 0.6% gap with no engine bug behind it. Fix: whenever this
+  // family's ZoneKind is the ONLY kind charged into its UPKEEP_BUCKET label
+  // (i.e. the outflow bucket total is unambiguously this family's own spend),
+  // report that ALREADY-COMPUTED, policy-adjusted, online-only figure instead
+  // of re-deriving a second number — one SSOT, zero drift. Shared buckets
+  // (e.g. 'Commerce & Industry' = commercial+office+industrial+mine,
+  // 'Power Grid' = power+pylon, 'Transport' = station+transport) can't be
+  // re-attributed to a single family without inventing a split the engine
+  // itself never computes, so those keep the raw per-family sum (unchanged
+  // behaviour — a distinct, pre-existing "combined bucket" concern, not this
+  // bug's asymmetry).
+  const bucketOwnerCount: Partial<Record<string, number>> = {};
+  for (const label of Object.values(UPKEEP_BUCKET)) {
+    bucketOwnerCount[label] = (bucketOwnerCount[label] ?? 0) + 1;
+  }
+  const outflowByLabel = new Map(s.lastFlows.outflows.map((f) => [f.label, f.value]));
   const structuresByFamily = FAMILIES.flatMap((fam) => {
     let count = 0;
     let upkeep = 0;
@@ -638,7 +676,16 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
         upkeep += sp.upkeep;
       }
     }
-    return count > 0 ? [{ kind: fam.kind, label: fam.label, count, upkeep }] : [];
+    if (count === 0) return [];
+    const bucketLabel = UPKEEP_BUCKET[fam.kind];
+    if (bucketLabel && bucketOwnerCount[bucketLabel] === 1) {
+      // Sole owner of this bucket — the outflow line IS this family's spend.
+      // Missing from lastFlows.outflows means the bucket totalled 0 (e.g. every
+      // instance is offline/under construction), which is correctly 0 upkeep
+      // actually being charged, not the raw catalogue sum.
+      upkeep = outflowByLabel.get(bucketLabel) ?? 0;
+    }
+    return [{ kind: fam.kind, label: fam.label, count, upkeep }];
   });
 
   // Rates tab yields (same formulas as the tab / computeFlows bases)
@@ -902,7 +949,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
         housingCapacityDisconnected: offlineResidentsByReason(s).disconnected,
         housingCapacityGross: residentsCapacity(s),
         jobs: totalJobs(s),
-        solvent: net >= 0,
+        cashPositiveThisTick: net >= 0,
         netPerTick: net,
         structuresByFamily,
       },

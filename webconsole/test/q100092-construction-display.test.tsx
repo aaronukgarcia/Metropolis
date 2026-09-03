@@ -170,6 +170,38 @@ test('Q100092: the SAME pow_nuke, once online, shows utilisation and PRODUCES st
   assert.ok(/produces|Power/i.test(html), 'PRODUCES content must be present for a power plant');
 });
 
+test('BUG-623: the LAST tick still under construction never shows 100% (clamped to 99)', async () => {
+  const road = B('road', 0, 10, { builtTick: 0 });
+  // One tick before the construction gate clears: elapsed = total - 1, so
+  // elapsed/total rounds to 100 under the old unclamped formula (Aaron repro:
+  // "N ticks remaining (100%)" with N=1 > 0 — a direct contradiction, since
+  // the gate is STILL failing here). This is the boundary tick, not a
+  // representative "near the end" tick — it's the single worst case.
+  const boundaryTick = NUKE_TICKS - 1;
+  const nuke = B('pow_nuke', 1, 10, { builtTick: 0 });
+  const s = city([nuke, road], boundaryTick);
+  assert.equal(s.tick - s.buildings[0].builtTick!, NUKE_TICKS - 1, 'setup sanity: exactly one tick shy of completion');
+
+  const html = await renderCard(s, s.buildings[0]);
+  const match = /Under construction — (\d+) ticks remaining \((\d+)%\)/.exec(html);
+  assert.ok(match, 'boundary tick must still show the construction line with a percent');
+  const [, remaining, pct] = match;
+  assert.equal(remaining, '1', 'setup sanity: exactly 1 tick remaining');
+  assert.notEqual(pct, '100', 'BUG-623: must NEVER show 100% while ticks remain (gate still failing)');
+  assert.equal(pct, '99', 'clamped to 99 on the last under-construction tick');
+});
+
+test('BUG-623: the tick AFTER completion is online — no construction line, no percent, at all (100% is unobservable, not just avoided)', async () => {
+  const road = B('road', 0, 10, { builtTick: 0 });
+  const nuke = B('pow_nuke', 1, 10, { builtTick: 0 });
+  const s = city([nuke, road], NUKE_TICKS); // gate: elapsed(=total) < total is false -> online
+  assert.equal(s.tick - s.buildings[0].builtTick!, NUKE_TICKS, 'setup sanity: exactly at completion');
+
+  const html = await renderCard(s, s.buildings[0]);
+  assert.ok(!html.includes('Under construction'), 'the moment the gate clears the construction line must vanish entirely');
+  assert.ok(!/\(\d+%\)/.test(html), 'no percent-complete figure once online (nothing left to be a percentage OF)');
+});
+
 test('Q100092: a genesis building (builtTick: null) is never construction-gated and displays as today', async () => {
   const road = B('road', 0, 10, { builtTick: 0 });
   // No builtTick at all — the FEAT-1972079891 legacy/genesis exemption:

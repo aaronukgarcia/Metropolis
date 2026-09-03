@@ -1672,9 +1672,18 @@ export function BuildingCard({
   const constructionPct = (() => {
     if (!underConstruction || building.builtTick == null) return 0;
     const total = constructionTicks(sp);
-    if (total <= 0) return 100;
+    // BUG-623: while the 'construction' gate is still failing, the building is
+    // BY DEFINITION not yet complete — so the displayed percent must never
+    // read 100% here. Round-off on the last ~0.5% of ticks (elapsed/total close
+    // to 1) was producing "N ticks remaining (100%)" with N>0, a direct
+    // contradiction of the still-offline gate reason on the same line. Clamp
+    // to 99 whenever underConstruction is true; true 100% is only reachable the
+    // tick the gate stops failing, at which point this whole branch (and the
+    // percent-complete line) no longer renders — so literal 100% is now
+    // unobservable by construction, not just by luck.
+    if (total <= 0) return 99;
     const elapsed = state.tick - building.builtTick;
-    return Math.min(100, Math.max(0, Math.round((elapsed / total) * 100)));
+    return Math.min(99, Math.max(0, Math.round((elapsed / total) * 100)));
   })();
   // FEAT-1972079903: when the Refs overlay is on, append the building ref to the
   // panel's name·provision label (e.g. "Small Holding · #44") so the visible
