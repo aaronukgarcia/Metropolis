@@ -233,6 +233,23 @@ export const ZONE_DEMAND_LABELS: Record<ZoneKey, string> = {
 };
 
 /**
+ * BUG-649 (Aaron, 2026-09-03, minutes after BUG-641 landed: "I also need 1.3
+ * million shops, that can't be right") — the shortfall number is denominated
+ * in JOBS (commercial/industrial) or RESIDENTS (housing), the same unit as the
+ * chosen spec's capacity, but the message rendered it as a bare quantity after
+ * the zone LABEL: "Shops: 1,300,000 short" reads unavoidably as 1.3 million
+ * SHOPS when it means 1.3 million retail JOBS. The unit was implicit and the
+ * label made the wrong one obvious — exactly the "no help" ambiguity BUG-641
+ * exists to remove, reintroduced one layer up. Naming the unit in the sentence
+ * is the whole fix; the arithmetic was never wrong.
+ */
+export const ZONE_DEMAND_UNITS: Record<ZoneKey, string> = {
+  residential: 'residents',
+  commercial: 'jobs',
+  industrial: 'jobs',
+};
+
+/**
  * One shortfall-clearing build plan for a single OVER-THRESHOLD zone demand
  * (BUG-641). Deliberately a sibling type to DemandFixPlanItem, not a reuse of
  * it: `serviceKey` there is a serviceCoverageOf()/wasteStatsOf() id resolved
@@ -469,11 +486,11 @@ export function zoneDemandMessage(item: ZoneDemandFixItem): string {
   // secondary "(demand index N)" suffix at wiring time).
   const shortfallText = fmtShortfall(item.shortfall);
   if (!item.alternative) {
-    return `${label}: ${shortfallText} short — Fix builds ${AUTO_BUILD_DEMAND_PERCENT}%: ${chosen}`;
+    return `${label}: ${shortfallText} ${ZONE_DEMAND_UNITS[item.zone]} short — Fix builds ${AUTO_BUILD_DEMAND_PERCENT}%: ${chosen}`;
   }
   const altName = SPECS[item.alternative.specId]?.name ?? item.alternative.specId;
   const alt = `${formatBuildingCount(altName, item.alternative.count)} (${fmtMoney(item.alternative.planCost)})`;
-  return `${label}: ${shortfallText} short — Fix builds ${AUTO_BUILD_DEMAND_PERCENT}%: ${chosen} or ${alt} — cheapest picked`;
+  return `${label}: ${shortfallText} ${ZONE_DEMAND_UNITS[item.zone]} short — Fix builds ${AUTO_BUILD_DEMAND_PERCENT}%: ${chosen} or ${alt} — cheapest picked`;
 }
 
 /**
