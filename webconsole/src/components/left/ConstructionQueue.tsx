@@ -90,8 +90,18 @@ export function ConstructionQueueTab() {
             </tr>
           </thead>
           <tbody>
+            {/* BUG-625: keyed on id+x+y, not id alone. `r.id` is `b.id`, the
+                SimState building id — at scale, a savepoint/rebuild path that
+                does not resync `state.nextId` against the actual max building
+                id (the BUG-413 class) can hand two DIFFERENT buildings the
+                SAME numeric id; a plain `key={r.id}` then collides and React
+                logs "two children with the same key" via reconcileChildrenArray
+                (the observed BUG-625 stack). Two buildings can share an id but
+                never share a tile (placement is occupancy-checked by
+                position), so id+x+y is a genuinely unique, still-stable key
+                for the common (non-corrupted) case. */}
             {rows.map((r) => (
-              <tr key={r.id}>
+              <tr key={`${r.id}-${r.x}-${r.y}`}>
                 <td>{r.name}</td>
                 <td className="mono">
                   ({r.x}, {r.y})

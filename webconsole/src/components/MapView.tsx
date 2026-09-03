@@ -1481,8 +1481,13 @@ function ForcedAssetSalesPanel() {
         <p className="forced-asset-sales-empty">No sellable assets remain.</p>
       ) : (
         <ul className="forced-asset-sales-list">
+          {/* BUG-625: keyed on id+x+y, not id alone — forcedSaleAssets copies
+              b.id straight from state.buildings, and two DIFFERENT buildings
+              can share an id under the nextId-desync class (BUG-413/BUG-631)
+              while never sharing a tile. Same fix as ConstructionQueue.tsx /
+              servicesTabs.tsx. */}
           {assets.map((a) => (
-            <li key={a.id}>
+            <li key={`${a.id}-${a.x}-${a.y}`}>
               <span className="fas-name">{a.name}</span>
               <span className="fas-loc">({a.x}, {a.y})</span>
               <span className="fas-value">{fmtMoney(a.saleValue)}</span>

@@ -162,7 +162,14 @@ export function WaterTab() {
             const pu = plantUtil.get(b.id);
             const atCeiling = pu?.atCeiling ?? false;
             return (
-              <tr key={b.id}>
+              // BUG-625: id+x+y, not id alone — see ConstructionQueue.tsx's
+              // note. `b.id` is the raw SimState building id, which a
+              // desynced `state.nextId` (BUG-413 class, reachable via a
+              // savepoint/rebuild path that doesn't resync it against the
+              // real max building id at scale) can hand to two DIFFERENT
+              // buildings. Position is occupancy-checked at placement time,
+              // so id+x+y stays unique even when id alone collides.
+              <tr key={`${b.id}-${b.x}-${b.y}`}>
                 <td className={sp.tag === 'clean' ? 'in' : 'out'}>{sp.name}</td>
                 <td className="mono">{b.x},{b.y}</td>
                 <td>{PIPE_TIERS[tier].label}</td>
