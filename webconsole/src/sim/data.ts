@@ -45,8 +45,18 @@ export const MAP_H = 260;
 
 export const ROW_BAND = 10;
 
+// BUG-657 (Aaron, 2026-09-03: "on the left edge of the map it's just got a Z on
+// each row, what's that for?") — a misplaced closing parenthesis made the clamp
+// a no-op and then a FLOOR: `Math.min(band)` with one argument returns `band`
+// unchanged, and `Math.max(0, band, 25)` is then >= 25 for every input, so every
+// row label rendered 'Z' (65 + 25) regardless of y. The gutter was uniform Z's,
+// and because coordLabel() builds on this, EVERY coordinate shown to the player
+// — the inspector's "grid Z,374", place notices, the debug JSON — carried the
+// same dead letter. Intended: clamp the band into 0..25 (A..Z), i.e. the 25
+// belongs inside the min. ROW_BAND is 10 and MAP_H is 260, so bands run 0..25
+// and the clamp is exactly saturating at the last row.
 export function yLabel(y: number): string {
-  return String.fromCharCode(65 + Math.max(0, Math.min(Math.floor(y / ROW_BAND)), 25));
+  return String.fromCharCode(65 + Math.max(0, Math.min(Math.floor(y / ROW_BAND), 25)));
 }
 
 export function coordLabel(x: number, y: number): string {
