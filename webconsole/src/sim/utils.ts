@@ -40,7 +40,16 @@ export function fmtMoneyEach(n: number): string {
   return `${sign}£${fmtNum(abs)}`;
 }
 
+// COLD AUDIT (BUG-657 class): every other formatter in this file
+// (fmtNum/fmtMoney/fmtSigned/fmtMoneyEach) guards Number.isFinite and degrades
+// to a safe default — fmtPct was the one exception, so a NaN or Infinity input
+// (e.g. a 0/0 ratio slipping past a call site's own guard) rendered literally
+// as "NaN%"/"Infinity%" to the player. No live call site hits this today, but
+// the inconsistency is exactly the class this audit hunts (an untested display
+// helper that typechecks and lints while being wrong), so it is closed here
+// rather than left as a landmine for the next caller that forgets to guard.
 export function fmtPct(n: number, digits = 1): string {
+  if (!Number.isFinite(n)) return '0%';
   return `${(n * 100).toFixed(digits)}%`;
 }
 

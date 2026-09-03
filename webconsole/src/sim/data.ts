@@ -183,8 +183,20 @@ export const PIPE_TIERS = [
   { label: 'Ø800 mm', mult: 2.6, upgradeCost: 16000 },
 ];
 
+// COLD AUDIT (BUG-657 class, GR#16 type-safe storage boundary): the reducer's
+// 'pipeUpgrade' case never lets a tier exceed PIPE_TIERS.length - 1, but this
+// is ALSO the read path for whatever a save file hands back, and the
+// `Record<number, number>` annotation on SimState.pipeTier is a compile-time
+// promise only — a hand-edited or corrupted save can carry any
+// JSON-representable value (a negative tier, a stray 99, a non-integer).
+// Consumers index PIPE_TIERS[pipeTierOf(...)].mult directly, so an
+// out-of-range tier would read `.mult` off `undefined` and throw. Clamped here
+// at the single read SSOT, exactly as sanitizeCrimeRate and
+// sanitizeCongestionTicksBySpec clamp their own corrupt-save inputs below.
 export function pipeTierOf(s: SimState, id: number): number {
-  return s.pipeTier[id] ?? 0;
+  const raw = s.pipeTier[id] ?? 0;
+  if (!Number.isFinite(raw)) return 0;
+  return Math.max(0, Math.min(PIPE_TIERS.length - 1, Math.floor(raw)));
 }
 
 /**
