@@ -897,15 +897,13 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
       };
     }
     case 'school': {
-      let places = 0;
-      for (const o of s.buildings) {
-        // BUG-569: gate on isOnline the same way serviceCoverageOf's school
-        // rows do — an under-construction / disconnected school contributes
-        // no coverage, so it must not inflate the utilisation denominator.
-        if (!isOnline(s, o)) continue;
-        const os = SPECS[o.spec];
-        if (os?.children) places += os.children;
-      }
+      // BUG-630: was an UNMEMOIZED O(buildings) scan run fresh on every
+      // utilisationOf() call for every school building — i.e. O(buildings x
+      // school-buildings) per rebuild. serviceCapacityAggregates() computes
+      // this exact sum (see schoolPlaces field) in one memoised city-wide
+      // pass; reuse it instead of re-deriving. BUG-569's isOnline gate is
+      // preserved (serviceCapacityAggregates' loop applies the same gate).
+      const { schoolPlaces: places } = serviceCapacityAggregates(s);
       if (places <= 0) return null;
       return {
         ratio: ratio(s.population * 0.18, places),
@@ -2309,6 +2307,13 @@ interface ServiceCapacityAggregates {
   fire: number;
   clean: number;
   waste: number;
+  // BUG-630: total online school "places" — mirrors utilisationOf()'s 'school'
+  // case exactly (`if (os?.children) places += os.children`, no kind/stage
+  // filter, same isOnline gate), gathered here as an EXTRA accumulator in the
+  // same single pass rather than folded into nursery/primary/tertiary above,
+  // so it stays byte-identical to the original per-call loop even if a future
+  // children-bearing spec ever ships without one of those three stage tags.
+  schoolPlaces: number;
 }
 
 const serviceCapacityAggregates: (s: SimState) => ServiceCapacityAggregates = memoOnState((s) => {
@@ -2321,6 +2326,7 @@ const serviceCapacityAggregates: (s: SimState) => ServiceCapacityAggregates = me
   let fire = 0;
   let clean = 0;
   let waste = 0;
+  let schoolPlaces = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
@@ -2337,9 +2343,66 @@ const serviceCapacityAggregates: (s: SimState) => ServiceCapacityAggregates = me
       if (sp.tag === 'clean') clean += eff;
       if (sp.tag === 'waste') waste += eff;
     }
+    if (sp.children) schoolPlaces += sp.children;
   }
-  return { nursery, primary, tertiary, gp, hosp, police, fire, clean, waste };
+  return { nursery, primary, tertiary, gp, hosp, police, fire, clean, waste, schoolPlaces };
 });
+
+/**
+ * BUG-630 — one memoised per-building display-state derivation, keyed by
+ * building id.
+ *
+ * PROBLEM: MapView's draw loop (and other per-building render code) called
+ * isOnline() + blockOccupancy() + utilisationOf() + densityTier() FRESH for
+ * every building on EVERY redraw — not just on a sim tick, but on every
+ * camera pan/zoom too, since the draw effect re-runs off `view`/`geom` as
+ * well as `state`. BUG-622 memoised the CITYWIDE AGGREGATES those four
+ * formulas read (residentsCapacity/totalJobs/powerStats/
+ * serviceCapacityAggregates, all memoOnState above), which fixed the O(n^2)
+ * blow-up, but the four formulas themselves — the switch statements, the
+ * SPECS[b.spec] lookup, the road-adjacency footprint walk — still re-ran per
+ * building on every redraw, measured at ~165ms for one pass at 13k buildings
+ * (GPU spike Phase 0 profiling).
+ *
+ * FIX: compute all four for every building in a SINGLE pass, ONCE per state
+ * identity (memoOnState — the house idiom used throughout this file, e.g.
+ * serviceCapacityAggregates/totalJobs/powerStats above). A redraw triggered
+ * by camera movement alone (same `state` object, no tick advanced) then pays
+ * only a Map.get() per building — O(buildings) cheap lookups instead of
+ * O(buildings) formula re-derivations.
+ *
+ * CORRECTNESS CONTRACT (the parity test in
+ * test/attack-bug630-display-state.test.mjs proves this): every entry's four
+ * fields are produced by calling the SAME SSOT functions
+ * (isOnline/blockOccupancy/utilisationOf/densityTier) a caller would invoke
+ * directly for that building — this is a caching wrapper around the existing
+ * formulas, never a reimplementation of them. A building whose spec cannot be
+ * resolved (SPECS[b.spec] undefined) is omitted from the map, mirroring every
+ * existing per-building call site's own `if (!sp) continue` guard (MapView's
+ * draw loop, debugjson.ts, consistency.ts).
+ */
+export interface BuildingDisplayState {
+  online: boolean;
+  occupancy: number | null;
+  utilisation: Utilisation | null;
+  tier: 1 | 2 | 3;
+}
+
+export const buildingDisplayStates: (s: SimState) => ReadonlyMap<number, BuildingDisplayState> =
+  memoOnState((s) => {
+    const out = new Map<number, BuildingDisplayState>();
+    for (const b of s.buildings) {
+      const sp = SPECS[b.spec];
+      if (!sp) continue;
+      out.set(b.id, {
+        online: isOnline(s, b),
+        occupancy: blockOccupancy(s, b),
+        utilisation: utilisationOf(s, b),
+        tier: densityTier(sp),
+      });
+    }
+    return out;
+  });
 
 export const powerStats: (s: SimState) => { need: number; cap: number } = memoOnState(
   (s) => computePowerStats(s)

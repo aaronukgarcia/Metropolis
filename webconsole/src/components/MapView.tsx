@@ -20,6 +20,7 @@ import {
   blockOccupancy,
   PIPE_TIERS,
   utilisationOf,
+  buildingDisplayStates,
   constructionTicks,
   lineUsageOf,
   isLineSpec,
@@ -199,6 +200,14 @@ export function MapView() {
   // "each game day takes ~2 minutes", i.e. the sim is mostly idle/waiting
   // between ticks), collapsing the dominant real-world cost even before the
   // data.ts fix lands. See test/attack-bug622-frame-pump.test.mjs.
+  //
+  // BUG-630 follow-up (2026-09-03): the data.ts memoisation fix landed —
+  // buildingDisplayStates(state) computes isOnline/blockOccupancy/
+  // utilisationOf/densityTier for every building in ONE pass, memoised on the
+  // `state` object identity (memoOnState). The draw loop below now does one
+  // Map lookup per building instead of four SSOT function calls; a redraw
+  // triggered by camera pan/zoom alone (same `state`, no tick advanced) hits
+  // the memo and pays only the lookups. See test/attack-bug630-display-state.test.mjs.
 
   // FEAT-1972079897 inc2 RE-APPLY: on mount, restore the camera the player was
   // looking at before a rebuild reload. cameraStash persisted it to localStorage
@@ -312,10 +321,16 @@ export function MapView() {
     }
     ctx.textAlign = 'start';
 
+    const displayStates = buildingDisplayStates(state);
     for (const b of state.buildings) {
       const sp = SPECS[b.spec];
       if (!sp) continue;
-      const online = isOnline(state, b);
+      const ds = displayStates.get(b.id);
+      // ds is only absent when SPECS[b.spec] is undefined (buildingDisplayStates'
+      // own guard) — already ruled out by the `if (!sp) continue` above, so this
+      // is unreachable in practice; the fallback keeps the loop fail-soft (GR#1)
+      // rather than throwing on an unexpected cache miss.
+      const online = ds ? ds.online : isOnline(state, b);
       const px = geom.ox + b.x * geom.s;
       const py = geom.oy + b.y * geom.s;
       const pw = sp.w * geom.s;
@@ -329,7 +344,7 @@ export function MapView() {
       // FEAT-1972079882 occupancy fill: null => full colour; else draw a dim
       // empty underlay and fill only the bottom `occ` fraction at full colour
       // (a half-occupied block shows a half-height fill, growing bottom-up).
-      const occ = online ? blockOccupancy(state, b) : null;
+      const occ = online ? (ds ? ds.occupancy : blockOccupancy(state, b)) : null;
       ctx.fillStyle = sp.color;
       if (occ == null) {
         ctx.fillRect(rx, ry, rw, rh);
@@ -347,7 +362,7 @@ export function MapView() {
       // Residential skips this (occupancy fill above is the cue).
       // Null-basis kinds don't render (util returns null).
       if (sp.kind !== 'residential' && online && geom.s > 3) {
-        const util = utilisationOf(state, b);
+        const util = ds ? ds.utilisation : utilisationOf(state, b);
         if (util !== null) {
           const barH = Math.max(2, geom.s * 0.4);
           // ⚠ BALANCE-NUMBER PLACEHOLDER (Aaron 2026-08-13 regime): the 0.3/0.7
@@ -381,7 +396,7 @@ export function MapView() {
       // block is big enough on screen to read the border.
       if (sp.category === 'zones' && geom.s > 3) {
         ctx.globalAlpha = baseAlpha;
-        ctx.strokeStyle = TIER_COLORS[densityTier(sp)];
+        ctx.strokeStyle = TIER_COLORS[ds ? ds.tier : densityTier(sp)];
         ctx.lineWidth = geom.s > 8 ? 2 : 1.25;
         ctx.strokeRect(rx, ry, rw, rh);
       }
