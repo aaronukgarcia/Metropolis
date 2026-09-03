@@ -60,15 +60,25 @@ import (
 // ([DrainCapacity], [DeathQueue.SetDrainCapacity]). Per ASM-580, the
 // smoothing budget (AC-5, data-filed) and the drain capacity (AC-11,
 // injected) are TWO INDEPENDENT knobs -- inc3 never derives one from the
-// other. [DeathQueue.RealiseDrained] is the new entry point that takes
-// min(budget, drain, queued) and tags each release with emergencyFlag;
-// [DeathQueue.Realise] and [EmergencyRealise] (inc1/inc2) are UNCHANGED --
-// every inc1/inc1.5/inc2 test still exercises them directly, byte-for-byte,
-// proving inc3 is purely additive. A DeathQueue that never has
-// SetDrainCapacity called on it (the default, and every world with no
-// FEAT-088 consumer wired) treats drain as unlimited, so RealiseDrained's
-// release set/order is identical to EmergencyRealise's for the same
-// (budget, emergency, month) inputs -- see RealiseDrained's own doc.
+// other. [DeathQueue.RealiseDrained] is the new entry point that tags each
+// release with emergencyFlag; [DeathQueue.Realise] and [EmergencyRealise]
+// (inc1/inc2) are UNCHANGED -- every inc1/inc1.5/inc2 test still exercises
+// them directly, byte-for-byte, proving inc3 is purely additive. A
+// DeathQueue that never has SetDrainCapacity called on it (the default,
+// and every world with no FEAT-088 consumer wired) treats drain as
+// unlimited, so RealiseDrained's release set/order is identical to
+// EmergencyRealise's for the same (budget, emergency, month) inputs -- see
+// RealiseDrained's own doc.
+//
+// BUG-484 (Aaron ruling, 2026-09-03): the min(budget, drain, queued) rule
+// applies ONLY on the non-emergency release -- RealiseDrained realises
+// min(ordinary budget, drain, queued) when emergency is false, but
+// min(emergency budget, queued) alone (the drain is NOT consulted at all)
+// when emergency is true. A declared weather emergency (AC-6) must
+// produce a genuine, non-smoothed major death event regardless of the
+// funeral fleet's throughput -- a small hearse fleet must never flatten
+// the AC-6 major death event into a trickle. See RealiseDrained's own doc
+// for the exact mechanics.
 
 // deathQueueEntry is one pending, hazard-selected death awaiting bounded
 // monthly realisation.
@@ -489,26 +499,43 @@ func budgetFor(q *DeathQueue, cfg MortalityConfig, emergency bool, correlationID
 // shared, byte-for-byte, with [EmergencyRealise]; see budgetFor's doc and
 // BUG-483 F1) with ASM-580's second, independent knob (the injected drain
 // capacity, [DeathQueue.SetDrainCapacity]) and AC-9/AC-10's ordered,
-// flagged handoff stream. Realisation this month is min(ordinary-or-
-// emergency budget, injected drain, queued) (ASM-580); a nil injected
-// drain (the default) makes this call release the identical set/order of
-// citizens EmergencyRealise would for the same (cfg, emergency, month)
-// inputs -- wiring RealiseDrained into the live cold-pass realisation step
-// is therefore a behavioural no-op for every world that has no FEAT-088
-// consumer wired yet (registry.go's AdvanceDayTick does exactly this).
+// flagged handoff stream.
+//
+// BUG-484 (Aaron ruling, 2026-09-03): the injected drain capacity binds
+// ONLY on the ordinary (non-emergency) path. When emergency is false,
+// realisation this month is min(ordinary budget, injected drain, queued)
+// exactly as ASM-580 words it -- a nil injected drain (the default) makes
+// this call release the identical set/order of citizens [Realise] would
+// for the same (budget, month) inputs. When emergency is true, the drain
+// is IGNORED ENTIRELY -- a declared weather emergency (AC-6) must produce
+// a genuine, non-smoothed major death event regardless of the funeral
+// fleet's throughput; the emergency release is min(emergency budget,
+// queued) alone, byte-identical to [EmergencyRealise] for the same (cfg,
+// emergency, month) inputs no matter what drain capacity is wired. This is
+// what makes RealiseDrained's "nil-drain path is differentially identical
+// to EmergencyRealise" claim now ALSO hold with a real (non-nil, finite)
+// drain wired, for the emergency case specifically -- wiring RealiseDrained
+// into the live cold-pass realisation step is therefore a behavioural
+// no-op, for BOTH the ordinary and emergency paths, for every world that
+// has no FEAT-088 consumer wired yet (registry.go's AdvanceDayTick does
+// exactly this).
 //
 // A negative [DrainCapacity.MonthlyDrainCapacity] return (a buggy FEAT-088
 // consumer) is passed straight through as `effective` without an explicit
-// clamp to 0 (BUG-483 F2): [realiseLocked] already treats ANY
-// budget/effective <= 0 as a no-op (see its doc), so a separate "if d < 0
-// { d = 0 }" step here would be dead code -- both a negative effective and
-// a zero effective release nothing and leave the queue untouched, byte-
-// for-byte. What was previously silent is the DIAGNOSABILITY of that
-// state: the first time a negative drain is observed for this queue, a
-// [ErrNegativeDrainCapacity] WARNING is logged (once per queue, not once
-// per call, since a stuck-at-zero-or-negative consumer would otherwise
-// call this every month) so a stuck death queue is visible in the log
-// well before population anomalies would otherwise be the only symptom.
+// clamp to 0 (BUG-483 F2), on the ordinary path only: [realiseLocked]
+// already treats ANY budget/effective <= 0 as a no-op (see its doc), so a
+// separate "if d < 0 { d = 0 }" step here would be dead code -- both a
+// negative effective and a zero effective release nothing and leave the
+// queue untouched, byte-for-byte. What was previously silent is the
+// DIAGNOSABILITY of that state: the first time a negative drain is
+// observed for this queue, a [ErrNegativeDrainCapacity] WARNING is logged
+// (once per queue, not once per call, since a stuck-at-zero-or-negative
+// consumer would otherwise call this every month) so a stuck death queue
+// is visible in the log well before population anomalies would otherwise
+// be the only symptom. The warning is logged only when the drain is
+// actually consulted (the ordinary path) -- an emergency release never
+// reads q.drain at all, so a negative drain sitting unconsulted during an
+// emergency month is not itself a loggable event.
 func (q *DeathQueue) RealiseDrained(cfg MortalityConfig, emergency bool, month int64, correlationID string) []RealisedDeath {
 	if err := q.checkNotCopied(correlationID, "RealiseDrained"); err != nil {
 		return nil
@@ -520,7 +547,7 @@ func (q *DeathQueue) RealiseDrained(cfg MortalityConfig, emergency bool, month i
 	defer q.mu.Unlock()
 
 	effective := budget
-	if q.drain != nil {
+	if !emergency && q.drain != nil {
 		if d := q.drain.MonthlyDrainCapacity(month); d < effective {
 			if d < 0 && !q.negativeDrainWarned {
 				q.negativeDrainWarned = true
