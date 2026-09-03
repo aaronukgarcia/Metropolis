@@ -47,6 +47,18 @@
 
 import { safeSetItem } from './safeStorage.ts';
 
+// FEAT-2326609752 (AARON Q100078=B, 2026-09-03): "Debug commits into metro
+// MariaDB via a tiny local endpoint" — backend.ts now tries the sink FIRST
+// and only falls back to this queue on failure/timeout (the ASM-453
+// contract is unchanged: nothing committed is ever lost). When the sink
+// becomes reachable again, backend.ts opportunistically DRAINS whatever
+// this queue is still holding: read the queue (oldest first — array order
+// IS commit order, unchanged from the header note above), POST each entry,
+// and persist the queue with that entry removed ONLY after a 2xx response.
+// `writeQueue` is the single write path a drain uses so QUEUE_KEY writes
+// stay centralized in this module (SSOT) rather than backend.ts reaching
+// into localStorage directly.
+
 /** localStorage key holding the persisted queue (ASM-453 schema — stable). */
 export const QUEUE_KEY = 'metropolis.debugQueue';
 
@@ -95,6 +107,17 @@ export function readQueue(storage: StorageLike): QueuedCommit[] {
 /** Number of commits awaiting a backend — the DebugTab's "N queued" badge. */
 export function pendingCount(storage: StorageLike): number {
   return readQueue(storage).length;
+}
+
+/**
+ * Persist a full queue array directly (FEAT-2326609752 drain path — remove
+ * one drained entry and rewrite the rest). Never throws: on a storage
+ * failure this returns false and the caller (backend.ts's drain loop)
+ * simply stops draining rather than losing track of what is still queued —
+ * the ON-DISK queue is only ever what a successful write actually persisted.
+ */
+export function writeQueue(storage: StorageLike, queue: QueuedCommit[]): boolean {
+  return safeSetItem(storage, QUEUE_KEY, JSON.stringify(queue)).ok;
 }
 
 /** UTF-8 byte length of a string — the real localStorage quota unit (not .length). */

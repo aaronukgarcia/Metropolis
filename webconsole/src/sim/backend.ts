@@ -5,7 +5,7 @@
 // every commit queues client-side in localStorage until one arrives); this
 // file only binds it to the real window.localStorage and the real network.
 
-import { enqueueCommit, pendingCount, QUEUE_BYTE_BUDGET, type StorageLike } from './commitqueue.ts';
+import { enqueueCommit, pendingCount, readQueue, writeQueue, QUEUE_BYTE_BUDGET, type StorageLike } from './commitqueue.ts';
 import type { SimState } from './types.ts';
 // The captured-error record shape is owned by debugjson.ts (CapturedError) so the
 // debug.json artefact and the live "Errors captured" panel can never drift. This
@@ -554,46 +554,141 @@ export function pendingCommits(): number {
   return pendingCount(queueStorage());
 }
 
-export async function commitDebug(payload: unknown): Promise<CommitResult> {
-  const id = `DBG-${Date.now().toString(36).toUpperCase()}`;
+// FEAT-2326609752 (AARON Q100078=B, 2026-09-03): the metro MariaDB debug
+// sink (tools/debugsink/server.js), a tiny localhost-only Node HTTP server.
+// Fixed port, documented alongside the server itself. An absolute
+// 127.0.0.1 URL is used (rather than a same-origin path through a vite
+// proxy) so the sink works identically whether the app is served by `vite
+// dev`, `vite preview`, or any other static host — the sink is CORS-open
+// (Access-Control-Allow-Origin: *) precisely because it never leaves the
+// loopback interface, so no proxy is required for this to work cleanly.
+const DEBUGSINK_URL = 'http://127.0.0.1:8642';
+
+// Short timeout (ASM-453 / this FEAT): the sink is either running on the
+// developer's own machine (near-instant) or not running at all (nothing
+// listening on 127.0.0.1:8642) — a slow success is not an expected shape,
+// so 1.5s is generous headroom before falling back to the always-reliable
+// local queue rather than stalling the Commit button.
+const DEBUGSINK_TIMEOUT_MS = 1500;
+
+/**
+ * POST one commit to the sink with a short timeout. Returns true on any 2xx,
+ * false on any failure (network error, non-2xx, or timeout/abort) — never
+ * throws, so callers never need their own try/catch around this.
+ */
+async function postToSink(id: string, at: string, payload: unknown): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEBUGSINK_TIMEOUT_MS);
   try {
-    const res = await fetch('/api/debug/commit', {
+    const res = await fetch(`${DEBUGSINK_URL}/api/debug/commit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, at: new Date().toISOString(), payload }),
+      body: JSON.stringify({ id, at, payload }),
+      signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { ok: true, queued: false, id, message: `Committed to backend as ${id}` };
+    return res.ok;
   } catch {
-    // ASM-453: no backend exists — queue locally and report honestly.
-    // BUG-607: enqueueCommit never throws (byte-budget eviction + a
-    // quota-degrade retry are internal to commitqueue.ts), but it CAN fail to
-    // persist the entry at all — that failure must reach the player and the
-    // registry (GR#1/#7), never a silent "queued" lie, and it must never
-    // break this button or the sim (the try/catch above is for the fetch,
-    // not for this call — enqueueCommit itself is throw-free).
-    const outcome = enqueueCommit(queueStorage(), id, payload, new Date().toISOString());
-    if (!outcome.ok) {
-      const code = outcome.droppedOversize ? 'MET-V854' : 'MET-V855';
-      const budgetMB = (QUEUE_BYTE_BUDGET / (1024 * 1024)).toFixed(1);
-      const msg = outcome.droppedOversize
-        ? `Debug commit ${id} dropped: frame exceeds the ${budgetMB}MB queue byte budget even after compaction`
-        : `Debug commit ${id} could not be queued locally: localStorage quota exhausted even after evicting the oldest half of the queue`;
-      recordError(msg, { type: 'app', action: 'commit', code });
-      return {
-        ok: false,
-        queued: false,
-        id,
-        message: outcome.droppedOversize
-          ? `Backend unreachable and this frame is too large to queue locally (even compacted) — download it instead (Debug tab → Download).`
-          : `Backend unreachable and the local queue is full (storage quota) — commit was NOT saved. Free storage (Config → Clear queue / Reclaim storage) and retry, or download it (Debug tab → Download).`,
-      };
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Opportunistic drain (FEAT-2326609752): on a successful live commit, sweep
+ * whatever the localStorage queue is still holding from before the sink was
+ * reachable (or from a earlier session run with no sink at all) into the
+ * sink too. Oldest-first (array order IS commit order — commitqueue.ts's
+ * ASM-453 contract), and an entry is removed from the persisted queue ONLY
+ * after its own 2xx — a failure partway through (sink drops mid-drain)
+ * leaves the remaining entries queued exactly as before, never lost and
+ * never double-counted. Never throws: this runs opportunistically inside
+ * an already-successful commit and must not turn that success into a
+ * reported failure.
+ *
+ * REJECT-round fix (F1, 2026-09-03): the FIRST version of this function read
+ * the queue ONCE up front and, after every await'd POST, wrote back a
+ * filtered copy of that same stale snapshot. `readQueue`/`postToSink` both
+ * cross an await boundary, and JS only guarantees atomicity BETWEEN await
+ * points — so a commit enqueued (by another commitDebug call, e.g. a second
+ * debug-tab commit fired while this drain's POST was still in flight) after
+ * the snapshot was taken but before writeQueue ran was silently clobbered:
+ * the stale snapshot's filtered copy simply didn't contain it, and the write
+ * overwrote the newer on-disk queue with that shorter list. Fixed by never
+ * writing from a pre-await snapshot: the LOOP ORDER still comes from a
+ * snapshot of ids (drain order must not shift underfoot while iterating),
+ * but every actual write is a synchronous read-filter-write of the CURRENT
+ * on-disk queue, done immediately after the entry's own POST resolves with
+ * no further await in between — single-threaded JS makes that block atomic
+ * with respect to any other synchronous code, and the only other writer
+ * (another commitDebug/drainQueue call) can only interleave AT an await,
+ * never inside this synchronous span. See the regression test
+ * "commitDebug: a commit enqueued mid-drain (between an await resolving and
+ * the write) survives the drain" in test/debugtab.test.mjs.
+ */
+async function drainQueue(): Promise<void> {
+  try {
+    const storage = queueStorage();
+    // Snapshot for ITERATION ORDER + the (id, at, payload) to re-POST only —
+    // never written back directly (see the fix note above).
+    const toDrain = readQueue(storage);
+    if (toDrain.length === 0) return;
+    for (const entry of toDrain) {
+      const ok = await postToSink(entry.id, entry.at, entry.payload);
+      if (!ok) continue; // leave this one queued; try the rest in case only this entry is problematic
+      // Synchronous read-filter-write, no await inside this block: atomic
+      // with respect to any other code that only ever mutates the queue via
+      // enqueueCommit/writeQueue (both synchronous). Always derives from the
+      // CURRENT on-disk queue, so a commit enqueued while the POST above was
+      // in flight is present in `current` and survives untouched.
+      const current = readQueue(storage);
+      const next = current.filter((e) => e.id !== entry.id);
+      writeQueue(storage, next);
     }
+  } catch {
+    // Best-effort only — the queue is the source of truth on disk and this
+    // function never removes an entry it didn't confirm was sunk.
+  }
+}
+
+export async function commitDebug(payload: unknown): Promise<CommitResult> {
+  const id = `DBG-${Date.now().toString(36).toUpperCase()}`;
+  const at = new Date().toISOString();
+  const sunk = await postToSink(id, at, payload);
+  if (sunk) {
+    // Opportunistically drain anything queued from before the sink was
+    // reachable. Awaited so the caller's result reflects post-drain state,
+    // but its own failures never affect THIS commit's success.
+    await drainQueue();
+    return { ok: true, queued: false, id, message: `Committed to metro MariaDB debug sink as ${id}` };
+  }
+  // ASM-453: sink unreachable/timed out — queue locally and report honestly.
+  // BUG-607: enqueueCommit never throws (byte-budget eviction + a
+  // quota-degrade retry are internal to commitqueue.ts), but it CAN fail to
+  // persist the entry at all — that failure must reach the player and the
+  // registry (GR#1/#7), never a silent "queued" lie, and it must never
+  // break this button or the sim.
+  const outcome = enqueueCommit(queueStorage(), id, payload, at);
+  if (!outcome.ok) {
+    const code = outcome.droppedOversize ? 'MET-V854' : 'MET-V855';
+    const budgetMB = (QUEUE_BYTE_BUDGET / (1024 * 1024)).toFixed(1);
+    const msg = outcome.droppedOversize
+      ? `Debug commit ${id} dropped: frame exceeds the ${budgetMB}MB queue byte budget even after compaction`
+      : `Debug commit ${id} could not be queued locally: localStorage quota exhausted even after evicting the oldest half of the queue`;
+    recordError(msg, { type: 'app', action: 'commit', code });
     return {
-      ok: true,
-      queued: true,
+      ok: false,
+      queued: false,
       id,
-      message: `Backend unreachable — queued locally as ${id} (${outcome.length} awaiting processing)`,
+      message: outcome.droppedOversize
+        ? `Backend unreachable and this frame is too large to queue locally (even compacted) — download it instead (Debug tab → Download).`
+        : `Backend unreachable and the local queue is full (storage quota) — commit was NOT saved. Free storage (Config → Clear queue / Reclaim storage) and retry, or download it (Debug tab → Download).`,
     };
   }
+  return {
+    ok: true,
+    queued: true,
+    id,
+    message: `Backend unreachable — queued locally as ${id} (${outcome.length} awaiting processing)`,
+  };
 }

@@ -17,11 +17,12 @@ import {
   QUEUE_CAP,
   QUEUE_BYTE_BUDGET,
   readQueue,
+  writeQueue,
   pendingCount,
   enqueueCommit,
   compactPayload,
 } from '../src/sim/commitqueue.ts';
-import { errorListModel } from '../src/sim/backend.ts';
+import { errorListModel, commitDebug } from '../src/sim/backend.ts';
 import {
   debugActions,
   DEBUG_FUNDS_GRANT,
@@ -300,4 +301,286 @@ test('dev buttons: dispatched payloads actually move the sim', () => {
   assert.equal(s2.xp, s0.xp + DEBUG_XP_GRANT, '+500 XP credits xp exactly');
   const s3 = reducer(s0, a.fast);
   assert.equal(s3.speed, 3, 'Force fast pins max speed');
+});
+
+// ---------- FEAT-2326609752 (AARON Q100078=B, 2026-09-03): commitDebug sink-first ----------
+//
+// This sandbox's global `localStorage` exists but its setItem/getItem throw
+// ("localStorage.setItem is not a function" under this Node build) — see the
+// same note in test/error-trapping.test.mjs. Install a WORKING in-memory
+// localStorage stub for the duration of each test here so the fallback-queue
+// path (and the drain path, which reads/writes the same key) behaves exactly
+// as it does in a real browser instead of silently degrading through
+// safeSetItem's catch on every call.
+function withFakeLocalStorage(fn) {
+  return async (...args) => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    const mem = new Map();
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: {
+        getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+        setItem: (k, v) => void mem.set(k, String(v)),
+      },
+      configurable: true,
+    });
+    try {
+      await fn(mem, ...args);
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(globalThis, 'localStorage', originalDescriptor);
+      } else {
+        delete globalThis.localStorage;
+      }
+    }
+  };
+}
+
+/** Install a fake global.fetch for the duration of the wrapped test. */
+function withFakeFetch(impl, fn) {
+  return async (...args) => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+    const calls = [];
+    Object.defineProperty(globalThis, 'fetch', {
+      value: async (url, init) => {
+        calls.push({ url, init });
+        return impl(url, init);
+      },
+      configurable: true,
+      writable: true,
+    });
+    try {
+      await fn(calls, ...args);
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(globalThis, 'fetch', originalDescriptor);
+      } else {
+        delete globalThis.fetch;
+      }
+    }
+  };
+}
+
+test(
+  'commitDebug: a 2xx from the sink is reported directly, never touches the local queue',
+  withFakeLocalStorage(
+    withFakeFetch(
+      async () => ({ ok: true, status: 200 }),
+      async (calls, mem) => {
+        const result = await commitDebug({ meta: { appVersion: '9.9.9' }, hello: 'world' });
+        assert.equal(result.ok, true);
+        assert.equal(result.queued, false);
+        assert.match(result.message, /metro MariaDB debug sink/);
+        assert.equal(calls.length, 1, 'exactly one POST attempt (no queue write, so no drain either)');
+        assert.equal(calls[0].url, 'http://127.0.0.1:8642/api/debug/commit');
+        assert.equal(calls[0].init.method, 'POST');
+        const sent = JSON.parse(calls[0].init.body);
+        assert.equal(sent.id, result.id);
+        assert.deepEqual(sent.payload, { meta: { appVersion: '9.9.9' }, hello: 'world' });
+        assert.equal(mem.has(QUEUE_KEY), false, 'the local queue must never be written to on a live sink success');
+      }
+    )
+  )
+);
+
+test(
+  'commitDebug: a non-2xx from the sink falls back to the local queue unchanged (ASM-453)',
+  withFakeLocalStorage(
+    withFakeFetch(
+      async () => ({ ok: false, status: 503 }),
+      async (calls, mem) => {
+        const result = await commitDebug({ x: 1 });
+        assert.equal(result.ok, true);
+        assert.equal(result.queued, true, 'sink failure must fall back to the existing queue path');
+        assert.match(result.message, /queued locally/);
+        const q = JSON.parse(mem.get(QUEUE_KEY));
+        assert.equal(q.length, 1);
+        assert.equal(q[0].id, result.id);
+      }
+    )
+  )
+);
+
+test(
+  'commitDebug: fetch throws -> queued locally, and the returned promise never rejects',
+  withFakeLocalStorage(
+    withFakeFetch(
+      async () => {
+        throw new Error('ECONNREFUSED');
+      },
+      async (calls, mem) => {
+        const result = await commitDebug({ y: 2 });
+        assert.equal(result.ok, true);
+        assert.equal(result.queued, true);
+        const q = JSON.parse(mem.get(QUEUE_KEY));
+        assert.equal(q.length, 1);
+        assert.equal(q[0].id, result.id);
+      }
+    )
+  )
+);
+
+test(
+  'commitDebug: a slow/never-responding sink times out (~1.5s) and falls back to the queue',
+  withFakeLocalStorage(
+    withFakeFetch(
+      (url, init) =>
+        new Promise((resolve, reject) => {
+          // Never resolves on our own — only reacts to the AbortController's
+          // signal, exactly like a real fetch would under a real timeout.
+          init.signal.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        }),
+      async (calls, mem) => {
+        const start = Date.now();
+        const result = await commitDebug({ z: 3 });
+        const elapsedMs = Date.now() - start;
+        assert.equal(result.queued, true, 'a timeout must fall back to the queue, not hang the commit');
+        assert.ok(elapsedMs < 5000, `timeout must be short (bounded ~1.5s), took ${elapsedMs}ms`);
+        const q = JSON.parse(mem.get(QUEUE_KEY));
+        assert.equal(q.length, 1);
+      }
+    )
+  )
+);
+
+test(
+  'commitDebug: a live success drains any pre-existing queued commits, oldest first, 2xx-only removal',
+  withFakeLocalStorage(
+    withFakeFetch(
+      async () => ({ ok: true, status: 200 }),
+      async (calls, mem) => {
+        // Seed the queue as if two earlier commits had queued locally while
+        // the sink was unreachable (commitqueue.ts schema: {id, at, payload}).
+        const seeded = [
+          { id: 'DBG-OLD-1', at: '2026-09-01T00:00:00.000Z', payload: { n: 1 } },
+          { id: 'DBG-OLD-2', at: '2026-09-01T00:00:01.000Z', payload: { n: 2 } },
+        ];
+        mem.set(QUEUE_KEY, JSON.stringify(seeded));
+
+        const result = await commitDebug({ live: true });
+        assert.equal(result.ok, true);
+        assert.equal(result.queued, false);
+
+        // The live commit + both drained entries = 3 POSTs, oldest-queued first.
+        assert.equal(calls.length, 3);
+        const postedIds = calls.map((c) => JSON.parse(c.init.body).id);
+        assert.equal(postedIds[0], result.id, 'the live commit posts first');
+        assert.deepEqual(postedIds.slice(1), ['DBG-OLD-1', 'DBG-OLD-2'], 'drain is oldest-first');
+
+        // Every drained entry was removed (2xx on all) — queue now empty.
+        const finalQueue = JSON.parse(mem.get(QUEUE_KEY));
+        assert.deepEqual(finalQueue, []);
+      }
+    )
+  )
+);
+
+test(
+  'commitDebug: drain only removes entries that actually got a 2xx (partial-failure drain leaves the rest queued)',
+  withFakeLocalStorage(
+    withFakeFetch(
+      // First call (the live commit) succeeds; subsequent drain calls fail.
+      (() => {
+        let n = 0;
+        return async () => {
+          n += 1;
+          return n === 1 ? { ok: true, status: 200 } : { ok: false, status: 503 };
+        };
+      })(),
+      async (calls, mem) => {
+        const seeded = [{ id: 'DBG-STUCK', at: '2026-09-01T00:00:00.000Z', payload: { n: 1 } }];
+        mem.set(QUEUE_KEY, JSON.stringify(seeded));
+
+        const result = await commitDebug({ live: true });
+        assert.equal(result.ok, true);
+        assert.equal(result.queued, false, 'the LIVE commit itself still succeeded');
+
+        // The pre-existing entry failed to drain (503) — it must remain queued.
+        const finalQueue = JSON.parse(mem.get(QUEUE_KEY));
+        assert.equal(finalQueue.length, 1);
+        assert.equal(finalQueue[0].id, 'DBG-STUCK');
+      }
+    )
+  )
+);
+
+// F1 REJECT-round fix (2026-09-03, ASM-453 violation): the first version of
+// drainQueue read the queue ONCE up front and, after each await'd POST,
+// wrote back a filtered copy of that SAME stale snapshot. A commit enqueued
+// (by a second, concurrent commitDebug() call) while a drain POST was still
+// in flight landed on disk between the snapshot and the write, and the
+// stale-snapshot write silently clobbered it. This test reproduces that
+// exact race directly (no helper wrappers, for full control over both the
+// localStorage mock and the fetch mock's timing): a fetch impl that, WHILE
+// its own promise is still pending (i.e. during the await inside
+// postToSink/drainQueue), synchronously writes a brand-new commit straight
+// into the same localStorage-backed queue — simulating another
+// commitDebug() call's enqueueCommit landing in that exact window. The
+// concurrently-enqueued entry MUST survive the drain.
+test('commitDebug: a commit enqueued mid-drain (during an in-flight POST) survives the drain', async () => {
+  const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const originalFetch = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+  const mem = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+      setItem: (k, v) => void mem.set(k, String(v)),
+    },
+    configurable: true,
+  });
+
+  // Pre-existing queued entry — this is what the live commit's success will
+  // trigger a drain of.
+  mem.set(
+    QUEUE_KEY,
+    JSON.stringify([{ id: 'DBG-OLD-1', at: '2026-09-01T00:00:00.000Z', payload: { n: 1 } }])
+  );
+
+  let call = 0;
+  Object.defineProperty(globalThis, 'fetch', {
+    value: async () => {
+      call += 1;
+      if (call === 2) {
+        // This is the drain's POST for DBG-OLD-1. Before resolving it,
+        // simulate a CONCURRENT commit landing in the queue — exactly the
+        // race window an unresolved await opens up for any other
+        // synchronous code (here: another commitDebug()'s enqueueCommit) to
+        // run and mutate the same on-disk queue.
+        await new Promise((r) => setTimeout(r, 0));
+        const current = JSON.parse(mem.get(QUEUE_KEY));
+        current.push({ id: 'DBG-CONCURRENT', at: '2026-09-03T00:00:00.000Z', payload: { concurrent: true } });
+        mem.set(QUEUE_KEY, JSON.stringify(current));
+      }
+      return { ok: true, status: 200 };
+    },
+    configurable: true,
+    writable: true,
+  });
+
+  try {
+    const result = await commitDebug({ live: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.queued, false, 'the live commit itself succeeded');
+
+    const finalQueue = JSON.parse(mem.get(QUEUE_KEY));
+    assert.deepEqual(
+      finalQueue.map((e) => e.id),
+      ['DBG-CONCURRENT'],
+      'DBG-OLD-1 was successfully drained (gone); DBG-CONCURRENT, enqueued WHILE that drain POST was in flight, must survive — a stale-snapshot write would have silently dropped it'
+    );
+  } finally {
+    if (originalLocalStorage) {
+      Object.defineProperty(globalThis, 'localStorage', originalLocalStorage);
+    } else {
+      delete globalThis.localStorage;
+    }
+    if (originalFetch) {
+      Object.defineProperty(globalThis, 'fetch', originalFetch);
+    } else {
+      delete globalThis.fetch;
+    }
+  }
 });
