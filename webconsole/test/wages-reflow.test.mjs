@@ -15,15 +15,39 @@
 //
 // RED proof: revert the checker basis in consistency.ts back to `wagesPerTick(s.population)`
 // (via scratch copy, never git) and this test goes RED — the check reports "diverged".
+//
+// BUG-wage-drift-2026-09 (Wage Stage 1, commit 4a8e9ed): this fixture had population but
+// ZERO job buildings, so wagesPerTick(population) (the OLD flat-wage SSOT) no longer matches
+// what the engine actually pays — 'Wages' is now sectorWagesPerTick(filledJobsBySector(s))
+// .totalPerTick, paid on FILLED jobs, and a jobless city legitimately pays £0 regardless of
+// population. Fix: (a) splice in a large-capacity job building (off_towers_downtown, 2,000
+// jobs — comfortably above this fixture's few-hundred population so population, not job
+// capacity, stays the binding constraint and filled jobs genuinely scale with the start-pop
+// vs end-pop bases this test is built to distinguish) with no builtTick (isOnline()'s
+// documented "no builtTick -> always online" convention, same as austerity-checks.test.mjs
+// and every congestion-teeth.test.mjs city() fixture — deterministic, no dependency on road
+// layout/funds/XP), and (b) recompute the RAW expectation via the NEW SSOT —
+// sectorWagesPerTick(filledJobsFromCapacityAndPopulation(totalJobsBySector(s), basis))
+// .totalPerTick — preserving this test's actual intent: the recorded wage is charged on the
+// START-of-tick basis, not the grown end-of-tick one.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
-import { wagesPerTick, councilTaxPerTick } from '../src/sim/fiscal.ts';
+import { councilTaxPerTick, sectorWagesPerTick } from '../src/sim/fiscal.ts';
+import { totalJobsBySector, filledJobsFromCapacityAndPopulation } from '../src/sim/data.ts';
 
-// Build a state with ample residential capacity, then advance until we hit a tick that
-// grows population from a NON-ZERO base (start-of-tick pop > 0), which is exactly the
+// Raw (pre-policy) wages on a given population basis — the SAME SSOT formula engine.ts's
+// computeFlows and consistency.ts's recompute both funnel through.
+function rawWagesAt(s, basis) {
+  return sectorWagesPerTick(filledJobsFromCapacityAndPopulation(totalJobsBySector(s), basis))
+    .totalPerTick;
+}
+
+// Build a state with ample residential capacity AND a large-capacity job building (so
+// filled jobs scale with population, not job-capacity), then advance until we hit a tick
+// that grows population from a NON-ZERO base (start-of-tick pop > 0), which is exactly the
 // condition under which start-of-tick and end-of-tick population differ.
 function advanceToGrowingTick() {
   let s = initialState();
@@ -32,6 +56,11 @@ function advanceToGrowingTick() {
       s = reducer(s, { type: 'place', spec: 'res_hut', x, y });
     }
   }
+  s = {
+    ...s,
+    buildings: [...s.buildings, { id: s.nextId, spec: 'off_towers_downtown', x: 300, y: 200 }],
+    nextId: s.nextId + 1,
+  };
   for (let i = 0; i < 40; i++) {
     const startPop = s.population;
     s = reducer(s, { type: 'tick' });
@@ -53,11 +82,12 @@ test('BUG-419: wages check passes on a tick that grows population (start-pop bas
   assert.equal(s.lastFlows.population, startPop, 'lastFlows records the start-of-tick basis');
 
   // The engine charged wages on the start-of-tick workforce, so the recorded flow equals
-  // wagesPerTick(startPop), NOT wagesPerTick(endPop).
+  // rawWagesAt(startPop), NOT rawWagesAt(endPop).
   const actualWages = s.lastFlows.outflows.find((f) => f.label === 'Wages').value;
-  assert.equal(actualWages, wagesPerTick(startPop), 'recorded wages match the start-of-tick basis');
+  assert.ok(actualWages > 0, 'test setup: fixture must pay nonzero raw wages (job capacity filled)');
+  assert.equal(actualWages, rawWagesAt(s, startPop), 'recorded wages match the start-of-tick basis');
   assert.notEqual(
-    wagesPerTick(endPop),
+    rawWagesAt(s, endPop),
     actualWages,
     'end-of-tick basis (the old buggy recompute) genuinely differs — proves the test exercises the bug'
   );

@@ -13,19 +13,19 @@
     {
       "tick": 60,
       "values": {
-        "treasury": 980155000,
+        "treasury": 987806000,
         "income": 89000,
-        "expenses": 932000,
-        "net": -843000
+        "expenses": 629000,
+        "net": -540000
       }
     },
     {
       "tick": 90,
       "values": {
-        "treasury": 1051100000,
+        "treasury": 1069242000,
         "income": 89000,
-        "expenses": 932000,
-        "net": -843000
+        "expenses": 629000,
+        "net": -540000
       }
     }
   ]

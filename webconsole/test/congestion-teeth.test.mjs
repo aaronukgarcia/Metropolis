@@ -62,6 +62,123 @@ function uncongestedRoadCity(overrides = {}) {
   return city(2000, { m20: 4, res_highrise: 1 }, overrides);
 }
 
+// ---------------------------------------------------------------------------
+// BUG-wage-drift-2026-09 (Wage Stage 1, commit 4a8e9ed): saturatedRoadCity's
+// tier-1 'road' tile and its res_highrise feeder are placed FIVE tiles apart
+// (city()'s slot layout), so the building starts "orphaned" — not yet
+// road-connected. Under the OLD flat wagesPerTick(population) economy this
+// city bled ~20k/tick and stayed too poor to ever pay for the auto-connect
+// (engine.ts autoConnect's `s.funds < totalCost` unaffordable-skip). Under
+// Wage Stage 1's filled-jobs wages, a city with population but ZERO job
+// buildings pays £0 in wages and instead GAINS funds (council tax alone) —
+// so by ~tick 59 (sweepOrphanConnects fires every 2*TICKS_PER_MONTH=60 ticks)
+// the city can now afford it, and fittingTier(res_highrise) (data.ts) is 5
+// (m20) regardless of the FEEDER's actual traffic load — so the connector is
+// laid straight at m20, not incrementally through the tier ladder. The
+// 'road' spec vanishes entirely before CONGESTION_SUSTAINED_TICKS (60) ever
+// elapses, so congestionLinesOf() never finds a 'road' line and the "sustain"
+// window is preempted by real game economy the test never intended to
+// exercise.
+//
+// Fix: for every AC that needs a FIXED, structurally-immune-to-auto-connect
+// saturated line, place the feeder building already touching its road tile
+// at tick 0 (planConnector's `touchesRoad` returns true immediately) — the
+// orphan sweep then has nothing to connect, no monitor is ever registered,
+// and the line's capacity can never drift out from under the assertions.
+// m20 (ROAD_TIER_SPECS[5]) is additionally the top tier, so even
+// evaluateRoadMonitors' OWN saturation-driven auto-widen (`tier >= 5`
+// skip, engine.ts) structurally cannot touch it — belt and braces against
+// BOTH auto-scale paths, not just the orphan-connect one that bit here.
+//
+// Packing: a 1×1 road tile has exactly 4 orthogonally-adjacent cells. Four
+// non-overlapping 2×2 res_highrise buildings (600 residents each) fit
+// snugly around all four sides — the maximum that can touch a single tile
+// without any of them touching each other. feeder = 4×600 = 2400 against a
+// single m20 tile's capacity of 2500 (data.ts ROAD_TIER_CAPACITY[5]) →
+// saturation 0.96, comfortably over CONGESTION_PENALTY_THRESHOLD (0.75) from
+// tick 0, and — because nothing here is ever an orphan — fixed forever.
+function fixedSaturatedM20City(overrides = {}) {
+  const s = initialState();
+  s.population = 2000;
+  s.buildings = [
+    { id: 91000, spec: 'm20', x: 5, y: 5 },
+    { id: 91001, spec: 'res_highrise', x: 3, y: 4 }, // west: touches (4,5)
+    { id: 91002, spec: 'res_highrise', x: 5, y: 3 }, // north: touches (5,4)
+    { id: 91003, spec: 'res_highrise', x: 6, y: 5 }, // east: touches (6,5)
+    { id: 91004, spec: 'res_highrise', x: 4, y: 6 }, // south: touches (5,6)
+  ];
+  return { ...s, ...overrides };
+}
+
+/**
+ * AC-5's own fixture: same pre-connected idiom as fixedSaturatedM20City above
+ * but on tier-1 'road' (capacity 100) — AC-5's intent is to widen a real
+ * tier-1 line, so it must stay tier-1 (not pre-widened to m20). Being
+ * pre-connected means the orphan sweep never touches it (no premature
+ * auto-connect-to-m20 the way the unconnected saturatedRoadCity now gets),
+ * so it reaches a genuinely sustained tier-1 congestion state — the manual
+ * "widen" step (splicing extra tier-1 tiles into s.buildings) then exercises
+ * exactly the capacity-recompute path the AC always intended, undisturbed by
+ * the engine's own auto-connect/auto-widen machinery.
+ */
+function fixedSaturatedRoadTier1City(overrides = {}) {
+  const s = initialState();
+  s.population = 2000;
+  s.buildings = [
+    { id: 91000, spec: 'road', x: 5, y: 5 },
+    { id: 91001, spec: 'res_highrise', x: 6, y: 5 }, // touches (5,5) directly
+  ];
+  return { ...s, ...overrides };
+}
+
+/**
+ * AC-9's income-drag scenario. Same fixedSaturatedM20City packing for the
+ * traffic source (com_shop itself carries zero feederTrafficWeight — no jobs
+ * or residents in data.ts — so it never perturbs the saturation math), with
+ * four com_shop buildings placed well clear of the road cluster to generate
+ * a real Business Tax base. Verified empirically (2026-09-03) that com_shop
+ * at this distance is never picked up by sweepOrphanConnects across 130+
+ * ticks, so this fixture is exactly as stable as fixedSaturatedM20City.
+ */
+function commuteCongestedCity(overrides = {}) {
+  const s = initialState();
+  s.population = 2000;
+  s.buildings = [
+    { id: 91000, spec: 'm20', x: 5, y: 5 },
+    { id: 91001, spec: 'res_highrise', x: 3, y: 4 },
+    { id: 91002, spec: 'res_highrise', x: 5, y: 3 },
+    { id: 91003, spec: 'res_highrise', x: 6, y: 5 },
+    { id: 91004, spec: 'res_highrise', x: 4, y: 6 },
+    { id: 91005, spec: 'com_shop', x: 30, y: 30 },
+    { id: 91006, spec: 'com_shop', x: 35, y: 30 },
+    { id: 91007, spec: 'com_shop', x: 40, y: 30 },
+    { id: 91008, spec: 'com_shop', x: 45, y: 30 },
+  ];
+  return { ...s, ...overrides };
+}
+
+/**
+ * AC-6's extreme-oversaturation scenario. A single m20 tile plus ONE
+ * res_tower_sgp (20,000 residents, data.ts) touching it directly — pre-
+ * connected (no orphan-connect drift) and genuinely massive relative to a
+ * single tile's 2,500 capacity (saturation clamps to 1, not a marginal
+ * value), so the [0,1] boundary-clamp mutant this AC targets is actually
+ * exercised. (The old road:1/res_highrise:20 fixture now gets swept into
+ * ~138 connector tiles under Wage Stage 1's funds surplus, ballooning
+ * capacity to 345,000 against a 12,000 feeder — saturation collapses to
+ * ~0.03 and the test was passing VACUOUSLY, verified empirically
+ * 2026-09-03.)
+ */
+function extremeOversaturatedM20City(overrides = {}) {
+  const s = initialState();
+  s.population = 50000;
+  s.buildings = [
+    { id: 91000, spec: 'm20', x: 5, y: 5 },
+    { id: 91001, spec: 'res_tower_sgp', x: 6, y: 5 }, // touches (5,5) directly
+  ];
+  return { ...s, ...overrides };
+}
+
 function tickN(s, n) {
   let out = s;
   for (let i = 0; i < n; i++) out = reducer(out, { type: 'tick' });
@@ -72,22 +189,22 @@ function tickN(s, n) {
 // AC-1: sustained congestion is measurable
 // ---------------------------------------------------------------------------
 test('AC-1: a saturated line accrues sustained ticks and isSustained flips true at the threshold (mutant: isSustained hardcoded false / factor stuck at 1.0)', () => {
-  let s = saturatedRoadCity();
-  // Pre-check: the road really is saturated from tick 0 (test setup sanity).
-  const usage0 = lineUsageOf(s).find((l) => l.spec === 'road');
-  assert.ok(usage0, 'test setup: no road line present');
-  assert.ok(usage0.saturation >= CONGESTION_PENALTY_THRESHOLD, `test setup must saturate the road, got ${usage0.saturation}`);
+  let s = fixedSaturatedM20City();
+  // Pre-check: the line really is saturated from tick 0 (test setup sanity).
+  const usage0 = lineUsageOf(s).find((l) => l.spec === 'm20');
+  assert.ok(usage0, 'test setup: no m20 line present');
+  assert.ok(usage0.saturation >= CONGESTION_PENALTY_THRESHOLD, `test setup must saturate the line, got ${usage0.saturation}`);
 
   s = tickN(s, CONGESTION_SUSTAINED_TICKS - 1);
   let lines = congestionLinesOf(s);
-  let road = lines.find((l) => l.spec === 'road');
-  assert.ok(road, 'road line missing from congestionLinesOf');
+  let road = lines.find((l) => l.spec === 'm20');
+  assert.ok(road, 'm20 line missing from congestionLinesOf');
   assert.strictEqual(road.isSustained, false, `must NOT be sustained one tick short of the threshold, got sustainedTicks=${road.sustainedTicks}`);
   assert.strictEqual(road.congestionFactor, 1, 'congestion factor must still be 1.0 (no penalty) before sustained');
 
   s = reducer(s, { type: 'tick' }); // the exact tick that crosses the threshold
   lines = congestionLinesOf(s);
-  road = lines.find((l) => l.spec === 'road');
+  road = lines.find((l) => l.spec === 'm20');
   assert.strictEqual(road.isSustained, true, `must be sustained at exactly ${CONGESTION_SUSTAINED_TICKS} ticks, got sustainedTicks=${road.sustainedTicks}`);
   assert.ok(road.congestionFactor < 1, `congestion factor must reflect the saturation excess once sustained, got ${road.congestionFactor}`);
 });
@@ -101,7 +218,7 @@ test('AC-2: wellbeingOf() exposes a Traffic/Commute part responsive to congestio
   assert.ok(before, 'Traffic/Commute part missing from wellbeingOf().parts');
   assert.strictEqual(before.value, 100, `uncongested Traffic/Commute part must read 100, got ${before.value}`);
 
-  const congestedState = tickN(saturatedRoadCity(), CONGESTION_SUSTAINED_TICKS);
+  const congestedState = tickN(fixedSaturatedM20City(), CONGESTION_SUSTAINED_TICKS);
   const congested = wellbeingOf(congestedState);
   const after = congested.parts.find((p) => p.label === 'Traffic/Commute');
   assert.ok(after, 'Traffic/Commute part missing after sustained congestion');
@@ -112,8 +229,8 @@ test('AC-2: wellbeingOf() exposes a Traffic/Commute part responsive to congestio
 // AC-3: wellbeing overall drops when congestion is sustained
 // ---------------------------------------------------------------------------
 test('AC-3: wellbeing overall decreases once a network transitions to sustained congestion (mutant: part not folded into overall)', () => {
-  const overallBefore = wellbeingOf(saturatedRoadCity()).overall; // not sustained yet (tick 0)
-  const congestedState = tickN(saturatedRoadCity(), CONGESTION_SUSTAINED_TICKS);
+  const overallBefore = wellbeingOf(fixedSaturatedM20City()).overall; // not sustained yet (tick 0)
+  const congestedState = tickN(fixedSaturatedM20City(), CONGESTION_SUSTAINED_TICKS);
   const overallAfter = wellbeingOf(congestedState).overall;
   assert.ok(overallAfter < overallBefore, `overall must fall once congestion is sustained: before=${overallBefore}, after=${overallAfter}`);
 });
@@ -157,7 +274,7 @@ test('burst tolerance: a saturation spike shorter than CONGESTION_SUSTAINED_TICK
 // AC-5: widening a congested road relieves the penalty
 // ---------------------------------------------------------------------------
 test('AC-5: widening a sustained-congested road relieves the penalty within one sustained window (mutant: counter never resets after capacity increases)', () => {
-  let s = tickN(saturatedRoadCity(), CONGESTION_SUSTAINED_TICKS);
+  let s = tickN(fixedSaturatedRoadTier1City(), CONGESTION_SUSTAINED_TICKS);
   assert.ok(congestionFactorOf(s) < 1, 'test setup: must be sustained-congested before widening');
   const wbBefore = wellbeingOf(s).overall;
 
@@ -182,8 +299,8 @@ test('AC-5: widening a sustained-congested road relieves the penalty within one 
 // AC-6: congestion factor is bounded [0,1]
 // ---------------------------------------------------------------------------
 test('AC-6: congestion factor and wellbeing part stay bounded even at extreme oversaturation (mutant: ramp escapes [0,1] / part goes negative)', () => {
-  // Massively oversaturate: many high-traffic buildings on a single road tile.
-  let s = city(50000, { road: 1, res_highrise: 20 });
+  // Massively oversaturate: one enormous residential tower on a single m20 tile.
+  let s = extremeOversaturatedM20City();
   s = tickN(s, CONGESTION_SUSTAINED_TICKS * 3);
   const factor = congestionFactorOf(s);
   assert.ok(Number.isFinite(factor), `congestion factor must be finite, got ${factor}`);
@@ -239,12 +356,17 @@ test('AC-8: Traffic/Commute is a first-class labelled part alongside every other
 test('AC-9: sustained congestion reduces Business/Freight/Office Tax inflows (mutant: income untouched by congestion)', () => {
   // A commercial city (Business Tax present) PLUS a heavy traffic source
   // (res_highrise) so the road/motorway actually carries load — com_shop
-  // alone has negligible feeder weight (data.ts feederTrafficWeight).
+  // alone has negligible feeder weight (data.ts feederTrafficWeight). The
+  // uncongested control keeps the ample-capacity city() helper (extra
+  // capacity from any orphan-connect drift can only make it MORE
+  // uncongested); the congested case uses the pre-connected
+  // commuteCongestedCity fixture so its saturation can never drift away
+  // under Wage Stage 1's funds surplus (see the fixture's own doc comment).
   function commuteCity(specCounts) {
     return city(2000, { com_shop: 4, res_highrise: 1, ...specCounts });
   }
   const uncongested = tickN(commuteCity({ m20: 4 }), CONGESTION_SUSTAINED_TICKS);
-  const congested = tickN(commuteCity({ road: 1 }), CONGESTION_SUSTAINED_TICKS);
+  const congested = tickN(commuteCongestedCity(), CONGESTION_SUSTAINED_TICKS);
   assert.ok(congestionFactorOf(uncongested) === 1, 'uncongested control must have zero congestion');
   assert.ok(congestionFactorOf(congested) < 1, 'congested case must actually be sustained-congested');
 

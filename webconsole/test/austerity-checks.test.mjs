@@ -22,16 +22,51 @@
 // RED proof (performed manually, scratch-copy only — never git): revert consistency.ts to
 // recompute Wages/upkeep WITHOUT applyOutflowPolicies and these austerity/both tests go RED
 // ("diverged"); restore the file. BUG-419's flowBasisPop start-of-tick basis is preserved.
+//
+// BUG-wage-drift-2026-09 (Wage Stage 1, commit 4a8e9ed): this fixture used to have
+// population but ZERO job buildings, so wagesPerTick(population) (the OLD flat-wage SSOT)
+// baked a nonzero expectation that no longer matches reality — engine.ts's 'Wages' outflow
+// is now sectorWagesPerTick(filledJobsBySector(s)).totalPerTick, paid on FILLED jobs, and a
+// jobless city now legitimately pays £0. Fix: (a) add a real job building (off_suite, 25
+// office jobs) so wages are genuinely nonzero, and (b) recompute the RAW expectation via the
+// NEW SSOT — sectorWagesPerTick(filledJobsFromCapacityAndPopulation(totalJobsBySector(s),
+// basis)).totalPerTick — on the SAME flowBasisPop basis the consistency checker itself uses
+// (consistency.ts), preserving this test's actual intent: the start-of-tick population basis
+// survives austerity/recycling's post-policy multipliers.
+//
+// The off_suite building is SPLICED directly into s.buildings (no builtTick field) rather
+// than routed through the 'place' reducer action like the rest of buildOnlineCity's fixture.
+// Verified empirically (2026-09-03): 'place' at this fixture's XP/funds point in the build
+// sequence is unreliable for a NEW building (specUnlocked's XP-level gate and the
+// autoConnect/orphan-connect funds-and-routing dance both silently no-op the placement
+// depending on exactly how much XP/funds the preceding res_hut/service placements consumed
+// — orthogonal to what this test is trying to prove). A building with no `builtTick` is a
+// documented, pre-existing convention this codebase already treats as complete/online
+// unconditionally (data.ts isOnline(): "a bespoke/legacy state ... has no connectivity
+// graph, so the gate is skipped" — `if (b.builtTick == null) return true` is the FIRST line
+// of isOnline()), the same convention every congestion-teeth.test.mjs city() fixture already
+// relies on — so this deterministically guarantees the job building counts, with no
+// dependency on road layout, funds, or XP level.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
-import { wagesPerTick } from '../src/sim/fiscal.ts';
+import { sectorWagesPerTick } from '../src/sim/fiscal.ts';
+import { totalJobsBySector, filledJobsFromCapacityAndPopulation } from '../src/sim/data.ts';
+
+// Raw (pre-policy) wages on a given population basis — the SAME SSOT formula
+// engine.ts's computeFlows and consistency.ts's recompute both funnel through
+// (sectorWagesPerTick fed FILLED jobs, never raw capacity — fiscal.ts F1).
+function rawWagesAt(s, basis) {
+  return sectorWagesPerTick(filledJobsFromCapacityAndPopulation(totalJobsBySector(s), basis))
+    .totalPerTick;
+}
 
 // Build an ONLINE city with both discounted-label services (road/pylon/water/education/park)
-// and non-discounted upkeep (housing, commerce, transport), plus enough residential mass to
-// carry a non-zero, growing population. Advance well past construction so upkeep is charged.
+// and non-discounted upkeep (housing, commerce, transport), a real job building (off_suite)
+// so Wages is genuinely nonzero, plus enough residential mass to carry a non-zero, growing
+// population. Advance well past construction so upkeep is charged.
 function buildOnlineCity() {
   let s = initialState();
   for (let y = 40; y < 70; y += 2) {
@@ -48,6 +83,13 @@ function buildOnlineCity() {
     ['com_shop', 37, 30],
   ];
   for (const [spec, x, y] of services) s = reducer(s, { type: 'place', spec, x, y });
+  // A real job building (see the fixture-doc comment above for why this is spliced
+  // directly rather than routed through 'place').
+  s = {
+    ...s,
+    buildings: [...s.buildings, { id: s.nextId, spec: 'off_suite', x: 300, y: 200 }],
+    nextId: s.nextId + 1,
+  };
   for (let i = 0; i < 32; i++) s = reducer(s, { type: 'tick' });
   return s;
 }
@@ -73,11 +115,14 @@ test('BUG-422: austerity ON — wages / council-tax / upkeep checks all pass', (
   assert.ok(s.population > 0, 'city has population');
 
   // Prove the policy is genuinely applied: recorded Wages is the POST-austerity value
-  // (round(raw * 0.9)), NOT the raw wagesPerTick(basis). If this were equal to raw, the
-  // test would be trivial and could pass even with the bug present.
+  // (round(raw * 0.9)), NOT the raw sectorWagesPerTick(...) basis. If this were equal to
+  // raw, the test would be trivial and could pass even with the bug present. Also prove
+  // the fixture itself pays real wages (off_suite's 25 jobs) — a jobless city legitimately
+  // pays £0 under Wage Stage 1, which would make this whole test vacuous.
   const basis = s.lastFlows.population ?? s.population;
-  const rawWages = wagesPerTick(basis);
+  const rawWages = rawWagesAt(s, basis);
   const actualWages = s.lastFlows.outflows.find((f) => f.label === 'Wages').value;
+  assert.ok(rawWages > 0, 'test setup: fixture must pay nonzero raw wages (off_suite jobs filled)');
   assert.equal(actualWages, Math.round(rawWages * 0.9), 'recorded wages are post-austerity');
   assert.notEqual(actualWages, rawWages, 'post-policy wages differ from raw — bug condition present');
 
@@ -117,8 +162,11 @@ test('BUG-422: austerity AND recycling ON together — all checks pass', () => {
   // Both stack on a discounted label: round(round(raw * 0.93) * 0.9). Wages gets austerity
   // only. The shared helper reproduces this exactly for the recompute.
   const basis = s.lastFlows.population ?? s.population;
+  const rawWages = rawWagesAt(s, basis);
   const actualWages = s.lastFlows.outflows.find((f) => f.label === 'Wages').value;
-  assert.equal(actualWages, Math.round(wagesPerTick(basis) * 0.9), 'wages post-austerity');
+  assert.ok(rawWages > 0, 'test setup: fixture must pay nonzero raw wages (off_suite jobs filled)');
+  assert.equal(actualWages, Math.round(rawWages * 0.9), 'wages post-austerity');
+  assert.notEqual(actualWages, rawWages, 'post-policy wages differ from raw — bug condition present');
 
   const report = runConsistencyChecks(s);
   assert.equal(check(report, 'flows.wages-matches').ok, true, check(report, 'flows.wages-matches').detail);
