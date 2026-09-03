@@ -52,6 +52,7 @@ import {
   utilisationOf,
   densityTier,
   isRoadSpec,
+  footprintOf,
   type Spec,
 } from '../sim/data.ts';
 import type { Building, SimState } from '../sim/types.ts';
@@ -130,11 +131,16 @@ export function buildInstances(
     const { b, sp } = filtered[i];
     const [r, g, bl] = hexToRgbUnit(sp.color);
 
+    // F5 (independent round REJECT, 2026-09-03): a building that has scaled
+    // OUT (FEAT-2326609740) draws bigger than sp.w/sp.h — read the building's
+    // OWN current footprint (footprintOf) so the GPU buffer stays in visual
+    // parity with MapView.tsx's Canvas2D loop and with debug.json.
+    const { w: fpW, h: fpH } = footprintOf(b, sp);
     const so = i * STATIC_FLOATS_PER_INSTANCE;
     staticData[so + 0] = b.x;
     staticData[so + 1] = b.y;
-    staticData[so + 2] = sp.w;
-    staticData[so + 3] = sp.h;
+    staticData[so + 2] = fpW;
+    staticData[so + 3] = fpH;
     staticData[so + 4] = r;
     staticData[so + 5] = g;
     staticData[so + 6] = bl;

@@ -133,7 +133,16 @@ test('BUG-400: real build events survive 100+ grant cycles (grant no longer evic
   // ledger — which is exactly where this test seeds its genuine events. That
   // eviction is correct behaviour (milestone pays ARE real events), so mark
   // every milestone already claimed to keep this test about GRANT rows only.
-  s = { ...s, ledger: [...filler, ...genuine], claimedMilestones: MILESTONES.map((m) => m.id) };
+  //
+  // FEAT-2326609740 (auto-scale ladder, 2026-09-03): closing BUG-590's
+  // spec-coverage gap means the res_hut placed above now ALSO gets a real
+  // buildingMonitor (res_hut previously had no capacityTiers at all, so
+  // placement could never register one). Left active, that monitor can fire
+  // genuine "Auto-scaled N building(s)" ledger rows over 120 months — again
+  // a LEGITIMATE real event, not a grant-path regression, but exactly the
+  // same confound the milestone fix above already had to neutralise. Clear
+  // it here to keep this test about GRANT rows only, same rationale.
+  s = { ...s, ledger: [...filler, ...genuine], claimedMilestones: MILESTONES.map((m) => m.id), buildingMonitors: [] };
   assert.equal(s.ledger.length, LEDGER_CAP, 'ledger seeded exactly at cap with genuine events oldest');
 
   // Run 100+ grant cycles (well past the 200-cap; old code prepended one grant row per

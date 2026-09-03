@@ -177,6 +177,13 @@ export interface DebugJsonBuilding {
   util: { ratio: number; basis: string } | null;
   /** FEAT-1972079910 inc3 (AC-7): original rail line for rd_railbridge tiles. */
   bridgeOver?: string;
+  /** FEAT-2326609740 §8: storey count (defaults to 1 for pre-feature saves). */
+  heightStoreys: number;
+  /** FEAT-2326609740 §8: true once both height cap and ladder end are hit. */
+  scaleLocked: boolean;
+  /** FEAT-2326609740 §8: current footprint tiles (defaults to the spec's base w/h). */
+  footprintW: number;
+  footprintH: number;
 }
 
 export interface ConsistencyReportJson {
@@ -646,6 +653,12 @@ export function buildDebugJson(
       tier: sp && sp.category === 'zones' ? densityTier(sp) : null,
       occ: occ == null ? null : round3(occ),
       util: util == null ? null : { ratio: round3(util.ratio), basis: util.basis },
+      // FEAT-2326609740 §8 (GR#16 defaults — never crash/silent-zero on an
+      // old save that predates these fields).
+      heightStoreys: b.heightStoreys ?? 1,
+      scaleLocked: b.scaleLocked ?? false,
+      footprintW: b.footprintW ?? sp?.w ?? 0,
+      footprintH: b.footprintH ?? sp?.h ?? 0,
     };
     // AC-7: include bridgeOver for rail bridges
     if ((b as any).bridgeOver) result.bridgeOver = (b as any).bridgeOver;

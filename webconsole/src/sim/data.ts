@@ -664,8 +664,12 @@ export function isRoadAdjacent(s: SimState, b: SimState['buildings'][number]): b
   if (!sp) return false;
   if (sp.category === 'network') return true;
   const roads = roadTileSetOf(s);
-  for (let dx = 0; dx < sp.w; dx++)
-    for (let dy = 0; dy < sp.h; dy++) {
+  // F5 (independent round REJECT, 2026-09-03): walk the building's OWN
+  // current footprint (footprintOf), not the spec's base w/h — a grown
+  // building's new edge might be the one actually adjacent to a road.
+  const { w, h } = footprintOf(b, sp);
+  for (let dx = 0; dx < w; dx++)
+    for (let dy = 0; dy < h; dy++) {
       const x = b.x + dx;
       const y = b.y + dy;
       for (const [ox, oy] of ORTHO) {
@@ -686,8 +690,10 @@ export function isRoadConnected(s: SimState, b: SimState['buildings'][number]): 
   if (sp.category === 'network') return true;
   const roads = roadTileSetOf(s);
   const connected = connectedRoadTileSet(s);
-  for (let dx = 0; dx < sp.w; dx++)
-    for (let dy = 0; dy < sp.h; dy++) {
+  // F5 twin of isRoadAdjacent's fix above — same reasoning, same fix.
+  const { w, h } = footprintOf(b, sp);
+  for (let dx = 0; dx < w; dx++)
+    for (let dy = 0; dy < h; dy++) {
       const x = b.x + dx;
       const y = b.y + dy;
       for (const [ox, oy] of ORTHO) {
@@ -1013,6 +1019,91 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
   }
 }
 
+/**
+ * FEAT-2326609740 (BUG-590 close-out): generate a 10-tier ~10%-compound
+ * capacityTiers ladder from a base capacity, matching the growth shape of
+ * the hand-written res_estate/off_businesspark/ind_estate family ladders
+ * above (GR#3 SSOT — one growth-curve generator instead of re-deriving the
+ * arithmetic per spec). tier[0] is always exactly `base` (unchanged
+ * placement capacity); tier[i] = round(base * 1.1^i) for i = 1..n-1.
+ */
+function tierLadder(base: number, n = 10): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(Math.round(base * Math.pow(1.1, i)));
+  return out;
+}
+
+/**
+ * FEAT-2326609740 (Aaron Q100089=B): the NPP reactor ladder. Each tier adds
+ * one more reactor unit to the twin-AGR base (Dungeness-scale, 2 reactors /
+ * 1,120 MW -> 560 MW/reactor), so tier[i] = base + i * (base/2) — i.e.
+ * 2, 3, 4, ... reactors. ⚠ PLACEHOLDER-balance, directional only (per-reactor
+ * MW is a straight-line extrapolation of the existing twin-AGR blurb, not a
+ * researched figure).
+ */
+function reactorLadder(base: number, n = 6): number[] {
+  const perReactor = base / 2;
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(Math.round(base + i * perReactor));
+  return out;
+}
+
+/**
+ * FEAT-2326609740 §2/Aaron Q100083 (2026-09-03): "height-limit table APPROVED
+ * as placeholder" — per-spec storey caps enforced structurally by
+ * evaluateBuildingMonitors (an UP tier step that would exceed the cap is
+ * refused, see engine.ts). ⚠ PLACEHOLDER-balance — directional only, a future
+ * Aaron balance pass may retune individual values; the CATEGORY shape
+ * (huts/terraces 3, res_block/lowrise 8, mid/high/estate towers 12-30, NYC 60,
+ * SGP 40, schools 4, clinics/eldercare 6, hospitals/teaching 12, offices
+ * 12-40, factories 3, civic 8) is what Aaron actually approved — individual
+ * spec entries below are this repo's placement of each real spec into that
+ * approved shape. The NPP reactor ladder (pow_nuke) is height-EXEMPT — see
+ * the isPowerLadder branch in evaluateBuildingMonitors — so it carries no
+ * entry here.
+ */
+export const HEIGHT_CAP_STOREYS: Record<string, number> = {
+  res_hut: 3,
+  res_terrace: 3,
+  res_block: 8,
+  res_lowrise: 8,
+  res_midrise: 15,
+  res_highrise: 30,
+  res_penthouse: 30,
+  res_estate_compact: 15,
+  res_estate: 20,
+  res_estate_sprawl: 12,
+  res_tower_nyc: 60,
+  res_tower_sgp: 40,
+  edu_nursery: 4,
+  edu_primary: 4,
+  edu_city: 4,
+  edu_tech: 6,
+  hea_clinic: 6,
+  hea_hospital: 12,
+  hea_ambulance: 4,
+  hea_eldercare: 6,
+  hea_teaching: 12,
+  pol_station: 4,
+  pol_hq: 8,
+  off_suite: 12,
+  off_tower: 40,
+  off_data: 40,
+  off_businesspark: 20,
+  off_towers_downtown: 40,
+  ind_estate: 3,
+  farm_estate: 3,
+};
+
+/** Height cap for a spec, or Infinity if the spec carries no cap entry
+ *  (e.g. a scalable spec HEIGHT_CAP_STOREYS hasn't caught up with yet — an
+ *  honest "no limit recorded" rather than a silent 0-storey lock, GR#15). */
+export function heightCapOf(sp: Spec | undefined): number {
+  if (!sp) return Infinity;
+  const cap = HEIGHT_CAP_STOREYS[sp.id];
+  return typeof cap === 'number' ? cap : Infinity;
+}
+
 const P = (
   id: string,
   kind: ZoneKind,
@@ -1158,8 +1249,12 @@ export const SPECS: Record<string, Spec> = {
 
   road: P('road', 'road', 'Road', '', 1, 1, 12000, 1, '#4a525c', 'network', 1, { roadTier: 1, capacity: 100 }),
 
-  res_hut: P('res_hut', 'residential', 'Small Holding', '8 residents', 1, 1, 220000, 1, '#4c9aff', 'zones', 1, { residents: 8 }),
-  res_block: P('res_block', 'residential', 'Estate Block', '60 residents', 2, 2, 1600000, 6, '#4c9aff', 'zones', 2, { residents: 60 }),
+  // FEAT-2326609740 (BUG-590): capacityTiers added to close the spec-coverage
+  // gap — these were the 7 base residential specs a player builds early game
+  // that previously had NO auto-scale ladder at all (evaluateBuildingMonitors
+  // hard-skipped them), the exact stall Aaron's tick-1196 capture hit.
+  res_hut: P('res_hut', 'residential', 'Small Holding', '8 residents', 1, 1, 220000, 1, '#4c9aff', 'zones', 1, { residents: 8, capacityTiers: tierLadder(8) }),
+  res_block: P('res_block', 'residential', 'Estate Block', '60 residents', 2, 2, 1600000, 6, '#4c9aff', 'zones', 2, { residents: 60, capacityTiers: tierLadder(60) }),
 
   com_shop: P('com_shop', 'commercial', 'Corner Shop', 'Local trade', 1, 1, 320000, 2, '#e3b341', 'zones', 1),
   com_retail: P('com_retail', 'commercial', 'Retail Park', 'Shopping quarter', 3, 2, 4200000, 18, '#e3b341', 'zones', 2),
@@ -1177,23 +1272,30 @@ export const SPECS: Record<string, Spec> = {
   // BUILD (Aaron's ask — nuclear VERY expensive up front). Capex raised 150k→560k
   // (~£500/MW, above renewables/gas per-MW) and opex 600→1400. `mw`/footprint/tag
   // UNCHANGED — cost-only retune. ⚠ PLACEHOLDER-balance — Aaron's row-by-row pass.
-  pow_nuke: P('pow_nuke', 'power', 'Nuclear Plant', 'Twin AGR · 1,120 MW · Dungeness-scale', 13, 13, 1568000000, 87111, '#e05d38', 'services', 5, { mw: 1120, tag: 'pollution' }),
+  // Q100089=B: the NPP becomes a capacityTiers ladder too — tiers = reactor
+  // count (reactorLadder), MW scales per tier. Height-EXEMPT (see
+  // evaluateBuildingMonitors' isPowerLadder branch) — every tier is an OUT
+  // (footprint growth) step, since "another reactor" is a new physical unit,
+  // never a taller one.
+  pow_nuke: P('pow_nuke', 'power', 'Nuclear Plant', 'Twin AGR · 1,120 MW · Dungeness-scale', 13, 13, 1568000000, 87111, '#e05d38', 'services', 5, { mw: 1120, tag: 'pollution', capacityTiers: reactorLadder(1120) }),
 
   wat_clean: P('wat_clean', 'water', 'Water Works', 'Clean water for 20,000', 2, 2, 4680000, 260, '#39c5cf', 'services', 3, { tag: 'clean', served: 20000 }),
   wat_waste: P('wat_waste', 'water', 'Waste-Water Plant', 'Treats sewage for 20,000', 2, 2, 6120000, 340, '#6b8f71', 'services', 3, { tag: 'waste', served: 20000 }),
 
-  hea_clinic: P('hea_clinic', 'health', 'Clinic', 'GPs for 5,000', 1, 1, 3240000, 180, '#ff7b72', 'services', 2, { served: 5000 }),
-  hea_hospital: P('hea_hospital', 'health', 'General Hospital', 'Serves 40,000', 2, 2, 28800000, 1600, '#d95f57', 'services', 4, { served: 40000 }),
-  pol_station: P('pol_station', 'police', 'Police Station', 'Covers 10,000', 2, 1, 4680000, 260, '#6e7bd9', 'services', 3, { served: 10000 }),
+  // FEAT-2326609740 §2 service-spec set: capacityTiers + monitor coverage
+  // extended to health/police/school/office alongside residential above.
+  hea_clinic: P('hea_clinic', 'health', 'Clinic', 'GPs for 5,000', 1, 1, 3240000, 180, '#ff7b72', 'services', 2, { served: 5000, capacityTiers: tierLadder(5000) }),
+  hea_hospital: P('hea_hospital', 'health', 'General Hospital', 'Serves 40,000', 2, 2, 28800000, 1600, '#d95f57', 'services', 4, { served: 40000, capacityTiers: tierLadder(40000) }),
+  pol_station: P('pol_station', 'police', 'Police Station', 'Covers 10,000', 2, 1, 4680000, 260, '#6e7bd9', 'services', 3, { served: 10000, capacityTiers: tierLadder(10000) }),
 
-  edu_nursery: P('edu_nursery', 'school', 'Kindergarten', '30 places · ages 0–4', 1, 1, 2160000, 120, '#ffd166', 'services', 2, { children: 30, stage: 'nursery' }),
-  edu_primary: P('edu_primary', 'school', 'Primary School', '300 places · ages 5–11', 2, 2, 9360000, 520, '#f2c14e', 'services', 3, { children: 300, stage: 'primary' }),
-  edu_city: P('edu_city', 'school', 'City School', '2,000 places · ages 5–15', 3, 2, 57600000, 3200, '#e3a92f', 'services', 4, { children: 2000, stage: 'city' }),
+  edu_nursery: P('edu_nursery', 'school', 'Kindergarten', '30 places · ages 0–4', 1, 1, 2160000, 120, '#ffd166', 'services', 2, { children: 30, stage: 'nursery', capacityTiers: tierLadder(30) }),
+  edu_primary: P('edu_primary', 'school', 'Primary School', '300 places · ages 5–11', 2, 2, 9360000, 520, '#f2c14e', 'services', 3, { children: 300, stage: 'primary', capacityTiers: tierLadder(300) }),
+  edu_city: P('edu_city', 'school', 'City School', '2,000 places · ages 5–15', 3, 2, 57600000, 3200, '#e3a92f', 'services', 4, { children: 2000, stage: 'city', capacityTiers: tierLadder(2000) }),
   col_sixth: P('col_sixth', 'school', 'College', '1,500 places · ages 16–19', 2, 2, 32400000, 1800, '#b58fd8', 'services', 4, { children: 1500, stage: 'tertiary' }),
   uni: P('uni', 'school', 'University', '6,000 students', 3, 3, 135000000, 7500, '#a371f7', 'services', 5, { children: 6000, stage: 'tertiary' }),
 
-  off_suite: P('off_suite', 'office', 'Office Suite', '25 office jobs', 1, 1, 900000, 5, '#43aa8b', 'zones', 2, { jobs: 25 }),
-  off_tower: P('off_tower', 'office', 'Office Tower', '300 office jobs', 2, 3, 22000000, 120, '#43aa8b', 'zones', 4, { jobs: 300 }),
+  off_suite: P('off_suite', 'office', 'Office Suite', '25 office jobs', 1, 1, 900000, 5, '#43aa8b', 'zones', 2, { jobs: 25, capacityTiers: tierLadder(25) }),
+  off_tower: P('off_tower', 'office', 'Office Tower', '300 office jobs', 2, 3, 22000000, 120, '#43aa8b', 'zones', 4, { jobs: 300, capacityTiers: tierLadder(300) }),
 
   mine_quarry: P('mine_quarry', 'mine', 'Quarry', 'Materials + freight jobs', 2, 2, 3200000, 20, '#b08d55', 'zones', 3, { tag: 'pollution', jobs: 30 }),
   mine_deep: P('mine_deep', 'mine', 'Deep Mine', 'Heavy freight output', 3, 3, 15000000, 80, '#9c6f3f', 'zones', 5, { tag: 'pollution', jobs: 90 }),
@@ -1226,11 +1328,13 @@ export const SPECS: Record<string, Spec> = {
   grand_terminus: P('grand_terminus', 'transport', 'Grand Terminus', 'Victorian rail cathedral', 3, 2, 108000000, 6000, '#d0a83c', 'services', 14, { served: 80000, jobs: 60 }),
 
   // ---- Housing tiers ----
-  res_terrace: P('res_terrace', 'residential', 'Terrace Row', '30 residents · Victorian brick', 2, 1, 900000, 3, '#4c9aff', 'zones', 3, { residents: 30 }),
-  res_lowrise: P('res_lowrise', 'residential', 'Low-rise Flats', '120 residents', 2, 2, 3200000, 10, '#4c9aff', 'zones', 4, { residents: 120 }),
-  res_midrise: P('res_midrise', 'residential', 'Mid-rise Flats', '280 residents', 2, 2, 7800000, 22, '#3d84e6', 'zones', 6, { residents: 280 }),
-  res_highrise: P('res_highrise', 'residential', 'High-rise Tower', '600 residents', 2, 2, 21000000, 60, '#3d84e6', 'zones', 9, { residents: 600 }),
-  res_penthouse: P('res_penthouse', 'residential', 'Penthouse Tower', '350 wealthy residents', 2, 2, 45000000, 90, '#6ab0ff', 'zones', 13, { residents: 350 }),
+  // FEAT-2326609740 (BUG-590): capacityTiers ladders added — these are the
+  // remaining 5 of the 7 originally-unscalable base residential specs.
+  res_terrace: P('res_terrace', 'residential', 'Terrace Row', '30 residents · Victorian brick', 2, 1, 900000, 3, '#4c9aff', 'zones', 3, { residents: 30, capacityTiers: tierLadder(30) }),
+  res_lowrise: P('res_lowrise', 'residential', 'Low-rise Flats', '120 residents', 2, 2, 3200000, 10, '#4c9aff', 'zones', 4, { residents: 120, capacityTiers: tierLadder(120) }),
+  res_midrise: P('res_midrise', 'residential', 'Mid-rise Flats', '280 residents', 2, 2, 7800000, 22, '#3d84e6', 'zones', 6, { residents: 280, capacityTiers: tierLadder(280) }),
+  res_highrise: P('res_highrise', 'residential', 'High-rise Tower', '600 residents', 2, 2, 21000000, 60, '#3d84e6', 'zones', 9, { residents: 600, capacityTiers: tierLadder(600) }),
+  res_penthouse: P('res_penthouse', 'residential', 'Penthouse Tower', '350 wealthy residents', 2, 2, 45000000, 90, '#6ab0ff', 'zones', 13, { residents: 350, capacityTiers: tierLadder(350) }),
 
   // ---- Retail tiers ----
   com_market: P('com_market', 'commercial', 'Market Hall', 'Covered traders market', 2, 2, 2200000, 10, '#e3b341', 'zones', 3, { jobs: 25 }),
@@ -1245,7 +1349,7 @@ export const SPECS: Record<string, Spec> = {
   ind_logistics: P('ind_logistics', 'industrial', 'Automated Logistics Hub', 'Robotic freight sorting', 3, 3, 48000000, 210, '#b58fd8', 'zones', 15, { jobs: 60 }),
 
   // ---- Offices ----
-  off_data: P('off_data', 'office', 'Data Centre', '90 tech jobs · heavy power draw', 2, 2, 34000000, 240, '#2f8f74', 'zones', 12, { jobs: 90 }),
+  off_data: P('off_data', 'office', 'Data Centre', '90 tech jobs · heavy power draw', 2, 2, 34000000, 240, '#2f8f74', 'zones', 12, { jobs: 90, capacityTiers: tierLadder(90) }),
 
   // ---- Parks tiers ----
   park_playground: P('park_playground', 'park', 'Playground', 'Swings + climbing frame', 1, 1, 400000, 6, '#3fb950', 'zones', 2),
@@ -1295,15 +1399,15 @@ export const SPECS: Record<string, Spec> = {
   waste_depot: P('waste_depot', 'water', 'Refuse Depot', 'Collects refuse on city rounds · 50 t/tick', 2, 2, 5400000, 300, '#6b8f71', 'services', 4, { wasteCapacity: 50 }),
 
   // ---- Education additions ----
-  edu_tech: P('edu_tech', 'school', 'Technical College', '2,200 places · trades + T-levels', 2, 2, 43200000, 2400, '#b58fd8', 'services', 6, { children: 2200, stage: 'tertiary' }),
+  edu_tech: P('edu_tech', 'school', 'Technical College', '2,200 places · trades + T-levels', 2, 2, 43200000, 2400, '#b58fd8', 'services', 6, { children: 2200, stage: 'tertiary', capacityTiers: tierLadder(2200) }),
 
   // ---- Health additions ----
-  hea_ambulance: P('hea_ambulance', 'health', 'Ambulance Station', 'Six-crew emergency cover', 1, 1, 6840000, 380, '#ff7b72', 'services', 5, { served: 15000 }),
-  hea_eldercare: P('hea_eldercare', 'health', 'Elder-care Home', '90 assisted-living places', 2, 2, 15300000, 850, '#d95f57', 'services', 7, { served: 90 }),
-  hea_teaching: P('hea_teaching', 'health', 'Teaching Hospital', 'Serves 120,000 + trains doctors', 3, 3, 153000000, 8500, '#c24f47', 'services', 10, { served: 120000 }),
+  hea_ambulance: P('hea_ambulance', 'health', 'Ambulance Station', 'Six-crew emergency cover', 1, 1, 6840000, 380, '#ff7b72', 'services', 5, { served: 15000, capacityTiers: tierLadder(15000) }),
+  hea_eldercare: P('hea_eldercare', 'health', 'Elder-care Home', '90 assisted-living places', 2, 2, 15300000, 850, '#d95f57', 'services', 7, { served: 90, capacityTiers: tierLadder(90) }),
+  hea_teaching: P('hea_teaching', 'health', 'Teaching Hospital', 'Serves 120,000 + trains doctors', 3, 3, 153000000, 8500, '#c24f47', 'services', 10, { served: 120000, capacityTiers: tierLadder(120000) }),
 
   // ---- Police & justice ----
-  pol_hq: P('pol_hq', 'police', 'Divisional HQ', 'Commands 60,000 coverage', 2, 2, 27000000, 1500, '#6e7bd9', 'services', 9, { served: 60000 }),
+  pol_hq: P('pol_hq', 'police', 'Divisional HQ', 'Commands 60,000 coverage', 2, 2, 27000000, 1500, '#6e7bd9', 'services', 9, { served: 60000, capacityTiers: tierLadder(60000) }),
   civ_courthouse: P('civ_courthouse', 'civic', 'Courthouse', 'Magistrates + crown courts', 2, 2, 21600000, 1200, '#8a94a8', 'services', 8),
   civ_prison: P('civ_prison', 'civic', 'Prison', 'Category B · 800 places', 3, 2, 46800000, 2600, '#707a8c', 'services', 10),
   // FEAT-1972079870 — the ADX supermax.
@@ -2507,7 +2611,12 @@ function computePowerStats(s: SimState): { need: number; cap: number } {
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (!sp) continue;
-    if (sp.kind === 'power') staticMw += sp.mw ?? 0;
+    // FEAT-2326609740 (Q100089=B): a power plant with a reactor-count
+    // capacityTiers ladder (pow_nuke) reports its TIER's MW, not the base
+    // catalogue mw — same capacityAtTier honouring residentsCapacity/
+    // totalJobs already give every other tiered spec. A plant with no
+    // capacityTiers (every other generator, today) is unchanged.
+    if (sp.kind === 'power') staticMw += sp.capacityTiers ? capacityAtTier(sp, b.capacityTier ?? 0) : sp.mw ?? 0;
     else if (sp.kind === 'industrial') industrial++;
     else if (sp.kind === 'office') office++;
     else if (sp.kind === 'mine') mine++;
@@ -2624,6 +2733,40 @@ export const totalJobs: (s: SimState) => number = memoOnState((s) => {
     else if (sp.kind === 'industrial') jobs += 18;
   }
   return jobs;
+});
+
+/**
+ * FEAT-2326609740 §11 — total 'children' capacity across every online school
+ * building, tier-aware (same shape as residentsCapacity/totalJobs above:
+ * capacityAtTier honours a scaled building's current tier, GR#3 one growth
+ * rule reused everywhere). Feeds evaluateBuildingMonitors' 'children' monitor
+ * utilization denominator.
+ */
+export const totalChildrenCapacity: (s: SimState) => number = memoOnState((s) => {
+  let cap = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'school') cap += capacityAtTier(sp, b.capacityTier ?? 0);
+  }
+  return cap;
+});
+
+/**
+ * FEAT-2326609740 §11 — total 'served' capacity across every online health +
+ * police building, tier-aware. Feeds evaluateBuildingMonitors' 'served'
+ * monitor utilization denominator (health and police share one monitor type
+ * because both use `served` as their capacity field — same field, same
+ * aggregate, per Aaron's Q100083 service-spec scope).
+ */
+export const totalServedCapacity: (s: SimState) => number = memoOnState((s) => {
+  let cap = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'health' || sp?.kind === 'police') cap += capacityAtTier(sp, b.capacityTier ?? 0);
+  }
+  return cap;
 });
 
 /**
@@ -2871,6 +3014,11 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
  */
 function parksCapacityOf(s: SimState): number {
   let capacity = 0;
+  // FOLLOW-UP (r3 round note (b), non-blocking): sp.w*sp.h, not
+  // footprintOf(b, sp) — harmless ONLY because no park spec carries a
+  // capacityTiers ladder today (parks never grow via this feature). Would
+  // need fixing the day a park spec joins the ladder; not fixed here (out
+  // of scope for the F5s-only re-round).
   for (const b of s.buildings) {
     const sp = SPECS[b.spec];
     if (sp?.kind === 'park') capacity += sp.w * sp.h;
@@ -3398,14 +3546,30 @@ export function occupiedSet(s: SimState, ignoreId?: number): Set<string> {
   return buildOccupiedSet(s.buildings, ignoreId);
 }
 
+/**
+ * FEAT-2326609740 — the SINGLE SOURCE OF TRUTH (GR#3) for a building's REAL
+ * current footprint. A building that has scaled OUT occupies MORE tiles than
+ * its spec's base w/h — every consumer that reasons about a building's
+ * physical extent (occupancy, road adjacency, rendering, hit-testing, the GPU
+ * instance builder, relocate validation) MUST read this, never `sp.w`/`sp.h`
+ * directly, or it silently disagrees with debug.json and with occupiedSet()
+ * (F5, independent round REJECT, 2026-09-03 — "built but not wired": only
+ * buildOccupiedSet had been taught the grown footprint; every other consumer
+ * still walked the stale spec-only rect).
+ */
+export function footprintOf(b: { footprintW?: number; footprintH?: number }, sp: Spec): { w: number; h: number } {
+  return { w: b.footprintW ?? sp.w, h: b.footprintH ?? sp.h };
+}
+
 function buildOccupiedSet(buildings: SimState['buildings'], ignoreId: number | undefined): Set<string> {
   const set = new Set<string>();
   for (const b of buildings) {
     if (b.id === ignoreId) continue;
     const sp = SPECS[b.spec];
     if (!sp) continue;
-    for (let dx = 0; dx < sp.w; dx++)
-      for (let dy = 0; dy < sp.h; dy++) set.add(`${b.x + dx},${b.y + dy}`);
+    const { w, h } = footprintOf(b, sp);
+    for (let dx = 0; dx < w; dx++)
+      for (let dy = 0; dy < h; dy++) set.add(`${b.x + dx},${b.y + dy}`);
   }
   return set;
 }
@@ -3460,6 +3624,11 @@ export function findSpot(s: SimState, specId: string): { x: number; y: number } 
   const hc = housingCentroid(s);
 
   // Pre-extract only the few buildings that matter for scoring.
+  // FOLLOW-UP (r3 round note (b), non-blocking): these centroids use
+  // bs.w/bs.h, not footprintOf(b, bs) — a grown building's scoring centroid
+  // is slightly off from its true footprint centre. Harmless in practice
+  // (siting-preference heuristic only, never a correctness/overlap gate) and
+  // not fixed here (out of scope for the F5s-only re-round).
   const tagged: Record<Tag, { cx: number; cy: number }[]> = { pollution: [], clean: [], waste: [] };
   const resList: { cx: number; cy: number }[] = [];
   for (const b of s.buildings) {

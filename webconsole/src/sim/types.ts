@@ -53,6 +53,37 @@ export interface Building {
    * before this field existed — treated as never in cooldown (backward compatible).
    */
   lastAutoScaleTick?: number;
+  /**
+   * FEAT-2326609740 (Aaron Q100076, "A PLUS B" up-then-out ladder): the
+   * building's current storey count. Starts at the spec's implicit base (1
+   * storey) and is incremented by each UP scale step (odd tier index),
+   * capped per-spec by HEIGHT_CAP_STOREYS in data.ts. Absent on buildings
+   * placed before this feature, or a building that has never scaled UP —
+   * ALWAYS read via `building.heightStoreys ?? 1` (GR#16), never trusted bare.
+   */
+  heightStoreys?: number;
+  /**
+   * FEAT-2326609740: the building's current footprint width/height in
+   * TILES, growing by +1 on each OUT scale step (even tier index). Absent
+   * (or equal to the spec's base sp.w/sp.h) means the building has never
+   * scaled OUT. ALWAYS read via `building.footprintW ?? sp.w` /
+   * `building.footprintH ?? sp.h` (GR#16) — never sp.w/sp.h directly once a
+   * building may have scaled, since the spec's base size no longer describes
+   * every building of that spec.
+   */
+  footprintW?: number;
+  footprintH?: number;
+  /**
+   * FEAT-2326609740 (§3.5/§14): true once the building has hit BOTH its
+   * height cap (or is height-exempt, e.g. the NPP reactor ladder) AND the
+   * end of its capacityTiers ladder, or has exhausted the up-then-out
+   * lookahead this pass with no room left to climb. Its buildingMonitor is
+   * removed the same pass this flips true — a locked building is DONE
+   * auto-scaling for good (re-arming after a demolition frees space is a
+   * known future gap, out of scope for this build — see the acceptance doc's
+   * interim-assumption #4). Absent/undefined == false (GR#16 default).
+   */
+  scaleLocked?: boolean;
 }
 
 export type ToolMode = 'select' | 'move' | 'bulldoze' | 'build' | 'clone';
@@ -706,5 +737,14 @@ export interface RoadMonitor {
 export interface BuildingMonitor {
   buildingId: number;
   until: number;
-  type: 'residents' | 'jobs';
+  /**
+   * FEAT-2326609740: extended beyond residents/jobs to cover the new
+   * service-spec ladders (§2/§11 of the acceptance doc) — 'children' for
+   * schools, 'served' for health + police, 'mw' for the NPP reactor ladder
+   * (Q100089=B). Each type reads the matching data.ts aggregate
+   * (residentsCapacity/totalJobs/totalChildrenCapacity/totalServedCapacity/
+   * powerStats) as its utilization denominator, same population-based-proxy
+   * style the original 'jobs' type already used (see evaluateBuildingMonitors).
+   */
+  type: 'residents' | 'jobs' | 'children' | 'served' | 'mw';
 }

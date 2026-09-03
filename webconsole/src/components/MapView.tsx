@@ -28,6 +28,7 @@ import {
   isRailSpec,
   computeFailedGates,
   AUTO_BUILD_DEMAND_PERCENT,
+  footprintOf,
 } from '../sim/data';
 import { computePath, type Tile } from '../sim/roadTracker';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
@@ -340,8 +341,12 @@ export function MapView() {
       const online = ds ? ds.online : isOnline(state, b);
       const px = geom.ox + b.x * geom.s;
       const py = geom.oy + b.y * geom.s;
-      const pw = sp.w * geom.s;
-      const ph = sp.h * geom.s;
+      // F5 (independent round REJECT, 2026-09-03): a building that has
+      // scaled OUT (FEAT-2326609740) draws bigger than its spec's base
+      // rect — always read the building's OWN current footprint.
+      const { w: fpW, h: fpH } = footprintOf(b, sp);
+      const pw = fpW * geom.s;
+      const ph = fpH * geom.s;
       const baseAlpha = b.id === state.movingId ? 0.6 : online ? 1 : 0.45;
       ctx.globalAlpha = baseAlpha;
       const rx = px + 0.5;
@@ -393,7 +398,7 @@ export function MapView() {
         }
         ctx.stroke();
       }
-      if ((sp.w > 1 || sp.h > 1) && geom.s > 4) {
+      if ((fpW > 1 || fpH > 1) && geom.s > 4) {
         ctx.strokeStyle = 'rgba(15, 18, 22, 0.55)';
         ctx.lineWidth = 1;
         ctx.strokeRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
@@ -507,8 +512,10 @@ export function MapView() {
         if (!sp || pylonIds.has(b.id)) continue;
         const px = geom.ox + b.x * geom.s;
         const py = geom.oy + b.y * geom.s;
-        const pw = sp.w * geom.s;
-        const ph = sp.h * geom.s;
+        // F5: pow_nuke (the reactor ladder) can scale OUT — draw its real footprint.
+        const { w: dimW, h: dimH } = footprintOf(b, sp);
+        const pw = dimW * geom.s;
+        const ph = dimH * geom.s;
         ctx.globalAlpha = 0.4;
         ctx.fillStyle = sp.color;
         ctx.fillRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
@@ -521,8 +528,9 @@ export function MapView() {
         if (!sp) continue;
         const px = geom.ox + b.x * geom.s;
         const py = geom.oy + b.y * geom.s;
-        const pw = sp.w * geom.s;
-        const ph = sp.h * geom.s;
+        const { w: satW, h: satH } = footprintOf(b, sp);
+        const pw = satW * geom.s;
+        const ph = satH * geom.s;
         ctx.fillStyle = powerColorMap.get('localGrid') || sp.color;
         ctx.fillRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
       }
@@ -724,15 +732,14 @@ export function MapView() {
         break;
       }
       case 'bulldoze': {
+        // F5 (independent round REJECT, 2026-09-03): hit-test against the
+        // building's REAL footprint (footprintOf) — a spec-only test made a
+        // grown building's newly-claimed tiles un-bulldozable dead tiles.
         const hit = state.buildings.find((b) => {
           const sp = SPECS[b.spec];
-          return (
-            sp &&
-            t.x >= b.x &&
-            t.x < b.x + sp.w &&
-            t.y >= b.y &&
-            t.y < b.y + sp.h
-          );
+          if (!sp) return false;
+          const { w, h } = footprintOf(b, sp);
+          return t.x >= b.x && t.x < b.x + w && t.y >= b.y && t.y < b.y + h;
         });
         if (hit) {
           dispatch({ type: 'bulldoze', x: t.x, y: t.y });
@@ -745,7 +752,9 @@ export function MapView() {
         else {
           const hit = state.buildings.find((b) => {
             const sp = SPECS[b.spec];
-            return sp && t.x >= b.x && t.x < b.x + sp.w && t.y >= b.y && t.y < b.y + sp.h;
+            if (!sp) return false;
+            const { w, h } = footprintOf(b, sp);
+            return t.x >= b.x && t.x < b.x + w && t.y >= b.y && t.y < b.y + h;
           });
           if (hit) dispatch({ type: 'pickup', id: hit.id });
         }
@@ -753,7 +762,9 @@ export function MapView() {
       case 'select': {
         const hit = state.buildings.find((b) => {
           const sp = SPECS[b.spec];
-          return sp && t.x >= b.x && t.x < b.x + sp.w && t.y >= b.y && t.y < b.y + sp.h;
+          if (!sp) return false;
+          const { w, h } = footprintOf(b, sp);
+          return t.x >= b.x && t.x < b.x + w && t.y >= b.y && t.y < b.y + h;
         });
         setSelected(hit ?? null);
         break;
@@ -1759,9 +1770,21 @@ export function BuildingCard({
           Close
         </button>
       </header>
-      <p className="mono">
-        id #{building.id} · grid {coordLabel(building.x, building.y)} · footprint {sp.w}×{sp.h}
-      </p>
+      {(() => {
+        // F5 (independent round REJECT, 2026-09-03): the label must read the
+        // building's REAL current footprint (footprintOf), not the spec's
+        // base w/h — a grown building's card previously kept showing its
+        // stale original size forever.
+        const { w: cardW, h: cardH } = footprintOf(building, sp);
+        const heightStoreys = building.heightStoreys ?? 1;
+        return (
+          <p className="mono">
+            id #{building.id} · grid {coordLabel(building.x, building.y)} · footprint {cardW}×{cardH}
+            {heightStoreys > 1 && ` · ${heightStoreys} storeys`}
+            {building.scaleLocked && ' · fully developed (at max height and footprint)'}
+          </p>
+        );
+      })()}
       <p>{sp.blurb}</p>
       {sp.dims && (
         <p className="mono">

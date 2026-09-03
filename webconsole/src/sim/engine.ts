@@ -47,6 +47,10 @@ import {
   MOTORWAY_JUNCTION_COST,
   residentsCapacity,
   onlineResidentsCapacity,
+  totalChildrenCapacity,
+  totalServedCapacity,
+  heightCapOf,
+  footprintOf,
   demandFixPlan,
   orderedDemandFixPlan,
   RESOLVE_DEMAND_ALL_MAX_UNITS,
@@ -1102,6 +1106,122 @@ interface BuildingScaleResult {
  *    MAX_AUTO_SCALE_UPGRADES_PER_PASS per pass (BUG-466 rate limit).
  * Mirrors evaluateRoadMonitors pattern; each building scales at most once per pass.
  */
+/** All tiles a w×h building at (x,y) occupies, as "x,y" keys. */
+function buildingTileKeys(x: number, y: number, w: number, h: number): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) out.add(`${x + i},${y + j}`);
+  return out;
+}
+
+/**
+ * Same contract as data.ts's `fits()`, but checks against a SHARED (mutable,
+ * cross-building) occupied set while excluding the building's OWN current
+ * tiles (`selfTiles`) — the growth-specific "does this rect collide with
+ * anything ELSE" check attemptScaleStep needs. F1 (independent round REJECT,
+ * 2026-09-03): plain `fits(occupiedSet(s, id), ...)` only ever sees tiles
+ * from the PRE-PASS `s` — it cannot see another building's OUT step from
+ * EARLIER in the SAME monthly pass, so two neighbours can both claim the
+ * same tile. Callers thread one `shared` set through the whole pass and
+ * grow it after every successful OUT step (see evaluateBuildingMonitors).
+ */
+function fitsAgainstShared(
+  shared: Set<string>,
+  selfTiles: Set<string>,
+  w: number,
+  h: number,
+  x: number,
+  y: number
+): boolean {
+  for (let i = 0; i < w; i++)
+    for (let j = 0; j < h; j++) {
+      const key = `${x + i},${y + j}`;
+      if (selfTiles.has(key)) continue; // the building's own current footprint — never a clash with itself
+      if (shared.has(key)) return false;
+    }
+  return true;
+}
+
+/**
+ * FEAT-2326609740 (Aaron Q100076, "A PLUS B" up-then-out): try to advance a
+ * building EXACTLY ONE ladder index (`currentTier + 1`) this pass — never
+ * more (F3, independent round REJECT, 2026-09-03: an earlier draft "skipped
+ * forward" across ladder indices when the natural type was blocked, granting
+ * TWO tiers of capacity for one charge). Each index has a "natural" mutation
+ * type by alternating parity (odd = UP/height, even = OUT/footprint — §3.2);
+ * a power-ladder spec (the NPP reactor ladder, Q100089=B) is height-EXEMPT,
+ * so its natural type is always OUT. When the natural type is structurally
+ * blocked, the SAME index's ALTERNATE type is tried instead (never a
+ * different index) — this is the "up-only fallback" / height-cap fallback
+ * from §3.5/§12/§13, just anchored to one index rather than hopping ahead.
+ *
+ * F4 (independent round REJECT, 2026-09-03): a `fits()` failure (the OUT
+ * mutation) is ALWAYS transient — a neighbouring demolition can free the
+ * tile later — so it NEVER locks the building, even when the alternate (UP)
+ * is ALSO blocked by a permanent height cap. `locked` is therefore only ever
+ * true when a successful step lands on the ladder's last index (nothing
+ * left to climb, structurally, independent of height/footprint headroom).
+ */
+function attemptScaleStep(
+  shared: Set<string>,
+  building: Building,
+  sp: Spec
+): {
+  advanced: boolean;
+  locked: boolean;
+  newTier: number;
+  newHeight: number;
+  newW: number;
+  newH: number;
+} {
+  const tiers = sp.capacityTiers!;
+  const isPowerLadder = sp.kind === 'power';
+  const heightCap = isPowerLadder ? Infinity : heightCapOf(sp);
+  const currentTier = building.capacityTier ?? 0;
+  const height = building.heightStoreys ?? 1;
+  // FOLLOW-UP (r3 round note (a), non-blocking): this re-implements
+  // footprintOf(building, sp) inline rather than calling the SSOT — harmless
+  // today (identical logic) but a future footprintOf change could drift from
+  // this copy. Not fixed here (out of scope for the F5s-only re-round).
+  const w = building.footprintW ?? sp.w;
+  const h = building.footprintH ?? sp.h;
+  // Caller (evaluateBuildingMonitors) already handles "already at the top of
+  // the ladder" before calling this, so `candidate` is always a valid index.
+  const candidate = currentTier + 1;
+  const selfTiles = buildingTileKeys(building.x, building.y, w, h);
+
+  const tryUp = (): { w: number; h: number; height: number } | null => {
+    if (isPowerLadder) return null; // height-exempt — UP is never a valid mutation for a reactor ladder
+    if (height >= heightCap) return null; // PERMANENT block — height can never decrease
+    return { w, h, height: height + 1 };
+  };
+  const tryOut = (): { w: number; h: number; height: number } | null => {
+    // Width-first, then height — deterministic, order-independent tiebreak (GR#21).
+    if (building.x + w + 1 <= MAP_W && fitsAgainstShared(shared, selfTiles, w + 1, h, building.x, building.y)) {
+      return { w: w + 1, h, height };
+    }
+    if (building.y + h + 1 <= MAP_H && fitsAgainstShared(shared, selfTiles, w, h + 1, building.x, building.y)) {
+      return { w, h: h + 1, height };
+    }
+    return null; // TRANSIENT — a demolition could free space later; never locks (F4)
+  };
+
+  const naturalWantsUp = !isPowerLadder && candidate % 2 === 1;
+  const natural = naturalWantsUp ? tryUp() : tryOut();
+  const result = natural ?? (naturalWantsUp ? tryOut() : tryUp());
+
+  if (!result) {
+    // Neither this index's natural nor alternate mutation succeeded this
+    // pass. Never locks here — a permanent height-cap block only rules out
+    // the UP half; the OUT half staying blocked is always a `fits()`
+    // failure (transient, F4). The monitor stays active and retries later.
+    return { advanced: false, locked: false, newTier: currentTier, newHeight: height, newW: w, newH: h };
+  }
+  // Landing on the ladder's last index locks the building immediately —
+  // structurally nothing is left to climb, independent of height/footprint.
+  const locked = candidate >= tiers.length - 1;
+  return { advanced: true, locked, newTier: candidate, newHeight: result.height, newW: result.w, newH: result.h };
+}
+
 export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingScaleResult {
   // (1) expire — keep only monitors still inside their 1-year window
   const active = (s.buildingMonitors ?? []).filter((m) => tick <= m.until);
@@ -1113,19 +1233,40 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
     byId.set(b.id, b);
   }
 
-  const tierUpgradeById = new Map<number, number>();
+  interface StepResult {
+    tier: number;
+    height: number;
+    w: number;
+    h: number;
+    locked: boolean;
+  }
+  const stepById = new Map<number, StepResult>();
+  const lockOnlyIds = new Set<number>(); // buildings locked with NO tier change (already-maxed / failed-permanently)
+  const removeMonitorIds = new Set<number>();
   let cost = 0;
   let upgraded = 0;
+
+  // F1 (independent round REJECT, 2026-09-03): ONE shared occupied-tile set,
+  // cloned from occupiedSet(s) (never mutate the cached Set it returns) and
+  // grown after every successful OUT step BEFORE the next monitor in this
+  // SAME pass is evaluated — otherwise two buildings scaling out in the same
+  // monthly pass can both see the pre-pass board and claim the same tile.
+  const sharedOccupied = new Set(occupiedSet(s));
 
   // BUG-467 perf: residentsCapacity(s) and totalJobs(s) are each O(buildings)
   // (they sum over every building). Computing them INSIDE the per-monitor loop
   // below made the pass O(buildings^2) — ~36s of scripting per placement at
   // ~9,886 buildings (the residentsCapacity self-time bomb in the profile).
   // They do not change during this pass (tier upgrades are collected in
-  // tierUpgradeById and applied only AFTER the loop, so `s` is constant here),
-  // so hoist them to a single O(n) computation each.
+  // stepById and applied only AFTER the loop, so `s` is constant here),
+  // so hoist them to a single O(n) computation each. FEAT-2326609740 adds
+  // 'children'/'served' monitor types — their aggregates are hoisted the
+  // same way for the same reason.
   const residentsCapForPass = residentsCapacity(s);
   const jobsCapForPass = totalJobs(s);
+  const childrenCapForPass = totalChildrenCapacity(s);
+  const servedCapForPass = totalServedCapacity(s);
+  const powerStatsForPass = powerStats(s);
 
   for (const m of active) {
     const building = byId.get(m.buildingId);
@@ -1137,14 +1278,14 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
     // consistent within one tick, matching the road-monitor pattern.
     if (!isOnline(s, building)) continue;
 
-    if (tierUpgradeById.has(building.id)) continue; // already scaled this pass
+    if (stepById.has(building.id) || lockOnlyIds.has(building.id)) continue; // already resolved this pass
 
     // BUG-466: rate-limit — cap the number of buildings queued for upgrade THIS
     // pass so a saturated city can't lump-charge every monitored building in one
     // month. `active` is already in strict, stable buildingId order (sorted
     // above), so the cap always selects the SAME buildings across replays of the
     // same input (determinism, GR#21).
-    if (tierUpgradeById.size >= MAX_AUTO_SCALE_UPGRADES_PER_PASS) break;
+    if (stepById.size >= MAX_AUTO_SCALE_UPGRADES_PER_PASS) break;
 
     // BUG-466: per-building cooldown — a building that just auto-scaled cannot
     // auto-scale again until AUTO_SCALE_COOLDOWN_TICKS have passed. Without this,
@@ -1160,13 +1301,32 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
     if (!sp || !sp.capacityTiers) continue; // spec missing or not scalable
 
     const currentTier = building.capacityTier ?? 0;
-    if (currentTier >= sp.capacityTiers.length - 1) continue; // already at max tier
+    if (currentTier >= sp.capacityTiers.length - 1) {
+      // FEAT-2326609740 §3.5/§14: already at the top of the ladder — lock it
+      // and drop the monitor instead of leaving it inert until its window
+      // expires (the old behaviour).
+      lockOnlyIds.add(building.id);
+      removeMonitorIds.add(building.id);
+      continue;
+    }
 
-    // Compute utilization based on monitor type (residents or jobs)
+    // Compute utilization based on monitor type. 'residents'/'jobs' are the
+    // original AC-7 basis; 'children'/'served'/'mw' (FEAT-2326609740 §11)
+    // follow the SAME population-based-proxy style the original 'jobs' type
+    // already used (comment below, unchanged) — directional, ⚠ placeholder.
     let utilization = 0;
     if (m.type === 'residents') {
       const totalCap = residentsCapForPass; // BUG-467: hoisted (was residentsCapacity(s) per-iteration = O(n^2))
       utilization = totalCap > 0 ? Math.min(1, s.population / totalCap) : 0;
+    } else if (m.type === 'children') {
+      const totalCap = childrenCapForPass;
+      utilization = totalCap > 0 ? Math.min(1, s.population / totalCap) : 0; // population-based proxy, same style as 'jobs'
+    } else if (m.type === 'served') {
+      const totalCap = servedCapForPass;
+      utilization = totalCap > 0 ? Math.min(1, s.population / totalCap) : 0; // population-based proxy, same style as 'jobs'
+    } else if (m.type === 'mw') {
+      const pw = powerStatsForPass;
+      utilization = pw.cap > 0 ? Math.min(1, pw.need / pw.cap) : 0; // real need/cap ratio — power already tracks true demand
     } else {
       // jobs type
       const totalCap = jobsCapForPass; // BUG-467: hoisted (was totalJobs(s) per-iteration = O(n^2))
@@ -1175,8 +1335,30 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
 
     if (utilization < BUILDING_UTILIZATION_THRESHOLD) continue; // below threshold
 
-    // Upgrade tier
-    tierUpgradeById.set(building.id, currentTier + 1);
+    const step = attemptScaleStep(sharedOccupied, building, sp);
+    if (!step.advanced) {
+      if (step.locked) {
+        lockOnlyIds.add(building.id);
+        removeMonitorIds.add(building.id);
+      }
+      // Not advanced and not locked: a transient fits()-failure — no charge,
+      // no tier change, monitor stays active for a future pass (§3.5).
+      continue;
+    }
+
+    stepById.set(building.id, { tier: step.newTier, height: step.newHeight, w: step.newW, h: step.newH, locked: step.locked });
+    if (step.locked) removeMonitorIds.add(building.id);
+    // F1: if this step grew the footprint, claim the new tiles in the SHARED
+    // set immediately — before the next monitor in this pass is evaluated —
+    // so a later building in the same pass can never grow into a tile this
+    // one just claimed (see attemptScaleStep's header comment).
+    // FOLLOW-UP (r3 round note (a), non-blocking): another inline
+    // footprintOf(building, sp) re-implementation — see the same note above
+    // attemptScaleStep's `w`/`h`. Not fixed here (out of scope this round).
+    const grewOut = step.newW !== (building.footprintW ?? sp.w) || step.newH !== (building.footprintH ?? sp.h);
+    if (grewOut) {
+      for (const t of buildingTileKeys(building.x, building.y, step.newW, step.newH)) sharedOccupied.add(t);
+    }
     // AC-10 (acceptance doc worked example): "Place res_estate (placement cost
     // ~45k); trigger auto-scale -> cost ~6.75k charged" — 45k is sp.cost, the
     // catalogue cost, NOT placementCost(sp) (which is £0 for every zone-category
@@ -1189,15 +1371,28 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
   }
 
   const buildings =
-    tierUpgradeById.size === 0
+    stepById.size === 0 && lockOnlyIds.size === 0
       ? s.buildings
-      : s.buildings.map((b) =>
-          tierUpgradeById.has(b.id)
-            ? { ...b, capacityTier: tierUpgradeById.get(b.id)!, lastAutoScaleTick: tick }
-            : b
-        );
+      : s.buildings.map((b) => {
+          const step = stepById.get(b.id);
+          if (step) {
+            return {
+              ...b,
+              capacityTier: step.tier,
+              heightStoreys: step.height,
+              footprintW: step.w,
+              footprintH: step.h,
+              lastAutoScaleTick: tick,
+              scaleLocked: step.locked,
+            };
+          }
+          if (lockOnlyIds.has(b.id)) return { ...b, scaleLocked: true };
+          return b;
+        });
 
-  return { buildings, monitors: active, cost, upgraded };
+  const monitors = removeMonitorIds.size === 0 ? active : active.filter((m) => !removeMonitorIds.has(m.buildingId));
+
+  return { buildings, monitors, cost, upgraded };
 }
 
 function advance(s: SimState): SimState {
@@ -2053,12 +2248,18 @@ export function autoConnect(
   } else {
     occupied = new Set<string>();
     roads = new Set<string>();
+    // Same class as R2-F5a/c (independent round REJECT, 2026-09-03): a
+    // GROWN building (FEAT-2326609740) occupies more tiles than its spec's
+    // base w/h — use footprintOf so the from-scratch board here agrees with
+    // occupiedSet()/debug.json instead of leaking the extra tiles as
+    // falsely-free ground a connector could route straight through.
     for (const b of s.buildings) {
       const bs = SPECS[b.spec];
       if (!bs) continue;
       const road = isRoadSpec(bs);
-      for (let dx = 0; dx < bs.w; dx++)
-        for (let dy = 0; dy < bs.h; dy++) {
+      const { w, h } = footprintOf(b, bs);
+      for (let dx = 0; dx < w; dx++)
+        for (let dy = 0; dy < h; dy++) {
           const k = `${b.x + dx},${b.y + dy}`;
           occupied.add(k);
           if (road) roads.add(k);
@@ -2218,12 +2419,16 @@ export function sweepOrphanConnects(s: SimState): SimState {
 
   const occupied = new Set<string>();
   const roads = new Set<string>();
+  // Same class as autoConnect's own from-scratch board above (R2-F5,
+  // independent round REJECT, 2026-09-03): use footprintOf so a grown
+  // building's extra tiles are counted here too, not just in occupiedSet().
   for (const b of s.buildings) {
     const bs = SPECS[b.spec];
     if (!bs) continue;
     const road = isRoadSpec(bs);
-    for (let dx = 0; dx < bs.w; dx++)
-      for (let dy = 0; dy < bs.h; dy++) {
+    const { w, h } = footprintOf(b, bs);
+    for (let dx = 0; dx < w; dx++)
+      for (let dy = 0; dy < h; dy++) {
         const k = `${b.x + dx},${b.y + dy}`;
         occupied.add(k);
         if (road) roads.add(k);
@@ -2339,11 +2544,15 @@ function autoBranchRail(s: SimState, placed: Building, sp: Spec): SimState {
   const occupied = new Set<string>();
   const lineTiles: Record<string, Set<string>> = {};
   for (const id of GATEWAY_BRANCH_TARGET_SPECS) lineTiles[id] = new Set<string>();
+  // Same class as autoConnect's board (R2-F5, independent round REJECT,
+  // 2026-09-03): use footprintOf so a grown building's extra tiles count as
+  // real obstacles the branch router must route around, not free ground.
   for (const b of s.buildings) {
     const bs = SPECS[b.spec];
     if (!bs) continue;
-    for (let dx = 0; dx < bs.w; dx++)
-      for (let dy = 0; dy < bs.h; dy++) {
+    const { w, h } = footprintOf(b, bs);
+    for (let dx = 0; dx < w; dx++)
+      for (let dy = 0; dy < h; dy++) {
         const k = `${b.x + dx},${b.y + dy}`;
         occupied.add(k);
         // Standard line tiles
@@ -2767,11 +2976,17 @@ function planRoadReplanCascade(
     | { kind: 'road'; tier: number; auto: boolean; buildingId: number; spec: string }
     | { kind: 'blocked' };
   const grid = new Map<string, Cell>();
+  // Same class as autoConnect's board (R2-F5, independent round REJECT,
+  // 2026-09-03): a grown non-road building's extra tiles must show as
+  // 'blocked' here too via footprintOf, not just its spec-base rect (roads
+  // themselves never grow via this ladder, so their own tier/auto reads are
+  // unaffected — only the 'blocked' branch for non-road buildings matters).
   for (const b of state.buildings) {
     const sp = SPECS[b.spec];
     if (!sp) continue;
-    for (let dx = 0; dx < sp.w; dx++) {
-      for (let dy = 0; dy < sp.h; dy++) {
+    const { w, h } = footprintOf(b, sp);
+    for (let dx = 0; dx < w; dx++) {
+      for (let dy = 0; dy < h; dy++) {
         const x = b.x + dx;
         const y = b.y + dy;
         if (x < lo.x || x > hi.x || y < lo.y || y > hi.y) continue;
@@ -2981,9 +3196,19 @@ function planRoadReplanCascade(
     for (const b of state.buildings) {
       const sp = SPECS[b.spec];
       if (!sp || isRoadSpec(sp) || CONNECT_EXEMPT_KINDS.has(sp.kind)) continue;
+      // F5s (independent round REJECT, 2026-09-03): a grown building
+      // (FEAT-2326609740) occupies more tiles than sp.w/sp.h — this
+      // function's OWN blocked-grid above (footprintOf'd) already knows
+      // that, so the no-stranding guard here must agree, or a grown
+      // building's EXTRA tile (its only real road frontage) is invisible to
+      // both the "does it touch R" and "does it keep access" checks, and a
+      // road this function allows to demolish silently flips the building's
+      // isRoadAdjacent gate false — exactly what the guard's own contract
+      // (this function never itself causes an online->offline flip) forbids.
+      const { w: fpW, h: fpH } = footprintOf(b, sp);
       let touchesR = false;
-      for (let dx = 0; dx < sp.w && !touchesR; dx++) {
-        for (let dy = 0; dy < sp.h && !touchesR; dy++) {
+      for (let dx = 0; dx < fpW && !touchesR; dx++) {
+        for (let dy = 0; dy < fpH && !touchesR; dy++) {
           const bx = b.x + dx, by = b.y + dy;
           // Orthogonal adjacency to R — NOT footprint overlap (a non-road
           // building can never occupy R's own cell, since grid cells are
@@ -2994,8 +3219,8 @@ function planRoadReplanCascade(
       }
       if (!touchesR) continue;
       let keepsAccess = false;
-      for (let dx = 0; dx < sp.w && !keepsAccess; dx++) {
-        for (let dy = 0; dy < sp.h && !keepsAccess; dy++) {
+      for (let dx = 0; dx < fpW && !keepsAccess; dx++) {
+        for (let dy = 0; dy < fpH && !keepsAccess; dy++) {
           const bx = b.x + dx, by = b.y + dy;
           const around: [number, number][] = [[bx + 1, by], [bx - 1, by], [bx, by + 1], [bx, by - 1]];
           for (const [ax, ay] of around) {
@@ -3314,7 +3539,22 @@ function reduceCore(state: SimState, action: Action): SimState {
       // Monitor expires after 1 year (TICKS_PER_YEAR). Type is 'residents' or 'jobs'
       // based on the building's primary capacity type.
       if (sp.capacityTiers) {
-        const monitorType: 'residents' | 'jobs' = sp.residents ? 'residents' : 'jobs';
+        // FEAT-2326609740 §11: monitor type follows whichever capacity field
+        // the spec actually carries — residential keeps 'residents', schools
+        // get the new 'children' type, health/police get 'served', a
+        // capacityTiers power plant (the NPP reactor ladder, Q100089=B) gets
+        // 'mw', everything else (offices, and any future jobs-carrying spec)
+        // keeps 'jobs'. Order matters only in that a spec never carries more
+        // than one of these fields (GR#7-adjacent data invariant).
+        const monitorType: BuildingMonitor['type'] = sp.residents
+          ? 'residents'
+          : sp.children !== undefined
+            ? 'children'
+            : sp.served !== undefined
+              ? 'served'
+              : sp.kind === 'power'
+                ? 'mw'
+                : 'jobs';
         const newMonitor: BuildingMonitor = {
           buildingId: placedBuilding.id,
           until: state.tick + TICKS_PER_YEAR,
@@ -3847,14 +4087,21 @@ function reduceCore(state: SimState, action: Action): SimState {
     }
 
     case 'bulldoze': {
+      // R2-F5a (independent round REJECT, 2026-09-03): a grown building
+      // (FEAT-2326609740) occupies MORE tiles than sp.w/sp.h — hit-testing
+      // against the spec-only rect made the extra tiles un-bulldozable dead
+      // ground (MapView still finds/dispatches, but the reducer, the
+      // AUTHORITATIVE layer, attributed the click to no building and
+      // silently no-op'd). Use the building's real footprint (footprintOf).
       const target = state.buildings.find((b) => {
         const sp = SPECS[b.spec];
         if (!sp) return false;
+        const { w, h } = footprintOf(b, sp);
         return (
           action.x >= b.x &&
-          action.x < b.x + sp.w &&
+          action.x < b.x + w &&
           action.y >= b.y &&
-          action.y < b.y + sp.h
+          action.y < b.y + h
         );
       });
       if (!target) return state;
@@ -3967,12 +4214,19 @@ function reduceCore(state: SimState, action: Action): SimState {
       const moving = state.buildings.find((b) => b.id === state.movingId);
       if (!moving) return { ...state, movingId: null };
       const sp = SPECS[moving.spec];
+      // F2 (independent round REJECT, 2026-09-03): a building that has
+      // scaled OUT (FEAT-2326609740) occupies MORE tiles than sp.w/sp.h —
+      // validating against the SPEC footprint let a grown building move
+      // into a hole too small for its REAL size, or off the map edge, since
+      // the smaller spec-only rect could pass a check the true footprint
+      // would fail. Always use the building's OWN current footprint here.
+      const { w: moveW, h: moveH } = footprintOf(moving, sp);
       if (
         action.x < 0 ||
         action.y < 0 ||
-        action.x + sp.w > MAP_W ||
-        action.y + sp.h > MAP_H ||
-        !fits(occupiedSet(state, moving.id), sp.w, sp.h, action.x, action.y)
+        action.x + moveW > MAP_W ||
+        action.y + moveH > MAP_H ||
+        !fits(occupiedSet(state, moving.id), moveW, moveH, action.x, action.y)
       )
         return state;
       // FEAT-dynamic-bailout: MOVE_COST is deliberately EXCLUDED from
@@ -4033,12 +4287,18 @@ function reduceCore(state: SimState, action: Action): SimState {
       }
 
       // Find all buildings that have ANY cell in the landing zone.
+      // R2-F5c (independent round REJECT, 2026-09-03): an EXISTING grown
+      // building's real footprint (footprintOf) can be bigger than its
+      // spec's base rect — flattening against sp.w/sp.h alone missed the
+      // extra tiles, so a stamp could land ON TOP of them instead of
+      // removing them first (a real, proven overlap).
       const toRemove = new Set<number>();
       for (const b of state.buildings) {
         const sp = SPECS[b.spec];
         if (!sp) continue;
-        for (let dy = 0; dy < sp.h; dy++) {
-          for (let dx = 0; dx < sp.w; dx++) {
+        const { w, h } = footprintOf(b, sp);
+        for (let dy = 0; dy < h; dy++) {
+          for (let dx = 0; dx < w; dx++) {
             if (landingCells.has(`${b.x + dx},${b.y + dy}`)) {
               toRemove.add(b.id);
               break;
@@ -4191,6 +4451,13 @@ function reduceCore(state: SimState, action: Action): SimState {
     case 'setClipboard':
       // FEAT-1972079853: UI-only action — just stores the clipboard for the ghost preview.
       // Does not affect game state deterministically; stampRegion carries the full clipboard.
+      // FOLLOW-UP (r3 round note (c), non-blocking): a clipboard item carries
+      // only `{spec, dx, dy}` (see the Action type above) — copying a GROWN
+      // building (FEAT-2326609740) and stamping it back places it at its
+      // spec's BASE footprint, not the grown one. Lossy (the stamp is
+      // smaller than the original), never corrupting (stampRegion's own
+      // flatten pass already uses footprintOf for what it clears — see
+      // 'stampRegion' above). Not fixed here (out of scope this round).
       return { ...state, clipboard: action.clipboard };
 
     case 'debugFunds':
@@ -4583,6 +4850,10 @@ const buildWellbeingCoreParts: (s: SimState) => { label: string; value: number }
   // Parks capacity = footprint sum (w × h per building). Parks need is pop-based.
   // Coverage = capacity / need; wellbeing = part(coverage). This prevents underflow
   // at high population (the old formula yielded 0 when pop > park_capacity * 70/0.5).
+  // FOLLOW-UP (r3 round note (b), non-blocking): sp.w*sp.h, not
+  // footprintOf(b, sp) — same twin-site class as data.ts's parksCapacityOf,
+  // harmless only because no park spec carries a capacityTiers ladder today.
+  // Not fixed here (out of scope for the F5s-only re-round).
   let parksCapacity = 0;
   for (const b of s.buildings) {
     const sp = SPECS[b.spec];
