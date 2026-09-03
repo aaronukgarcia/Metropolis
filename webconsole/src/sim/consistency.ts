@@ -36,7 +36,51 @@ export interface ConsistencyCheck {
 export interface ConsistencyReport {
   checks: ConsistencyCheck[];
   failures: number;
+  /**
+   * BUG-624: ids of the grace-eligible per-line flows-vs-recompute checks
+   * (GRACE_ELIGIBLE_LINE_IDS below) that failed on THIS call's RAW
+   * evaluation — i.e. before any grace was applied. Always populated
+   * (whether or not the caller asked for grace), so a caller can start
+   * threading it through from any point without a throwaway first call.
+   * A caller that wants the two-consecutive-failures tolerance passes this
+   * set back in as the NEXT call's `priorFailedLineIds` argument — carried
+   * by the CALLER, never by SimState (determinism untouched, and
+   * runConsistencyChecks stays a pure function of its arguments).
+   */
+  rawFailedLineIds: string[];
 }
+
+/**
+ * BUG-624 (Aaron/Opus round, 2026-09-03): the flows-vs-recompute per-line
+ * checks (Wages, Upkeep total) reconstruct their comparison from CURRENT
+ * state (`countByKindOnline(s)` / `isOnline(s, b)`), while the "actual" side
+ * is the value `advance()` recorded via `computeFlows(s)` EARLIER in the
+ * same tick, against the PRE-increment `s.tick`. When a building's
+ * construction completes exactly on this tick boundary (`s.tick - builtTick
+ * === constructionTicks`), `isOnline` flips false→true between the
+ * computeFlows() call and the tick-incremented final state — so the
+ * recompute sees one more online building than the actual flow charged for.
+ * This is genuine, benign, and self-heals next tick (the recompute and the
+ * next tick's actual will agree again) — it is NOT the persistent silent
+ * corruption these checks exist to catch (a hand-tampered flow, a building
+ * removed without a reflow, a policy pipeline regression), which reproduces
+ * on every subsequent check until fixed.
+ *
+ * The distinguishing signal is exactly that: a genuine defect fails on EVERY
+ * consecutive check; a mid-tick online flip fails on exactly one. So these
+ * two ids get a two-consecutive-failures grace — opt-in only (see
+ * `priorFailedLineIds` on runConsistencyChecks): omitting the argument (as
+ * every pre-existing call site and test does) keeps the ORIGINAL
+ * instant-fail behaviour byte-for-byte, so BUG-603's tamper regressions and
+ * every single-shot corruption test stay exactly as red as before. Only a
+ * caller that explicitly threads `rawFailedLineIds` from one call into the
+ * next `priorFailedLineIds` argument gets the tolerance, and even then a
+ * failure that persists into the SECOND consecutive check is never graced.
+ */
+export const GRACE_ELIGIBLE_LINE_IDS: ReadonlySet<string> = new Set([
+  'flows.wages-matches',
+  'flows.upkeep-total-matches',
+]);
 
 /**
  * BUG-603 (Aaron ruling Q100079=A, tightened after a REJECT round caught the
@@ -74,9 +118,43 @@ export interface RecomputedFlowsOverride {
  */
 export function runConsistencyChecks(
   s: SimState,
-  actualFlowsOverride?: RecomputedFlowsOverride
+  actualFlowsOverride?: RecomputedFlowsOverride,
+  /**
+   * BUG-624 opt-in grace argument. `undefined` (the default, and every
+   * existing call site) means "no history known" — the ORIGINAL
+   * instant-fail behaviour applies to every check, including the two
+   * grace-eligible ids. Passing a Set (even an empty one, for a caller's
+   * very first tick) opts in: a grace-eligible id that raw-fails now but is
+   * NOT in this set is tolerated (graced to ok:true) for exactly one
+   * consecutive check; passing the SAME id back in (because it raw-failed
+   * last time too) makes the second consecutive failure count for real.
+   */
+  priorFailedLineIds?: ReadonlySet<string>
 ): ConsistencyReport {
   const checks: ConsistencyCheck[] = [];
+  const rawFailedLineIds: string[] = [];
+  // BUG-624: push a check that may be grace-eligible. `rawOk` is the true,
+  // ungraced comparison result — always recorded into rawFailedLineIds when
+  // false, regardless of whether grace ends up applying, so the caller's
+  // NEXT call has an accurate history to compare against.
+  const pushGraceable = (id: string, rawOk: boolean, okDetail: string, failDetail: string) => {
+    if (rawOk) {
+      checks.push({ id, ok: true, detail: okDetail });
+      return;
+    }
+    rawFailedLineIds.push(id);
+    const graceable =
+      priorFailedLineIds !== undefined &&
+      GRACE_ELIGIBLE_LINE_IDS.has(id) &&
+      !priorFailedLineIds.has(id);
+    checks.push({
+      id,
+      ok: graceable,
+      detail: graceable
+        ? `${failDetail} [BUG-624 grace: 1st consecutive divergence, tolerated pending re-check next tick]`
+        : failDetail,
+    });
+  };
 
   // ===== SHAPE VALIDATION LAYER (existing) =====
 
@@ -435,19 +513,18 @@ export function runConsistencyChecks(
   )[0].value;
   const actualWages = actualFlows.outflows.find((f) => f.label === 'Wages')?.value ?? 0;
   const wagesOk = recomputedWages === actualWages;
-  checks.push({
-    id: 'flows.wages-matches',
-    ok: wagesOk,
-    detail: wagesOk
-      ? `Wages: computed ${recomputedWages} = actual ${actualWages}`
-      // F4 FIX (independent round, 2026-09-03): the old "(pop change without
-      // reflow?)" wording dated from when Wages was purely population-based
-      // (BUG-419). Wages is now buildings-AND-population derived (filled
-      // jobs), so the honest divergence causes are a building change
-      // (placed/demolished/came online or offline) OR a population change,
-      // read against a stale (un-recomputed) actual flow.
-      : `Wages diverged: computed ${recomputedWages} vs actual ${actualWages} (building or population change without reflow?)`,
-  });
+  pushGraceable(
+    'flows.wages-matches',
+    wagesOk,
+    `Wages: computed ${recomputedWages} = actual ${actualWages}`,
+    // F4 FIX (independent round, 2026-09-03): the old "(pop change without
+    // reflow?)" wording dated from when Wages was purely population-based
+    // (BUG-419). Wages is now buildings-AND-population derived (filled
+    // jobs), so the honest divergence causes are a building change
+    // (placed/demolished/came online or offline) OR a population change,
+    // read against a stale (un-recomputed) actual flow.
+    `Wages diverged: computed ${recomputedWages} vs actual ${actualWages} (building or population change without reflow?)`,
+  );
 
   // Recompute total upkeep: sum of ONLINE building upkeeps only.
   // LIMITATION: This check verifies total upkeep magnitude but NOT per-bucket mapping
@@ -521,13 +598,12 @@ export function runConsistencyChecks(
     }
   }
   const upkeepOk = recomputedUpkeep === actualUpkeep;
-  checks.push({
-    id: 'flows.upkeep-total-matches',
-    ok: upkeepOk,
-    detail: upkeepOk
-      ? `Upkeep total: computed ${recomputedUpkeep} = actual ${actualUpkeep} (per-bucket mapping NOT verified)`
-      : `Upkeep total diverged: computed ${recomputedUpkeep} vs actual ${actualUpkeep} (building removed? online status change?)`,
-  });
+  pushGraceable(
+    'flows.upkeep-total-matches',
+    upkeepOk,
+    `Upkeep total: computed ${recomputedUpkeep} = actual ${actualUpkeep} (per-bucket mapping NOT verified)`,
+    `Upkeep total diverged: computed ${recomputedUpkeep} vs actual ${actualUpkeep} (building removed? online status change?)`,
+  );
 
   // ===== 3. PALETTE CROSS-CHECK =====
   const specsUsedColors = new Set<string>();
@@ -561,5 +637,5 @@ export function runConsistencyChecks(
   });
 
   const failures = checks.filter((c) => !c.ok).length;
-  return { checks, failures };
+  return { checks, failures, rawFailedLineIds };
 }

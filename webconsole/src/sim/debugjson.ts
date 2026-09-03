@@ -182,6 +182,20 @@ export interface DebugJsonBuilding {
 export interface ConsistencyReportJson {
   checks: Array<{ id: string; ok: boolean; detail: string }>;
   failures: number;
+  /**
+   * BUG-624: ids of the grace-eligible per-line flows checks
+   * (consistency.ts's GRACE_ELIGIBLE_LINE_IDS) that failed on THIS build's
+   * RAW evaluation, before any grace was applied. A caller that wants the
+   * two-consecutive-failures tolerance on a LIVE, repeatedly-refreshed panel
+   * (see buildDebugJson's `priorFailedLineIds` parameter) holds this array
+   * from one refresh and feeds it back in as the next refresh's
+   * `priorFailedLineIds` — held by the CALLER (a component ref / module-level
+   * variable), never by SimState, so determinism is untouched and
+   * buildDebugJson stays a pure function of its arguments. A one-shot caller
+   * that never threads this (capture-before-wipe, every existing test) simply
+   * never sees grace applied — see buildDebugJson's doc comment.
+   */
+  rawFailedLineIds: string[];
 }
 
 export interface DebugJson {
@@ -576,8 +590,27 @@ function share(value: number, total: number): number | null {
   return total > 0 ? round3(value / total) : null;
 }
 
-/** Build the complete raw-number debug.json object from sim + UI state. */
-export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
+/**
+ * Build the complete raw-number debug.json object from sim + UI state.
+ *
+ * BUG-624 `priorFailedLineIds` (optional, default undefined): this function
+ * stays a PURE serializer — no hidden module state, no history of its own.
+ * `undefined` (every pre-existing call site: captureBeforeWipe's fail-closed
+ * GR#27 capture, every debugjson.test.mjs assertion) means "no history" and
+ * reproduces the ORIGINAL instant-fail consistency behaviour byte-for-byte —
+ * see consistency.ts's runConsistencyChecks doc for why the capture path in
+ * particular must NEVER thread grace: a pre-wipe snapshot exists to record
+ * the RAW truth of the city at that instant, not a tolerance-smoothed view.
+ * A caller that DOES want the two-consecutive-failures tolerance on a live,
+ * repeatedly-refreshed panel (DebugTab) holds the PREVIOUS refresh's
+ * `consistency.rawFailedLineIds` itself (a component ref, not SimState) and
+ * passes it back in here as `priorFailedLineIds` on the NEXT refresh.
+ */
+export function buildDebugJson(
+  s: SimState,
+  ui: DebugUiInput,
+  priorFailedLineIds?: ReadonlySet<string>
+): DebugJson {
   const income = s.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
   const expense = s.lastFlows.outflows.reduce((a, b) => a + b.value, 0);
   const net = income - expense;
@@ -592,7 +625,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
   const waterDemand = waterDemandOf(s);
   const pipeInfo = waterPipeInfo(s);
   const generatedAt = new Date(ui.frameAtMs).toISOString();
-  const consistency = runConsistencyChecks(s);
+  const consistency = runConsistencyChecks(s, undefined, priorFailedLineIds);
 
   // buildings â€” full per-building list + present-kind counts
   const byKind: Partial<Record<ZoneKind, number>> = {};

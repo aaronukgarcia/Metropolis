@@ -7,7 +7,7 @@
 // this component under the SAME name because bug512-bug513 test imports
 // DebugTab from '../src/components/right/RightDock.tsx'.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSim } from '../../../sim/simContext';
 import { useBusy } from '../../Busy';
 import { commitDebug, errorListModel, pendingCommits, recentErrors } from '../../../sim/backend';
@@ -34,6 +34,26 @@ export function DebugTab() {
   const [status, setStatus] = useState<string | null>(null);
   const [pending, setPending] = useState(pendingCommits());
 
+  // BUG-624: the PREVIOUS refresh's raw (ungraced) flows-check failures,
+  // held in a component ref — NOT SimState, so determinism is untouched and
+  // buildDebugJson stays a pure function of its explicit arguments. This is
+  // the two-consecutive-failures history for the two grace-eligible per-line
+  // checks (consistency.ts's GRACE_ELIGIBLE_LINE_IDS): a building whose
+  // construction completes exactly on a tick boundary makes the recompute
+  // see one more online building than the actual flow charged for — a
+  // transient, self-healing divergence, not a real defect (BUG-624).
+  //
+  // Starts as an EMPTY Set, not undefined — per consistency.ts's documented
+  // contract, a Set (even empty) OPTS IN to grace ("no prior failures known
+  // yet" is exactly the state of a freshly-mounted panel), whereas `undefined`
+  // means "never grace" (that's what every one-shot caller — captureBeforeWipe,
+  // every existing test — correctly wants). DebugTab is the continuously-
+  // refreshing caller this mechanism exists for, so it opts in from the very
+  // first frame: a genuinely pre-existing persistent defect just takes one
+  // extra 15 s refresh to surface as red, which is an acceptable cost on a
+  // dev-only panel for eliminating the far more common transient noise.
+  const priorFailedLineIdsRef = useRef<Set<string>>(new Set());
+
   // FEAT-1972079886: the frame is now the FULL-STATE debug.json — every UI
   // tab's status, raw numbers — built by the pure serializer in debugjson.ts.
   // Non-sim inputs (version, wall clock, map camera, captured errors) are
@@ -41,12 +61,18 @@ export function DebugTab() {
   // frame is a complete, self-consistent capture of that instant.
   const takeFrame = (s: typeof state) => {
     const at = Date.now();
-    const dj = buildDebugJson(s, {
-      appVersion: versionRaw,
-      frameAtMs: at,
-      map: currentMapUi(),
-      errors: recentErrors(),
-    });
+    const dj = buildDebugJson(
+      s,
+      {
+        appVersion: versionRaw,
+        frameAtMs: at,
+        map: currentMapUi(),
+        errors: recentErrors(),
+      },
+      priorFailedLineIdsRef.current,
+    );
+    // Carry THIS frame's raw failures forward as the next refresh's history.
+    priorFailedLineIdsRef.current = new Set(dj.consistency.rawFailedLineIds);
     return { at, dj, text: debugJsonText(dj) };
   };
   const [frame, setFrame] = useState(() => takeFrame(state));

@@ -60,6 +60,12 @@ export function compactDebugForArchive(dj: DebugJson): DebugJson {
   const consistency: ConsistencyReportJson = {
     failures,
     checks: failures === 0 ? [] : failed,
+    // BUG-624: the capture path never threads grace (buildDebugJson is called
+    // here with no priorFailedLineIds — see captureBeforeWipe below), so
+    // rawFailedLineIds is already the raw, ungraced truth; carried through
+    // unfiltered so the archived snapshot keeps the full RAW picture even
+    // when the compact `checks` array above is trimmed to empty on success.
+    rawFailedLineIds: dj.consistency?.rawFailedLineIds ?? [],
   };
   return {
     ...dj,
@@ -133,6 +139,11 @@ export function captureBeforeWipe(
   storage: CaptureStorage,
   nowMs: number = Date.now(),
 ): void {
+  // BUG-624: intentionally NOT threading priorFailedLineIds — a pre-wipe
+  // capture is the RAW-truth record GR#27 exists for, so it must show any
+  // consistency divergence exactly as it stood at that instant, ungraced,
+  // even a transient online-flip one. Grace is for a repeatedly-refreshed
+  // live panel only (DebugTab), never for a one-shot forensic snapshot.
   const dj = compactDebugForArchive(
     buildDebugJson(state, {
       appVersion,
