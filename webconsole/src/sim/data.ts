@@ -476,7 +476,29 @@ export function unlockedAtLevel(level: number): string[] {
   return names;
 }
 
+// BUG-642 (part 2) — isOnline() is invoked from roughly a dozen separate
+// O(buildings) passes per tick (computeFlows' waste family, powerStats,
+// serviceCoverageOf, buildingDisplayStates, demandFixPlan, ...), and every
+// call re-walked the building's footprint with string-keyed road lookups.
+// CPU profile on Aaron's 29,831-building city: isOnline + isRoadAdjacent +
+// isRoadConnected = 64% of ALL per-tick CPU. This memo evaluates the gates
+// ONCE per state object for every building in s.buildings and answers each
+// subsequent query with a Map lookup. Keyed on the building OBJECT (not its
+// id) so a caller passing a building that is not in s.buildings (a placement
+// candidate, a ghost) falls through to the direct computation below —
+// semantics are byte-identical to the unmemoised function for every input.
+const onlineByBuilding: (s: SimState) => Map<object, boolean> = memoOnState((s) => {
+  const out = new Map<object, boolean>();
+  for (const b of s.buildings) out.set(b, computeIsOnline(s, b));
+  return out;
+});
+
 export function isOnline(s: SimState, b: SimState['buildings'][number]): boolean {
+  const known = onlineByBuilding(s).get(b);
+  return known === undefined ? computeIsOnline(s, b) : known;
+}
+
+function computeIsOnline(s: SimState, b: SimState['buildings'][number]): boolean {
   if (b.builtTick == null) return true;
   const sp = SPECS[b.spec];
   // G1 (construction time) — unchanged.
@@ -713,7 +735,16 @@ export function plantEffServed(s: SimState, b: SimState['buildings'][number]): n
   return Math.round((sp?.served ?? 0) * PIPE_TIERS[pipeTierOf(s, b.id)].mult);
 }
 
-export function waterCaps(s: SimState): { clean: number; waste: number } {
+// BUG-642 — memoised per state object (memoOnState, hoisted function
+// declaration below). utilisationOf()'s 'water' case calls this once PER
+// WATER PLANT from buildingDisplayStates()' per-tick pass, and every call
+// re-walked the whole buildings array: O(water plants x buildings) per tick.
+// Measured on Aaron's 29,659-building city (488 water plants): 5,423ms of a
+// 5,820ms buildingDisplayStates pass — the ~5s main-thread freeze every tick
+// that made the game unplayable. Same read-set as before (buildings,
+// roadConnectivity/tick via isOnline, pipeTier via plantEffServed), so the
+// state-identity key is the correct, field-list-free cache key.
+export const waterCaps: (s: SimState) => { clean: number; waste: number } = memoOnState((s) => {
   // BUG-534 — same activation gate as serviceCoverageOf()'s inline water sum
   // and powerStats(): an offline plant serves nobody.
   let clean = 0;
@@ -727,7 +758,7 @@ export function waterCaps(s: SimState): { clean: number; waste: number } {
     if (sp.tag === 'waste') waste += eff;
   }
   return { clean, waste };
-}
+});
 
 export function waterBalanceOf(s: SimState): {
   clean: number;
