@@ -119,7 +119,6 @@ export function MapView() {
   const [selected, setSelected] = useState<Building | null>(null);
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
   const [view, setView] = useState<View>({ zoom: 2.2, cx: 165, cy: 76 });
-  const [frame, setFrame] = useState(0);
   const [showWater, setShowWater] = useState(false);
   const [showPower, setShowPower] = useState(false);
   // FEAT-1972079903: per-building reference-id overlay toggle. UI-only, default
@@ -170,10 +169,36 @@ export function MapView() {
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => {
-    const h = setInterval(() => setFrame((f) => f + 1), 50);
-    return () => clearInterval(h);
-  }, []);
+  // BUG-622 (P1, 2026-09-03): REMOVED the 20fps `setFrame` repaint-pump timer
+  // that used to sit here. Investigation confirmed it drove ZERO pixels — its
+  // only two uses anywhere in this file were `void frame;` (line below, a
+  // no-op) and its own entry in the draw effect's dependency array. Every
+  // actually-animated element already reads from a real, already-tracked
+  // dependency: the disconnected-road flash and the train positions are both
+  // pure functions of `state.tick` (GR#21 — see the trains comment a few
+  // hundred lines down: "the 50ms `frame` repaint only redraws the SAME
+  // positions [...] a repaint pump, never a position source"), camera moves
+  // go through `view`, hover/selection through their own state. So this timer
+  // forced the ENTIRE draw effect body — every building, every overlay full-
+  // array pass — to re-run 20 times per SECOND, forever, regardless of
+  // whether the sim ticked, the camera moved, or anything else changed.
+  //
+  // MEASURED IMPACT (BUG-622 profiling, 13k-building/1.4M-population fixture,
+  // tmp-profile/drawloop-bench.mjs): the per-building draw-loop JS alone
+  // (isOnline + blockOccupancy + utilisationOf for every building) measured
+  // ~13,900ms for ONE pass at this scale — data.ts's blockOccupancy()/
+  // utilisationOf() each call the UNMEMOIZED O(buildings) residentsCapacity()/
+  // totalJobs() aggregate scans fresh, per building, making the per-building
+  // draw loop O(buildings^2) (a SEPARATE finding reported to the wage lane,
+  // which owns data.ts, for a residentsCapacity()/totalJobs()/powerStats()
+  // memoisation fix mirroring this file's own overlaySubsetsOf() WeakMap
+  // cache). At 20fps that O(n^2) cost was being paid TWENTY TIMES A SECOND
+  // regardless of sim activity — removing the forced 20fps re-run does not
+  // fix the O(n^2) itself, but it stops multiplying it by 20x/sec while the
+  // player is doing nothing (which is nearly always — Aaron's report was
+  // "each game day takes ~2 minutes", i.e. the sim is mostly idle/waiting
+  // between ticks), collapsing the dominant real-world cost even before the
+  // data.ts fix lands. See test/attack-bug622-frame-pump.test.mjs.
 
   // FEAT-1972079897 inc2 RE-APPLY: on mount, restore the camera the player was
   // looking at before a rebuild reload. cameraStash persisted it to localStorage
@@ -240,7 +265,6 @@ export function MapView() {
   }, [size]);
 
   useEffect(() => {
-    void frame;
     const cv = canvasRef.current;
     if (!cv || geom.s <= 0) return;
     const dpr = window.devicePixelRatio || 1;
@@ -538,9 +562,16 @@ export function MapView() {
     // trainPositions(geometry, demand, state.tick) — a pure function of the sim
     // tick (see trains.ts). NO Date.now / random: the old wall-clock preview glyph
     // it replaces is gone. Trains are quantised to whole ticks so a replay draws
-    // byte-identical glyphs; the 50ms `frame` repaint only redraws the SAME
-    // positions (a repaint pump, never a position source). Gated behind the
-    // existing "Lines" overlay toggle, so it rides the same demand read-out.
+    // byte-identical glyphs. BUG-622: this file used to also carry a 20fps
+    // `frame` repaint-pump timer whose comment here claimed it kept these
+    // positions "pumped" on screen between ticks — investigation proved that
+    // was never true (positions are 100% a function of state.tick; the pump
+    // redrew the exact same frame) and the pump has been removed (see its
+    // former call site's BUG-622 comment above, near the `size` ResizeObserver
+    // effect) — trains now redraw exactly when state.tick (or any other real
+    // dependency) actually changes, never on a wall-clock heartbeat. Gated
+    // behind the existing "Lines" overlay toggle, so it rides the same demand
+    // read-out.
     if (showLines) {
       const railTiles: RailTile[] = [];
       const stationTiles: StationTile[] = [];
@@ -648,7 +679,7 @@ export function MapView() {
       }
       ctx.globalAlpha = 1;
     }
-  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, roadTracker, geom, size, frame]);
+  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, roadTracker, geom, size]);
 
   function tileFrom(clientX: number, clientY: number): { x: number; y: number } | null {
     const cv = canvasRef.current;

@@ -1773,20 +1773,25 @@ export const countByKindOnline: (s: SimState) => Record<ZoneKind, number> = memo
  * For each residential building, capacity = capacityAtTier(sp, building.capacityTier ?? 0).
  * Respects ongoing capacity upgrades triggered by auto-scale.
  */
-export function residentsCapacity(s: SimState): number {
+// BUG-622: memoised — MapView's draw pass calls blockOccupancy/utilisationOf
+// per building, each of which called this full-city scan fresh, turning the
+// draw loop O(n^2) (~14s per redraw at 13k buildings, measured). Pure
+// derivation of s, so memoOnState is exact.
+export const residentsCapacity: (s: SimState) => number = memoOnState((s) => {
   let cap = 0;
   for (const b of s.buildings) {
     const sp = SPECS[b.spec];
     if (sp?.kind === 'residential') cap += capacityAtTier(sp, b.capacityTier ?? 0);
   }
   return cap;
-}
+});
 
 /**
  * FEAT-1972079878 inc1 (AC-5): online residents capacity, including auto-scaled tiers.
  * Same as residentsCapacity, but excludes offline buildings (per isOnline gate).
  */
-export function onlineResidentsCapacity(s: SimState): number {
+// BUG-622: memoised — same per-building-caller O(n^2) class as residentsCapacity.
+export const onlineResidentsCapacity: (s: SimState) => number = memoOnState((s) => {
   let cap = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
@@ -1794,7 +1799,7 @@ export function onlineResidentsCapacity(s: SimState): number {
     if (sp?.kind === 'residential') cap += capacityAtTier(sp, b.capacityTier ?? 0);
   }
   return cap;
-}
+});
 
 /**
  * BUG-417 — housing capacity that is NOT yet live: residents that will come
@@ -2473,7 +2478,9 @@ export function isBrownoutActive(s: SimState): boolean {
 // jobs-capacity pass in engine.ts) while correctly paying zero upkeep.
 // Mirror the powerStats() gate exactly: `if (!isOnline(s, b)) continue;`
 // inside the building loop (data.ts ~1918). Order-independent fold (GR#21).
-export function totalJobs(s: SimState): number {
+// BUG-622: memoised — utilisationOf calls this per building from MapView's
+// draw pass (the measured O(n^2) / ~14s-per-redraw class at 13k buildings).
+export const totalJobs: (s: SimState) => number = memoOnState((s) => {
   let jobs = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
@@ -2484,7 +2491,7 @@ export function totalJobs(s: SimState): number {
     else if (sp.kind === 'industrial') jobs += 18;
   }
   return jobs;
-}
+});
 
 /**
  * FEAT-wage-stage1 (Q100067/Q100086, 2026-09-03) — the SAME building-jobs
