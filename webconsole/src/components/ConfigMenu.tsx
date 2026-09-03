@@ -7,6 +7,7 @@ import {
   TYPICAL_LOCALSTORAGE_QUOTA_BYTES,
 } from '../sim/storageConfig';
 import { PREWIPE_ARCHIVE_KEY } from '../sim/captureBeforeWipe';
+import { FAST_BUILD_FLAG_KEY, FAST_BUILD_MAX_TICKS, isFastBuildEnabled, resetFastBuildFlagCache } from '../sim/debugBuildSpeed';
 import { QUEUE_KEY } from '../sim/commitqueue';
 import { NAMED_SAVES_INDEX_KEY, NAMED_SAVE_SLOT_PREFIX } from '../sim/namedsaves';
 import { SAVEPOINT_KEY_PREFIX, SAVEPOINT_CAP } from '../sim/replay';
@@ -234,6 +235,32 @@ export function ConfigMenu() {
                   }}
                 />
               </label>
+              {/* BUG-613 (Aaron: "5 Gorges dam need only 100 ticks to build
+                  not 3000" in dev) — the fast-build override had NO UI toggle,
+                  so dev sessions never actually got it. DEV-only, same gating
+                  as the +£10m/+£1T buttons; flipping resets the BUG-602 flag
+                  cache so it applies within the current second, and setTick
+                  re-renders the label. Determinism: the flag only ever scales
+                  lead-times DOWN on this machine — flag-off play is untouched. */}
+              {import.meta.env?.DEV && (
+                <label className="brand-menu-row" title={`Dev only: scale construction lead-times down per class, capped at ${FAST_BUILD_MAX_TICKS} ticks (the £5B dam builds in ${FAST_BUILD_MAX_TICKS} ticks, not 3,333)`}>
+                  <input
+                    type="checkbox"
+                    checked={isFastBuildEnabled()}
+                    onChange={(e) => {
+                      try {
+                        if (e.target.checked) window.localStorage.setItem(FAST_BUILD_FLAG_KEY, '1');
+                        else window.localStorage.removeItem(FAST_BUILD_FLAG_KEY);
+                      } catch {
+                        /* storage unavailable — leave the flag as-is */
+                      }
+                      resetFastBuildFlagCache();
+                      setTick((n) => n + 1);
+                    }}
+                  />
+                  Fast build (dev): max {FAST_BUILD_MAX_TICKS} ticks per building
+                </label>
+              )}
               {reclaimMsg && <div className="mono muted">{reclaimMsg}</div>}
               <div className="brand-menu-form">
                 <button

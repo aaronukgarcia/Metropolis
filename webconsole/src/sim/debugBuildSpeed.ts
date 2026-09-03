@@ -67,6 +67,15 @@ export const FAST_BUILD_CLASS_FACTORS: Partial<Record<ZoneKind, number>> = {
  * placeholder catalogue families). PLACEHOLDER-balance. */
 export const DEFAULT_FAST_BUILD_FACTOR = 0.1;
 
+/** BUG-613 (Aaron, 2026-09-03: "5 Gorges dam need only 100 ticks to build not
+ * 3000" in dev) — hard ceiling on any scaled lead-time while the fast-build
+ * flag is ON. Mega-projects (the £5B dam = 3,333 base ticks) stayed slow even
+ * scaled (×0.05 = 167); a dev watching the city should never wait more than
+ * ~100 ticks for ANY build. Only consulted when the flag is enabled — the
+ * flag-OFF byte-for-byte determinism guarantee is untouched.
+ * PLACEHOLDER-balance. */
+export const FAST_BUILD_MAX_TICKS = 100;
+
 /** Reads the debug flag from the given storage-like object (defaults to
  * window.localStorage) — a plain function so it's testable without a real
  * browser localStorage, and never throws (private-mode / disabled storage
@@ -154,5 +163,6 @@ export function scaleConstructionTicks(
   const enabled = opts?.enabled ?? isFastBuildEnabled(opts?.storage);
   if (!enabled) return baseTicks;
   const factor = FAST_BUILD_CLASS_FACTORS[kind] ?? DEFAULT_FAST_BUILD_FACTOR;
-  return Math.max(1, Math.round(baseTicks * factor));
+  // BUG-613: ceiling applies AFTER the class factor, floor-at-1 last.
+  return Math.max(1, Math.min(FAST_BUILD_MAX_TICKS, Math.round(baseTicks * factor)));
 }

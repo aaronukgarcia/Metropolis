@@ -19,6 +19,7 @@ import {
   resetFastBuildFlagCache,
   FAST_BUILD_FLAG_KEY,
   FAST_BUILD_CLASS_FACTORS,
+  FAST_BUILD_MAX_TICKS,
   DEFAULT_FAST_BUILD_FACTOR,
 } from '../src/sim/debugBuildSpeed.ts';
 import { constructionTicks } from '../src/sim/data.ts';
@@ -85,6 +86,20 @@ describe('scaleConstructionTicks — ON scales per class', () => {
     assert.equal(scaleConstructionTicks(5, 'power', { enabled: true }), 1);
     // 1 × 0.05 → 0 → floored to 1
     assert.equal(scaleConstructionTicks(1, 'health', { enabled: true }), 1);
+  });
+
+  test('BUG-613 ceiling: no building exceeds FAST_BUILD_MAX_TICKS while enabled (the £5B dam case)', () => {
+    // Five Gorges Dam: cost 5B → base 3,333; ×0.05 = 167 — still too slow for
+    // a dev session (Aaron: "need only 100 ticks to build not 3000"). The cap
+    // bites AFTER the class factor.
+    assert.equal(FAST_BUILD_MAX_TICKS, 100);
+    assert.equal(scaleConstructionTicks(3333, 'power', { enabled: true }), 100);
+    // An even bigger hypothetical mega-project is still capped.
+    assert.equal(scaleConstructionTicks(100000, 'residential', { enabled: true }), 100);
+    // Below the cap the class factor alone governs (no distortion).
+    assert.equal(scaleConstructionTicks(400, 'power', { enabled: true }), 20);
+    // PROVE-CAN-FAIL: OFF stays byte-for-byte even above the cap.
+    assert.equal(scaleConstructionTicks(3333, 'power', { enabled: false }), 3333);
   });
 });
 
