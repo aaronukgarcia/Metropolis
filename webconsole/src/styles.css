@@ -1092,3 +1092,4 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .qd-hwm { font-size: 10px; }
 .qd-total { display: flex; align-items: center; gap: 6px; margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border); }
 .qd-total b { color: var(--ink); }
+.qd-worker-line { font-size: 10px; margin: 4px 0 0; padding-top: 4px; border-top: 1px solid var(--border); color: var(--muted); }
