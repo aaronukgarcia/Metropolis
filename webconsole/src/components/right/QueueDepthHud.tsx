@@ -73,14 +73,21 @@ export function QueueDepthHud() {
 
   useEffect(() => queueDepthTracker.subscribe(setSnapshot), []);
 
-  const workerOn = webWorkerOffloadEnabled();
+  // BUG-615: workerOn is read fresh inside EVERY poll tick (readOnce), not
+  // captured once at effect-creation — a mid-session flag flip is picked up
+  // on the very next 1Hz tick even if nothing else re-renders the component.
+  // webWorkerOffloadEnabled() is a plain localStorage read; at 1/sec this is
+  // the same cadence already budgeted for the worker/tick trackers below, so
+  // it adds no new per-render or higher-frequency reads (BUG-602 lesson: the
+  // thing to avoid is reading localStorage on every RENDER, not once a
+  // second on a timer).
+  const [workerOn, setWorkerOn] = useState(() => webWorkerOffloadEnabled());
 
-  // Poll the worker/tick trackers on the same cadence PerfHud.tsx already
-  // uses. Re-runs whenever workerOn changes so a mid-session flag flip (e.g.
-  // a dogfood toggling localStorage) re-targets which tracker is read.
   useEffect(() => {
     const readOnce = () => {
-      if (workerOn) {
+      const on = webWorkerOffloadEnabled();
+      setWorkerOn(on);
+      if (on) {
         const tracker = getGlobalWorkerQueueTracker();
         setWorkerDepth(tracker.depth());
         setWorkerStreak(tracker.supersedeStreak());
@@ -92,7 +99,7 @@ export function QueueDepthHud() {
     readOnce();
     const id = setInterval(readOnce, WORKER_POLL_MS);
     return () => clearInterval(id);
-  }, [workerOn]);
+  }, []);
 
   // GR#1: an unexpected/empty tracker state (nothing has ever been tracked)
   // renders a defined placeholder row, never a blank/crashed panel.

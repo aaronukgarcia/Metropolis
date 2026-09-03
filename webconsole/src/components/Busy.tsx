@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { codedError } from '../sim/backend';
+import { codedError, normalizeThrowable, recordError } from '../sim/backend';
 
 interface BusyContextValue {
   busy: boolean;
@@ -52,6 +52,25 @@ export function BusyProvider({ children }: { children: ReactNode }) {
       void (async () => {
         try {
           await fn();
+        } catch (e) {
+          // BUG-619: fn() throwing sync or rejecting async used to escape
+          // this IIFE uncaught — a genuine unhandled promise rejection.
+          // Caught and reported through the same registry-coded pattern
+          // backend.ts's window/unhandledrejection handlers already use
+          // (BAR-F1: a NAMED code on the thrown value, e.g. from
+          // codedError(), wins; otherwise no code is forced — there is no
+          // registered MET- code yet for "a Busy-wrapped background action
+          // failed" specifically, and GR#7 forbids inventing one here).
+          // The finally block below still runs unconditionally, so the
+          // BUG-604/614 chip-timer-cancel + refcount/linger semantics are
+          // byte-identical whether fn() succeeded, threw, or rejected.
+          const normalized = normalizeThrowable(e);
+          recordError(normalized.message, {
+            type: 'app',
+            stack: normalized.stack,
+            action: 'busy-run',
+            code: (normalized as any)?.code,
+          });
         } finally {
           settled = true;
           clearTimeout(chipTimer);
