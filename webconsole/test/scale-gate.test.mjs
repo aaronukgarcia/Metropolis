@@ -1,0 +1,214 @@
+// scale-gate.test.mjs — FEAT-2326609759 (BUG-617 RCA): the webconsole SCALE
+// GATE. Aaron's live dogfood city (1.4M population, ~13k buildings) wedged
+// the main thread for minutes on load, even paused. The Go engine has had a
+// real 1M-citizen CI merge gate since BUG-034 (internal/harness/synth +
+// cmd/perfci, the perf-1m-probe job) — this is the webconsole side of that
+// bar. It never existed before: every prior webconsole "scale" test
+// (wellbeing-scale.test.mjs, density-scale-inc1.test.mjs) tops out at a few
+// hundred buildings, nowhere near the scale that actually wedged.
+//
+// PHASING (Aaron, 2026-09-03): BUG-617's fix — a chunked/yielding restore —
+// is being built in a separate lane RIGHT NOW. This file is split into two
+// halves so the part that CAN be held to a bound today is, without blocking
+// on work in flight elsewhere:
+//
+//   HALF A (live, enforced today) — the fixture builds in bounded time, is
+//   internally consistent, and steady-state TICK cost + the three render-path
+//   derivations (wellbeingOf / serviceCoverageOf / demandFixPlan — exactly
+//   what TopBar/RightDock recompute every render) stay under a generously-
+//   derived bound.
+//
+//   HALF B (test.skip, BUG-617-gated) — the LOAD-PATH bound (parse +
+//   consistency + replay + first derivation, chunked) is written now so it is
+//   ready to arm the day the chunked loader lands, but is skipped because
+//   that loader does not exist yet — there is nothing to bound.
+//
+// BOUND DERIVATION (house rule: bound the per-tick/per-chunk cost, never a
+// wall-clock total; prefer the robust MEDIAN over max — a single GC pause or
+// the once-per-30-ticks monthly boundary pass is real but not the steady-state
+// signal this gate exists to catch):
+//
+//   Measured locally (Windows, Node 25.3.0, 5 independent runs of 30 ticks
+//   each straight after buildScaleFixture() at the DEFAULT 13,000-building /
+//   ~1.42M-population fixture): per-tick medians of 16.4ms, 16.9ms, 22.1ms,
+//   27.3ms and 17.0ms — i.e. a ~16-27ms steady-state median, consistent with
+//   this item's own "BUG-602 landed 2.7ms at ~1.9k buildings, expect 20-60ms
+//   at 13k" estimate (buildings dominate nearly every per-tick pass: flows,
+//   coverage, wellbeing, road connectivity, monitors — cost scales close to
+//   linearly with buildings.length). TICK_MEDIAN_BOUND_MS is set to 3x the
+//   HIGHEST observed median (27.3ms x 3 ≈ 82ms), then rounded up to 100ms as
+//   a further margin for CI hardware (ubuntu-latest GitHub runner, unknown
+//   relative speed to this dev machine) and Node 22 (CI's pinned version, one
+//   major behind the 25.3.0 measured here) — never tightened without a fresh
+//   measurement on the actual CI runner.
+//
+//   The three render-path derivations combined measured 7.5-9.9ms/pass across
+//   the same runs (wellbeingOf dominates: ~6.5-7.7ms of it — a real O(buildings)
+//   cost, serviceCoverageOf and demandFixPlan are sub-2ms each). Bound set to
+//   3x the highest observed combined figure (~9.9ms x 3 ≈ 30ms), rounded up to
+//   40ms for the same CI-hardware margin.
+//
+// Both bounds are LOCAL to this file (not shared with the Go engine's
+// perf-1m-probe baseline-and-regression machinery) — this is a fixed
+// generously-derived ceiling, not a tracked regression baseline. A real
+// regression-tracking webconsole scale gate (mirroring perf-1m-probe's
+// baseline/compare/accept-regression machinery) is future work, not
+// attempted here (see the report's CI-wiring note for why a fixed bound was
+// chosen for the first landing).
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { buildScaleFixture, DEFAULT_BUILDING_COUNT, DEFAULT_TARGET_POPULATION } from './scale/fixture.mjs';
+import { reducer } from '../src/sim/engine.ts';
+import { wellbeingOf } from '../src/sim/engine.ts';
+import { serviceCoverageOf, demandFixPlan } from '../src/sim/data.ts';
+import { runConsistencyChecks } from '../src/sim/consistency.ts';
+
+/** The fixture itself must build in well under a CI job's own timeout — see
+ * house rule "bound the per-tick/chunk cost, never a wall-clock total": this
+ * IS a wall-clock total, but for a ONE-TIME setup cost outside the
+ * steady-state loop being measured, not the thing this gate exists to catch
+ * a regression in. Measured locally: 107-163ms. Bounded at 60s (the budget
+ * this item's own brief set for "can this run in CI at all"), ~400x the
+ * measured figure — deliberately loose; a real regression here would show up
+ * first as a CI job timeout long before this assertion mattered. */
+const FIXTURE_BUILD_BOUND_MS = 60_000;
+
+/** See file header BOUND DERIVATION. */
+const TICK_MEDIAN_BOUND_MS = 100;
+
+/** See file header BOUND DERIVATION. */
+const RENDER_PATH_BOUND_MS = 40;
+
+const TICK_SAMPLE_COUNT = 30;
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+// Built once per test file run (not per-test) — building the fixture is
+// itself timed by the first test below, and every subsequent test reuses
+// its result so the whole file's real cost is one fixture build + a bounded
+// number of reducer ticks, not N independent 13k-building constructions.
+let fixture;
+let fixtureBuildMs;
+
+test('SCALE GATE half A: the 13k-building/1.4M-population fixture builds within budget and passes every consistency check', () => {
+  const t0 = performance.now();
+  fixture = buildScaleFixture();
+  fixtureBuildMs = performance.now() - t0;
+
+  assert.equal(
+    fixture.buildings.length,
+    DEFAULT_BUILDING_COUNT,
+    'fixture must build exactly the documented building count'
+  );
+  assert.ok(
+    fixture.population >= DEFAULT_TARGET_POPULATION * 0.9,
+    `fixture population (${fixture.population}) should be within 10% of the documented ` +
+      `target (${DEFAULT_TARGET_POPULATION}) — Aaron's live-city order of magnitude`
+  );
+  assert.ok(
+    fixtureBuildMs < FIXTURE_BUILD_BOUND_MS,
+    `fixture build took ${fixtureBuildMs.toFixed(1)}ms, must be under ${FIXTURE_BUILD_BOUND_MS}ms ` +
+      `(a fixture this slow to build cannot run in CI at all)`
+  );
+
+  const report = runConsistencyChecks(fixture);
+  const failures = report.checks.filter((c) => !c.ok);
+  assert.equal(
+    failures.length,
+    0,
+    `scale fixture must pass every consistency check; failures: ${JSON.stringify(failures.slice(0, 5))}`
+  );
+});
+
+test('SCALE GATE half A: median per-tick time at 13k buildings / 1.4M population stays under bound', () => {
+  assert.ok(fixture, 'fixture-build test must run first (node:test preserves file order)');
+  let s = fixture;
+  const times = [];
+  for (let i = 0; i < TICK_SAMPLE_COUNT; i++) {
+    const t0 = performance.now();
+    s = reducer(s, { type: 'tick' });
+    times.push(performance.now() - t0);
+  }
+  fixture = s; // carry the settled state forward to the render-path test below
+
+  const med = median(times);
+  assert.ok(
+    med < TICK_MEDIAN_BOUND_MS,
+    `median tick time at scale was ${med.toFixed(2)}ms across ${TICK_SAMPLE_COUNT} ticks ` +
+      `(all: ${times.map((t) => t.toFixed(1)).join(', ')}), must be under ${TICK_MEDIAN_BOUND_MS}ms`
+  );
+
+  // Sanity check that ticking at scale didn't silently break the city.
+  const report = runConsistencyChecks(s);
+  assert.equal(
+    report.checks.filter((c) => !c.ok).length,
+    0,
+    'the fixture must remain internally consistent after 30 ticks at scale'
+  );
+});
+
+test('SCALE GATE half A: render-path derivations (wellbeingOf + serviceCoverageOf + demandFixPlan) stay under bound at scale', () => {
+  assert.ok(fixture, 'earlier tests must run first (node:test preserves file order)');
+  const s = fixture;
+
+  const t0 = performance.now();
+  const wb = wellbeingOf(s);
+  const t1 = performance.now();
+  const coverage = serviceCoverageOf(s);
+  const t2 = performance.now();
+  const plan = demandFixPlan(s);
+  const t3 = performance.now();
+
+  // Prove the calls did real work (not short-circuited on an empty/degenerate
+  // state) so a future refactor that accidentally no-ops one of them at scale
+  // shows up as a correctness failure here, not just silently "fast".
+  assert.ok(Number.isFinite(wb.overall), 'wellbeingOf must return a finite overall score');
+  assert.ok(coverage.length > 0, 'serviceCoverageOf must return coverage rows for a city this size');
+  assert.ok(Array.isArray(plan), 'demandFixPlan must return an array');
+
+  const totalMs = t3 - t0;
+  assert.ok(
+    totalMs < RENDER_PATH_BOUND_MS,
+    `wellbeingOf+serviceCoverageOf+demandFixPlan took ${totalMs.toFixed(2)}ms combined ` +
+      `(wellbeingOf ${(t1 - t0).toFixed(2)}ms, serviceCoverageOf ${(t2 - t1).toFixed(2)}ms, ` +
+      `demandFixPlan ${(t3 - t2).toFixed(2)}ms), must be under ${RENDER_PATH_BOUND_MS}ms`
+  );
+});
+
+// ============================================================================
+// HALF B — LOAD-PATH BOUND. Skipped: BUG-617's chunked/yielding restore has
+// not landed yet (it is being built in a separate lane concurrently with
+// this gate). There is no chunked load API to call yet, so there is nothing
+// real to bound — a test that measured today's SYNCHRONOUS restore would
+// either (a) pass trivially against no chunk boundary at all, proving
+// nothing, or (b) time out on this exact wedge, which is BUG-617 itself, not
+// a new finding.
+//
+// ARM THIS when BUG-617 lands: replace the TODO body with a real call to the
+// chunked loader (a generator/async-iterable, following the same shape as
+// the existing `replayFromGenesisDefensiveChunked` in genesisReplay.ts —
+// grep that name for the established chunked-generator pattern this repo
+// already uses for the SEPARATE genesis-replay chunking path), assert each
+// individual chunk/yield step completes within a bounded time (NOT a wall-
+// clock total for the whole restore — house rule), and remove the `skip`.
+// ============================================================================
+test(
+  'SCALE GATE half B: load-path (parse + consistency + replay + first derivation) stays chunk-bounded at scale',
+  { skip: 'BUG-617: chunked/yielding restore has not landed yet — nothing to bound. Arm when it lands.' },
+  async () => {
+    // TODO(BUG-617): once the chunked/yielding restore lands, this should:
+    //   1. Serialize buildScaleFixture() to the real save/journal format.
+    //   2. Drive the chunked loader chunk-by-chunk (mirroring
+    //      replayFromGenesisDefensiveChunked's generator/yield shape).
+    //   3. Assert EACH chunk's wall time is under a bounded per-chunk budget
+    //      (e.g. ~16ms, one frame) — never the total restore time.
+    //   4. Assert the restored state passes runConsistencyChecks and its
+    //      first wellbeingOf()/serviceCoverageOf() derivation is itself
+    //      bounded (the "first render" half of BUG-617's report).
+    assert.fail('not yet implemented — arm this test when BUG-617 lands');
+  }
+);
