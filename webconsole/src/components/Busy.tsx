@@ -65,12 +65,28 @@ export function BusyProvider({ children }: { children: ReactNode }) {
           // BUG-604/614 chip-timer-cancel + refcount/linger semantics are
           // byte-identical whether fn() succeeded, threw, or rejected.
           const normalized = normalizeThrowable(e);
-          recordError(normalized.message, {
-            type: 'app',
-            stack: normalized.stack,
-            action: 'busy-run',
-            code: (normalized as any)?.code,
-          });
+          // BUG-621 (defense-in-depth): normalizeThrowable() is explicitly
+          // hardened to never throw back (BAR-F2), but recordError() carries
+          // no equivalent contract — its own array bookkeeping
+          // (errorLog.find/unshift/pop) is unguarded, so a sufficiently
+          // hostile runtime (e.g. a polluted Array.prototype) could make THIS
+          // call throw. Because this whole block runs inside an async IIFE's
+          // try, a same-tick synchronous throw here would re-escape past the
+          // finally below as an unhandled promise rejection — precisely the
+          // class of defect BUG-619 exists to close, one level deeper. Swallow
+          // it, matching normalizeThrowable's own "never throw back to the
+          // caller" discipline: losing one error-log entry is acceptable,
+          // leaking an unhandled rejection out of Busy.run is not.
+          try {
+            recordError(normalized.message, {
+              type: 'app',
+              stack: normalized.stack,
+              action: 'busy-run',
+              code: (normalized as any)?.code,
+            });
+          } catch (recordErrorFailure) {
+            console.error('Busy.run: recordError itself threw (BUG-621 guard swallowed it)', recordErrorFailure);
+          }
         } finally {
           settled = true;
           clearTimeout(chipTimer);

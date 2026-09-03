@@ -823,16 +823,91 @@ export function computeMilestoneRewards(s: SimState, claimedMilestones: string[]
 }
 
 /**
+ * BUG-600 (GR#16 type-safe storage boundaries / GR#3 single source of truth —
+ * one shared helper for BOTH reward pending-queues, not two near-copies):
+ * a hand-edited or legacy savepoint can hand back ANYTHING for
+ * s.pendingRewards / s.pendingMilestoneRewards — not an array at all, an
+ * array of junk objects, or a well-shaped element whose totalReward is
+ * NaN/negative/non-integer. Left untreated, a non-array throws a TypeError
+ * the moment advance()'s `for...of` drain loops touch it, and a NaN
+ * totalReward flows straight into `funds`, silently breaking the tick-
+ * boundary conservation invariant with no error surfaced (GR#1/#17 — this is
+ * exactly the "silent failure" class those rules exist to close).
+ *
+ * The independent round's five corruptions — non-array, junk elements, a NaN
+ * totalReward, a 1000-element flood, and dupes of already-paid ids — produced
+ * IDENTICAL outcomes against both queues, so this one function closes both:
+ * non-array collapses to `[]`, each element is validated in full via the
+ * caller-supplied `isValid` predicate (which also re-checks totalReward, so a
+ * partially-valid element can never slip through on a shared check alone),
+ * junk elements are dropped rather than crashing the drain, and the queue is
+ * capped so a flood can never grow the ledger/history/state unboundedly.
+ */
+const MAX_PENDING_REWARD_QUEUE = 200; // a real queue drains every tick and never legitimately holds more than a handful of entries
+
+function sanitizePendingRewards<T extends { totalReward: number }>(
+  v: unknown,
+  isValid: (item: unknown) => item is T,
+): T[] {
+  if (!Array.isArray(v)) return [];
+  const out: T[] = [];
+  for (const item of v) {
+    if (out.length >= MAX_PENDING_REWARD_QUEUE) break;
+    if (isValid(item)) out.push(item);
+  }
+  return out;
+}
+
+/** Shared numeric gate for BOTH queues' totalReward field (BUG-600). */
+function isValidRewardAmount(n: unknown): n is number {
+  return typeof n === 'number' && Number.isFinite(n) && Number.isSafeInteger(n) && n >= 0;
+}
+
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** BUG-600: validates one s.pendingRewards element (LevelRewardResult shape). */
+function isValidLevelReward(item: unknown): item is LevelRewardResult {
+  if (!isPlainRecord(item)) return false;
+  if (!isValidRewardAmount(item.totalReward)) return false;
+  if (typeof item.newLevel !== 'number' || !Number.isFinite(item.newLevel)) return false;
+  const notice = item.notice;
+  if (!isPlainRecord(notice)) return false;
+  return (
+    typeof notice.level === 'number' && Number.isFinite(notice.level) &&
+    typeof notice.cash === 'number' && Number.isFinite(notice.cash) &&
+    Array.isArray(notice.unlocked) && notice.unlocked.every((u) => typeof u === 'string')
+  );
+}
+
+/** BUG-600: validates one s.pendingMilestoneRewards element (MilestoneRewardResult shape). */
+function isValidMilestoneReward(item: unknown): item is MilestoneRewardResult {
+  if (!isPlainRecord(item)) return false;
+  if (!isValidRewardAmount(item.totalReward)) return false;
+  if (typeof item.milestoneId !== 'string' || item.milestoneId.length === 0) return false;
+  const notice = item.notice;
+  if (!isPlainRecord(notice)) return false;
+  return (
+    typeof notice.id === 'string' &&
+    typeof notice.label === 'string' &&
+    typeof notice.cash === 'number' && Number.isFinite(notice.cash)
+  );
+}
+
+/**
  * Drain and apply pending rewards, updating funds and lastRewardedLevel atomically.
  * Does NOT recompute; takes results verbatim from computeLevelRewards().
  * Called by advance() to apply queued rewards through flows.
  */
 export function grantLevelRewards(s: SimState): SimState {
-  if (s.pendingRewards.length === 0) return s;
+  // BUG-600: sanitize before touching .length/for...of — see sanitizePendingRewards doc above.
+  const pendingRewards = sanitizePendingRewards(s.pendingRewards, isValidLevelReward);
+  if (pendingRewards.length === 0) return s;
   let funds = s.funds;
   let lastRewardedLevel = s.lastRewardedLevel;
   let notice: LevelUpNotice | null = s.notice;
-  for (const lr of s.pendingRewards) {
+  for (const lr of pendingRewards) {
     funds += lr.totalReward;
     lastRewardedLevel = lr.newLevel;
     notice = lr.notice;
@@ -1215,8 +1290,16 @@ function advance(s: SimState): SimState {
 
   // Drain pending rewards queue (from debugXp and place actions).
   // Each applies through flows so it's visible in fiscal panel and counts for conservation.
+  //
+  // BUG-600 (defense-in-depth, GR#16): reducer() already runs sanitizeTreasury()
+  // — which sanitizes both reward queues, see there — before ANY action
+  // (including 'tick') reaches advance(). This re-sanitizes anyway so a NaN/
+  // non-array reaching the funds arithmetic below is structurally impossible
+  // here, not merely "prevented upstream today" (advance() has no way to
+  // enforce that every future caller routes through reducer() first).
+  const safePendingRewards = sanitizePendingRewards(s.pendingRewards, isValidLevelReward);
   let nextNotice = s.notice;
-  for (const pr of s.pendingRewards) {
+  for (const pr of safePendingRewards) {
     inflows = [...inflows, { label: 'Level Rewards', value: pr.totalReward }];
     nextNotice = pr.notice; // Last notice wins (multiple crossings rare but possible)
   }
@@ -1231,7 +1314,8 @@ function advance(s: SimState): SimState {
   // (fundsAtTickEnd === fundsAtTickStart + Σinflows − Σoutflows) on the tick
   // the cash actually lands (mirrors the Level Rewards one-tick-lag design).
   let nextMilestoneNotice: MilestoneNotice | null = s.milestoneNotice ?? null;
-  const pendingMilestoneRewards = s.pendingMilestoneRewards ?? [];
+  // BUG-600: same defense-in-depth re-sanitization as safePendingRewards above.
+  const pendingMilestoneRewards = sanitizePendingRewards(s.pendingMilestoneRewards, isValidMilestoneReward);
   for (const pr of pendingMilestoneRewards) {
     inflows = [...inflows, { label: `Milestone Reward: ${pr.notice.label}`, value: pr.totalReward }];
     nextMilestoneNotice = pr.notice; // Last notice wins (multiple crossings rare but possible)
@@ -1428,8 +1512,11 @@ function advance(s: SimState): SimState {
   }
 
   // Update lastRewardedLevel for all rewards (both pending and in-tick).
+  // BUG-600: reuse the already-sanitized safePendingRewards computed above —
+  // a raw s.pendingRewards read here would let a junk element's `undefined`
+  // newLevel silently corrupt lastRewardedLevel.
   let lastRewardedLevel = s.lastRewardedLevel;
-  for (const pr of s.pendingRewards) {
+  for (const pr of safePendingRewards) {
     lastRewardedLevel = pr.newLevel;
   }
   for (const lr of inTickRewards) {
@@ -4291,6 +4378,33 @@ export function sanitizeTreasury(s: SimState): SimState {
     claimedMilestones.length !== (s.claimedMilestones ?? []).length ||
     claimedMilestones.some((id, i) => id !== (s.claimedMilestones ?? [])[i]);
 
+  // BUG-600 (GR#16 boundary discipline / GR#3 one shared helper for both
+  // queues — see sanitizePendingRewards' doc comment above): this is the
+  // LOAD boundary — every reducer() call runs sanitizeTreasury() first
+  // (including 'hydrate', a savepoint load), so a hand-edited or legacy
+  // savepoint's non-array / junk-element / NaN-totalReward pending-reward
+  // queue is normalised here BEFORE any action (not just a tick) can read it.
+  // Mirrors claimedMilestonesChanged's changed-flag style immediately above
+  // (array fields can't use `===` identity the way funds/notice do — a freshly
+  // sanitized `[]` is never reference-equal to another `[]`).
+  // NOTE: `!Array.isArray(...)` is checked FIRST and unconditionally forces
+  // `changed` — a non-array input (string/object/null/undefined) that
+  // happens to sanitize down to a same-length `[]` (e.g. length 0) must
+  // still be treated as changed, or the identity-preserving early return
+  // below would hand back `s` with its ORIGINAL corrupt (non-array) value
+  // still sitting in the field, defeating the whole sanitizer.
+  const pendingRewards = sanitizePendingRewards(s.pendingRewards, isValidLevelReward);
+  const pendingRewardsChanged =
+    !Array.isArray(s.pendingRewards) ||
+    pendingRewards.length !== s.pendingRewards.length ||
+    pendingRewards.some((x, i) => x !== (s.pendingRewards as unknown[])[i]);
+
+  const pendingMilestoneRewards = sanitizePendingRewards(s.pendingMilestoneRewards, isValidMilestoneReward);
+  const pendingMilestoneRewardsChanged =
+    !Array.isArray(s.pendingMilestoneRewards) ||
+    pendingMilestoneRewards.length !== s.pendingMilestoneRewards.length ||
+    pendingMilestoneRewards.some((x, i) => x !== (s.pendingMilestoneRewards as unknown[])[i]);
+
   // FEAT-dynamic-bailout (spec §4 migration table) — runs EXACTLY ONCE per
   // save, guarded by `capexBackfilled` (a brand-new game already starts with
   // it `true` — see rawState() — so this branch only ever fires for a save
@@ -4373,6 +4487,8 @@ export function sanitizeTreasury(s: SimState): SimState {
     notice === s.notice &&
     milestoneNotice === (s.milestoneNotice ?? null) &&
     !claimedMilestonesChanged &&
+    !pendingRewardsChanged &&
+    !pendingMilestoneRewardsChanged &&
     capexBackfilled === capexBackfilledPrev &&
     cumulativeCapexSpent === s.cumulativeCapexSpent &&
     dynamicBailoutUsed === dynamicBailoutUsedPrev
@@ -4386,6 +4502,8 @@ export function sanitizeTreasury(s: SimState): SimState {
     notice,
     milestoneNotice,
     claimedMilestones,
+    pendingRewards,
+    pendingMilestoneRewards,
     cumulativeCapexSpent,
     capexBackfilled,
     dynamicBailoutUsed,
