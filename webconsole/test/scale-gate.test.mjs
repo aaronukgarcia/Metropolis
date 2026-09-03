@@ -59,9 +59,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildScaleFixture, DEFAULT_BUILDING_COUNT, DEFAULT_TARGET_POPULATION } from './scale/fixture.mjs';
-import { reducer } from '../src/sim/engine.ts';
+import { reducer, computeFlows } from '../src/sim/engine.ts';
 import { wellbeingOf } from '../src/sim/engine.ts';
-import { serviceCoverageOf, demandFixPlan } from '../src/sim/data.ts';
+import {
+  serviceCoverageOf,
+  demandFixPlan,
+  buildingDisplayStates,
+  crimeRateOf,
+  waterCaps,
+  powerStats,
+  wasteStatsOf,
+  isOnline,
+} from '../src/sim/data.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
 import { emptyJournal, recordAction } from '../src/sim/journal.ts';
 import {
@@ -95,6 +104,73 @@ const TICK_MEDIAN_BOUND_MS = 400;
 const RENDER_PATH_BOUND_MS = 250;
 
 const TICK_SAMPLE_COUNT = 30;
+
+// ============================================================================
+// PER-SELECTOR BUDGET TABLE (BUG-644) — TICK_MEDIAN_BOUND_MS/RENDER_PATH_BOUND_MS
+// above bound the WHOLE tick / WHOLE render path. That is exactly why BUG-642
+// (waterCaps() called once per water-plant from buildingDisplayStates(),
+// unmemoised — 488 plants x 29,831 buildings = 5.4s on Aaron's real city) never
+// reddened this gate: a single selector inside a larger pass can regress by
+// 100x-3750x (this item's independent round RED-proved a 3750x regression on
+// demand) and still hide under a whole-path bound sized for the SUM of many
+// cheap selectors. Every row below times ONE selector in isolation and fails
+// LOUD, naming the selector that regressed, not just "the tick got slower".
+//
+// COLD-CALL METHODOLOGY: several of these selectors (waterCaps, powerStats,
+// crimeRateOf, serviceCoverageOf) are memoOnState-wrapped AND called
+// internally by the bigger selectors (wellbeingOf/computeFlows/
+// buildingDisplayStates all pull crimeRateOf/serviceCoverageOf/waterCaps/
+// powerStats results for their own totals). Calling every selector on the
+// SAME small set of states — the obvious first approach — silently measures
+// most of them as a memo-cache HIT (near 0ms) because an earlier selector in
+// the same test already warmed that exact state object's cache entry, which
+// is precisely the "false 14ms from a warm module" trap this item's own RCA
+// memory warns about. So each selector below gets its OWN disjoint set of
+// freshly-ticked state objects that no other selector in this file ever
+// touches — every measurement is a guaranteed cold (first-ever) call for
+// that state, the same shape BUG-642's real trigger had (a never-before-
+// queried restored/loaded state).
+//
+// BOUND DERIVATION (house rule: MEDIAN of >=5 runs, never max — see file
+// header). Measured locally (Windows, Node 25.3.0, SAMPLES=6 cold calls per
+// selector, straight after the BUG-644 composition fix, at the DEFAULT
+// 13,000-building / ~1.4M-population fixture with its now-representative
+// mix — 213 water-kind buildings, 2,037 motorway, 484 rail, etc., see
+// scale/fixture.mjs's COMPOSITION PROVENANCE note):
+//   buildingDisplayStates  7.7-12.4ms  median  9.5ms
+//   computeFlows           13.4-26.9ms median 14.4ms  (one 26.9ms outlier;
+//                                                        median stays robust)
+//   wellbeingOf            9.3-10.6ms  median  9.7ms
+//   crimeRateOf            9.2-9.6ms   median  9.4ms
+//   serviceCoverageOf      3.9-4.3ms   median  4.1ms
+//   waterCaps              1.2-2.8ms   median  1.3ms
+//   powerStats             2.6-2.9ms   median  2.8ms
+//   demandFixPlan          5.6-6.2ms   median  5.9ms
+//   wasteStatsOf           1.8-1.9ms   median  1.9ms
+// This file's OWN prior CI run (33736133023, 2026-09-03, cited above) already
+// proved CI hardware runs these selectors at ~7.3x the local wall-clock
+// (54.66ms CI vs ~7.5ms local for a differently-warmed wellbeingOf call), and
+// the house rule wants the SAME "smoke gate for an order-of-magnitude cliff,
+// not a micro-benchmark" margin TICK_MEDIAN_BOUND_MS/RENDER_PATH_BOUND_MS
+// already use (a ~15-25x local multiplier once real CI numbers were folded
+// in). Absent a fresh per-selector CI run to fold in here, every bound below
+// is LOCAL MEDIAN x30 (7.3x measured hardware gap x ~4x smoke-gate margin,
+// rounded generously) — expect, per this file's own established pattern, to
+// re-derive at least one of these tighter after the first real CI run redens
+// or comfortably passes it (do NOT tighten pre-emptively without that data).
+const SELECTOR_BUDGETS = [
+  ['buildingDisplayStates', buildingDisplayStates, 300],
+  ['computeFlows', computeFlows, 450],
+  ['wellbeingOf', wellbeingOf, 300],
+  ['crimeRateOf', crimeRateOf, 300],
+  ['serviceCoverageOf', serviceCoverageOf, 125],
+  ['waterCaps', waterCaps, 40],
+  ['powerStats', powerStats, 90],
+  ['demandFixPlan', demandFixPlan, 180],
+  ['wasteStatsOf', wasteStatsOf, 60],
+];
+
+const SELECTOR_SAMPLE_COUNT = 6;
 
 function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
@@ -135,6 +211,26 @@ test('SCALE GATE half A: the 13k-building/1.4M-population fixture builds within 
     failures.length,
     0,
     `scale fixture must pass every consistency check; failures: ${JSON.stringify(failures.slice(0, 5))}`
+  );
+
+  // BUG-644: a fixture composition change is worthless (or worse, silently
+  // vacuous) if it produces a mostly-OFFLINE city — offline buildings are
+  // gated out of most of the selectors this file bounds, so an all-offline
+  // fixture would make every one of those bounds trivially, meaninglessly
+  // pass. This fixture is direct-constructed WITHOUT a builtTick field (see
+  // file header ONLINE-GATING SHORTCUT in scale/fixture.mjs), so isOnline()
+  // treats every building as online by its own documented backward-tolerance
+  // rule — this assertion is the load-bearing proof that stays true, not a
+  // tautology: if a future change to isOnline()/the fixture ever starts
+  // giving buildings a builtTick (or otherwise re-enables the road-gate),
+  // this is what would catch a city that came out mostly offline.
+  const onlineCount = fixture.buildings.reduce((n, b) => n + (isOnline(fixture, b) ? 1 : 0), 0);
+  const onlineFraction = onlineCount / fixture.buildings.length;
+  assert.ok(
+    onlineFraction >= 0.95,
+    `fixture online fraction is ${(onlineFraction * 100).toFixed(1)}% (${onlineCount}/` +
+      `${fixture.buildings.length}) — must stay >= 95% or every per-selector budget below ` +
+      `(most of which skip offline buildings) becomes vacuous`
   );
 });
 
@@ -190,6 +286,76 @@ test('SCALE GATE half A: render-path derivations (wellbeingOf + serviceCoverageO
     `wellbeingOf+serviceCoverageOf+demandFixPlan took ${totalMs.toFixed(2)}ms combined ` +
       `(wellbeingOf ${(t1 - t0).toFixed(2)}ms, serviceCoverageOf ${(t2 - t1).toFixed(2)}ms, ` +
       `demandFixPlan ${(t3 - t2).toFixed(2)}ms), must be under ${RENDER_PATH_BOUND_MS}ms`
+  );
+});
+
+test('SCALE GATE: per-selector budget table catches a single regressed selector, not just the whole tick (BUG-644)', () => {
+  assert.ok(fixture, 'earlier tests must run first (node:test preserves file order)');
+
+  // See SELECTOR_BUDGETS' file-header comment for the full COLD-CALL
+  // METHODOLOGY rationale. Each selector gets its OWN disjoint slice of
+  // freshly-ticked states — reused by no other selector in this file — so
+  // every measurement is a guaranteed cold (first-ever, never memo-hit) call
+  // for that exact state object, the same shape a just-loaded/just-restored
+  // city has in production (precisely BUG-642's real trigger shape).
+  let s = fixture;
+  const tickTimes = [];
+  const selectorStates = SELECTOR_BUDGETS.map(() => []);
+  const totalTicksNeeded = SELECTOR_BUDGETS.length * SELECTOR_SAMPLE_COUNT;
+  for (let n = 0; n < totalTicksNeeded; n++) {
+    const t0 = performance.now();
+    s = reducer(s, { type: 'tick' });
+    tickTimes.push(performance.now() - t0);
+    selectorStates[n % SELECTOR_BUDGETS.length].push(s);
+  }
+  fixture = s; // carry the settled state forward (HALF B reuses `fixture`)
+
+  // The reducer tick itself is also in the "at least" list this table must
+  // cover — reuses the SAME already-established TICK_MEDIAN_BOUND_MS (not a
+  // new, weaker number) so this row cannot silently be more lenient than
+  // HALF A's own tick bound; it exists here so a regression's failure
+  // message names "reducer tick" explicitly alongside every other selector
+  // in the SAME table, instead of only reddening a separate HALF A test.
+  const tickMedian = median(tickTimes);
+  assert.ok(
+    tickMedian < TICK_MEDIAN_BOUND_MS,
+    `[reducer tick] median ${tickMedian.toFixed(2)}ms across ${tickTimes.length} ticks, ` +
+      `must be under ${TICK_MEDIAN_BOUND_MS}ms`
+  );
+
+  const regressed = [];
+  for (let i = 0; i < SELECTOR_BUDGETS.length; i++) {
+    const [name, fn, boundMs] = SELECTOR_BUDGETS[i];
+    const states = selectorStates[i];
+    const times = states.map((st) => {
+      const t0 = performance.now();
+      fn(st);
+      return performance.now() - t0;
+    });
+    const med = median(times);
+    if (!(med < boundMs)) {
+      regressed.push(
+        `${name}: median ${med.toFixed(2)}ms (samples: ${times.map((t) => t.toFixed(1)).join(', ')}) ` +
+          `exceeds its ${boundMs}ms budget`
+      );
+    }
+  }
+  // FAIL LOUD, naming every selector that regressed — never collapse this
+  // into "the tick got slower" (the whole point of BUG-644's per-selector
+  // table: a 3750x regression inside ONE selector must not hide under a
+  // whole-path bound sized for the sum of many cheap ones).
+  assert.equal(
+    regressed.length,
+    0,
+    `${regressed.length} selector(s) exceeded their per-derivation budget:\n  ` + regressed.join('\n  ')
+  );
+
+  // Sanity check that the extra ticks didn't silently break the city.
+  const report = runConsistencyChecks(fixture);
+  assert.equal(
+    report.checks.filter((c) => !c.ok).length,
+    0,
+    'the fixture must remain internally consistent after the per-selector sampling ticks'
   );
 });
 

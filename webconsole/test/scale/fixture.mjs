@@ -41,6 +41,32 @@
 // Every building's spec/position/tier is a pure function of its index and
 // the (already-deterministic, data-file-sourced) SPECS catalogue. Two calls
 // to buildScaleFixture() with the same params produce byte-identical output.
+//
+// COMPOSITION PROVENANCE (BUG-644, 2026-09-03): the fractions above were a
+// hand-guessed "generic city" mix (heavy office/industrial/commercial, a
+// flat 3% water) with NO separate motorway/rail/station/transport/mine/
+// civic/pylon/landmark categories at all — 'road' silently absorbed every
+// one of those kinds as plain road tiles. That drift is exactly why the
+// BUG-642 O(water-plants x buildings) freeze (488 water-kind buildings x
+// 29,831 buildings = 5.4s on Aaron's real city) never reddened this gate:
+// the mix being ticked bore no resemblance to the mix that froze. The table
+// below (CATEGORY_FRACTIONS) is instead DERIVED from a real 29,831-building
+// dogfood capture (Aaron's live savepoint, decoded via saveCodec.ts +
+// tallied by SPECS[...].kind, captured 2026-09-03 — see BUG-644 on the BOW
+// for the exact repro script). Measured kind counts on that capture:
+//   road 14139 (47.40%)  motorway 4663 (15.63%)  school 3276 (10.98%)
+//   park 2819 (9.45%)    power 2040 (6.84%)      rail 1109 (3.72%)
+//   water 488 (1.64%)    health 350 (1.17%)      residential 348 (1.17%)
+//   fire 198 (0.66%)     industrial 108 (0.36%)  commercial 98 (0.33%)
+//   police 80 (0.27%)    office 55 (0.18%)       transport 33 (0.11%)
+//   mine 14 (0.05%)      civic 7 (0.02%)         station 3 (0.01%)
+//   pylon 2 (0.01%)      landmark 1 (0.00%)      -- sums to 29,831.
+// Every non-residential, non-'road' fraction below is that kind's share of
+// the REMAINING (post-residential) 29,483 buildings (kind-count / 29483),
+// so it composes with the pre-existing "'road' absorbs the remainder" rule
+// unchanged. residential itself is NOT in this table — see fillResidential's
+// doc comment for why capacity-driven placement (not a fixed fraction) is
+// still correct, and how it now also lands close to the real 1.17% share.
 
 import {
   SPECS,
@@ -49,7 +75,7 @@ import {
   capacityAtTier,
   onlineResidentsCapacity,
 } from '../../src/sim/data.ts';
-import { initialState, reducer } from '../../src/sim/engine.ts';
+import { initialState, reducer, nextSafeBuildingId } from '../../src/sim/engine.ts';
 
 /** Default total building count — Aaron's reported live-city order of magnitude. */
 export const DEFAULT_BUILDING_COUNT = 13000;
@@ -65,19 +91,28 @@ const RESIDENTIAL_MAX_COUNT = 6000;
 /** Non-residential category fractions of the REMAINING (post-residential)
  * building budget. 'road' is deliberately absent — it absorbs whatever
  * rounding remainder is left so the total always lands exactly on
- * buildingCount (never approximate — a CI gate must be exactly reproducible). */
+ * buildingCount (never approximate — a CI gate must be exactly reproducible).
+ * See the file-header COMPOSITION PROVENANCE note above for where every
+ * number comes from — this is no longer a hand-guessed mix. */
 const CATEGORY_FRACTIONS = [
-  ['office', 0.14],
-  ['industrial', 0.12],
-  ['commercial', 0.10],
-  ['park', 0.08],
-  ['health', 0.05],
-  ['police', 0.03],
-  ['fire', 0.03],
-  ['school', 0.05],
-  ['civic', 0.03],
-  ['power', 0.02],
-  ['water', 0.03],
+  ['motorway', 4663 / 29483],
+  ['school', 3276 / 29483],
+  ['park', 2819 / 29483],
+  ['power', 2040 / 29483],
+  ['rail', 1109 / 29483],
+  ['water', 488 / 29483],
+  ['health', 350 / 29483],
+  ['fire', 198 / 29483],
+  ['industrial', 108 / 29483],
+  ['commercial', 98 / 29483],
+  ['police', 80 / 29483],
+  ['office', 55 / 29483],
+  ['transport', 33 / 29483],
+  ['mine', 14 / 29483],
+  ['civic', 7 / 29483],
+  ['station', 3 / 29483],
+  ['pylon', 2 / 29483],
+  ['landmark', 1 / 29483],
 ];
 
 function specsOfKind(kind) {
@@ -107,26 +142,64 @@ function fillKind(kind, count, coord) {
   return out;
 }
 
+/** Every (spec, tier) combination of kind 'residential', one entry per
+ * combination (a spec with no capacityTiers contributes exactly one entry),
+ * sorted by capacity DESCENDING. Used by fillResidential below — see that
+ * function's doc comment for why descending order (not the catalogue's
+ * natural id order) is the fix for BUG-644's composition drift. */
+function allResidentialCombosByCapacityDesc() {
+  const specs = specsOfKind('residential');
+  const combos = [];
+  for (const sp of specs) {
+    if (sp.capacityTiers) {
+      for (let tier = 0; tier < sp.capacityTiers.length; tier++) {
+        combos.push({ sp, tier, cap: capacityAtTier(sp, tier) });
+      }
+    } else {
+      combos.push({ sp, tier: undefined, cap: capacityAtTier(sp, undefined) });
+    }
+  }
+  combos.sort((a, b) => b.cap - a.cap);
+  return combos;
+}
+
 /**
  * Builds residential buildings until online capacity reaches targetPopulation
  * (or RESIDENTIAL_MAX_COUNT buildings is hit — see that constant's doc).
- * Cycles through every residential spec AND every capacityTier so both the
- * base-capacity and auto-scaled-tier code paths get real coverage at scale.
+ *
+ * BUG-644 COMPOSITION FIX: the previous version round-robinned uniformly
+ * through spec+tier combos in catalogue-id order — which, because the
+ * lowest-capacity combos (res_hut cap 8, res_terrace cap 30, ...) sort before
+ * the towers alphabetically, spent many early iterations on tiny-capacity
+ * buildings and needed 300+ buildings total to reach a 1.4M-population
+ * target. Aaron's real city reaches 1.44M population from just 348
+ * residential buildings (1.17% of 29,831) because a handful of the
+ * highest-capacity tower tiers (res_tower_sgp/res_tower_nyc/
+ * res_estate_sprawl at their top tiers, tens of thousands of capacity each)
+ * do almost all of the work. Cycling the SAME combo list but sorted by
+ * capacity DESCENDING reproduces that shape directly — still visits every
+ * combo (so every base-capacity and auto-scaled-tier code path keeps getting
+ * exercised on each full cycle) but the biggest contributors land first,
+ * landing on ~1% residential share at the default 1.4M target instead of the
+ * previous ~2.4%. Deliberately still a plain bounded while-loop (not a
+ * separate "place every combo once" pass) — a fixed pass would place every
+ * one of the ~57 combos regardless of targetPopulation, which BREAKS the
+ * several OTHER tests in this repo that build small fixtures via this same
+ * function (buildingCount as low as 50, e.g. render/mapRenderer.test.mjs) by
+ * making residential alone exceed the whole building budget.
  */
 function fillResidential(targetPopulation, coord) {
-  const specs = specsOfKind('residential');
+  const combos = allResidentialCombosByCapacityDesc();
   const out = [];
   let capacity = 0;
   let i = 0;
   while (capacity < targetPopulation && out.length < RESIDENTIAL_MAX_COUNT) {
-    const sp = specs[i % specs.length];
-    const tier = sp.capacityTiers ? Math.floor(i / specs.length) % sp.capacityTiers.length : 0;
-    const cap = capacityAtTier(sp, tier);
-    const { x, y } = coord(sp);
-    const b = { spec: sp.id, x, y };
-    if (sp.capacityTiers) b.capacityTier = tier;
+    const combo = combos[i % combos.length];
+    const { x, y } = coord(combo.sp);
+    const b = { spec: combo.sp.id, x, y };
+    if (combo.tier !== undefined) b.capacityTier = combo.tier;
     out.push(b);
-    capacity += cap;
+    capacity += combo.cap;
     i++;
   }
   return { buildings: out, capacity };
@@ -200,6 +273,20 @@ export function buildScaleFixture({
     funds: 1_000_000_000_000,
     fundsAtTickStart: 1_000_000_000_000,
     fundsAtTickEnd: 1_000_000_000_000,
+    // BUG-644: this fixture direct-constructs `buildings` with hand-assigned
+    // sequential ids (1..buildingCount above) but never touched `nextId`,
+    // which stayed at initialState()'s small starter-city default. Any
+    // reducer path that auto-places a new building (residential/commercial
+    // demand response, road auto-extension, ...) mints its next id from that
+    // stale low counter and collides with an existing hand-built building —
+    // caught by runConsistencyChecks' buildings.ids-unique check once enough
+    // ticks run for an auto-build to fire (reproduced here: BUG-644's own
+    // longer-running per-selector sampling loop hit a "771 duplicate
+    // building IDs" failure at tick ~25 past settle before this fix).
+    // nextSafeBuildingId (engine.ts) is the same helper the reducer's own
+    // rehydration path uses for exactly this class of bug (see its doc
+    // comment) — reuse it here rather than re-deriving max+1 by hand.
+    nextId: nextSafeBuildingId(buildings),
   };
 
   for (let i = 0; i < settleTicks; i++) {
