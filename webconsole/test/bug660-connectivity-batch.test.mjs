@@ -40,11 +40,20 @@
 //      oracle rebuilt directly from state.buildings (BUG-646's own
 //      independent-oracle idiom), so a phantom/hole in the mutated board
 //      cannot hide behind agreement with the batch's own cache.
-//  (B) PERFORMANCE — a SAME-RUN ratio: the reference (unit-by-unit, no
-//      batchBoard) path vs the batchBoard-optimized path over the SAME plan
-//      on the SAME large synthetic city, asserting the optimized path is
-//      decisively faster. Never a wall-clock CI bound (GR house rule) — the
-//      assertion is a RATIO measured in the same process on the same
+//  (B) PERFORMANCE — SAME-RUN SCALE INVARIANCE (BUG-660 P2 rework, round-
+//      filed against this describe block's original "reference beats a
+//      deliberately slow unit-by-unit path" ratio — see (B)'s own header
+//      comment below for the full history and derivation). Two asserts,
+//      because the two halves of the fix have two different, independently
+//      measured cost signatures: (B1) growing the backdrop city AND the
+//      requested batch size together by the same factor must not grow
+//      per-unit placement cost by more than Kx (catches batchBoard
+//      reverted); (B2) growing how many same-tagged points have already
+//      been added THIS batch must not grow occupy()'s own marginal
+//      findNext()+occupy() cost by more than Kx (catches occupy()'s
+//      tightening reverted, isolated from batchBoard/autoConnect/road-BFS
+//      noise). Never a wall-clock CI bound (GR house rule) — both
+//      assertions are RATIOs measured in the same process on the same
 //      machine in the same run, immune to absolute machine speed.
 //  (C) DETERMINISM — resolveDemandAll from the SAME starting state twice
 //      produces byte-identical output (Set/Map iteration order can never
@@ -61,7 +70,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import { initialState, reducer, nextSafeBuildingId } from '../src/sim/engine.ts';
-import { SPECS, isRoadSpec, occupiedSet, roadTileSetOf, findSpot } from '../src/sim/data.ts';
+import { SPECS, isRoadSpec, occupiedSet, roadTileSetOf, createSpotSearchContext } from '../src/sim/data.ts';
 import { emptyJournal, recordAction, isStateAffecting } from '../src/sim/journal.ts';
 import { replayFromGenesis, stableStringify } from '../src/sim/genesisReplay.ts';
 
@@ -112,31 +121,6 @@ function backdropState(n, populationOverride) {
   };
 }
 
-/**
- * INDEPENDENT reference driver: places up to `count` units of `specId` by
- * calling findSpot()+the full public reducer() ONE UNIT AT A TIME — never
- * placePlanItem, never batchBoard, never any of this bug's new code. This is
- * exactly the unoptimized shape BUG-646's own doc comment describes as the
- * pre-fix baseline (a fresh findSpot(s2, specId) + reduceCore('place') per
- * unit), so it is a true independent oracle for "what would placement look
- * like with none of BUG-646/BUG-660's batch optimizations at all" — any
- * divergence from the optimized path is a genuine correctness regression,
- * not a difference in code path philosophy.
- */
-function placeIndividually(state, specId, count) {
-  let s = state;
-  let placed = 0;
-  for (let i = 0; i < count; i++) {
-    const spot = findSpot(s, specId);
-    if (!spot) break;
-    const next = reducer(s, { type: 'place', spec: specId, x: spot.x, y: spot.y });
-    if (next.buildings.length === s.buildings.length) break; // declined (funds/etc.)
-    s = next;
-    placed++;
-  }
-  return { state: s, placed };
-}
-
 /** Independent oracle: rebuild the occupied-tile set straight from
  *  state.buildings, no reference to occupiedSet()'s own cache. */
 function oracleOccupied(buildings) {
@@ -169,14 +153,6 @@ const SPEC_ID = 'wat_clean';
 // Population sized to guarantee a real, sizeable cleanwater shortfall
 // (same order of magnitude as attack-bug646-round.test.mjs's own trigger).
 const POP = 3_000_000;
-// Smaller still for the (B) perf-ratio test — its "reference" side
-// deliberately pays the OLD unit-by-unit cost (full reducer() dispatch per
-// unit, including a from-scratch computeRoadConnectivity every call), which
-// scales far worse than the fix; a smaller fixture keeps the whole suite
-// comfortably inside scoped.mjs's default timeout while still measuring a
-// decisive ratio (observed 50x+ during development at this size).
-const RATIO_BACKDROP_N = 1200;
-const RATIO_POP = 1_200_000;
 
 describe('BUG-660 (A): batchBoard-optimized placePlanItem stays fully self-consistent', () => {
   // NOTE ON WHY THIS ISN'T A "compare to findSpot()+place() one at a time"
@@ -252,31 +228,231 @@ describe('BUG-660 (A): batchBoard-optimized placePlanItem stays fully self-consi
   });
 });
 
-describe('BUG-660 (B): SAME-RUN performance ratio — batchBoard vs unit-by-unit reference', () => {
-  test('the optimized batch path is decisively faster than the unit-by-unit reference over the same plan', () => {
-    const base = backdropState(RATIO_BACKDROP_N, RATIO_POP);
+describe('BUG-660 (B): SAME-RUN scale invariance', () => {
+  // BUG-660 P2 (round-filed): the ORIGINAL (B) here compared the batchBoard
+  // path against a unit-by-unit reference that pays its OWN unrelated O(n^2)
+  // full-reducer/full-connectivity cost, so the reference was already ~10x
+  // slower for reasons that have nothing to do with BUG-660 — the ratio held
+  // even with the fix fully reverted (measured by the round: occupy()
+  // tightening alone reverted still passed at 48s; batchBoard alone disabled
+  // still passed at 29s; only reverting BOTH tripped it, and then only via
+  // scoped.mjs's 240s wall-clock timeout, a bound the house rules forbid
+  // relying on). That test asserted the wrong thing: "batch beats a
+  // deliberately slow reference", not "the fix's own property holds".
+  //
+  // THE PROPERTY THE FIX ACTUALLY BUYS (both halves): a cost that is O(1) in
+  // some size axis rather than O(that axis). Direct measurement this session
+  // (see the report for the full numbers — reproducible via the mutation
+  // probes below) found the TWO halves' costs are NOT driven by the SAME
+  // axis, so ONE ratio assertion over ONE axis cannot decisively catch both
+  // without either flaking on the fixed path or missing a reverted half —
+  // exactly the outcome the task's own instructions anticipated ("if a
+  // single scale-invariance assert cannot catch BOTH halves, add a SECOND
+  // targeted assert rather than loosening K"). Two assertions, one per axis:
+  //
+  //   (B1) placePlanItem's batchBoard (engine.ts): occupiedSetIncremental()'s
+  //   unconditional `new Set(base)` clone (data.ts) is O(EXISTING BUILDINGS
+  //   IN THE CITY) per unit when batchBoard is absent — so growing the
+  //   BACKDROP CITY SIZE (while holding the fraction batches-size-per-city
+  //   roughly fixed via proportional population, so the per-unit cost of
+  //   demandFixPlan()'s own O(city) setup work doesn't itself confound the
+  //   comparison) should leave per-unit cost flat if fixed, growing if not.
+  //
+  //   (B2) createSpotSearchContext().occupy()'s tightening (data.ts):
+  //   rescores the candidate cache against only the points ADDED THIS CALL —
+  //   O(cache.length) — instead of, when reverted, invalidating the cache and
+  //   forcing the NEXT findNext() to re-walk the whole window and recompute
+  //   distToList() against the WHOLE tagged/resList ACCUMULATED SO FAR THIS
+  //   BATCH — O(window) + O(window x pointsAddedThisBatchSoFar). That
+  //   quantity is BATCH-ACCUMULATION size, not city size: measured directly,
+  //   varying backdrop city size alone moved this cost only mildly and
+  //   noisily (BUG-660 P2 round's own measurement — occupy() reverted alone
+  //   still passed the original ratio test at 48s), while varying how many
+  //   same-tagged points have already been added THIS BATCH moved it by
+  //   6x+ cleanly. (B2) isolates exactly that axis via createSpotSearchContext()
+  //   directly (bypassing placePlanItem/autoConnect/road-BFS entirely), which
+  //   both gets a clean, low-noise signal AND proves (B2) fires independently
+  //   of (B1)/batchBoard (confirmed: disabling batchBoard alone leaves (B2)'s
+  //   ratio at ~1x — the two asserts are provably orthogonal).
+  const SPEC_TAG_ID = SPEC_ID; // 'wat_clean', tag: 'clean' — SSOT, see data.ts SPECS
 
-    const t0 = performance.now();
-    const optimized = reducer(base, { type: 'resolveDemand', serviceKey: SERVICE_KEY });
-    const t1 = performance.now();
-    const optimizedMs = t1 - t0;
-    const placedCount = optimized.buildings.length - base.buildings.length;
-    assert.ok(placedCount > 50, `precondition: a real, sizeable batch (placed ${placedCount})`);
+  describe('(B1) batchBoard: per-unit cost must not grow with city size', () => {
+    const SIZE_RATIO = 5;
+    const SMALL_N = 250; // 500 backdrop buildings (250 res_lowrise + 250 road)
+    const LARGE_N = SMALL_N * SIZE_RATIO; // 1,250 -> 2,500 backdrop buildings
+    // Population scales WITH the backdrop (demandFixPlan()'s count is exactly
+    // linear in population — verified directly: pop 1.2M -> 90 units, pop 6M
+    // -> 450 units, 5x pop = 5x count) so the batch's OWN target size grows
+    // in step with the city, keeping the (buildings-in-city / units-in-batch)
+    // ratio constant across fixtures. Without this, a FIXED target count on a
+    // 5x-larger city dilutes across a fixed-size batch differently at each
+    // size purely from demandFixPlan()/createSpotSearchContext()'s own
+    // ONE-TIME O(city) per-batch setup cost (buildScoringContext() walks
+    // every building once) amortizing over a fixed unit count — a real but
+    // UNRELATED-TO-BUG-660 cost that swamped the signal in development
+    // (measured: even the FIXED, correct code showed a spurious ~3-4x ratio
+    // at fixed target counts once backdrops got large, purely from this
+    // amortization artifact) and would have forced a needlessly loose K.
+    const SMALL_POP = 1_200_000;
+    const LARGE_POP = SMALL_POP * SIZE_RATIO;
 
-    const t2 = performance.now();
-    const ref = placeIndividually(base, SPEC_ID, placedCount + 5);
-    const t3 = performance.now();
-    const refMs = t3 - t2;
+    /** Runs the cleanwater resolveDemand batch on a backdrop of size n /
+     *  population pop and returns the per-unit cost.
+     *
+     *  Normalises per-unit cost by the count of the REQUESTED spec
+     *  (SPEC_ID === wat_clean) actually placed, NOT by the total buildings
+     *  delta: autoConnect lays a variable number of incidental road/connector
+     *  tiles alongside each unit depending on the backdrop's local road
+     *  geometry (measured: the SAME target unit count laid a DIFFERENT
+     *  connector-tile count at the two fixture sizes — pure geometry noise,
+     *  nothing to do with city-size scaling), so the requested-spec count is
+     *  the correct, geometry-independent basis for an apples-to-apples
+     *  per-unit comparison. */
+    function measureOnce(n, pop) {
+      const base = backdropState(n, pop);
+      const t0 = performance.now();
+      const after = reducer(base, { type: 'resolveDemand', serviceKey: SERVICE_KEY });
+      const t1 = performance.now();
+      const added = after.buildings.slice(base.buildings.length);
+      const unitsPlaced = added.filter((b) => b.spec === SPEC_TAG_ID).length;
+      return { perUnitMs: (t1 - t0) / unitsPlaced, unitsPlaced };
+    }
 
-    // K chosen conservatively below the actual measured ratio (observed
-    // 10x-30x+ on this fixture during development) so the assertion has
-    // comfortable margin against ordinary machine/CI jitter while still
-    // catching a real regression back toward the old per-call clone.
-    const K = 3;
-    assert.ok(
-      optimizedMs * K < refMs,
-      `optimized path (${optimizedMs.toFixed(1)}ms) must beat the unit-by-unit reference (${refMs.toFixed(1)}ms) by at least ${K}x — ratio was ${(refMs / optimizedMs).toFixed(2)}x`
-    );
+    test(`per-unit cost on a ${SIZE_RATIO}x-larger city (with a proportionally larger batch) stays within Kx of the smaller city`, () => {
+      // STABILITY NOTE (proven necessary, not decorative — see this session's
+      // report): a big resolveDemand batch generates a LOT of garbage (every
+      // placement is an immutable state update), and Node's GC pressure
+      // measurably worsens the LATER of two back-to-back big allocations
+      // regardless of which city size it is — running all of one size's
+      // repeats before the other's biased whichever ran second by 3-5x on its
+      // own, with the bias fully attributable to run ORDER (confirmed by
+      // swapping which size ran first: the size that moved to "first" got
+      // faster, the one that moved to "second" got slower). INTERLEAVING one
+      // small + one large measurement per round cancels that positional bias
+      // (both sizes sit at the same position in the sequence every round),
+      // and taking the MEDIAN of REPEATS rounds absorbs whatever noise
+      // remains (measured stable across 10+ repeats — see report).
+      const REPEATS = 5;
+      const smallSamples = [];
+      const largeSamples = [];
+      let smallUnits = null;
+      let largeUnits = null;
+      for (let r = 0; r < REPEATS; r++) {
+        const small = measureOnce(SMALL_N, SMALL_POP);
+        const large = measureOnce(LARGE_N, LARGE_POP);
+        if (smallUnits === null) smallUnits = small.unitsPlaced;
+        if (largeUnits === null) largeUnits = large.unitsPlaced;
+        assert.equal(small.unitsPlaced, smallUnits, `resolveDemand's ${SPEC_TAG_ID} unit count must be deterministic across repeats at n=${SMALL_N}`);
+        assert.equal(large.unitsPlaced, largeUnits, `resolveDemand's ${SPEC_TAG_ID} unit count must be deterministic across repeats at n=${LARGE_N}`);
+        smallSamples.push(small.perUnitMs);
+        largeSamples.push(large.perUnitMs);
+      }
+      assert.ok(smallUnits > 50, `precondition: fixture n=${SMALL_N} must place a real, sizeable batch (placed ${smallUnits} ${SPEC_TAG_ID} units)`);
+      assert.equal(
+        largeUnits, smallUnits * SIZE_RATIO,
+        `population scales exactly linearly into demandFixPlan()'s count (verified directly), so the ${SIZE_RATIO}x-population fixture must request/produce exactly ${SIZE_RATIO}x the ${SPEC_TAG_ID} units (small placed ${smallUnits}, large placed ${largeUnits}) — otherwise the two fixtures are not proportionally comparable`
+      );
+
+      const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+      const smallMedian = median(smallSamples);
+      const largeMedian = median(largeSamples);
+
+      // K DERIVATION (GR#15 — no bare magic constant): the property under
+      // test is "per-unit cost is O(1) in city size" (fixed) vs "O(city
+      // size)" (batchBoard reverted — occupiedSetIncremental()'s per-call
+      // full clone). Growing the backdrop by SIZE_RATIO (batch size growing
+      // in step, so the O(city)-setup-amortization confound above is
+      // controlled for) predicts a per-unit-cost ratio of ~1x if fixed, or
+      // ~SIZE_RATIO if reverted. K is the geometric mean of those two
+      // regimes, sqrt(1 * SIZE_RATIO) = sqrt(SIZE_RATIO) ~= 2.24 — this
+      // session's direct measurement (report) put the fixed-code ratio at a
+      // stable ~0.7-0.9x (max single-round observed 1.4x) across 10 repeats
+      // and the batchBoard-reverted ratio at a stable ~2.8x, so K sits with
+      // real margin on both sides of the measured signal, not just the
+      // idealized one.
+      const K = Math.sqrt(SIZE_RATIO);
+      const ratio = largeMedian / smallMedian;
+      assert.ok(
+        ratio < K,
+        `per-unit cost must not grow with city size: small (n=${SMALL_N}, pop=${SMALL_POP}) ${smallMedian.toFixed(4)}ms/unit (median of ${REPEATS} interleaved rounds), ` +
+        `large (n=${LARGE_N}, pop=${LARGE_POP}, ${SIZE_RATIO}x) ${largeMedian.toFixed(4)}ms/unit (median of ${REPEATS} interleaved rounds) — ratio ${ratio.toFixed(2)}x, must be < K=${K.toFixed(2)}`
+      );
+    });
+  });
+
+  describe('(B2) occupy() tightening: marginal cost must not grow with same-batch accumulated points', () => {
+    const SIZE_RATIO = 10;
+    const SMALL_M = 200; // "this batch has already added 200 same-tagged points"
+    const LARGE_M = SMALL_M * SIZE_RATIO; // 2,000
+
+    /** Primes a fresh createSpotSearchContext() (bypassing placePlanItem,
+     *  autoConnect and the road-BFS entirely — the WHOLE POINT is to isolate
+     *  occupy()'s own cost from those unrelated costs) with `priorCount`
+     *  synthetic prior same-batch placements of SPEC_TAG_ID, parked far away
+     *  (x>=400, near the map's eastern edge) from where scanAllCore() will
+     *  actually search (near the map's default starting region — see
+     *  buildScoringContext()'s housingCentroid()-anchored window), so they
+     *  contribute ONLY to the 'clean' tag list (occupy()'s own cost driver)
+     *  without disturbing the real candidate window's occupancy. */
+    function primeContext(priorCount) {
+      const state = { ...initialState(), funds: 1e13, unlockedAll: true, administrationState: null };
+      const ctx = createSpotSearchContext(state, SPEC_TAG_ID);
+      ctx.findNext(); // force the initial scanAllCore() cache build
+      for (let i = 0; i < priorCount; i++) {
+        const x = 400 + (i % 10) * 2;
+        const y = 2 + Math.floor(i / 10) * 2;
+        ctx.occupy([{ id: 100_000 + i, spec: SPEC_TAG_ID, x, y, builtTick: 0 }]);
+      }
+      return ctx;
+    }
+
+    /** The marginal cost of placing ONE MORE unit after `priorCount` same-
+     *  tagged units have already been added this batch — exactly the
+     *  quantity occupy()'s tightening fix optimizes (O(cache.length) per
+     *  call regardless of `priorCount`) vs the reverted behaviour (a full
+     *  window re-walk + O(list-size) rescoring on the NEXT findNext(), where
+     *  list-size grows with `priorCount`). */
+    function marginalCostMs(priorCount) {
+      const ctx = primeContext(priorCount);
+      const t0 = performance.now();
+      const spot = ctx.findNext();
+      assert.ok(spot, `precondition: a free ${SPEC_TAG_ID} site must exist after ${priorCount} synthetic prior placements`);
+      ctx.occupy([{ id: 999_999, spec: SPEC_TAG_ID, x: spot.x, y: spot.y, builtTick: 0 }]);
+      const t1 = performance.now();
+      return t1 - t0;
+    }
+
+    test(`marginal findNext()+occupy() cost after ${SIZE_RATIO}x more same-batch accumulated points stays within Kx`, () => {
+      // Same interleave + median stability rationale as (B1) above.
+      const REPEATS = 6;
+      const smallSamples = [];
+      const largeSamples = [];
+      for (let r = 0; r < REPEATS; r++) {
+        smallSamples.push(marginalCostMs(SMALL_M));
+        largeSamples.push(marginalCostMs(LARGE_M));
+      }
+      const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+      const smallMedian = median(smallSamples);
+      const largeMedian = median(largeSamples);
+
+      // K DERIVATION (GR#15 — no bare magic constant): same shape as (B1)'s —
+      // fixed behaviour is O(1) in accumulated-points count (ratio ~1x
+      // predicted), reverted behaviour is ~linear in it (ratio ~SIZE_RATIO
+      // predicted, from the reverted findNext()'s O(list-size) rescoring of
+      // every candidate). K is the geometric mean, sqrt(SIZE_RATIO) ~= 3.16.
+      // This session's direct measurement (report) put the fixed-code ratio
+      // at a stable ~1.0-1.3x (one cold-start round excluded by the median)
+      // across 8 repeats and the occupy()-tightening-reverted ratio at a
+      // stable ~6.4x — again real margin on both sides of the idealized
+      // numbers, not just the theoretical ones.
+      const K = Math.sqrt(SIZE_RATIO);
+      const ratio = largeMedian / smallMedian;
+      assert.ok(
+        ratio < K,
+        `marginal occupy() cost must not grow with same-batch accumulated points: ${SMALL_M} prior points ${smallMedian.toFixed(4)}ms (median of ${REPEATS}), ` +
+        `${LARGE_M} prior points (${SIZE_RATIO}x) ${largeMedian.toFixed(4)}ms (median of ${REPEATS}) — ratio ${ratio.toFixed(2)}x, must be < K=${K.toFixed(2)}`
+      );
+    });
   });
 });
 

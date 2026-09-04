@@ -294,6 +294,45 @@ export function isFreeZone(sp: Spec): boolean {
 }
 
 /**
+ * FEAT-2326609782 GENESIS FREE (2026-09-04, Aaron's ruling on the £3.3M/month
+ * genesis-upkeep STOP question): the pre-existing national m20/rail map
+ * furniture seeded by starterCity() (engine.ts) — the trunk motorway rows and
+ * the rail row, none of which ever set `builtTick`, so `b.builtTick` reads
+ * `undefined` for every one of them — pays NO upkeep. The player never built
+ * it and never chose to take on its running cost. Any m20/rail tile the
+ * PLAYER or autoConnect lays (builtTick > 0, since tick 0 is genesis's own
+ * advance() and 'place'/autoConnect always stamp the CURRENT tick at
+ * placement) pays full upkeep exactly like before this predicate existed.
+ *
+ * `builtTick<=0` (not strictly `=== undefined`) so a hand-built test fixture
+ * or a hypothetical FUTURE genesis addition that explicitly stamps `0` is
+ * ALSO treated as map furniture — the ruling's own wording ("tiles with
+ * builtTick<=0") is the general rule, not a spec-detail of how starterCity()
+ * happens to omit the field today.
+ *
+ * Deliberately scoped to exactly the two specs the ruling names (m20, rail) —
+ * this is NOT a general "map furniture" concept (the codebase has none yet).
+ * Every other genesis spec (road/pylon/station_sanderling/hs1) already had
+ * £0 upkeep before this ruling and is untouched by it.
+ *
+ * Build COST is completely unaffected by this predicate: placementCost() is
+ * only ever charged at 'place' action time, and genesis tiles never go
+ * through 'place' — they are pre-seeded directly into starterCity()'s
+ * buildings array. This function governs upkeep ONLY.
+ *
+ * SSOT (GR#3): the ONE seam both engine.computeFlows and consistency.ts's
+ * upkeep recompute read through (mirroring the existing UPKEEP_BUCKET
+ * pattern one function up) — a duplicated inline `builtTick<=0` check in two
+ * places would risk exactly the BUG-628-class drift this codebase has
+ * already been bitten by once (raw vs policy-adjusted upkeep readouts).
+ */
+const GENESIS_FREE_UPKEEP_SPECS = new Set(['m20', 'rail']);
+export function upkeepChargeableOf(b: Building, sp: Spec): number {
+  if (GENESIS_FREE_UPKEEP_SPECS.has(sp.id) && (b.builtTick ?? 0) <= 0) return 0;
+  return sp.upkeep;
+}
+
+/**
  * FEAT-2326609761 (CONSOLIDATOR, Aaron's R2 ruling + Q100102): the player's
  * own bulldozer refunds 25% of what was actually paid (engine.ts's `bulldoze`
  * case, `Math.round(placementCost(def) * BULLDOZE_REFUND_FRACTION)`) — this
@@ -1481,9 +1520,33 @@ export function sortPaletteItems(state: SimState, items: string[]): string[] {
  * All figures remain PLACEHOLDER-balance (Aaron's row-by-row pass pending) —
  * this rebase fixes the ORDER OF MAGNITUDE, not the final tuned numbers.
  */
+/**
+ * FEAT-2326609782 (2026-09-04, Aaron's ruling): m20/rail STOP being £0 map
+ * furniture — both had sat at cost:0/upkeep:0 since genesis, which meant (a)
+ * inc3's rail/motorway layout tiers laid FREE (AC-9 partial) and (b)
+ * autoConnect's m20 connector showed capex £0 even on Aaron's own city
+ * (id-2098 report, BUG-682's "the zero-cost level-99 profile smells like a
+ * placeholder leaking into the choice"). PLACEHOLDER-tier per the balance
+ * regime (row-by-row tuning pending) — this fixes the ORDER OF MAGNITUDE,
+ * derived from real UK per-km costs rebased onto this game's 50m tile:
+ *   - m20 (motorway): UK real-world ≈ £30M/km → £30M × 0.05km/tile =
+ *     £1,500,000/tile build cost. Upkeep ≈ £3,000/tile/month, i.e.
+ *     3000 / 30 ticks-per-month (engine.ts TICKS_PER_MONTH) = £100/tile/tick
+ *     (Spec.upkeep is PER-TICK — see rail/road siblings below and
+ *     fiscal.ts's councilTaxPerCapitaPerTick for the same /30 convention).
+ *   - rail: UK real-world ≈ £15M/km → £15M × 0.05km/tile = £750,000/tile
+ *     build cost. Upkeep ≈ £1,500/tile/month = 1500/30 = £50/tile/tick.
+ * Both specs also NEED a UPKEEP_BUCKET entry (fiscal.ts) now that upkeep is
+ * nonzero — 'motorway' -> 'Roads' (m20 shares the family the other road tiers
+ * already bucket into) and 'rail' -> 'Transport' (matches station/transport);
+ * without those two entries this upkeep would silently vanish from the
+ * outflows instead of booking (see fiscal.ts's own "placeholder catalogue
+ * kinds" comment for the same class of bug, closed there for a different set
+ * of kinds).
+ */
 export const SPECS: Record<string, Spec> = {
-  m20: P('m20', 'motorway', 'M20 Motorway', '', 1, 1, 0, 0, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
-  rail: P('rail', 'rail', 'Rail Line', '', 1, 1, 0, 0, '#8a6d3b', 'network', 99),
+  m20: P('m20', 'motorway', 'M20 Motorway', '', 1, 1, 1500000, 100, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
+  rail: P('rail', 'rail', 'Rail Line', '', 1, 1, 750000, 50, '#8a6d3b', 'network', 99),
   station_sanderling: P('station_sanderling', 'station', 'Sanderling Station', '', 1, 1, 0, 15, '#d0a83c', 'network', 99),
   // BUG-652: real Ashford International directly employs roughly 150-250
   // people across station operations, retail, and HS1/Southeastern staff — a

@@ -287,6 +287,14 @@ export const UPKEEP_BUCKET: Partial<Record<ZoneKind, string>> = {
   fire: 'Fire & Rescue',
   civic: 'Civic & Justice',
   leisure: 'Leisure',
+  // FEAT-2326609782 (2026-09-04): m20/rail went from £0/£0 (no bucket needed —
+  // upkeep was always 0) to real per-tile upkeep. Same "silently vanish"
+  // failure mode as the FEAT-1972079877 kinds above if these two are missing.
+  // motorway -> 'Roads' (m20 is the tier-5 rung of the SAME road-tier ladder
+  // road/rd_avenue/rd_aroad/rd_dual already bucket into); rail -> 'Transport'
+  // (matches station/transport, the existing non-road network family).
+  motorway: 'Roads',
+  rail: 'Transport',
 };
 
 /**

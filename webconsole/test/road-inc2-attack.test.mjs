@@ -114,18 +114,43 @@ test('ATTACK stale-tile: monitor over a non-road cell is skipped, no crash', () 
   assert.ok(!after.lastFlows.outflows.some((f) => f.label === 'Road Auto-Scale'), 'no charge for a non-road monitor');
 });
 
-// ATTACK 6: tier-4 → tier-5 free-upgrade edge — m20 cost is 0, so delta is negative and
-// clamped to 0. Verify it does NOT mint money or produce a negative outflow (conservation-safe).
-test('ATTACK free-upgrade: tier-4 dual → tier-5 m20 (negative delta) never charges negative / mints money', () => {
-  const buildings = [{ id: 1, spec: 'rd_dual', x: 10, y: 10, builtTick: -1000 }, { ...SOURCE }];
+// ATTACK 6: tier-4 -> tier-5 upgrade edge. HISTORICAL NOTE (honest update,
+// FEAT-2326609782 2026-09-04 ruling): this test originally exercised m20's
+// then-£0 cost — the tier-4->tier-5 delta was NEGATIVE and this proved the
+// `Math.max(0, ...)` clamp in evaluateRoadMonitors (engine.ts) never let a
+// cheaper successor tier mint money via a negative outflow. m20 is no longer
+// £0 (£1,500,000/tile build, real cost > rd_dual's £96,000), so the delta is
+// now genuinely POSITIVE and this specific pair no longer exercises the
+// clamp branch — updating to match reality rather than leaving a stale
+// "negative delta" comment/oracle. The clamp itself still exists in
+// engine.ts (defensive against any FUTURE tier whose cost undercuts its
+// predecessor) and is still covered by the trivial `r.cost >= 0` invariant.
+//
+// SEPARATE, PRE-EXISTING finding (not a ripple of this pricing change — the
+// SOURCE fixture (ind_heavy, jobs:110) never actually saturated a tier-4
+// road's 1000-capacity threshold at ANY price, £0 or otherwise: load =
+// (110 jobs + 110 freight) x activity(1) = 220, well under the 850
+// (0.85 x 1000) saturation bar. The original test's `if (auto) assert(...)`
+// guard silently tolerated this — it always passed vacuously, upgrade never
+// firing. Swapped the feeder to ind_estate (jobs:2000, load 4000) so this
+// test actually exercises the upgrade it claims to, rather than trivially
+// passing on a fixture that can never saturate tier 4.
+test('ATTACK real-upgrade: tier-4 dual -> tier-5 m20 charges the real positive delta, never mints money', () => {
+  const HEAVY_SOURCE = { id: 2, spec: 'ind_estate', x: 20, y: 20, builtTick: -1000 };
+  const buildings = [{ id: 1, spec: 'rd_dual', x: 10, y: 10, builtTick: -1000 }, { ...HEAVY_SOURCE }];
   const monitors = [{ x: 10, y: 10, source: 2, until: TICKS_PER_YEAR }];
   const before = mk({ buildings, roadMonitors: monitors, population: 500, tick: TICKS_PER_MONTH - 1 });
   const r = evaluateRoadMonitors(before, TICKS_PER_MONTH);
   assert.ok(r.cost >= 0, 'cost is never negative');
+  assert.equal(r.upgraded, 1, 'sanity: the tier-4->5 upgrade actually fires with this feeder');
+  const expectedDelta = SPECS.m20.cost - SPECS.rd_dual.cost;
+  assert.ok(expectedDelta > 0, 'sanity: m20 is genuinely pricier than rd_dual post-ruling');
+  assert.equal(r.cost, expectedDelta, 'upgrade is charged the real tier-4->tier-5 cost delta, not clamped');
   const after = reducer(before, { type: 'tick' });
+  assert.equal(tileAt(after, 10, 10).spec, 'm20', 'the tile was actually upgraded to m20');
   const auto = after.lastFlows.outflows.find((f) => f.label === 'Road Auto-Scale');
-  // Either it upgraded for 0 (no outflow appended since cost>0 gate) — verify no negative outflow.
-  if (auto) assert.ok(auto.value >= 0, 'no negative outflow');
+  assert.ok(auto, 'auto-scale outflow present for the real positive-cost upgrade');
+  assert.ok(auto.value >= 0, 'no negative outflow');
   const rep = runConsistencyChecks(after);
-  assert.equal(rep.checks.find((c) => c.id === 'conservation.funds-vs-flows').ok, true, 'conservation holds on free upgrade');
+  assert.equal(rep.checks.find((c) => c.id === 'conservation.funds-vs-flows').ok, true, 'conservation holds on the real-cost upgrade');
 });

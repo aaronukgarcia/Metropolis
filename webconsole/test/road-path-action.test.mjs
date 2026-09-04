@@ -8,11 +8,20 @@ import { recordAction, emptyJournal, isStateAffecting } from '../src/sim/journal
 import { SPECS } from '../src/sim/data.ts';
 
 // Build a clean board for testing.
+//
+// FEAT-2326609782 (2026-09-04 ruling): m20/rail are no longer £0 map furniture
+// (m20 £1,500,000/tile == STARTING_TREASURY exactly; rail £750,000/tile) — a
+// handful of tests below place several rail/m20 tiles in a row, or an m20 tile
+// followed by an unrelated placeRoadPath, from a bare genesis-funds board.
+// Ample funds here is honest: none of THIS file's assertions are about
+// affordability at the default board level — the AC-4/Atomicity tests that DO
+// test affordability all override `funds` explicitly afterwards (see below),
+// so this bump can't weaken those oracles.
 function board(buildings) {
   const base = initialState();
   let maxId = 0;
   for (const b of buildings) if (b.id > maxId) maxId = b.id;
-  return { ...base, unlockedAll: true, buildings, nextId: maxId + 1 };
+  return { ...base, unlockedAll: true, buildings, nextId: maxId + 1, funds: base.funds + 20_000_000 };
 }
 
 // Test AC-3: one drag commits a single journal entry carrying the full path.

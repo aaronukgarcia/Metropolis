@@ -16,6 +16,7 @@ import {
   isOnline,
   totalJobsBySector,
   filledJobsFromCapacityAndPopulation,
+  upkeepChargeableOf,
 } from './data.ts';
 import {
   councilTaxPerTick,
@@ -927,8 +928,14 @@ export function runConsistencyChecks(
     if (!isOnline(s, b)) continue; // Skip buildings still under construction
     const sp = SPECS[b.spec];
     if (!sp || !sp.upkeep) continue;
+    // FEAT-2326609782 GENESIS FREE (2026-09-04): mirrors engine.computeFlows'
+    // SAME upkeepChargeableOf() call exactly (data.ts SSOT) — genesis m20/rail
+    // map furniture (builtTick<=0) pays no upkeep, so the recomputed total
+    // here must exclude it too or this check would false-positive diverge.
+    const upkeep = upkeepChargeableOf(b, sp);
+    if (!upkeep) continue;
     const k = UPKEEP_BUCKET[sp.kind];
-    if (k) upkeepBuckets[k] = (upkeepBuckets[k] ?? 0) + sp.upkeep;
+    if (k) upkeepBuckets[k] = (upkeepBuckets[k] ?? 0) + upkeep;
   }
   const upkeepEntries = Object.entries(upkeepBuckets)
     .filter(([, v]) => v > 0)

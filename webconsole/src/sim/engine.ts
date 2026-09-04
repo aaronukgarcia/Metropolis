@@ -22,6 +22,7 @@ import {
   roadTileSetIncremental,
   isRoadOrTrunkSpec,
   placementCost,
+  upkeepChargeableOf,
   serviceCoverageOf,
   earlyGameFactor,
   brownoutOf,
@@ -676,8 +677,13 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (!sp || !sp.upkeep) continue;
+    // FEAT-2326609782 GENESIS FREE (2026-09-04): the pre-existing national
+    // m20/rail map furniture (builtTick<=0) pays no upkeep — see
+    // upkeepChargeableOf's own doc comment (data.ts) for the full ruling.
+    const upkeep = upkeepChargeableOf(b, sp);
+    if (!upkeep) continue;
     const k = UPKEEP_BUCKET[sp.kind];
-    if (k) buckets[k] = (buckets[k] ?? 0) + sp.upkeep;
+    if (k) buckets[k] = (buckets[k] ?? 0) + upkeep;
   }
   let outflows: FlowItem[] = Object.entries(buckets)
     .filter(([, v]) => v > 0)

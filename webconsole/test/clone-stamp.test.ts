@@ -221,9 +221,7 @@ describe('clone-stamp', () => {
 
   it('refunds partial cost for demolished buildings', () => {
     const state = initialState();
-    // Use station_sanderling (network category, costs 0 placement but is a service).
-    // Actually use m20 motorway which is network, costs 0 placement.
-    // Use a road (network, costs 40).
+    // Use a road (network category, real placement cost).
     const testState = {
       ...state,
       funds: 50000,
