@@ -39,6 +39,8 @@ export function buildGameSave(opts: {
   buildVersion: string;
   camera?: MapViewState | null;
   now?: Date;
+  /** FEAT-2326609780 round 3: the monotonic per-lineage save counter — see Savepoint.saveSeq's own doc comment (replay.ts). */
+  saveSeq?: number;
 }): GameSave {
   const now = opts.now ?? new Date();
   const snapshot = sanitizeTreasury(opts.state);
@@ -47,7 +49,7 @@ export function buildGameSave(opts: {
     name: opts.name,
     savedAt: now.toISOString(),
     buildVersion: opts.buildVersion,
-    savepoint: createSavepoint(snapshot, opts.journalTail, now, opts.buildVersion, opts.camera ?? null),
+    savepoint: createSavepoint(snapshot, opts.journalTail, now, opts.buildVersion, opts.camera ?? null, opts.saveSeq),
     journal: opts.journal ?? emptyJournal(),
   };
 }

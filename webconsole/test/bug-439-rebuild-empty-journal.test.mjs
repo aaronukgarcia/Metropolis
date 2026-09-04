@@ -160,7 +160,7 @@ describe('BUG-439: rebuild-after-load must replay the FULL saved journal, not an
     const storePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'sim', 'store.tsx');
     const src = fs.readFileSync(storePath, 'utf8');
 
-    const buildCurrentSaveBody = src.match(/const buildCurrentSave = \(name: string\) => \{[\s\S]*?\n  \};/);
+    const buildCurrentSaveBody = src.match(/const buildCurrentSave = \(name: string, saveSeq\?: number\) => \{[\s\S]*?\n  \};/);
     assert.ok(buildCurrentSaveBody, 'buildCurrentSave must exist in store.tsx');
     assert.doesNotMatch(
       buildCurrentSaveBody[0],

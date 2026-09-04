@@ -50,6 +50,49 @@ export interface Savepoint {
    * so genesis replay stays deterministic. Optional (absent on legacy savepoints).
    */
   camera?: MapViewState | null;
+  /**
+   * FEAT-2326609780 round 3 (the structural fix — adjudicated, not
+   * optional): a MONOTONIC PER-LINEAGE counter, incremented once per persist
+   * ATTEMPT (success or failure — see store.tsx's `nextSaveSeq()`) and
+   * carried through every mirror (inc1 mirrorSaveCheckpoint,
+   * mirrorSavepointDirect). Replaces `snapshotTick`+`savedAt` as the PRIMARY
+   * freshness ordering between two savepoints of the SAME lineage
+   * (localStorage vs. its IndexedDB mirror/rescue copy):
+   *   - `snapshotTick` sits FLAT while the player places/demolishes without
+   *     a tick advancing (only `{type:'tick'}` actions move it), so two
+   *     savepoints minutes apart can tie on tick.
+   *   - Building COUNT is not monotonic either (round 2's ATTACK G,
+   *     adjudicated): bulldoze, forced asset sales (FEAT-1972079923 inc2),
+   *     and the default-on consolidator's scrap-and-rebuild passes
+   *     (FEAT-2326609761) all legitimately SHRINK a city that is still
+   *     unambiguously the NEWER one — a building-count safety net refused a
+   *     genuine rescue forever.
+   *   - `savedAt` (wall-clock) is the round-2 R2-F1 trap: a `finish()`
+   *     self-heal stamped with `new Date()` at equal tick always beat a
+   *     genuinely-newer rescue that merely happened to be written a little
+   *     earlier in wall-clock time but represents MORE of the lineage's
+   *     real persist history.
+   * `saveSeq` sits FLAT for none of these — it counts persist events, not
+   * ticks, buildings, or wall-clock time, so it rises across every one of
+   * the shapes above.
+   *
+   * Optional for backward tolerance: a savepoint written before this field
+   * existed has no stamp. Per the adjudicated ruling, an absent `saveSeq` is
+   * treated as `0` on BOTH sides of a comparison; if that leaves the two
+   * sides tied (both absent, or an honest tie at a shared value), the
+   * comparison falls back to the pre-round-3 `snapshotTick`+`savedAt` rule —
+   * documented, not silent, and only ever a TIE-BREAK now, never primary.
+   */
+  saveSeq?: number;
+  /**
+   * P0 RCA fix (Aaron, 2026-09-04, item 1): copied automatically from
+   * `snapshot.lineageId` by `createSavepoint` — see `SimState.lineageId`'s
+   * own doc comment (types.ts) for the full mechanism. Absent = the
+   * reserved `LEGACY_LINEAGE_ID` lineage (a save written before this field
+   * existed) — `savepointKey` maps both the same way, so this is backward
+   * tolerant with zero storage migration required.
+   */
+  lineageId?: string;
 }
 
 /**
@@ -72,6 +115,50 @@ export interface RestoreResult {
  * (see SAVEPOINT_CAP).
  */
 export const SAVEPOINT_KEY_PREFIX = 'metropolis.savepoint';
+
+/**
+ * P0 RCA fix: the reserved lineage id for a save with no `lineageId` stamp
+ * (every save written before this fix). Deliberately maps to the SAME
+ * unnamespaced keys (`metropolis.savepoint.<slot>`) every save already used
+ * — see `savepointKey`'s own comment — so an existing player's next boot
+ * reads exactly what it does today, zero storage migration required.
+ */
+export const LEGACY_LINEAGE_ID = 'legacy';
+
+/** The localStorage key holding which lineage id is "current" (the one boot should restore). Absent = LEGACY_LINEAGE_ID (item 5's default). */
+export const CURRENT_LINEAGE_KEY = 'metropolis.currentLineage';
+
+/** Read the current-lineage pointer, defaulting to the reserved legacy lineage (P0 fix item 5). Never throws. */
+export function readCurrentLineageId(storage: StorageLike): string {
+  try {
+    const raw = storage.getItem(CURRENT_LINEAGE_KEY);
+    return raw && raw.length > 0 ? raw : LEGACY_LINEAGE_ID;
+  } catch {
+    return LEGACY_LINEAGE_ID;
+  }
+}
+
+/** Set the current-lineage pointer. Never throws. */
+export function writeCurrentLineageId(storage: StorageLike, lineageId: string): void {
+  try {
+    storage.setItem(CURRENT_LINEAGE_KEY, lineageId);
+  } catch {
+    /* best-effort — a failure here just means the NEXT boot falls back to LEGACY_LINEAGE_ID */
+  }
+}
+
+/**
+ * Mint an opaque, per-city lineage id. Called ONLY from outside the pure
+ * reducer (a boot-time fresh-city decision, `freshStart`, `loadDevCity1`) —
+ * NEVER from inside `reducer()`/`rawState()` itself, which must stay
+ * deterministic (GR#21): the 'reset' reducer case instead receives an
+ * already-minted id on the dispatched action (see engine.ts's 'reset' case
+ * and store.tsx's Start Over dispatch site), so replaying the SAME recorded
+ * action always reproduces the SAME lineage id.
+ */
+export function mintLineageId(now: Date = new Date()): string {
+  return `L${now.getTime().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
 
 /**
  * BUG-469 (Aaron ruling, Q100029): a single autosave slot means ANY overwrite
@@ -101,19 +188,32 @@ export interface StorageLike {
 }
 
 /**
- * Generate the localStorage key for the Nth savepoint slot (0-based).
+ * Generate the localStorage key for the Nth savepoint slot (0-based),
+ * optionally namespaced to a lineage (P0 RCA fix, item 2).
+ *
+ * `undefined` and `LEGACY_LINEAGE_ID` are DELIBERATELY THE SAME physical key
+ * (`metropolis.savepoint.<slot>`, no lineage segment at all) — every save
+ * ever written used this exact key, so treating the legacy lineage as
+ * "no segment" rather than a literal `.legacy.` segment means an existing
+ * player's saves are found at the SAME location with ZERO storage migration.
+ * Any OTHER (minted) lineage id gets its own namespaced key
+ * (`metropolis.savepoint.<lineageId>.<slot>`), which can never collide with
+ * another lineage's slots — this is what makes the P0 fix's overwrite gate
+ * (item 3) scoped-by-construction: two different lineages are never even
+ * reading/writing the same key, so there is nothing to compare.
  */
-function savepointKey(slot: number): string {
-  return `${SAVEPOINT_KEY_PREFIX}.${slot}`;
+function savepointKey(slot: number, lineageId?: string): string {
+  if (!lineageId || lineageId === LEGACY_LINEAGE_ID) return `${SAVEPOINT_KEY_PREFIX}.${slot}`;
+  return `${SAVEPOINT_KEY_PREFIX}.${lineageId}.${slot}`;
 }
 
 /**
  * Read a single savepoint slot. Fail-safe: a missing key, corrupt JSON, or a
  * parse error all degrade to `null` — never throws.
  */
-function readSlot(storage: StorageLike, slot: number): Savepoint | null {
+function readSlot(storage: StorageLike, slot: number, lineageId?: string): Savepoint | null {
   try {
-    const raw = storage.getItem(savepointKey(slot));
+    const raw = storage.getItem(savepointKey(slot, lineageId));
     if (!raw) return null;
     // FEAT-1972079935: decode() is a no-op on a legacy uncompressed value
     // (no LZv1: prefix), so this reads both old and new savepoints.
@@ -143,11 +243,11 @@ function isStaleAutosave(sp: Savepoint, nowMs: number): boolean {
  * hasn't happened yet (e.g. the app has not autosaved since the retention
  * window passed). `now` is injectable for deterministic tests.
  */
-export function readAllSavepoints(storage: StorageLike, now: Date = new Date()): Savepoint[] {
+export function readAllSavepoints(storage: StorageLike, now: Date = new Date(), lineageId?: string): Savepoint[] {
   const nowMs = now.getTime();
   const savepoints: Savepoint[] = [];
   for (let slot = 0; slot < SAVEPOINT_CAP; slot++) {
-    const sp = readSlot(storage, slot);
+    const sp = readSlot(storage, slot, lineageId);
     if (!sp) continue;
     if (isStaleAutosave(sp, nowMs)) continue;
     savepoints.push(sp);
@@ -163,43 +263,107 @@ export function mostRecentSavepoint(savepoints: Savepoint[]): Savepoint | null {
   return savepoints.reduce((best, sp) => (sp.savedAt > best.savedAt ? sp : best));
 }
 
+/** P0 RCA fix, item 3/4: why `persistSavepointWithReason` refused a write. */
+export type SavepointRejectReason = 'stale-overwrite' | 'storage-error';
+
+export interface PersistSavepointResult {
+  ok: boolean;
+  reason?: SavepointRejectReason;
+}
+
+/**
+ * Is `incoming` at least as new as `existing`? PRIMARY: `saveSeq` (the
+ * monotonic per-lineage persist counter, FEAT-2326609780 round 3) when BOTH
+ * carry one — mirrors store.tsx's `isStrictlyFresherSavepointMeta` and
+ * saveStore.ts's `guardedSavepointSetItem` exactly, so all three of this
+ * estate's freshness gates agree. Falls back to the original BUG-469 rule
+ * (tick, then `savedAt` as the `>=` tie-break) when either side lacks a
+ * `saveSeq` — the common case for anything written before round 3, and the
+ * exact comparison the RCA's own repro fixtures exercise (they never stamp
+ * `saveSeq`), so this fallback is what keeps their assertions unchanged.
+ */
+function isIncomingSavepointNewerOrEqual(incoming: Savepoint, existing: Savepoint): boolean {
+  const incSeq = incoming.saveSeq;
+  const exSeq = existing.saveSeq;
+  if (Number.isFinite(incSeq) && Number.isFinite(exSeq)) {
+    if (incSeq !== exSeq) return (incSeq as number) > (exSeq as number);
+    // tied on a REAL saveSeq — fall through to the tick+savedAt tie-break below
+  }
+  return incoming.snapshotTick > existing.snapshotTick || (incoming.snapshotTick === existing.snapshotTick && incoming.savedAt >= existing.savedAt);
+}
+
 /**
  * Persist a new savepoint, rotating slots so a bounded HISTORY of the newest
  * SAVEPOINT_CAP autosaves is kept (BUG-469) — never a single overwritten slot.
  *
- * Target-slot choice (no separate "next slot" cursor — GR#3, the slots
- * themselves are the only source of truth): prefer an empty slot; if all
- * SAVEPOINT_CAP slots are occupied, overwrite the OLDEST occupied one. That
- * is exactly a rotating history — the newest SAVEPOINT_CAP autosaves always
- * survive, the single oldest one rolls off.
+ * P0 RCA fix (Aaron, 2026-09-04 — "I created a whole new map city 13...yet I
+ * saved and started a new map" resurrected the OLD city): the rotation slots
+ * are now namespaced by `savepoint.lineageId` (item 2's `savepointKey`) —
+ * `undefined`/`LEGACY_LINEAGE_ID` map to the SAME unnamespaced keys every
+ * save has always used (zero migration), any OTHER lineage id gets its own
+ * physically separate keyspace. This makes the overwrite gate below (item 3)
+ * SCOPED BY CONSTRUCTION: two different lineages' savepoints are never even
+ * read from the same key, so a foreign-lineage save can never again be
+ * treated as a competitor — closing the exact mechanism the RCA proved
+ * (a brand-new low-tick city could never beat an old high-tick one occupying
+ * the SAME global slot).
  *
- * Overwrite protection (BUG-469): before overwriting an occupied slot, the
- * incoming savepoint must be strictly newer (by snapshotTick, then by
- * savedAt) than what is already there. A stale/older writer — a backgrounded
- * tab whose timer fires after a fresher autosave already landed, a slow
- * reload racing a live tab — is REJECTED (returns false) rather than
- * clobbering a fresher save. The prior good savepoint is left untouched.
+ * Target-slot choice (no separate "next slot" cursor — GR#3, the slots
+ * themselves are the only source of truth, WITHIN one lineage's namespace):
+ * prefer an empty slot; if all SAVEPOINT_CAP slots are occupied, overwrite
+ * the OLDEST occupied one. That is exactly a rotating history — the newest
+ * SAVEPOINT_CAP autosaves of THIS lineage always survive, the single oldest
+ * one rolls off.
+ *
+ * Overwrite protection (BUG-469, extended round 3): before overwriting an
+ * occupied slot, the incoming savepoint must be at least as new as what is
+ * already there by `isIncomingSavepointNewerOrEqual` (saveSeq-primary,
+ * tick+savedAt fallback) — now ONLY ever compared against another savepoint
+ * of the SAME lineage. A stale/older writer is REJECTED (`ok:false`,
+ * `reason:'stale-overwrite'`) rather than clobbering a fresher save of that
+ * lineage. The prior good savepoint is left untouched.
  *
  * BUG-469: also purges any autosave older than AUTOSAVE_RETENTION_MS before
  * picking a target slot, so long-idle dev installs don't accumulate
  * autosaves forever (named saves are a separate mechanism and are never
  * touched here).
  *
- * Fail-safe: localStorage errors are caught and logged silently; the app
- * continues without the savepoint. Returns whether the save succeeded (true
- * = persisted, false = failed OR protected-against-stale-overwrite). The
- * caller should display a quiet indicator on failure (FEAT-1972079854 spec,
- * AC-7 / GR#1).
+ * Fail-safe: localStorage errors are caught and reported as
+ * `reason:'storage-error'` rather than thrown; the app continues without the
+ * savepoint. `persistSavepoint` (below) is the pre-existing boolean-only
+ * contract every other caller in this codebase already uses; new call sites
+ * that need to distinguish WHY a save was refused (item 4 — a refusal must
+ * surface loudly, not the quiet autosave dot) use
+ * `persistSavepointWithReason` directly.
  */
-export function persistSavepoint(
+export function persistSavepointWithReason(
   storage: StorageLike,
   savepoint: Savepoint,
   now: Date = new Date()
-): boolean {
+): PersistSavepointResult {
   try {
+    // F2 fix (P0 lineage round): a savepoint arriving here with NO lineageId
+    // (e.g. a genesis rebuild — replayFromGenesis starts at initialState()
+    // and only ever recovers a lineage from a JOURNALLED reset entry, which
+    // JOURNAL_CAP can roll off) is NOT necessarily a legacy save — lineage is
+    // an identity of the CITY, not of the journal contents. Stamp it to
+    // whatever `storage` says is the CURRENT lineage before it is ever keyed,
+    // so a rebuild (or any other caller that forgot to carry the id forward)
+    // lands in the live lineage's own slots instead of clobbering the
+    // legacy keyspace. Only fills a genuine gap — never overrides an
+    // explicit lineageId already on the savepoint — and never stamps when
+    // the ambient current lineage IS legacy (a real legacy save stays
+    // legacy, unchanged from prior behaviour).
+    if (!savepoint.lineageId) {
+      const ambientLineageId = readCurrentLineageId(storage);
+      if (ambientLineageId !== LEGACY_LINEAGE_ID) {
+        savepoint.lineageId = ambientLineageId;
+      }
+    }
+    const lineageId = savepoint.lineageId;
     for (let slot = SAVEPOINT_CAP; slot < 8; slot++) {
       try {
-        storage.removeItem(savepointKey(slot));
+        storage.removeItem(savepointKey(slot, lineageId));
       } catch {
         /* leftover slots from older caps */
       }
@@ -208,12 +372,12 @@ export function persistSavepoint(
     const nowMs = now.getTime();
     const slots: Array<{ slot: number; sp: Savepoint | null }> = [];
     for (let slot = 0; slot < SAVEPOINT_CAP; slot++) {
-      let sp = readSlot(storage, slot);
+      let sp = readSlot(storage, slot, lineageId);
       // BUG-469: purge-on-write — drop autosaves older than the retention
       // window so a slot they occupy is free for rotation again.
       if (sp && isStaleAutosave(sp, nowMs)) {
         try {
-          storage.removeItem(savepointKey(slot));
+          storage.removeItem(savepointKey(slot, lineageId));
         } catch {
           /* ignore — worst case the stale slot lingers, filtered on read */
         }
@@ -226,14 +390,10 @@ export function persistSavepoint(
     const target = emptySlot ?? slots.reduce((oldest, s) => (s.sp!.savedAt < oldest.sp!.savedAt ? s : oldest));
 
     if (target.sp) {
-      const incomingTick = savepoint.snapshotTick;
-      const existingTick = target.sp.snapshotTick;
-      const incomingIsNewer =
-        incomingTick > existingTick || (incomingTick === existingTick && savepoint.savedAt >= target.sp.savedAt);
-      if (!incomingIsNewer) {
+      if (!isIncomingSavepointNewerOrEqual(savepoint, target.sp)) {
         // BUG-469 overwrite protection: reject the stale write outright.
-        // The prior (fresher) savepoint in this slot is left intact.
-        return false;
+        // The prior (fresher, SAME-lineage) savepoint in this slot is left intact.
+        return { ok: false, reason: 'stale-overwrite' };
       }
     }
 
@@ -241,11 +401,26 @@ export function persistSavepoint(
     // setItem — the outer try/catch still covers readSlot/removeItem.
     // FEAT-1972079935: encode() compresses the (large) serialized savepoint
     // before it hits localStorage — smaller payload, same quota-safe path.
-    const result = safeSetItem(storage, savepointKey(target.slot), encode(JSON.stringify(savepoint)));
-    return result.ok;
+    const result = safeSetItem(storage, savepointKey(target.slot, lineageId), encode(JSON.stringify(savepoint)));
+    return result.ok ? { ok: true } : { ok: false, reason: 'storage-error' };
   } catch {
-    return false;
+    return { ok: false, reason: 'storage-error' };
   }
+}
+
+/**
+ * Backward-compatible boolean contract — every pre-existing call site in
+ * this codebase uses this. Returns whether the save succeeded (true =
+ * persisted, false = failed OR protected-against-stale-overwrite). See
+ * `persistSavepointWithReason` for the full doc comment and the reason-
+ * carrying variant new call sites (item 4) should prefer.
+ */
+export function persistSavepoint(
+  storage: StorageLike,
+  savepoint: Savepoint,
+  now: Date = new Date()
+): boolean {
+  return persistSavepointWithReason(storage, savepoint, now).ok;
 }
 
 /**
@@ -264,24 +439,64 @@ export function persistSavepoint(
  */
 export function restampSavepointsBuildVersion(
   storage: StorageLike,
-  runningVersion: string
+  runningVersion: string,
+  lineageId?: string
 ): boolean {
   if (!runningVersion) return false;
+  // F3 fix (P0 lineage round, BUG-468 regression): a caller that does not
+  // (or cannot) know the lineage explicitly must still land on the RIGHT
+  // keyspace — default to whatever `storage` itself says is current, rather
+  // than silently falling back to the (for a namespaced player, empty)
+  // legacy slots. `readCurrentLineageId` already normalises an absent
+  // pointer to `LEGACY_LINEAGE_ID`, which `savepointKey` treats identically
+  // to `undefined`, so this is a no-op for a genuinely legacy player.
+  const effectiveLineageId = lineageId ?? readCurrentLineageId(storage);
   let wrote = false;
   // Cover the live slots boot actually reads (0..SAVEPOINT_CAP), which includes
   // the rolling autosave savepoint.
   for (let slot = 0; slot < SAVEPOINT_CAP; slot++) {
     try {
-      const raw = storage.getItem(savepointKey(slot));
+      const raw = storage.getItem(savepointKey(slot, effectiveLineageId));
       if (!raw) continue;
       const sp = JSON.parse(decode(raw)) as Savepoint;
       if (!sp || typeof sp !== 'object') continue;
       if (sp.buildVersion === runningVersion) continue; // already current
       sp.buildVersion = runningVersion;
-      const result = safeSetItem(storage, savepointKey(slot), encode(JSON.stringify(sp)));
+      const result = safeSetItem(storage, savepointKey(slot, effectiveLineageId), encode(JSON.stringify(sp)));
       wrote = wrote || result.ok;
     } catch {
       // Corrupt slot / quota — skip; never throw out of a resolution handler.
+      continue;
+    }
+  }
+  return wrote;
+}
+
+/**
+ * P0 RCA fix, item 5 (MIGRATION): a savepoint written before lineage
+ * identity existed has no `lineageId` field, but ALREADY reads/writes as the
+ * reserved `LEGACY_LINEAGE_ID` lineage (`savepointKey`'s undefined-maps-to-
+ * unnamespaced behaviour) — so this migration is NOT required for correct
+ * behaviour, only for HONESTY: it rewrites each legacy slot IN PLACE (same
+ * physical key, mirrors `restampSavepointsBuildVersion`'s own idiom exactly)
+ * to carry an explicit `lineageId: 'legacy'` stamp, so a future reader never
+ * has to guess whether "no field" means "pre-fix" or "a bug". Idempotent
+ * (skips a slot that already carries the stamp) and fail-safe (a corrupt
+ * slot / quota error is skipped, never thrown).
+ */
+export function migrateLegacySavepointsInPlace(storage: StorageLike): boolean {
+  let wrote = false;
+  for (let slot = 0; slot < SAVEPOINT_CAP; slot++) {
+    try {
+      const raw = storage.getItem(savepointKey(slot)); // unnamespaced = legacy
+      if (!raw) continue;
+      const sp = JSON.parse(decode(raw)) as Savepoint;
+      if (!sp || typeof sp !== 'object') continue;
+      if (sp.lineageId === LEGACY_LINEAGE_ID) continue; // already stamped
+      sp.lineageId = LEGACY_LINEAGE_ID;
+      const result = safeSetItem(storage, savepointKey(slot), encode(JSON.stringify(sp)));
+      wrote = wrote || result.ok;
+    } catch {
       continue;
     }
   }
@@ -424,7 +639,7 @@ export const LARGE_TAIL_REPLAY_THRESHOLD = 150;
  * instead of blocking the synchronous boot path. Fail-safe: any error
  * degrades to `{ success: false }`, exactly like `restoreFromSavepoint`.
  */
-export function prepareRestoreForChunkedTail(storage: StorageLike): {
+export function prepareRestoreForChunkedTail(storage: StorageLike, lineageId?: string): {
   success: boolean;
   state?: SimState;
   tail?: JournalEntry[];
@@ -447,7 +662,7 @@ export function prepareRestoreForChunkedTail(storage: StorageLike): {
   needsJobsGrandfatherCatchUp?: boolean;
 } {
   try {
-    const savepoints = readAllSavepoints(storage);
+    const savepoints = readAllSavepoints(storage, new Date(), lineageId);
     if (savepoints.length === 0) {
       return { success: false, reason: 'No savepoint found' };
     }
@@ -592,9 +807,9 @@ export function* replayTailChunked(
  * any error (missing savepoint, corrupt JSON, consistency check failure) returns
  * { success: false } and the app boots fresh.
  */
-export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
+export function restoreFromSavepoint(storage: StorageLike, lineageId?: string): RestoreResult {
   try {
-    const savepoints = readAllSavepoints(storage);
+    const savepoints = readAllSavepoints(storage, new Date(), lineageId);
     if (savepoints.length === 0) {
       return { success: false, reason: 'No savepoint found' };
     }
@@ -718,7 +933,8 @@ export function createSavepoint(
   journalTail: JournalEntry[],
   now: Date = new Date(),
   buildVersion?: string,
-  camera?: MapViewState | null
+  camera?: MapViewState | null,
+  saveSeq?: number
 ): Savepoint {
   return {
     savedAt: now.toISOString(),
@@ -726,10 +942,18 @@ export function createSavepoint(
     snapshot: state,
     journalTail, // Real tail: actions recorded since last snapshot
     // inc2: stamp the build the save was produced under + the current camera.
-    // Both are optional; omitted fields simply don't serialize, so a legacy
-    // reader (and needsRebuild) sees `undefined` and keeps old behaviour.
+    // round 3: stamp the monotonic per-lineage saveSeq (see the Savepoint
+    // field's own doc comment). All three optional; an omitted field simply
+    // doesn't serialize, so a legacy reader sees `undefined` and keeps old
+    // behaviour (needsRebuild / the saveSeq-absent fallback rule).
     ...(buildVersion ? { buildVersion } : {}),
     ...(camera ? { camera } : {}),
+    ...(saveSeq !== undefined ? { saveSeq } : {}),
+    // P0 RCA fix, item 1: lineage identity is carried on SimState itself
+    // (types.ts's SimState.lineageId) and copied onto every Savepoint
+    // AUTOMATICALLY here — no call site anywhere in the app needs to pass
+    // it explicitly; it simply rides whatever `state` is being saved.
+    ...(state.lineageId ? { lineageId: state.lineageId } : {}),
   };
 }
 
@@ -738,8 +962,10 @@ export function createSavepoint(
  * Used on app boot if no savepoint is available.
  */
 export function freshStart(): { state: SimState; journal: Journal } {
+  // P0 RCA fix, item 1: this is a genesis point, called directly by app code
+  // (never by the pure reducer), so minting a lineage id here is safe.
   return {
-    state: getInitialState(),
+    state: { ...getInitialState(), lineageId: mintLineageId() },
     journal: emptyJournal(),
   };
 }

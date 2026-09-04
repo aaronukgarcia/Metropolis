@@ -38,6 +38,16 @@ import {
   replayTailChunked,
   checkConsistencyRecoveringStaleFlows,
   SAVEPOINT_CAP,
+  SAVEPOINT_KEY_PREFIX,
+  LEGACY_LINEAGE_ID,
+  readCurrentLineageId,
+  writeCurrentLineageId,
+  mintLineageId,
+  migrateLegacySavepointsInPlace,
+  persistSavepointWithReason,
+  type Savepoint,
+  type StorageLike,
+  type SavepointRejectReason,
 } from './replay';
 import {
   needsRebuild,
@@ -62,6 +72,8 @@ import {
   migrateFromLocalStorage,
   mirrorKeyFromLocalStorage,
   mirrorSaveCheckpoint,
+  mirrorSavepointDirect as mirrorSavepointDirectToStore,
+  SAVEPOINT_OVERFLOW_KEY,
 } from './saveStore';
 import { encode, decode } from './saveCodec';
 // FEAT-webworker-sim-offload Stage 1 / Landing 2 (2026-09-02): tick-only
@@ -303,15 +315,263 @@ function pickAnyFile(): Promise<string | null> {
 // ---------------------------------------------------------------------------
 
 /** Mirror the rotating savepoint slots + the full journal, crash-consistency ordered. */
-function mirrorSavepointCheckpoint(): void {
+function mirrorSavepointCheckpoint(lineageId?: string): void {
   try {
     void mirrorSaveCheckpoint(getDefaultSaveStore(), window.localStorage, {
       savepointSlots: SAVEPOINT_CAP,
       journalKey: JOURNAL_KEY,
+      lineageId,
     });
   } catch {
     /* best-effort — localStorage's own write already succeeded/failed on its own terms */
   }
+}
+
+/**
+ * FEAT-2326609780 inc2: mirror a savepoint whose localStorage write FAILED
+ * straight into the durable store's overflow slot — bypasses the
+ * "read-from-localStorage" step every other mirror helper uses, because on a
+ * failed write localStorage still holds the OLD savepoint and mirroring from
+ * it would be a no-op. `encodedSavepoint` is typically plain
+ * `JSON.stringify(savepoint)` (no need to spend the compression cost twice —
+ * IndexedDB is not the 5MB-constrained medium); `decode()` at read time
+ * treats an uncompressed payload as a no-op passthrough.
+ */
+function mirrorSavepointDirect(encodedSavepoint: string, lineageId?: string): void {
+  try {
+    void mirrorSavepointDirectToStore(getDefaultSaveStore(), encodedSavepoint, lineageId);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * FEAT-2326609780 inc2: the single call-site pattern every `persistSavepoint`
+ * caller in this file now uses, so the durable IndexedDB mirror ALWAYS
+ * advances regardless of whether the synchronous localStorage write
+ * succeeded — this is what breaks the quota-wedge cycle (BUG-617-class):
+ * once localStorage cannot accept a savepoint, this is the ONLY remaining
+ * path that keeps a fresher-than-localStorage copy reachable for the next
+ * boot (see the boot-time IDB-freshness effect below).
+ *   - success: mirror the bytes localStorage actually holds now (unchanged
+ *     inc1 behaviour — savepoint-slots-before-journal crash-consistency
+ *     ordering preserved).
+ *   - failure: mirror the savepoint that COULD NOT be written, directly,
+ *     bypassing localStorage entirely.
+ */
+function mirrorAfterPersist(persisted: boolean, savepoint: Savepoint): void {
+  // P0 RCA fix, item 2: `savepoint.lineageId` (stamped automatically by
+  // createSavepoint from the state that produced it) threads straight
+  // through to the IDB mirror keys, so two lineages' durable copies can
+  // never collide either.
+  if (persisted) {
+    mirrorSavepointCheckpoint(savepoint.lineageId);
+  } else {
+    mirrorSavepointDirect(JSON.stringify(savepoint), savepoint.lineageId);
+  }
+}
+
+/** The shape every savepoint-freshness comparison in this module operates on. */
+export interface SavepointFreshnessMeta {
+  snapshotTick: number;
+  savedAt: string;
+  saveSeq?: number;
+  /** P0 RCA fix, item 5: the IDB-freshness swap must never adopt a candidate from a DIFFERENT lineage — see `isStrictlyFresherSavepointMeta`'s own comment. */
+  lineageId?: string;
+}
+
+/**
+ * FEAT-2326609780 ROUND 3 (the structural fix, adjudicated — round 2's
+ * ATTACK G and R2-F1 both trace to the SAME root cause): is `candidate`
+ * STRICTLY fresher than `booted`?
+ *
+ * PRIMARY ORDER: `saveSeq`, the monotonic per-lineage persist counter (see
+ * `Savepoint.saveSeq`'s own doc comment, replay.ts). Round 2 REJECTED the
+ * previous tick+savedAt-primary design on two independently-proven grounds:
+ *   - ATTACK G: building count is not monotonic (bulldoze, forced asset
+ *     sales, the default-on consolidator's scrap-and-rebuild passes all
+ *     legitimately SHRINK a city that is still the newer one) — round 2's
+ *     OWN safety net (since REMOVED) refused a genuine rescue forever
+ *     because it was smaller.
+ *   - R2-F1: `snapshotTick` sits FLAT while the player plays without a tick
+ *     advancing, so two savepoints minutes apart can tie on tick — and the
+ *     `savedAt` tie-break then means "whichever was stamped most recently
+ *     in WALL-CLOCK time wins", which is exactly backwards when a
+ *     `finish()` self-heal stamps `new Date()` onto a STALE, smaller
+ *     lineage a few milliseconds after a genuinely fresher rescue was
+ *     already sitting in IndexedDB with an earlier timestamp.
+ * `saveSeq` sits flat for neither: it counts PERSIST EVENTS, not ticks,
+ * buildings, or wall-clock time, so it strictly rises across every one of
+ * the shapes above (see store.tsx's `nextSaveSeq()` — every
+ * autosave/save/self-heal/load/rebuild bumps it once, success or failure).
+ *
+ * FALLBACK (documented, not silent): a `saveSeq` of `undefined` (a
+ * pre-round-3 savepoint) is treated as `0` on BOTH sides. When that leaves
+ * the two sides TIED (both absent, or an honest equal count), this falls
+ * back to the pre-round-3 `snapshotTick`-then-`savedAt` rule — now only ever
+ * a tie-break, never primary. Strict `>` throughout (not `persistSavepoint`'s
+ * `>=` — see that function's own BUG-469 rule): equal-on-every-field must
+ * NOT count as "fresher" here, because the caller's question is "should I
+ * hydrate a SECOND time", and hydrating onto byte-identical metadata would
+ * be a pointless (and potentially non-idempotent) re-hydrate for zero
+ * benefit — a deliberate divergence from `persistSavepoint`, not a bug to
+ * reconcile toward it.
+ *
+ * `null` (no savepoint) is the oldest possible value on either side: a
+ * well-formed candidate beats a null `booted` (nothing was loaded — e.g. a
+ * fresh dev-city boot), and a null `candidate` never beats anything.
+ *
+ * Hostile/corrupt metadata (F5/ATTACK D — a hand-edited or pre-inc1 record
+ * missing `savedAt`, or a `NaN` tick/seq from a truncated/corrupted mirror
+ * write) is handled by ordinary JS comparison semantics: every relational
+ * comparison against `NaN` or `undefined` is `false`, so a corrupt value
+ * NEVER wins a comparison it takes part in — safe by the shape of the
+ * arithmetic itself, not because this function validates its inputs (see
+ * `freshestSavepoint` below, which DOES validate, because `NaN`/`undefined`
+ * are also never LESS than anything — a corrupt `booted` baseline would
+ * otherwise silently let inequality checks alone be gamed).
+ */
+/** Normalize a lineage id for comparison — `undefined` and the reserved legacy id are the SAME lineage (see `LEGACY_LINEAGE_ID`'s own doc comment). */
+function normalizeLineageId(lineageId: string | undefined): string {
+  return lineageId && lineageId !== LEGACY_LINEAGE_ID ? lineageId : LEGACY_LINEAGE_ID;
+}
+
+export function isStrictlyFresherSavepointMeta(candidate: SavepointFreshnessMeta | null, booted: SavepointFreshnessMeta | null): boolean {
+  if (!candidate) return false;
+  if (!booted) return true;
+  // P0 RCA fix, item 5: the IDB-freshness swap must NEVER adopt a candidate
+  // from a DIFFERENT lineage than what booted — that is exactly Aaron's
+  // resurrected-old-city mechanism, just relocated to the IndexedDB mirror
+  // instead of localStorage's own rotation slots. A foreign-lineage
+  // candidate is never a competitor, full stop, regardless of what its
+  // tick/savedAt/saveSeq claim.
+  if (normalizeLineageId(candidate.lineageId) !== normalizeLineageId(booted.lineageId)) return false;
+  const candidateSeqDefined = Number.isFinite(candidate.saveSeq);
+  const bootedSeqDefined = Number.isFinite(booted.saveSeq);
+  // FEAT-2326609780 round 3 self-fix (caught by re-running THIS ESTATE'S
+  // own tests before reporting, and independently by ATTACK A2/E/G on the
+  // first round-3 attempt): saveSeq is primary ONLY when BOTH sides carry a
+  // real one. Treating an ABSENT saveSeq as a literal `0` (rather than
+  // "unknown, fall back") made every pre-round-3 / seq-less savepoint lose
+  // UNCONDITIONALLY to any post-round-3 self-heal, because a self-heal
+  // ALWAYS stamps a real, positive `saveSeq` via `nextSaveSeq()` — even the
+  // routine, always-happens self-heal on a perfectly ordinary boot. That
+  // silently defeated the whole structural fix: a genuinely fresher durable
+  // rescue with no `saveSeq` (or one whose OWN saveSeq the test/caller never
+  // set) always lost to whatever the local self-heal had just stamped,
+  // regardless of which one actually represented more history. Comparing by
+  // saveSeq is only meaningful when both numbers describe the SAME counting
+  // scheme — an absent value on either side means "unknown", not "zero",
+  // and the comparison falls back to tick+savedAt instead.
+  if (candidateSeqDefined && bootedSeqDefined) {
+    const candidateSeq = candidate.saveSeq as number;
+    const bootedSeq = booted.saveSeq as number;
+    if (candidateSeq !== bootedSeq) return candidateSeq > bootedSeq;
+    // Tied on a REAL saveSeq — fall through to the tick+savedAt tie-break below.
+  }
+  // Either side lacks a saveSeq, or both have the SAME one (a genuine tie):
+  // fall back to the pre-round-3 tick+savedAt rule — tie-break only now,
+  // never primary, but the only honest comparison available when the
+  // primary counting scheme is not comparable on both sides.
+  return candidate.snapshotTick > booted.snapshotTick || (candidate.snapshotTick === booted.snapshotTick && candidate.savedAt > booted.savedAt);
+}
+
+/**
+ * True for a well-formed `{snapshotTick, savedAt}` pair — finite tick,
+ * non-empty string savedAt. `saveSeq` is validated separately at the point
+ * of use (`isStrictlyFresherSavepointMeta` already treats a non-finite
+ * `saveSeq` as absent/0 safely) since it is optional even on a well-formed
+ * savepoint. Deliberately NOT a type predicate (`sp is ...`): `Savepoint`'s
+ * own declared type already claims `snapshotTick`/`savedAt` are always
+ * `number`/`string`, so a predicate narrowing against that same shape makes
+ * TypeScript treat the "invalid" branch as unreachable (`never`) at compile
+ * time — exactly backwards for a runtime check whose entire purpose is
+ * distrusting a value that TRUE JS at runtime does not actually guarantee
+ * matches its declared type (a corrupted/hand-edited IndexedDB blob).
+ */
+function isValidSavepointMeta(sp: Savepoint): boolean {
+  const tick: unknown = sp.snapshotTick;
+  const savedAt: unknown = sp.savedAt;
+  return typeof tick === 'number' && Number.isFinite(tick) && typeof savedAt === 'string' && savedAt.length > 0;
+}
+
+/**
+ * FEAT-2326609780 inc2: pick the freshest of a list of possibly-null
+ * candidate savepoints (by the same saveSeq-primary rule as
+ * `isStrictlyFresherSavepointMeta`). Used to reduce the durable store's
+ * several possible sources (the mirrored rotation slots PLUS the
+ * failure-path overflow slot) down to a single "best IndexedDB has to
+ * offer" candidate before comparing it against what booted from localStorage.
+ *
+ * F5 FIX (independent round REJECT, ATTACK D): the original version seeded
+ * `best` with the FIRST non-null candidate UNCONDITIONALLY, before any
+ * validation. A candidate with a corrupt (`NaN`) `snapshotTick` then won
+ * that unconditional seed, and EVERY subsequent well-formed candidate lost
+ * to it — `wellFormed.tick > NaN` and `wellFormed.tick === NaN` are both
+ * `false`, so `isStrictlyFresherSavepointMeta` never replaces a corrupt
+ * `best` with a good one. A single corrupted IndexedDB slot silently
+ * poisoned the whole comparison. Fix: validate every candidate BEFORE it is
+ * ever allowed to become `best` (GR#1/#17: report the corrupt slot loudly —
+ * a player should not have their durable rescue copy silently ignored
+ * without a trace).
+ */
+export function freshestSavepoint(candidates: Array<Savepoint | null>): Savepoint | null {
+  let best: Savepoint | null = null;
+  for (const sp of candidates) {
+    if (!sp) continue;
+    if (!isValidSavepointMeta(sp)) {
+      recordError(
+        `A durable IndexedDB savepoint slot was ignored during the boot-freshness check: corrupt metadata (snapshotTick=${String(sp.snapshotTick)}, savedAt=${String(sp.savedAt)})`,
+        { type: 'app', action: 'load' },
+      );
+      continue;
+    }
+    if (!best || isStrictlyFresherSavepointMeta({ snapshotTick: sp.snapshotTick, savedAt: sp.savedAt, saveSeq: sp.saveSeq }, { snapshotTick: best.snapshotTick, savedAt: best.savedAt, saveSeq: best.saveSeq })) {
+      best = sp;
+    }
+  }
+  return best;
+}
+
+/**
+ * FEAT-2326609780 inc2: decode a raw IndexedDB value (either
+ * `saveCodec.encode()`-compressed, mirrored verbatim from a successful
+ * localStorage write, or plain JSON, written directly by
+ * `mirrorSavepointDirect` on a failed one — `decode()` is a no-op passthrough
+ * on uncompressed input either way) back into a `Savepoint`. Fail-safe: any
+ * parse error degrades to `null`, matching every other savepoint reader in
+ * this codebase (a corrupt IDB entry must never crash the boot-freshness
+ * check — localStorage's own copy is always the safe fallback).
+ */
+function decodeSavepointRaw(raw: string | null): Savepoint | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(decode(raw)) as Savepoint;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * FEAT-2326609780 inc2: build a minimal in-memory `StorageLike` exposing a
+ * single savepoint's raw encoded bytes at slot 0 — just enough for
+ * `prepareRestoreForChunkedTail` (which only ever reads
+ * `metropolis.savepoint.0..SAVEPOINT_CAP-1`) to parse it via the EXACT SAME
+ * code path a localStorage-sourced boot uses. This is what "reuses the
+ * existing chunked-tail machinery" means for an IndexedDB-sourced savepoint:
+ * no bespoke restore logic, just the real function fed a different backing
+ * store for one read.
+ */
+function singleSavepointStorage(rawSlot0: string): StorageLike {
+  return {
+    getItem: (key: string) => (key === `${SAVEPOINT_KEY_PREFIX}.0` ? rawSlot0 : null),
+    setItem: () => {
+      /* never written through this shim */
+    },
+    removeItem: () => {
+      /* never written through this shim */
+    },
+  };
 }
 
 /** Mirror one named-save slot plus its index + current-city-name keys. */
@@ -339,16 +599,26 @@ function mirrorPreWipeArchive(): void {
  * One-time (per browser profile) copy of every existing localStorage save
  * into the durable IndexedDB layer. Called once from a mount effect — never
  * blocks first paint (boot's synchronous localStorage restore already ran in
- * the lazy useState initializer above this component). Fire-and-forget: a
+ * the lazy useState initializer above this component). Never rejects: a
  * migration failure degrades to "this browser keeps using localStorage as
  * its effective durable store, same as before this feature existed" — never
  * a regression, per the layer's own fail-safe contract.
+ *
+ * FEAT-2326609780 round 2 (F4): returns the migration's own Promise (instead
+ * of firing-and-forgetting it) so the boot-time IDB-freshness effect can
+ * `await` it before reading IndexedDB — otherwise the freshness read and this
+ * migration's mirror writes race with no ordering guarantee, and the
+ * attacker's ATTACK E proved that race lets a stale localStorage copy
+ * clobber a fresher IndexedDB rotation slot mid-mount.
  */
-function runOneTimeSaveMigration(): void {
+function runOneTimeSaveMigrationAsync(): Promise<void> {
   try {
-    void migrateFromLocalStorage(getDefaultSaveStore(), window.localStorage);
+    return migrateFromLocalStorage(getDefaultSaveStore(), window.localStorage).then(
+      () => undefined,
+      () => undefined, // never rejects — matches every other saveStore.ts helper's contract
+    );
   } catch {
-    /* best-effort */
+    return Promise.resolve();
   }
 }
 
@@ -362,12 +632,22 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // SimProvider" (the whole app went blank), and also called useReducer/useState
   // after a conditional return.
   const [boot] = useState(() => {
+    // P0 RCA fix (Aaron, 2026-09-04, item 5 — MIGRATION): stamp any legacy
+    // (pre-lineage) savepoint in place (idempotent, cheap — mirrors
+    // restampSavepointsBuildVersion's own precedent of running inline in
+    // this initializer) and resolve which lineage boot should restore.
+    // `readCurrentLineageId` defaults to LEGACY_LINEAGE_ID when the pointer
+    // was never written — an EXISTING player's next boot restores from
+    // exactly the same (unnamespaced) keys it always has, zero regression.
+    migrateLegacySavepointsInPlace(window.localStorage);
+    const currentLineageId = readCurrentLineageId(window.localStorage);
+
     // inc2 (brief §4.3-4.4): if a persisted save was produced under a DIFFERENT
     // build, do NOT silently snapshot-restore — flag a pending rebuild decision so
     // the player is offered Rebuild / Keep / Fresh. We still restore the OLD
     // snapshot underneath so the app is usable behind the prompt; the choice then
     // either replays on the new engine, keeps this, or starts fresh.
-    const most = mostRecentSavepoint(readAllSavepoints(window.localStorage));
+    const most = mostRecentSavepoint(readAllSavepoints(window.localStorage, new Date(), currentLineageId));
     const running = currentBuildVersion();
     const crossBuild = !!most && needsRebuild(most.buildVersion, running);
 
@@ -431,7 +711,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // `prepareRestoreForChunkedTail`/`replayTailChunked` directly and have no
     // dependency on this branch.
     if (most) {
-      const prepared = prepareRestoreForChunkedTail(window.localStorage);
+      const prepared = prepareRestoreForChunkedTail(window.localStorage, currentLineageId);
       if (prepared.success && prepared.state && prepared.tail) {
         const loadedJournal = loadJournal(window.localStorage);
         return {
@@ -445,13 +725,21 @@ export function SimProvider({ children }: { children: ReactNode }) {
             crossBuildAfter: crossBuild ? { savedVersion: most.buildVersion ?? null, currentVersion: running } : null,
             needsJobsGrandfatherCatchUp: prepared.needsJobsGrandfatherCatchUp ?? false,
           },
+          // FEAT-2326609780 inc2: the identity of the savepoint that just
+          // booted (tick + timestamp only — never the heavy snapshot itself,
+          // which would otherwise be retained for the app's whole lifetime
+          // via this `[boot]` useState value). Compared against whatever the
+          // IDB-freshness effect below finds; a strictly fresher IDB
+          // savepoint triggers a post-mount hydrate through the same chunked
+          // machinery this branch itself uses.
+          bootSavepointMeta: { snapshotTick: most.snapshotTick, savedAt: most.savedAt, saveSeq: most.saveSeq, lineageId: currentLineageId },
         };
       }
       // prepare failed — fall through to the normal path below, which will
       // independently fail the same way and degrade to a fresh/dev-city boot.
     }
 
-    const restoreResult = restoreFromSavepoint(window.localStorage);
+    const restoreResult = restoreFromSavepoint(window.localStorage, currentLineageId);
     if (restoreResult.success && restoreResult.state) {
       const loadedJournal = loadJournal(window.localStorage);
       return {
@@ -462,18 +750,28 @@ export function SimProvider({ children }: { children: ReactNode }) {
           ? { savedVersion: most?.buildVersion ?? null, currentVersion: running, camera: most?.camera ?? null, kind: 'rebuild' as StandbyKind }
           : null,
         pendingTailReplay: null,
+        bootSavepointMeta: most ? { snapshotTick: most.snapshotTick, savedAt: most.savedAt, saveSeq: most.saveSeq, lineageId: currentLineageId } : null,
       };
     }
+    // P0 RCA fix, item 1: no savepoint exists for the current lineage at
+    // all — a genuinely fresh boot (first ever, or the pointer was reset).
+    // Mint a NEW lineage id and make it current immediately, so this
+    // session's very first autosave already lands in its own namespaced
+    // slots rather than the shared legacy ones (reserved for pre-fix data).
     const fresh =
       typeof process !== 'undefined' && process.env.NODE_TEST_CONTEXT
         ? initialState()
         : loadDevCity1();
+    const freshLineageId = fresh.lineageId ?? mintLineageId();
+    fresh.lineageId = freshLineageId;
+    writeCurrentLineageId(window.localStorage, freshLineageId);
     return {
       state: sanitizeTreasury(fresh),
       journal: emptyJournal(),
       saveIndex: 0,
       pendingRebuild: null,
       pendingTailReplay: null,
+      bootSavepointMeta: null,
     };
   });
 
@@ -494,8 +792,17 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // localStorage save into the durable IndexedDB layer. Runs in an effect
   // (AFTER first paint) so it never touches the synchronous boot-time restore
   // above — the instant-boot contract (BUG-617) is unaffected.
+  //
+  // FEAT-2326609780 round 2 (F4): the migration's own Promise is captured
+  // here (this effect is declared, and therefore fires, BEFORE the
+  // IDB-freshness effect below) so that effect can deterministically `await`
+  // migration's completion before reading IndexedDB — closing the race
+  // ATTACK E proved (a stale localStorage copy mirrored/migrated over a
+  // fresher IndexedDB rotation slot AFTER the freshness effect had already
+  // read it, or vice versa, with no ordering guarantee either way).
+  const migrationPromiseRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
-    runOneTimeSaveMigration();
+    migrationPromiseRef.current = runOneTimeSaveMigrationAsync();
   }, []);
   // BUG-458: the coalescing journal persister — created once (lazy ref init,
   // no useEffect indirection so it exists on the very first render). `schedule`
@@ -560,6 +867,35 @@ export function SimProvider({ children }: { children: ReactNode }) {
      *  tail-created instance of one of the six BUG-652 specs is grandfathered
      *  too, exactly like the synchronous restoreFromSavepoint() path. */
     needsJobsGrandfatherCatchUp: boolean;
+    /** FEAT-2326609780 inc2: normally undefined, and the effect below replays
+     *  `tail` onto `stateRefForDispatch.current` (the already-mounted state —
+     *  correct for boot's own use of this mechanism, where the mounted state
+     *  IS the tail's own pre-replay base). The post-mount IDB-freshness swap
+     *  (below) is different: the currently-mounted state is the STALE
+     *  localStorage-sourced city, not the IDB savepoint's own base, so that
+     *  path supplies its base explicitly here instead. */
+    swapBaseState?: SimState;
+    /** FEAT-2326609780 round 2 (F2): true ONLY for the post-mount
+     *  IDB-freshness swap (never the boot-time large-tail replay of the
+     *  SAME lineage). ATTACK B proved the swap replaced STATE from the
+     *  IndexedDB lineage while leaving the persisted journal + lastSaveIndex
+     *  as localStorage's — so a later Rebuild-from-Genesis / hard-reset-
+     *  replay (GR#27/FEAT-1972079897) silently reverted the player, because
+     *  replaying the (unchanged, wrong-lineage) journal never reproduces the
+     *  swapped-in city. When true, `finish()` below re-bases the journal
+     *  (and `lastSaveIndex`) to the swapped lineage ATOMICALLY with the
+     *  hydrate, mirroring how `applyLoadedSave` re-bases `journal` from
+     *  `save.journal` for a named-save Load. There is no full companion
+     *  journal for an anonymous savepoint/overflow-slot lineage (unlike a
+     *  named GameSave), so the re-based journal is a SINGLE synthetic
+     *  `{type:'hydrate', state: reconciledState}` entry — engine.ts's
+     *  'hydrate' reducer case ignores its incoming `state` parameter
+     *  entirely (it substitutes `action.state` wholesale), so this is not a
+     *  hack: replaying that one entry from ANY starting state reproduces the
+     *  swapped-in city exactly, which is the only truthful thing that can be
+     *  claimed about a lineage whose pre-snapshot history was never
+     *  recorded locally. */
+    isIdbSwap?: boolean;
   } | null>(boot.pendingTailReplay);
   // FEAT-2326609720 inc1: registers RebuildPrompt with the app-wide blocking-
   // overlay resolver (overlayManager.tsx) at BLOCKING_OVERLAY_ID.REBUILD_PROMPT
@@ -651,6 +987,215 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const tailReplayActiveRef = useRef<boolean>(boot.pendingTailReplay !== null);
   const tailReplayBufferRef = useRef<Action[]>([]);
 
+  // FEAT-2326609780 inc2: IDB-PRIMARY BOOT — the freshness check.
+  //
+  // Boot itself (the lazy useState initializer above) stays perfectly
+  // synchronous and localStorage-only, exactly as before this increment —
+  // instant first paint, zero regression, unchanged tests. This effect asks
+  // a single question: does the durable IndexedDB mirror hold a savepoint
+  // STRICTLY FRESHER than whatever the app is currently showing? That is
+  // exactly the quota-wedge shape (BUG-617-class) this increment exists to
+  // close: every localStorage persist rejected (5MB quota on a 49k-building
+  // city), so localStorage's rotation is stuck on a stale savepoint while
+  // `mirrorAfterPersist`'s failure-path overflow write kept advancing
+  // IndexedDB underneath it. If localStorage is caught up (the overwhelming
+  // common case — inc1's mirror only ever lags, never leads, in the healthy
+  // path), this is a no-op: no second hydrate, no flicker.
+  //
+  // FEAT-2326609780 ROUND 2 F1 FIX (independent round REJECT, "built but not
+  // wired"): BUG-669 made EVERY savepoint boot set `pendingTailReplay`
+  // (even with an empty tail, so the chunked machinery is one uniform path —
+  // see that effect's own comment), which means `pendingTailReplay !== null`
+  // is true on essentially every mount the instant this effect's first
+  // commit runs. The round-1 version bailed out permanently the FIRST time
+  // it observed that (a one-shot `idbFreshnessCheckedRef`), so the swap this
+  // whole increment exists to deliver NEVER fired for the exact 49k-building
+  // wedged city it was built for — proven by the round's ATTACK A2. Fix:
+  // this effect is now keyed on `[pendingTailReplay, rebuildDecision]` so it
+  // deterministically RE-RUNS the instant the boot-time tail replay's own
+  // `finish()` lands (pendingTailReplay -> null) or an unresolved rebuild
+  // prompt clears — hooking the actual completion path, never a timer or a
+  // one-shot race. `idbSwapAttemptedRef` (not the old `idbFreshnessCheckedRef`)
+  // guards against re-triggering once THIS effect has itself INITIATED a
+  // swap (its own replay finishing would otherwise re-null pendingTailReplay
+  // and cause an infinite re-evaluation loop).
+  //
+  // `bootSavepointMetaRef` (not the static `boot.bootSavepointMeta`) is the
+  // comparison baseline — updated by the tail-replay effect's `finish()` the
+  // instant ANY replay (boot's own, or a prior swap) lands, so a
+  // freshness re-check after a large-tail replay compares against what the
+  // player is NOW looking at, not the pre-replay boot snapshot.
+  //
+  // F1's regression-safety net: a candidate whose OWN tail is empty is
+  // claiming to be a COMPLETE, fully-caught-up city — that claim is cheaply
+  // checkable (its building count must not be LOWER than the live city's),
+  // unlike a non-empty tail (whose eventual building count cannot be known
+  // without running it, exactly like the existing boot-time replay already
+  // trusts). ATTACK A proved that a numerically-"fresher" (by tick) IndexedDB
+  // candidate can legitimately be a SMALLER city than a tail replay that just
+  // finished landing the player's real, larger history — this net refuses
+  // that swap rather than regressing the player.
+  const idbSwapAttemptedRef = useRef(false);
+  const bootSavepointMetaRef = useRef<SavepointFreshnessMeta | null>(boot.bootSavepointMeta);
+  // FEAT-2326609780 round 3 (ATTACK A vs ATTACK G, both re-run before this
+  // report — see the freshness effect's own header for the full reasoning):
+  // when a candidate lacks a comparable `saveSeq` and the comparison falls
+  // back to tick+savedAt, `saveSeq` alone cannot protect a JUST-VERIFIED
+  // real tail replay from being discarded for a smaller, empty-tail
+  // candidate whose tick was merely bumped without genuine growth (ATTACK
+  // A) — but the SAME fallback must still let a genuinely smaller-but-newer
+  // rescue win when NOTHING was just verified locally (ATTACK G: bulldoze/
+  // forced-sale/consolidator shrink a city that is still the newer one).
+  // The discriminator is NOT building count in the abstract (banned,
+  // correctly, by ATTACK G) — it is whether the LOCAL side's most recent
+  // replay actually verified anything: a NON-EMPTY tail was chunk-replayed
+  // through the real reducer, action by action, and its resulting building
+  // count is trustworthy; an EMPTY tail is a bare re-persist that verified
+  // nothing beyond "the snapshot itself parses". This ref remembers the
+  // building count from the last replay that verified real content (`null`
+  // when the most recent replay had an empty tail, e.g. G's/E's local
+  // self-heal) — consulted ONLY in the tick+savedAt fallback branch, never
+  // when a real saveSeq comparison already decided the outcome.
+  const verifiedFloorBuildingsRef = useRef<number | null>(null);
+  // FEAT-2326609780 round 3 (the structural fix — adjudicated): the
+  // monotonic per-lineage save counter (see Savepoint.saveSeq's own doc
+  // comment). Recovered at boot from whatever the LOCAL (synchronous,
+  // localStorage-sourced) boot savepoint already carried — `0` if it had
+  // none or predates round 3 — and bumped once per PERSIST ATTEMPT
+  // (`nextSaveSeq()`, called by every autosave/save/self-heal/load/rebuild
+  // site, success or failure, BEFORE the write is attempted) so it is always
+  // comparable against whatever the durable IndexedDB copy of the SAME
+  // lineage carries, regardless of tick, building count, or wall-clock time.
+  const saveSeqRef = useRef<number>(boot.bootSavepointMeta?.saveSeq ?? 0);
+  const nextSaveSeq = (): number => {
+    saveSeqRef.current += 1;
+    return saveSeqRef.current;
+  };
+  useEffect(() => {
+    // Never race a flow that currently owns the swap surface — re-evaluate
+    // the moment it releases (this effect's own dependency array ensures
+    // that transition re-runs it; no polling, no timer).
+    if (tailReplayActiveRef.current) return;
+    if (rebuildDecisionRef.current !== null) return;
+    if (idbSwapAttemptedRef.current) return;
+    let cancelled = false;
+    (async () => {
+      // F4: deterministic ordering — never read IndexedDB until the
+      // one-time migration's own mirror writes have settled (ATTACK E).
+      await migrationPromiseRef.current;
+      if (cancelled) return;
+
+      // P0 RCA fix, item 2/5: read ONLY the current lineage's own IDB keys
+      // (legacy/undefined resolves to the SAME unnamespaced keys every
+      // pre-fix mirror write used — this is what the round-1/round-2
+      // attacker fixtures, which never stamp a lineageId, still exercise
+      // byte-for-byte). A different lineage's mirrored slots simply live at
+      // a different key and are never even read here, let alone compared.
+      const currentLineageForIdbRead = bootSavepointMetaRef.current?.lineageId;
+      const idbSlotKey = (slot: number) =>
+        !currentLineageForIdbRead || currentLineageForIdbRead === LEGACY_LINEAGE_ID
+          ? `${SAVEPOINT_KEY_PREFIX}.${slot}`
+          : `${SAVEPOINT_KEY_PREFIX}.${currentLineageForIdbRead}.${slot}`;
+      const idbOverflowKey =
+        !currentLineageForIdbRead || currentLineageForIdbRead === LEGACY_LINEAGE_ID
+          ? SAVEPOINT_OVERFLOW_KEY
+          : `${SAVEPOINT_KEY_PREFIX}.${currentLineageForIdbRead}.idbOnly`;
+
+      const store = getDefaultSaveStore();
+      const rawCandidates = await Promise.all([
+        store.getItem(idbSlotKey(0)),
+        store.getItem(idbSlotKey(1)),
+        store.getItem(idbSlotKey(2)),
+        store.getItem(idbOverflowKey),
+      ]);
+      if (cancelled || tailReplayActiveRef.current || rebuildDecisionRef.current !== null || idbSwapAttemptedRef.current) return;
+
+      const best = freshestSavepoint(rawCandidates.map(decodeSavepointRaw));
+      if (!best) return; // IndexedDB has nothing valid (fresh browser, degraded store, migration not yet run) — localStorage's boot stands.
+      const bestMeta: SavepointFreshnessMeta = { snapshotTick: best.snapshotTick, savedAt: best.savedAt, saveSeq: best.saveSeq, lineageId: best.lineageId };
+      if (!isStrictlyFresherSavepointMeta(bestMeta, bootSavepointMetaRef.current)) {
+        return; // localStorage's boot is already current or newer — no-op, no second hydrate.
+      }
+      // Did a REAL, comparable saveSeq decide this, or did the comparison
+      // fall back to tick+savedAt (see isStrictlyFresherSavepointMeta's own
+      // doc comment — a fallback happens when either side lacks a saveSeq)?
+      // The verified-floor check just below applies ONLY to a fallback
+      // decision — a real saveSeq comparison is the authoritative, adjudicated
+      // primary signal and is never second-guessed by building count.
+      const decidedByRealSeq = Number.isFinite(bestMeta.saveSeq) && Number.isFinite(bootSavepointMetaRef.current?.saveSeq);
+
+      // Reuse prepareRestoreForChunkedTail VERBATIM — the only difference
+      // from a localStorage-sourced boot is which bytes slot 0 of the shim
+      // storage hands back.
+      const rawBest = JSON.stringify(best);
+      const prepared = prepareRestoreForChunkedTail(singleSavepointStorage(rawBest));
+      if (!prepared.success || !prepared.state || !prepared.tail) return;
+      if (cancelled || tailReplayActiveRef.current || rebuildDecisionRef.current !== null || idbSwapAttemptedRef.current) return;
+
+      // FEAT-2326609780 round 3 (ATTACK A vs ATTACK G — see
+      // `verifiedFloorBuildingsRef`'s own doc comment above for the full
+      // reasoning): a BLANKET building-count safety net was REMOVED
+      // (adjudicated) — building count is not a monotonic progress measure
+      // (bulldoze/forced-sale/consolidator scrap-and-rebuild all legitimately
+      // shrink a city that is still the newer one, ATTACK G). But when the
+      // freshness decision above fell back to tick+savedAt (no comparable
+      // saveSeq on both sides), an empty-tail candidate claiming to be
+      // complete must not be allowed to discard a JUST-VERIFIED real tail
+      // replay for something SMALLER (ATTACK A) — tick alone is not
+      // trustworthy evidence of genuine progress (it can sit flat OR be
+      // bumped without corresponding growth). This check is SCOPED to
+      // exactly that gap: it never fires when a real saveSeq comparison
+      // already decided the outcome, and never fires when nothing was just
+      // verified locally (`verifiedFloorBuildingsRef.current === null`,
+      // ATTACK G's/E's shape — an empty-tail self-heal verifies nothing).
+      if (!decidedByRealSeq && prepared.tail.length === 0 && verifiedFloorBuildingsRef.current !== null && prepared.state.buildings.length < verifiedFloorBuildingsRef.current) {
+        recordError(
+          `IndexedDB held a savepoint that compared as "fresher" by tick/savedAt (no comparable saveSeq) but has FEWER buildings ` +
+            `(${prepared.state.buildings.length}) than the real tail replay this boot just verified (${verifiedFloorBuildingsRef.current}) - refusing the swap to avoid regressing the player`,
+          { type: 'app', action: 'load' },
+        );
+        return;
+      }
+
+      // FEAT-2326609780 round 3 (R2-F1): keep the app's own persist counter
+      // consistent with the lineage we are about to adopt, so a LATER
+      // persist in THIS session (autosave, self-heal) numbers itself
+      // correctly relative to the swapped-in history, not the stale local
+      // one this mount originally booted from.
+      if (typeof best.saveSeq === 'number' && Number.isFinite(best.saveSeq) && best.saveSeq > saveSeqRef.current) {
+        saveSeqRef.current = best.saveSeq;
+      }
+
+      const running = currentBuildVersion();
+      const crossBuild = needsRebuild(prepared.buildVersion, running);
+      idbSwapAttemptedRef.current = true;
+      setPendingTailReplay({
+        tail: prepared.tail,
+        camera: prepared.camera ?? null,
+        crossBuildAfter: crossBuild ? { savedVersion: prepared.buildVersion ?? null, currentVersion: running } : null,
+        needsJobsGrandfatherCatchUp: prepared.needsJobsGrandfatherCatchUp ?? false,
+        swapBaseState: sanitizeTreasury(prepared.state),
+        isIdbSwap: true,
+      });
+    })().catch((e: unknown) => {
+      // Fail-safe (GR#1): the freshness check itself never disturbs the
+      // already-mounted, already-usable localStorage-sourced city.
+      recordError(`IndexedDB boot-freshness check failed: ${e instanceof Error ? e.message : String(e)} - continuing on the localStorage-sourced city`, {
+        type: 'app',
+        action: 'load',
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately
+    // re-run only when pendingTailReplay/rebuildDecision themselves change
+    // (the completion-path hook, F1); every other value read inside is read
+    // through a ref specifically so it is never stale without needing to be
+    // a dependency (stateRefForDispatch/tailReplayActiveRef/
+    // rebuildDecisionRef/idbSwapAttemptedRef/bootSavepointMetaRef/migrationPromiseRef).
+  }, [pendingTailReplay, rebuildDecision]);
+
   const wrappedDispatch = useMemo(() => {
     // Journal-record + dispatch the action (shared by the normal path and the
     // guarded reset path below).
@@ -714,7 +1259,27 @@ export function SimProvider({ children }: { children: ReactNode }) {
           // capture/wipe boundary — never let a wipe proceed with a stale
           // on-disk journal tail sitting behind a pending debounce timer.
           journalPersisterRef.current?.flush(journalRef.current);
-          attemptWipe(stateRefForDispatch.current, versionRaw, window.localStorage, () => recordAndDispatch(action));
+          // P0 RCA fix (Aaron, 2026-09-04, item 1): mint a fresh lineage id
+          // for the new city HERE (outside the pure reducer — see
+          // Action['reset']'s own doc comment on why) and stamp it onto the
+          // dispatched action so it is journalled and reproduces identically
+          // on replay. The old city's savepoint slots are namespaced under
+          // its OWN (different) lineage id and are simply never looked at
+          // again — this is the fix for the exact mechanism the RCA proved
+          // (a brand-new city's autosave competing with, and losing to, an
+          // old city's savepoint occupying the same global slot).
+          const freshLineageId = mintLineageId();
+          attemptWipe(stateRefForDispatch.current, versionRaw, window.localStorage, () =>
+            recordAndDispatch({ ...action, lineageId: freshLineageId }),
+          );
+          // GR#27's fail-closed gate has ALREADY run above (attemptWipe
+          // threw and aborted if the capture failed) — only make the new
+          // lineage "current" once the wipe genuinely happened, and give
+          // its own persist counter a clean slate (namespacing already
+          // makes cross-lineage seq comparison impossible, but starting a
+          // brand-new lineage's count at 0 is the honest representation).
+          writeCurrentLineageId(window.localStorage, freshLineageId);
+          saveSeqRef.current = 0;
           // FEAT-2326609778: mirror the just-written archive entry into the
           // durable layer. GR#27's fail-closed gate has ALREADY run above
           // (attemptWipe threw and aborted if it failed) — this is purely an
@@ -1392,7 +1957,16 @@ export function SimProvider({ children }: { children: ReactNode }) {
     setRebuildProgress(null);
     setRebuildInProgress(true);
 
-    const gen = replayTailChunked(stateRefForDispatch.current, pendingTailReplay.tail, pendingTailReplay.needsJobsGrandfatherCatchUp);
+    // FEAT-2326609780 inc2: the IDB-freshness swap supplies its own base (the
+    // IDB savepoint's own snapshot, not whatever localStorage-sourced state
+    // is currently mounted) via `swapBaseState`; every other caller of this
+    // mechanism (boot's own large-tail path) leaves it undefined and gets the
+    // existing "replay onto the already-mounted state" behaviour, unchanged.
+    const gen = replayTailChunked(
+      pendingTailReplay.swapBaseState ?? stateRefForDispatch.current,
+      pendingTailReplay.tail,
+      pendingTailReplay.needsJobsGrandfatherCatchUp,
+    );
 
     const closeGen = () => {
       try {
@@ -1527,6 +2101,72 @@ export function SimProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        // FEAT-2326609780 round 2 (F2, ATTACK B) / ROUND 3 (R2-F3 REJECT,
+        // ATTACK H): an IDB-freshness swap replaces STATE from a lineage the
+        // currently-persisted `journal` knows NOTHING about (it is
+        // localStorage's own lineage) — genesis replay / hard-reset-replay
+        // (GR#27/FEAT-1972079897) reads back the PERSISTED journal, so
+        // leaving it untouched here means that feature silently reverts the
+        // player to the pre-swap city (ATTACK B). There is no full companion
+        // journal for an anonymous savepoint/overflow-slot lineage (only the
+        // snapshot + the tail just replayed onto it) — round 3's OWN first
+        // attempt to instead re-base to an EMPTY journal (reasoning: the
+        // swapped savepoint already IS the fully-caught-up snapshot) was
+        // REJECTED by re-running this estate's own ATTACK B: an empty
+        // journal genesis-replays to the bare baseline city, not the
+        // swapped-in one — it is NOT an honest lineage representation, it
+        // just trades ATTACK H's failure mode for a NEW, permanent one (a
+        // Rebuild-from-Genesis after a healthy swap would ALSO now produce a
+        // bare city). The single synthetic
+        // `{type:'hydrate', state: reconciledState}` entry (engine.ts's
+        // 'hydrate' case substitutes `action.state` wholesale, so replaying
+        // this one entry from ANY starting point reproduces the swapped-in
+        // city exactly) is therefore restored — it is the only honest claim
+        // that CAN be made about a lineage whose pre-snapshot history was
+        // never recorded on this device — but ATTACK H proved that write can
+        // itself be arbitrarily large (it embeds the whole SimState) and
+        // `persistJournal` (journal.ts) DESTRUCTIVELY removes the key on any
+        // failure when `entries.length <= 200` (always true here). The fix
+        // is therefore atomicity around THAT destructive side effect, not
+        // avoiding the entry shape: capture the pre-swap journal, attempt
+        // the rebase, and on failure IMMEDIATELY re-persist the CAPTURED
+        // pre-swap journal (small — it is the player's real, already-
+        // journalled history, not a whole-SimState blob, so it fits under
+        // the exact same quota that just rejected the rebase) before
+        // aborting the whole swap loudly. Hydrate + journal + saveIndex all
+        // land, or none do, and the pre-swap journal is never left deleted.
+        if (pendingTailReplay.isIdbSwap) {
+          const previousJournal = journalRef.current;
+          const rebasedJournal: Journal = {
+            entries: [{ tick: reconciledState.tick, action: { type: 'hydrate', state: reconciledState } as Action }],
+          };
+          const rebasedOk = journalPersisterRef.current?.flush(rebasedJournal) ?? false;
+          if (!rebasedOk) {
+            // `persistJournal`'s own failure branch has ALREADY called
+            // `removeItem(JOURNAL_KEY)` by the time `flush` returns `false`
+            // — restore the player's real pre-swap history immediately,
+            // best-effort, before surfacing the failure. This small payload
+            // (the player's own already-journalled actions, not a
+            // whole-SimState blob) fits under the same quota that just
+            // rejected the oversized rebase in every case this fix has been
+            // proven against.
+            journalPersisterRef.current?.flush(previousJournal);
+            finish(
+              'Load aborted — the fresher save found in your browser\'s durable storage could not be safely checkpointed (journal persist failed). Your current city is still active.',
+            );
+            return;
+          }
+          setJournal(rebasedJournal);
+          setLastSaveIndex(rebasedJournal.entries.length);
+        }
+
+        // FEAT-2326609780 round 3: record whether THIS replay verified real
+        // content (see `verifiedFloorBuildingsRef`'s own doc comment above)
+        // — a non-empty tail means every one of its actions just ran through
+        // the real reducer, so `reconciledState`'s building count is
+        // trustworthy; an empty tail (a bare re-persist) establishes no floor.
+        verifiedFloorBuildingsRef.current = pendingTailReplay.tail.length > 0 ? reconciledState.buildings.length : null;
+
         invalidateInFlightWorkerTick();
         dispatch({ type: 'hydrate', state: reconciledState });
         // Self-healing (BUG-617): persist a FRESH savepoint with an EMPTY
@@ -1565,8 +2205,30 @@ export function SimProvider({ children }: { children: ReactNode }) {
           // now looking at (finalState plus anything reconciled in above),
           // or the very next boot's "instant" restore would silently regress
           // behind the buffered actions this fix just finished preserving.
-          const healed = createSavepoint(reconciledState, [], new Date(), healedVersion, pendingTailReplay.camera);
+          const healed = createSavepoint(reconciledState, [], new Date(), healedVersion, pendingTailReplay.camera, nextSaveSeq());
+          // FEAT-2326609780 round 2 (F1) / round 3: keep the IDB-freshness
+          // comparison baseline current — a freshness re-check that fires
+          // after THIS replay lands (the completion-path hook) must compare
+          // against what the player is NOW looking at, not the pre-replay
+          // boot snapshot `boot.bootSavepointMeta` was frozen at. Carries
+          // `saveSeq` (round 3: the monotonic primary ordering key, not
+          // `savedAt` — see this fix's own header comment on ATTACK G/R2-F1).
+          // P0 RCA fix: MUST carry lineageId too — an earlier version of
+          // this fix omitted it, which silently reset the comparison
+          // baseline's lineage to "legacy" after every self-heal, making
+          // the freshness effect read the WRONG (legacy) IDB keys and
+          // refuse every genuine same-lineage rescue as "foreign lineage".
+          bootSavepointMetaRef.current = { snapshotTick: healed.snapshotTick, savedAt: healed.savedAt, saveSeq: healed.saveSeq, lineageId: healed.lineageId };
           const healedOk = persistSavepoint(window.localStorage, healed);
+          // FEAT-2326609780 inc2 (P2 follow-up filed under BUG-669): this
+          // self-heal write previously mirrored NOTHING — a quota-wedged
+          // localStorage healed the LIVE city in memory but never advanced
+          // IndexedDB, so the next boot's IDB-freshness check (below) would
+          // still see the OLD IDB savepoint and the wedge would never close.
+          // Mirror unconditionally, exactly like every other persistSavepoint
+          // call site now does — success mirrors the localStorage bytes,
+          // failure mirrors `healed` directly into the overflow slot.
+          mirrorAfterPersist(healedOk, healed);
           if (!healedOk) {
             recordError(
               'Self-heal save failed after a large-tail load (storage quota). The replayed city is active now, but the large tail may reappear on the next load — clear journal in Config, then Save.',
@@ -1630,16 +2292,20 @@ export function SimProvider({ children }: { children: ReactNode }) {
         const tail = journalTail(journal, lastSaveIndex);
         // inc2: stamp the save with the running build + current camera so a later
         // boot on a new build can detect the change and offer a rebuild.
-        const savepoint = createSavepoint(state, tail, new Date(), currentBuildVersion(), currentCamera());
+        const savepoint = createSavepoint(state, tail, new Date(), currentBuildVersion(), currentCamera(), nextSaveSeq());
         const success = persistSavepoint(window.localStorage, savepoint);
         setAutoSaveError(!success);
         if (success) {
           // Update lastSaveIndex to mark this checkpoint.
           setLastSaveIndex(journal.entries.length);
-          // FEAT-2326609778: mirror into the durable IndexedDB layer,
-          // savepoint-slots-before-journal ordered (crash-consistency contract).
-          mirrorSavepointCheckpoint();
         }
+        // FEAT-2326609780 inc2: mirror UNCONDITIONALLY — on success this is
+        // the inc1 savepoint-slots-before-journal crash-consistency mirror;
+        // on failure (the quota-wedge shape) this instead writes the
+        // savepoint that just failed to reach localStorage directly into the
+        // durable store's overflow slot, so IndexedDB keeps advancing even
+        // while every localStorage slot is wedged.
+        mirrorAfterPersist(success, savepoint);
       } catch (e) {
         // Catch-all for any error during autosave (e.g., localStorage throws).
         setAutoSaveError(true);
@@ -1934,7 +2600,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
             // build, and carry the camera across the reload, so resuming boots straight
             // into the new-engine city with no re-prompt and no view jump.
             const running = currentBuildVersion();
-            const rebuiltSave = createSavepoint(result.state, [], new Date(), running, decision.camera ?? currentCamera());
+            // F2 fix (P0 lineage round): replayFromGenesis always starts from
+            // initialState() with NO lineageId, only ever recovering one from a
+            // JOURNALLED reset entry — which JOURNAL_CAP can roll off. Lineage is
+            // an identity of the CITY being rebuilt, not of the journal contents,
+            // so carry the CURRENT lineage forward explicitly rather than trusting
+            // whatever (if anything) the replay happened to reconstruct.
+            const rebuildLineageId = readCurrentLineageId(window.localStorage);
+            result.state = { ...result.state, lineageId: rebuildLineageId };
+            const rebuiltSave = createSavepoint(result.state, [], new Date(), running, decision.camera ?? currentCamera(), nextSaveSeq());
             persistSavepoint(window.localStorage, rebuiltSave);
             persistStashedCamera(window.localStorage, decision.camera ?? currentCamera());
             // BUG-458: flush (not schedule) — a rebuild is a wipe/replace boundary.
@@ -2017,7 +2691,12 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // clears the mismatch after this ONE resolution. Flush the journal so any
     // pending write is on disk before a possible reload.
     try {
-      restampSavepointsBuildVersion(window.localStorage, currentBuildVersion());
+      // F3 fix (BUG-468 regression): restampSavepointsBuildVersion gained a
+      // lineageId param — without it, a namespaced city's stamp is checked
+      // against the LEGACY slots (lineageId undefined), never its own, so the
+      // cross-build stamp on the current lineage never clears and the
+      // "New build detected" prompt loops forever for that city.
+      restampSavepointsBuildVersion(window.localStorage, currentBuildVersion(), readCurrentLineageId(window.localStorage));
     } catch {
       /* storage error — the prompt may recur, but never crash the resolution */
     }
@@ -2039,7 +2718,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // buildVersion behind (covers any dismiss-that-continues route as well as the
     // rebuild-report resume). Idempotent when the stamp already matches.
     try {
-      restampSavepointsBuildVersion(window.localStorage, currentBuildVersion());
+      // F3 fix (BUG-468 regression): pass the current lineageId, same reason
+      // as onKeep above — the stamp lives per-lineage now.
+      restampSavepointsBuildVersion(window.localStorage, currentBuildVersion(), readCurrentLineageId(window.localStorage));
     } catch {
       /* storage error — never block the resume */
     }
@@ -2144,7 +2825,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const buildCurrentSave = (name: string) => {
+  // FEAT-2326609780 round 3: `saveSeq` is optional and left UNSTAMPED for a
+  // caller (exportCity) that never persists the result to this device's
+  // durable stores — the monotonic counter only advances on an actual
+  // persist attempt (saveGame/saveGameAs pass `nextSaveSeq()` explicitly).
+  const buildCurrentSave = (name: string, saveSeq?: number) => {
     const s = stateRefForDispatch.current;
     return buildGameSave({
       state: s,
@@ -2162,6 +2847,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       name: displayCityName(name),
       buildVersion: currentBuildVersion(),
       camera: currentCamera(),
+      saveSeq,
     });
   };
 
@@ -2206,7 +2892,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         }
         const snapshot = sanitizeTreasury(save.savepoint.snapshot);
         setRebuildProgress({ actionsDone: 2, actionsTotal: 4, phaseLabel: 'Writing session save…' });
-        const persisted = persistSavepoint(window.localStorage, {
+        const savepointToPersist: Savepoint = {
           ...save.savepoint,
           snapshot,
           // journalTail stays [] deliberately: this is the tail-since-snapshot used
@@ -2215,7 +2901,23 @@ export function SimProvider({ children }: { children: ReactNode }) {
           // This is unrelated to `save.journal` (the FULL history) restored below.
           journalTail: [],
           buildVersion: running,
-        });
+          // FEAT-2326609780 round 3: this persist bumps the monotonic
+          // per-lineage counter too, same as every other persist site.
+          saveSeq: nextSaveSeq(),
+        };
+        // P0 RCA fix, item 1/5 + F1 fix (P0 lineage round): loading a save makes
+        // ITS lineage the current one — this MUST happen BEFORE the persist
+        // below, not after. persistSavepointWithReason (replay.ts) defaults an
+        // absent savepoint.lineageId from whatever `storage` says is CURRENT —
+        // if the pointer still named the PREVIOUS lineage at persist time, a
+        // legacy (lineageId-less) loaded save would get silently stamped into
+        // that previous (still-current) lineage's namespace instead of staying
+        // legacy, contaminating the abandoned city's own slots. Normalise
+        // absent -> LEGACY_LINEAGE_ID so a legacy save's pointer write is never
+        // skipped, or the next boot resurrects the abandoned city instead of
+        // the one the player just loaded.
+        writeCurrentLineageId(window.localStorage, normalizeLineageId(savepointToPersist.lineageId));
+        const persisted = persistSavepoint(window.localStorage, savepointToPersist);
         // BUG-439 FIX: restore the loaded save's FULL journal (save.journal) into
         // the live journal state/on-disk journal file instead of discarding it as
         // emptyJournal(). Without this, a rebuild triggered right after a load (or
@@ -2230,7 +2932,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // hotJournalRef here would instead go STALE the moment the player keeps
         // playing post-load and a LATER version-crossing rebuild reads it back.)
         journalPersisterRef.current?.flush(save.journal);
-        if (persisted) mirrorSavepointCheckpoint();
+        // FEAT-2326609780 inc2: mirror unconditionally (was `if (persisted)`
+        // — a quota failure here left IndexedDB holding the PREVIOUS city's
+        // savepoint even though the player just loaded a different one).
+        mirrorAfterPersist(persisted, savepointToPersist);
         persistStashedCamera(window.localStorage, save.savepoint.camera ?? currentCamera());
         setRebuildProgress({ actionsDone: 3, actionsTotal: 4, phaseLabel: 'Hydrating city…' });
         setCityName(displayCityName(save.name));
@@ -2253,6 +2958,25 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // race — invalidate BEFORE this hydrate proceeds.
         invalidateInFlightWorkerTick();
         dispatch({ type: 'hydrate', state: snapshot });
+        // FEAT-2326609780 round 3 (R2-F4, independent round REJECT): a
+        // manual Load is a deliberate, explicit lineage choice by the
+        // player — the post-mount IDB-freshness effect (this component,
+        // above) must never later swap a DIFFERENT city in over it just
+        // because some other durable savepoint happens to compare as
+        // "fresher" by the old boot-time baseline. Update the comparison
+        // baseline to this load's own identity (so a stale/unrelated
+        // candidate cannot masquerade as fresher than what the player just
+        // chose) AND close the swap surface for the rest of this mount,
+        // exactly as if the freshness effect had already run once.
+        bootSavepointMetaRef.current = {
+          snapshotTick: savepointToPersist.snapshotTick,
+          savedAt: savepointToPersist.savedAt,
+          saveSeq: savepointToPersist.saveSeq,
+          lineageId: savepointToPersist.lineageId,
+        };
+        idbSwapAttemptedRef.current = true;
+        // Lineage pointer already written above, BEFORE the persist (see
+        // comment there for why the ordering matters).
         if (!persisted) {
           recordError('City loaded in memory; session persist failed (quota). Use Config → Clear journal, then Save.', {
             type: 'app',
@@ -2269,24 +2993,47 @@ export function SimProvider({ children }: { children: ReactNode }) {
     }, 50);
   };
 
+  /**
+   * P0 RCA fix (Aaron, 2026-09-04, item 4 — "the aggravator inside the P0"):
+   * turn a `persistSavepointWithReason` result into the loud, visible error
+   * every manual save refusal now surfaces, and describe it honestly by
+   * reason — a lineage/ordering conflict is not a quota problem, and telling
+   * the player the wrong cause sends them to the wrong fix. Shared by
+   * `saveGame`/`saveGameAs` so the two call sites can never drift apart
+   * again (they already had: saveGameAs previously ignored its own return
+   * value entirely).
+   */
+  const surfaceSaveRefusal = (reason: SavepointRejectReason | undefined): void => {
+    const msg =
+      reason === 'stale-overwrite'
+        ? 'Save refused: a fresher save already exists for this city (an ordering/lineage conflict). This city is NOT being saved — your recent play is safe only in memory until you try again.'
+        : 'Save failed (storage quota). This city is NOT being saved — clear journal in Config, then try again or use Save As.';
+    recordError(msg, { type: 'app', action: 'save' });
+    setAutoSaveError(true);
+  };
+
   const saveGame = async (): Promise<boolean> => {
     try {
-      const save = buildCurrentSave(cityName);
-      const ok = persistSavepoint(window.localStorage, save.savepoint);
+      const save = buildCurrentSave(cityName, nextSaveSeq());
+      const result = persistSavepointWithReason(window.localStorage, save.savepoint);
+      // FEAT-2326609780 inc2: mirror unconditionally, success or failure, so
+      // a quota-failed manual save still advances the durable IndexedDB copy.
+      mirrorAfterPersist(result.ok, save.savepoint);
+      if (!result.ok) {
+        // P0 RCA fix, item 4: a REFUSED save must NOT clear the journal —
+        // the player's real, unsaved history is the ONLY record of what
+        // happened since the last successful checkpoint; the OLD code
+        // cleared it here UNCONDITIONALLY, silently discarding it on every
+        // refusal while claiming (via the quiet autosave dot alone) that
+        // nothing was wrong.
+        surfaceSaveRefusal(result.reason);
+        return false;
+      }
       // BUG-458: flush — a save is exactly the boundary where losing the
       // journal tail would be unacceptable (it's now folded into the savepoint).
       journalPersisterRef.current?.flush(emptyJournal());
       setLastSaveIndex(journalRef.current.entries.length);
-      if (!ok) {
-        recordError('Save failed (storage quota). Clear journal in Config, then try again or use Save As.', {
-          type: 'app',
-          action: 'save',
-        });
-        setAutoSaveError(true);
-        return false;
-      }
       setAutoSaveError(false);
-      mirrorSavepointCheckpoint();
       rememberOpened(save);
       return true;
     } catch (e) {
@@ -2315,12 +3062,26 @@ export function SimProvider({ children }: { children: ReactNode }) {
         );
         return { ok: false, collision };
       }
-      const save = buildCurrentSave(label);
-      persistSavepoint(window.localStorage, save.savepoint);
+      const save = buildCurrentSave(label, nextSaveSeq());
+      const savedAsResult = persistSavepointWithReason(window.localStorage, save.savepoint);
+      // FEAT-2326609780 inc2: mirror unconditionally (see mirrorAfterPersist).
+      mirrorAfterPersist(savedAsResult.ok, save.savepoint);
+      if (!savedAsResult.ok) {
+        // P0 RCA fix, item 4 — "the aggravator inside the P0": this return
+        // value was PREVIOUSLY IGNORED ENTIRELY (store.tsx:2319 in the RCA's
+        // own file:line evidence) — Save As cleared the journal and reported
+        // `{ok:true}` to the caller regardless of whether the write actually
+        // landed, so a refused Save As silently discarded the player's
+        // recent history while claiming success. Refuse the SAME way
+        // saveGame does: no journal clear, no city-name switch, no file
+        // download, a loud error, and an honest `ok:false` returned.
+        surfaceSaveRefusal(savedAsResult.reason);
+        return { ok: false };
+      }
       // BUG-458: flush — Save As is a save boundary, same as saveGame.
       journalPersisterRef.current?.flush(emptyJournal());
       setLastSaveIndex(journalRef.current.entries.length);
-      mirrorSavepointCheckpoint();
+      setAutoSaveError(false);
       setCityName(label);
       try {
         setCurrentCityName(window.localStorage, label);

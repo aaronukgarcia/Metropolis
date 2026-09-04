@@ -636,6 +636,8 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   consolidatorUndoConsumed: 'sim.consolidatorUndoConsumed',
   // BUG-652 GRANDFATHERING (2026-09-04).
   economyEpoch: 'sim.economyEpoch',
+  // P0 RCA fix (2026-09-04) — per-city lineage identity, see SimState.lineageId's own doc comment.
+  lineageId: 'sim.lineageId',
   // Aaron ruling 2026-09-04 (land_tunnel footprint grandfather).
   tunnelFootprintEpoch: 'sim.tunnelFootprintEpoch',
 };

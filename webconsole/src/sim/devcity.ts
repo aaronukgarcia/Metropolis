@@ -1,5 +1,6 @@
 import type { SimState } from './types.ts';
 import snapshot from './fixtures/Dev-city1.json' with { type: 'json' };
+import { mintLineageId } from './replay.ts';
 
 export const DEVCITY1_NAME = 'Dev-city1';
 
@@ -31,5 +32,9 @@ export function loadDevCity1(): SimState {
   if (!state.lastArrivalsByMode) {
     state.lastArrivalsByMode = { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 };
   }
+  // P0 RCA fix, item 1: this is a genesis point (boot's own "no save found"
+  // fallback calls it directly, never through the pure reducer), so minting
+  // a fresh lineage id here is safe and required.
+  state.lineageId = mintLineageId();
   return state;
 }

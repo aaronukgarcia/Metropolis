@@ -10,7 +10,7 @@ import { PREWIPE_ARCHIVE_KEY } from '../sim/captureBeforeWipe';
 import { FAST_BUILD_FLAG_KEY, FAST_BUILD_MAX_TICKS, isFastBuildEnabled, resetFastBuildFlagCache } from '../sim/debugBuildSpeed';
 import { QUEUE_KEY } from '../sim/commitqueue';
 import { NAMED_SAVES_INDEX_KEY, NAMED_SAVE_SLOT_PREFIX } from '../sim/namedsaves';
-import { SAVEPOINT_KEY_PREFIX, SAVEPOINT_CAP } from '../sim/replay';
+import { SAVEPOINT_KEY_PREFIX, SAVEPOINT_CAP, LEGACY_LINEAGE_ID, readCurrentLineageId } from '../sim/replay';
 import { JOURNAL_KEY } from '../sim/journal';
 import { encode, decode } from '../sim/saveCodec';
 import { useSim } from '../sim/simContext';
@@ -177,8 +177,33 @@ export function ConfigMenu() {
     window.localStorage.removeItem(NAMED_SAVES_INDEX_KEY);
     setConfirmingClear(null);
   };
+  /**
+   * P0 RCA fix (Aaron, 2026-09-04, item 6): this used to `clearPrefix`
+   * the bare `metropolis.savepoint` PREFIX — since that ALSO matches every
+   * OTHER lineage's namespaced slots (`metropolis.savepoint.<lineageId>.N`
+   * all start with `metropolis.savepoint.`), it silently destroyed every
+   * city's autosaves, not just the one the player is looking at. Now clears
+   * ONLY the CURRENT lineage's own exact slot keys (never a prefix match —
+   * a prefix would still risk one lineage id being a literal prefix of
+   * another's) — a NEW game never needs this button at all (its own fresh
+   * lineage id can never collide with anything), it exists purely to let a
+   * player intentionally clear THIS city's autosave history.
+   */
   const clearAutosaveSlots = () => {
-    clearPrefix(SAVEPOINT_KEY_PREFIX);
+    const lineageId = readCurrentLineageId(window.localStorage);
+    // Mirrors replay.ts's private `savepointKey` exactly: legacy/undefined
+    // maps to the SAME unnamespaced keys every save has always used.
+    const keyFor = (slot: number) =>
+      lineageId === LEGACY_LINEAGE_ID ? `${SAVEPOINT_KEY_PREFIX}.${slot}` : `${SAVEPOINT_KEY_PREFIX}.${lineageId}.${slot}`;
+    // Also sweep the legacy cleanup range (0..7) persistSavepoint itself
+    // purges leftover slots from older, larger SAVEPOINT_CAP values — only
+    // meaningful for the unnamespaced (legacy) keyspace, since a namespaced
+    // lineage was never subject to an older/larger cap.
+    const slotCount = lineageId === LEGACY_LINEAGE_ID ? 8 : SAVEPOINT_CAP;
+    for (let slot = 0; slot < slotCount; slot++) {
+      window.localStorage.removeItem(keyFor(slot));
+    }
+    setTick((n) => n + 1);
     setConfirmingClear(null);
   };
 
@@ -335,7 +360,16 @@ export function ConfigMenu() {
                 )}
                 {confirmingClear === 'autosaves' ? (
                   <span className="brand-menu-form" role="group" aria-label="Confirm clear autosave slots">
-                    <span className="muted">Delete all autosave slots?</span>
+                    {/* P0 RCA fix, item 6: this only ever clears THIS city's
+                        own autosave slots now, never every city's — the
+                        label says so, and calls out the legacy (pre-lineage)
+                        case explicitly since those slots are shared with
+                        whatever save predates this fix. */}
+                    <span className="muted">
+                      {readCurrentLineageId(window.localStorage) === LEGACY_LINEAGE_ID
+                        ? 'Delete this city\'s autosave slots (legacy, pre-lineage save)?'
+                        : 'Delete this city\'s autosave slots?'}
+                    </span>
                     <button className="btn tiny accent" onClick={clearAutosaveSlots}>
                       Yes, delete
                     </button>

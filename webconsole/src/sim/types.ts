@@ -358,6 +358,30 @@ export interface SimState {
    */
   tunnelFootprintEpoch?: number;
   /**
+   * P0 RCA fix (Aaron, 2026-09-04): "I created a whole new map city 13 and
+   * never once placed any gorges dams... yet I saved and started a new map"
+   * — the OLD city was resurrected over the NEW one because savepoint slots
+   * were global (`metropolis.savepoint.{0,1,2}`, lineage-blind) and BUG-469's
+   * tick-only overwrite gate could never let a brand-new (low-tick) city's
+   * autosave land over an old (high-tick) one occupying the same slots.
+   * `lineageId` is an OPAQUE per-city identity, minted ONCE at every genesis
+   * point (the boot-time fresh-city fallback, `freshStart`, `loadDevCity1`,
+   * the 'reset' reducer case via the dispatched action's own `lineageId` —
+   * see engine.ts's 'reset' case for why it is NOT minted with
+   * Math.random/Date.now INSIDE the reducer, which would break GR#21
+   * determinism) and carried unchanged through every subsequent tick,
+   * savepoint, journal entry, GameSave, and pre-wipe archive entry for that
+   * city's whole lifetime — it is bookkeeping identity, never read by any
+   * gameplay computation. `replay.ts` uses it to namespace savepoint slots
+   * per-lineage (`metropolis.savepoint.<lineageId>.<slot>`) so two cities can
+   * never compete for the same rotation slots or overwrite-protection
+   * comparison again. Absent (`undefined`) on a save written before this
+   * field existed — treated as the reserved `'legacy'` lineage, which maps
+   * to the SAME unnamespaced keys every save already used (zero storage
+   * migration, zero behaviour change for an existing player's next boot).
+   */
+  lineageId?: string;
+  /**
    * FEAT-2326609761 inc2 (Aaron's glide-mode ruling, 2026-09-04): which
    * traversal mode the consolidator uses to pick its focus window. 'glide'
    * (the DEFAULT — "glide is the default mode unless the player switches")

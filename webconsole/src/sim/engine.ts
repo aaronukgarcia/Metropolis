@@ -4553,7 +4553,23 @@ export type Action =
   | { type: 'dismissPlaceNotice' }
   | { type: 'dismissInsolvencyPopup' }
   | { type: 'unlockAll' }
-  | { type: 'reset' }
+  | {
+      type: 'reset';
+      /**
+       * P0 RCA fix (Aaron, 2026-09-04): a fresh, opaque lineage id for the
+       * new city. Minted OUTSIDE the reducer (store.tsx's Start Over
+       * dispatch site, via replay.ts's `mintLineageId()`) — the reducer must
+       * stay pure/deterministic (GR#21), so it never generates its own
+       * randomness; it only stamps whatever id the dispatched action
+       * carries. Recorded into the journal exactly like every other action
+       * field, so replaying the SAME recorded 'reset' reproduces the SAME
+       * lineage id every time. Optional for backward tolerance — an OLD
+       * journal entry recorded before this field existed carries none, and
+       * the reducer leaves the fresh city's lineageId unset (reads as the
+       * reserved 'legacy' lineage on replay, never a crash).
+       */
+      lineageId?: string;
+    }
   | {
       type: 'hydrate';
       state: SimState;
@@ -6059,6 +6075,12 @@ function reduceCore(
     case 'reset': {
       const s = rawState();
       s.speed = state.speed;
+      // P0 RCA fix: stamp whatever lineage id the dispatcher minted (never
+      // generated here — see the Action['reset'] field's own doc comment on
+      // why the reducer stays deterministic). Left unset when the action
+      // carries none (an old journal entry, or a caller that intentionally
+      // wants the reserved 'legacy' lineage).
+      if (action.lineageId) s.lineageId = action.lineageId;
       return advance(s);
     }
 

@@ -51,6 +51,7 @@
 
 import { isQuotaError } from './safeStorage.ts';
 import { recordError } from './backend.ts';
+import { decode } from './saveCodec.ts';
 
 /** IndexedDB database name + version for the save estate. */
 export const SAVE_STORE_DB_NAME = 'metropolis-saves';
@@ -59,6 +60,21 @@ export const SAVE_STORE_OBJECT_STORE = 'kv';
 
 /** Flag key (inside the store itself) marking the one-time localStorage migration done. */
 export const SAVE_STORE_MIGRATED_KEY = 'metropolis.saveStore.migrated';
+
+/**
+ * FEAT-2326609780 inc2: IDB-only overflow slot for a savepoint whose
+ * localStorage write FAILED (the quota-wedge shape this increment exists to
+ * fix). `mirrorSaveCheckpoint`/`mirrorKeyFromLocalStorage` only ever COPY
+ * bytes that are already sitting in localStorage — on a failed write,
+ * localStorage still holds the OLD (stale) savepoint, so mirroring from it
+ * would just re-copy stale data and never let the durable store get ahead.
+ * This key instead receives the JUST-COMPUTED savepoint bytes DIRECTLY (never
+ * read back from localStorage), so the durable store can advance even when
+ * every localStorage slot is wedged. Deliberately outside the
+ * `metropolis.savepoint.0..SAVEPOINT_CAP-1` rotation — it is never written to
+ * or read from localStorage, only IndexedDB.
+ */
+export const SAVEPOINT_OVERFLOW_KEY = 'metropolis.savepoint.idbOnly';
 
 /**
  * localStorage key prefixes/exact-keys this layer migrates + mirrors.
@@ -348,6 +364,104 @@ export function resetSaveStoreForTests(): void {
 }
 
 // ---------------------------------------------------------------------------
+// FEAT-2326609780 round 2 (F3/F4, independent round REJECT — ATTACK C/E):
+// BUG-469-STYLE OVERWRITE PROTECTION FOR THE DURABLE LAYER.
+//
+// `persistSavepoint` (replay.ts) refuses to overwrite an occupied localStorage
+// slot with an OLDER savepoint. Every write path into IndexedDB's savepoint
+// keys (the rotation slots AND the overflow slot) did a bare `setItem` with
+// NO such check — in the wedge, the overflow slot is the ONLY surviving copy
+// of the advanced city, so ATTACK C proved a later FAILED persist of an
+// OLDER savepoint (loading an older named save while still wedged, say)
+// silently destroyed it; ATTACK E proved the inc1 migration/mirror path
+// mirrors localStorage's STALE bytes over a rotation slot that IndexedDB
+// already held something fresher in, unconditionally, mid-mount. Every write
+// to a savepoint-shaped IndexedDB key now goes through the same guard.
+// ---------------------------------------------------------------------------
+
+/**
+ * Matches a rotation-slot OR overflow key, legacy (unnamespaced) or
+ * lineage-namespaced (P0 RCA fix, item 2): `metropolis.savepoint.0`,
+ * `metropolis.savepoint.idbOnly`, `metropolis.savepoint.<lineageId>.0`,
+ * `metropolis.savepoint.<lineageId>.idbOnly`.
+ */
+const SAVEPOINT_SLOT_KEY_RE = /^metropolis\.savepoint\.([A-Za-z0-9_-]+\.)?(\d+|idbOnly)$/;
+
+/** True for any IndexedDB key this module treats as "savepoint-shaped" and therefore freshness-guarded — the numbered rotation slots plus the overflow slot, legacy or lineage-namespaced. */
+function isSavepointGuardedKey(key: string): boolean {
+  return SAVEPOINT_SLOT_KEY_RE.test(key) || key === SAVEPOINT_OVERFLOW_KEY;
+}
+
+/**
+ * Parse just enough of a possibly-`saveCodec.encode()`-compressed savepoint
+ * blob to compare freshness. Returns `null` on anything not shaped like a
+ * valid savepoint (corrupt JSON, missing/non-finite `snapshotTick`,
+ * missing/empty `savedAt`) — fail-OPEN toward "cannot prove this is a
+ * regression, so do not block the write" is the safe default here: refusing
+ * an incoming write we cannot evaluate would risk permanently wedging the
+ * durable store on an unreadable value.
+ */
+function parseSavepointFreshnessMeta(raw: string): { snapshotTick: number; savedAt: string; saveSeq?: number } | null {
+  try {
+    const parsed = JSON.parse(decode(raw)) as { snapshotTick?: unknown; savedAt?: unknown; saveSeq?: unknown };
+    if (typeof parsed.snapshotTick === 'number' && Number.isFinite(parsed.snapshotTick) && typeof parsed.savedAt === 'string' && parsed.savedAt.length > 0) {
+      return {
+        snapshotTick: parsed.snapshotTick,
+        savedAt: parsed.savedAt,
+        ...(typeof parsed.saveSeq === 'number' && Number.isFinite(parsed.saveSeq) ? { saveSeq: parsed.saveSeq } : {}),
+      };
+    }
+  } catch {
+    /* fall through to null — corrupt/unparsable, never blocks the write */
+  }
+  return null;
+}
+
+/**
+ * `store.setItem`, but for a savepoint-shaped key: refuses (returns
+ * `ok:false`, the value already there is left untouched) when a valid
+ * EXISTING value is present and the incoming one is not newer-or-equal.
+ *
+ * FEAT-2326609780 round 3 (the structural fix — adjudicated): PRIMARY order
+ * is `saveSeq`, the monotonic per-lineage persist counter (see
+ * `Savepoint.saveSeq`'s own doc comment, replay.ts, and
+ * store.tsx's `isStrictlyFresherSavepointMeta` — this module deliberately
+ * mirrors that same ordering so the two independent freshness guards in this
+ * estate (this one, and the boot-time swap decision) never disagree about
+ * which of two savepoints of one lineage is newer). `saveSeq` absent on
+ * either side (a pre-round-3 savepoint) is treated as `0`; a tie (both
+ * absent, or a genuine equal count) falls back to `persistSavepoint`'s own
+ * rule (tick first, `savedAt` as the `>=` tie-break — see replay.ts's
+ * `incomingIsNewer`).
+ *
+ * Only ever refuses when BOTH the existing and incoming values parse as
+ * well-formed savepoints — an unreadable existing value (never expected in
+ * practice, but never trusted blindly either) or an unreadable incoming
+ * value never blocks a write, matching this module's fail-open-toward-
+ * availability posture everywhere else (GR#1: a durable-layer bug must
+ * never be able to brick the save path entirely).
+ */
+async function guardedSavepointSetItem(store: SaveStore, key: string, value: string): Promise<SaveStoreWriteResult> {
+  const existingRaw = await store.getItem(key);
+  if (existingRaw !== null) {
+    const existing = parseSavepointFreshnessMeta(existingRaw);
+    const incoming = parseSavepointFreshnessMeta(value);
+    if (existing && incoming) {
+      const existingSeq = Number.isFinite(existing.saveSeq) ? (existing.saveSeq as number) : 0;
+      const incomingSeq = Number.isFinite(incoming.saveSeq) ? (incoming.saveSeq as number) : 0;
+      const incomingIsNewerOrEqual =
+        existingSeq !== incomingSeq
+          ? incomingSeq > existingSeq
+          : incoming.snapshotTick > existing.snapshotTick || (incoming.snapshotTick === existing.snapshotTick && incoming.savedAt >= existing.savedAt);
+      if (!incomingIsNewerOrEqual) {
+        return { ok: false, quota: false, degraded: false, error: 'refused: an existing durable savepoint is fresher (BUG-469-style overwrite protection)' };
+      }
+    }
+  }
+  return store.setItem(key, value);
+}
+
+// ---------------------------------------------------------------------------
 // Migration — one-time, copy-in, NEVER delete the localStorage originals.
 // ---------------------------------------------------------------------------
 
@@ -399,9 +513,17 @@ export async function migrateFromLocalStorage(store: SaveStore, localStorage: Mi
     try {
       const value = localStorage.getItem(key);
       if (value === null) continue;
-      const result = await store.setItem(key, value);
+      // F4: the one-time migration is also a savepoint-slot WRITE — guard it
+      // exactly like every other one, so a stale localStorage copy being
+      // migrated in cannot clobber a slot IndexedDB already holds something
+      // fresher in (ATTACK E's exact shape, reachable at mount time).
+      const result = isSavepointGuardedKey(key) ? await guardedSavepointSetItem(store, key, value) : await store.setItem(key, value);
       if (result.ok) {
         keysCopied.push(key);
+      } else if (result.error?.startsWith('refused:')) {
+        // F4: NOT a migration failure — the durable store already holds a
+        // fresher savepoint at this key and the guard correctly kept it.
+        // Neither copied nor a reportable failure; nothing was lost.
       } else {
         failures.push(key);
         reportOnce('MET-V860', `Migrating existing localStorage save ${key} into IndexedDB failed (${result.error ?? 'unknown'}) - the original localStorage copy was left untouched`);
@@ -422,7 +544,16 @@ export async function migrateFromLocalStorage(store: SaveStore, localStorage: Mi
 // into the durable store, best-effort, fire-and-forget-safe (never throws).
 // ---------------------------------------------------------------------------
 
-/** Mirror a single localStorage key's current value into the durable store. Never throws. */
+/**
+ * Mirror a single localStorage key's current value into the durable store.
+ * Never throws. F4 (round 2, ATTACK E): a savepoint-shaped key routes
+ * through `guardedSavepointSetItem` — an UNCONDITIONAL mirror of
+ * localStorage's bytes would otherwise clobber a rotation slot IndexedDB
+ * already holds something fresher in (a `mirrorSaveCheckpoint` call racing
+ * this mount's own IDB-freshness read, or simply localStorage genuinely
+ * being behind after a prior swap). A "refused as stale" result is treated
+ * as success here — the destination already holds the right (fresher) bytes.
+ */
 export async function mirrorKeyFromLocalStorage(store: SaveStore, localStorage: MigrationStorage, key: string): Promise<boolean> {
   try {
     const value = localStorage.getItem(key);
@@ -430,8 +561,8 @@ export async function mirrorKeyFromLocalStorage(store: SaveStore, localStorage: 
       await store.removeItem(key);
       return true;
     }
-    const result = await store.setItem(key, value);
-    return result.ok;
+    const result = isSavepointGuardedKey(key) ? await guardedSavepointSetItem(store, key, value) : await store.setItem(key, value);
+    return result.ok || !!result.error?.startsWith('refused:');
   } catch {
     return false;
   }
@@ -448,14 +579,63 @@ export async function mirrorKeyFromLocalStorage(store: SaveStore, localStorage: 
  * this function only governs the ORDER of the best-effort IndexedDB mirror,
  * never localStorage's own already-correct synchronous contract.)
  */
+/**
+ * FEAT-2326609780 inc2: write a savepoint's bytes STRAIGHT into the durable
+ * store's overflow slot, bypassing the "read localStorage first" step every
+ * other mirror helper here uses. This is the failure-path counterpart to
+ * `mirrorSaveCheckpoint` — call it when `persistSavepoint` returned false, so
+ * the durable store still advances past the wedge instead of silently
+ * re-mirroring the stale localStorage copy. `encodedSavepoint` may be either
+ * `saveCodec.encode()`-compressed or plain JSON — `decode()` at read time is
+ * a no-op passthrough on uncompressed input, so callers are free to skip
+ * compression here (this is IndexedDB, not the 5MB-constrained medium).
+ * Never throws.
+ *
+ * F3 FIX (round 2, independent round REJECT — ATTACK C): this was a bare
+ * `setItem` with NO freshness check at all. In the wedge, the overflow slot
+ * is the ONLY surviving copy of the advanced city — a later FAILED persist
+ * of an OLDER savepoint (e.g. loading an older named save while still
+ * wedged) routed straight here via `mirrorAfterPersist` and silently
+ * destroyed the rescue copy. Now routes through the same
+ * `guardedSavepointSetItem` BUG-469-style overwrite protection every other
+ * savepoint-shaped write in this module uses: refuses (returns `false`,
+ * leaves the existing value untouched) when the overflow slot already holds
+ * something newer-or-equal.
+ */
+/**
+ * P0 RCA fix, item 2: the overflow key for a given lineage. `undefined`/the
+ * reserved legacy lineage id map to the ORIGINAL bare `SAVEPOINT_OVERFLOW_KEY`
+ * constant (byte-identical to every pre-fix mirror write and to what the
+ * round-1/round-2 attacker fixtures — which never stamp a `lineageId` —
+ * still exercise), so this is purely ADDITIVE: only a NAMED (minted)
+ * lineage gets its own separate overflow slot.
+ */
+function overflowKeyForLineage(lineageId?: string): string {
+  return !lineageId || lineageId === 'legacy' ? SAVEPOINT_OVERFLOW_KEY : `metropolis.savepoint.${lineageId}.idbOnly`;
+}
+
+export async function mirrorSavepointDirect(store: SaveStore, encodedSavepoint: string, lineageId?: string): Promise<boolean> {
+  try {
+    const result = await guardedSavepointSetItem(store, overflowKeyForLineage(lineageId), encodedSavepoint);
+    return result.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function mirrorSaveCheckpoint(
   store: SaveStore,
   localStorage: MigrationStorage,
-  opts: { savepointSlots: number; journalKey: string },
+  opts: { savepointSlots: number; journalKey: string; lineageId?: string },
 ): Promise<{ savepointsOk: boolean; journalOk: boolean }> {
   let savepointsOk = true;
   for (let slot = 0; slot < opts.savepointSlots; slot++) {
-    const ok = await mirrorKeyFromLocalStorage(store, localStorage, `metropolis.savepoint.${slot}`);
+    // P0 RCA fix, item 2: mirrors replay.ts's own `savepointKey` convention
+    // exactly (legacy/undefined -> unnamespaced) so the IDB copy of a
+    // lineage's rotation slots lives at the SAME relative key shape as its
+    // localStorage original.
+    const key = !opts.lineageId || opts.lineageId === 'legacy' ? `metropolis.savepoint.${slot}` : `metropolis.savepoint.${opts.lineageId}.${slot}`;
+    const ok = await mirrorKeyFromLocalStorage(store, localStorage, key);
     savepointsOk = savepointsOk && ok;
   }
   if (!savepointsOk) return { savepointsOk, journalOk: false };
