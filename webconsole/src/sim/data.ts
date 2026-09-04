@@ -4472,14 +4472,35 @@ function distToList(list: { cx: number; cy: number }[], x: number, y: number): n
  * score a tile identically (GR#3 SSOT) — only how the RESULT is collected
  * (one best vs every fit, sorted) differs between the two callers.
  */
-function scoreTile(sp: Spec, hc: { x: number; y: number }, tagged: Record<Tag, { cx: number; cy: number }[]>, resList: { cx: number; cy: number }[], x: number, y: number): number {
-  const cx = x + sp.w / 2;
-  const cy = y + sp.h / 2;
+/** The four SSOT distance inputs scoreTile()'s rules read — split out (BUG-660)
+ *  so a batch cache can store them PER CANDIDATE and tighten them
+ *  incrementally against only newly-added points, instead of recomputing
+ *  distToList() over the WHOLE tagged/resList every time any one point is
+ *  added. See createSpotSearchContext()'s occupy() for the incremental use. */
+interface TileDistances {
+  poll: number;
+  waste: number;
+  clean: number;
+  resNear: number;
+}
+
+function tileDistances(tagged: Record<Tag, { cx: number; cy: number }[]>, resList: { cx: number; cy: number }[], cx: number, cy: number): TileDistances {
+  return {
+    poll: distToList(tagged.pollution, cx, cy),
+    waste: distToList(tagged.waste, cx, cy),
+    clean: distToList(tagged.clean, cx, cy),
+    resNear: distToList(resList, cx, cy),
+  };
+}
+
+/** BUG-593's per-tile scoring rules, driven by ALREADY-COMPUTED distances
+ *  (tileDistances()) — the pure "distances -> score" half of scoreTile(),
+ *  split out so an incremental caller can supply freshly-tightened distances
+ *  without recomputing them via a full tagged/resList scan (GR#3 SSOT: this
+ *  is the ONLY place the scoring rules themselves are written). */
+function scoreFromDistances(sp: Spec, hc: { x: number; y: number }, x: number, y: number, d: TileDistances): number {
   let score = -cheb(x, y, hc.x, hc.y) / 4;
-  const poll = distToList(tagged.pollution, cx, cy);
-  const waste = distToList(tagged.waste, cx, cy);
-  const clean = distToList(tagged.clean, cx, cy);
-  const resNear = distToList(resList, cx, cy);
+  const { poll, waste, clean, resNear } = d;
 
   if ((sp.stage === 'nursery' || sp.stage === 'primary') && poll < 8) score -= 1000;
   if ((sp.stage === 'city' || sp.stage === 'tertiary') && poll < 6) score -= 800;
@@ -4509,6 +4530,12 @@ function scoreTile(sp: Spec, hc: { x: number; y: number }, tagged: Record<Tag, {
   if (sp.tag === 'clean' && waste < 8) score -= 2000;
 
   return score;
+}
+
+function scoreTile(sp: Spec, hc: { x: number; y: number }, tagged: Record<Tag, { cx: number; cy: number }[]>, resList: { cx: number; cy: number }[], x: number, y: number): number {
+  const cx = x + sp.w / 2;
+  const cy = y + sp.h / 2;
+  return scoreFromDistances(sp, hc, x, y, tileDistances(tagged, resList, cx, cy));
 }
 
 function findSpotCore(specId: string, ctx: SpotScoringContext, winHint?: { win: number }): { x: number; y: number } | null {
@@ -4618,18 +4645,36 @@ function findSpotCore(specId: string, ctx: SpotScoringContext, winHint?: { win: 
  * re-check per pop, since a later same-batch placement can overlap an
  * earlier candidate's footprint for any spec wider/taller than the stride).
  *
- * CORRECTNESS: this is lossless ONLY as long as no OTHER pending candidate's
- * SCORE can change while cached — true whenever the spec being placed has no
- * `tag` and is not `kind: 'residential'` (scoreTile()'s only score inputs
- * besides `occ` are `tagged`/`resList`/`hc`, and `occupy()` only appends to
- * those for a tagged/residential spec — see createSpotSearchContext()'s own
- * "never a residential spec" assumption, same idea). The cache is
- * INVALIDATED (discarded, forcing a fresh scan+sort) the moment occupy() adds
- * anything to tagged/resList, so a tagged spec (wat_clean/wat_waste/a
- * pollution-tagged power plant) still gets a fresh, fully-correct scan every
- * time its own placements could move the goalposts for later candidates —
- * it just loses the speedup for that specific spec, never correctness.
+ * CORRECTNESS: a pending candidate's SCORE can shift while cached whenever
+ * the spec being placed carries a `tag` or is `kind: 'residential'`
+ * (scoreTile()'s only score inputs besides `occ` are `tagged`/`resList`/
+ * `hc`, and `occupy()` only appends to those for a tagged/residential spec —
+ * see createSpotSearchContext()'s own "never a residential spec" assumption,
+ * same idea). BUG-660 FOLLOW-UP (2026-09-04): a tagged spec (wat_clean/
+ * wat_waste/a pollution-tagged power plant) used to force a full fresh
+ * scanAllCore() rescan+refit of the WHOLE window on every single one of its
+ * own placements — CPU-profiled against Aaron's real 49,174-building save as
+ * the dominant cost in a resolveDemandAll batch (>80% of samples in `fits`/
+ * `distToList`/`scanAllCore`/`scanWindowAll` combined), because `occ` only
+ * ever GROWS within a batch, so the true candidate universe for a given
+ * window can never gain a tile the original scan missed — createSpotSearchContext()'s
+ * occupy() now re-fits + re-scores ONLY the already-cached candidates in
+ * place (dropping any that no longer fit) instead of discarding the list and
+ * re-walking the whole window — see its own doc comment for the full
+ * argument. Still fully correct (identical scores/fits to a from-scratch
+ * rescan of the SAME window), just no longer paying for geometry already
+ * known.
  */
+/** A candidate tile in createSpotSearchContext()'s sorted cache. Carries its
+ *  own TileDistances (BUG-660) alongside the derived score, so occupy() can
+ *  TIGHTEN just these four numbers against newly-added points instead of
+ *  recomputing them from the whole tagged/resList every time. */
+interface SpotCandidate extends TileDistances {
+  x: number;
+  y: number;
+  score: number;
+}
+
 function scanWindowAll(
   sp: Spec,
   ctx: SpotScoringContext,
@@ -4638,13 +4683,14 @@ function scanWindowAll(
   xb: number,
   yb: number,
   stride: number
-): { x: number; y: number; score: number }[] {
+): SpotCandidate[] {
   const { occ, hc, tagged, resList } = ctx;
-  const out: { x: number; y: number; score: number }[] = [];
+  const out: SpotCandidate[] = [];
   for (let y = ya; y <= yb; y += stride) {
     for (let x = xa; x <= xb; x += stride) {
       if (!fits(occ, sp.w, sp.h, x, y)) continue;
-      out.push({ x, y, score: scoreTile(sp, hc, tagged, resList, x, y) });
+      const d = tileDistances(tagged, resList, x + sp.w / 2, y + sp.h / 2);
+      out.push({ x, y, ...d, score: scoreFromDistances(sp, hc, x, y, d) });
     }
   }
   // Highest score first (pop from the end — O(1) — instead of shift/O(n)).
@@ -4655,7 +4701,7 @@ function scanWindowAll(
 /** Same widen-and-retry contract as findSpotCore(), but returns the FULL
  *  sorted (ascending — caller pops from the end) candidate list for the
  *  window it settles on, for createSpotSearchContext()'s candidate cache. */
-function scanAllCore(specId: string, ctx: SpotScoringContext, winHint: { win: number }): { x: number; y: number; score: number }[] | null {
+function scanAllCore(specId: string, ctx: SpotScoringContext, winHint: { win: number }): SpotCandidate[] | null {
   const sp = SPECS[specId];
   if (!sp) return null;
   const { hc } = ctx;
@@ -4753,7 +4799,7 @@ export function createSpotSearchContext(s: SimState, specId: string): SpotSearch
   // BUG-646: the sorted-candidate cache (scanAllCore() above) — null means
   // "not built yet or invalidated, recompute on next findNext()". Ascending
   // score order so the best candidate is a cheap pop() off the end.
-  let cache: { x: number; y: number; score: number }[] | null = null;
+  let cache: SpotCandidate[] | null = null;
   return {
     findNext: () => {
       if (!sp) return null;
@@ -4773,19 +4819,100 @@ export function createSpotSearchContext(s: SimState, specId: string): SpotSearch
       return findSpotCore(specId, ctx, winHint); // one direct fallback call so a single-candidate window still resolves without an extra empty round-trip
     },
     occupy: (newBuildings) => {
+      // BUG-660 (Aaron, P1, "Fix-All 2000-unit batch still blocks ~66s
+      // median" — direct CPU profiling against Aaron's real 49,174-building
+      // save identified THIS re-score path, not autoConnect, as the dominant
+      // cost: `fits`/`distToList`/`scanAllCore` together were >80% of total
+      // samples in a resolveDemandAll batch that includes wat_clean/
+      // wat_waste/pollution-tagged power. Every one of those specs carries a
+      // `tag`, so the OLD `cache = null` here forced scanAllCore() to re-walk
+      // and re-score the ENTIRE window from scratch (an O(window-area) pass,
+      // this function's own doc comment already measured at 13-70ms/unit at
+      // window sizes 180-360) on literally every unit of a tagged spec.
+      //
+      // FIRST FIX (kept, still needed): re-fit + re-score only the cache's
+      // OWN candidates instead of re-walking the window — see the "THE FIX"
+      // paragraph on scanWindowAll()'s doc comment. The independent round's
+      // repeated-run harness (not the author's single dev-box anecdote) put
+      // that fix alone at PRE 387,329ms (n=1) -> POST a median 19,854ms (n=5)
+      // for a single resolveDemandAll at Aaron's real ~49k-building save, and
+      // 72,753ms -> a median 7,718ms (n=5) on the smaller ~6k-building
+      // fixture, but re-profiling showed `distToList` STILL
+      // dominant: each re-score was recomputing every candidate's distance
+      // to the ENTIRE (thousands-strong, in a mature city) tagged list from
+      // scratch, every single occupy() call.
+      //
+      // SECOND FIX (this pass): a NEW tagged/residential point can only ever
+      // DECREASE distToList()'s min-distance result for any given candidate
+      // — it is a min() over a strictly growing list. So instead of
+      // recomputing poll/waste/clean/resNear from the WHOLE list, tighten
+      // each candidate's ALREADY-CACHED distances (SpotCandidate now carries
+      // them — scanWindowAll()/tileDistances()) against only the points
+      // ADDED IN THIS CALL (newPoll/newWaste/newClean/newRes below, almost
+      // always exactly one tagged point — a demand-fix batch never places a
+      // residential spec, so resList realistically never grows here). This
+      // is O(cache.length x pointsAddedThisCall) instead of O(cache.length x
+      // totalTaggedListSize) — identical RESULT (min() is associative: the
+      // min of the old min and the new points equals the min over the whole
+      // updated list) at a fraction of the cost when the tagged list is
+      // large relative to one batch's own contribution to it.
+      const newPoll: { cx: number; cy: number }[] = [];
+      const newWaste: { cx: number; cy: number }[] = [];
+      const newClean: { cx: number; cy: number }[] = [];
+      const newRes: { cx: number; cy: number }[] = [];
       for (const b of newBuildings) {
         const bs = SPECS[b.spec];
         if (!bs) continue;
         for (let dx = 0; dx < bs.w; dx++)
           for (let dy = 0; dy < bs.h; dy++) ctx.occ.add(`${b.x + dx},${b.y + dy}`);
         if (bs.tag) {
-          ctx.tagged[bs.tag].push({ cx: b.x + bs.w / 2, cy: b.y + bs.h / 2 });
-          cache = null; // other pending candidates' scores can now be stale — force a fresh, fully-correct scan
+          const pt = { cx: b.x + bs.w / 2, cy: b.y + bs.h / 2 };
+          ctx.tagged[bs.tag].push(pt);
+          if (bs.tag === 'pollution') newPoll.push(pt);
+          else if (bs.tag === 'waste') newWaste.push(pt);
+          else if (bs.tag === 'clean') newClean.push(pt);
         }
         if (bs.kind === 'residential') {
-          ctx.resList.push({ cx: b.x + bs.w / 2, cy: b.y + bs.h / 2 });
-          cache = null; // same reasoning — resNear scoring for every pending candidate could shift
+          const pt = { cx: b.x + bs.w / 2, cy: b.y + bs.h / 2 };
+          ctx.resList.push(pt);
+          newRes.push(pt);
         }
+      }
+      const anyNewPoints = newPoll.length > 0 || newWaste.length > 0 || newClean.length > 0 || newRes.length > 0;
+      // `occ` only ever GROWS within a batch (placements are never undone —
+      // the same invariant findSpotCore()'s winHint memo already relies on),
+      // so no tile the ORIGINAL scanAllCore() window pass missed can
+      // suddenly start fitting now — the true candidate universe for THIS
+      // window is exactly the cache's own tiles, filtered down. A candidate
+      // that no longer fits (this unit's own footprint, or any connector
+      // tile alongside it, now overlaps it) is dropped here, exactly as
+      // findNext()'s own pop-loop fits() re-check would have dropped it
+      // lazily one pop at a time — that re-check stays in place as a final
+      // safety net, now usually a no-op hit.
+      if (anyNewPoints && cache !== null && sp) {
+        const tighten = (min: number, pts: { cx: number; cy: number }[], cx: number, cy: number) => {
+          let m = min;
+          for (const p of pts) {
+            const dd = cheb(cx, cy, p.cx, p.cy);
+            if (dd < m) m = dd;
+          }
+          return m;
+        };
+        const rescored: SpotCandidate[] = [];
+        for (const cand of cache) {
+          if (!fits(ctx.occ, sp.w, sp.h, cand.x, cand.y)) continue;
+          const cx = cand.x + sp.w / 2;
+          const cy = cand.y + sp.h / 2;
+          const d: TileDistances = {
+            poll: newPoll.length ? tighten(cand.poll, newPoll, cx, cy) : cand.poll,
+            waste: newWaste.length ? tighten(cand.waste, newWaste, cx, cy) : cand.waste,
+            clean: newClean.length ? tighten(cand.clean, newClean, cx, cy) : cand.clean,
+            resNear: newRes.length ? tighten(cand.resNear, newRes, cx, cy) : cand.resNear,
+          };
+          rescored.push({ x: cand.x, y: cand.y, ...d, score: scoreFromDistances(sp, ctx.hc, cand.x, cand.y, d) });
+        }
+        rescored.sort((a, b) => a.score - b.score); // ascending — findNext() pops from the end
+        cache = rescored;
       }
     },
   };
