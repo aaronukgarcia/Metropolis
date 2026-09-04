@@ -128,10 +128,11 @@ const (
 	// header's Kind to route the shard back here.
 	KindCitizens = "citizens"
 
-	recCitizensMeta      = "citizens.meta"
-	recCitizensCold      = "citizens.cold"
-	recCitizensHousehold = "citizens.household"
-	recCitizensFidelity  = "citizens.fidelity"
+	recCitizensMeta       = "citizens.meta"
+	recCitizensCold       = "citizens.cold"
+	recCitizensHousehold  = "citizens.household"
+	recCitizensFidelity   = "citizens.fidelity"
+	recCitizensDeathQueue = "citizens.deathqueue"
 )
 
 // coldPassParamsWire is ColdPassParams's wire projection (the mid-month
@@ -284,13 +285,90 @@ type fidelityWire struct {
 	Fidelity Fidelity `json:"fidelity"`
 }
 
+// deathQueueEntryWire is one FEAT-087 AC-20 pending (hazard-selected, not
+// yet realised) death on the wire — the wire projection of
+// [DeathQueueEntrySnapshot]. Explicit json tags; the domain struct is never
+// marshalled directly (this file's established convention).
+type deathQueueEntryWire struct {
+	CitizenID      uint64 `json:"citizenID"`
+	SelectionMonth int64  `json:"selectionMonth"`
+}
+
+// realisedDeathWire is one FEAT-088 handoff record on the wire — the wire
+// projection of [RealisedDeath].
+type realisedDeathWire struct {
+	CitizenID     uint64 `json:"citizenID"`
+	DeathMonth    int64  `json:"deathMonth"`
+	EmergencyFlag bool   `json:"emergencyFlag"`
+}
+
+// deathQueueWire is FEAT-087 AC-20's single "citizens.deathqueue" record:
+// the wire projection of [DeathQueueSnapshot] — every DATA field of
+// CitizensAPI's DeathQueue (BUG-483 F3). See DeathQueueSnapshot's own doc
+// for the full durable-vs-derived analysis; shardIndex is DELIBERATELY
+// absent here (derived, rebuilt on load by [DeathQueue.RestoreSnapshot]).
+type deathQueueWire struct {
+	Pending     []deathQueueEntryWire `json:"pending"`
+	RealisedIDs []uint64              `json:"realisedIDs"`
+	RealisedAt  map[uint64]int64      `json:"realisedAt"`
+	Handoff     []realisedDeathWire   `json:"handoff"`
+}
+
+// toDeathQueueWire/fromDeathQueueWire convert directly (identical field set,
+// element-by-element) between [DeathQueueSnapshot] (the domain-package-
+// agnostic payload deathwave.go exposes) and the tagged wire type — the
+// domain struct is still never json.Marshalled directly (AC-2's field-parity
+// discipline), mirroring coldPassParamsWire's precedent above.
+func toDeathQueueWire(s DeathQueueSnapshot) deathQueueWire {
+	w := deathQueueWire{
+		Pending:     make([]deathQueueEntryWire, len(s.Pending)),
+		RealisedIDs: append([]uint64(nil), s.RealisedIDs...),
+		RealisedAt:  make(map[uint64]int64, len(s.RealisedAt)),
+		Handoff:     make([]realisedDeathWire, len(s.Handoff)),
+	}
+	for i, e := range s.Pending {
+		w.Pending[i] = deathQueueEntryWire(e)
+	}
+	for k, v := range s.RealisedAt {
+		w.RealisedAt[k] = v
+	}
+	for i, h := range s.Handoff {
+		w.Handoff[i] = realisedDeathWire(h)
+	}
+	return w
+}
+
+func fromDeathQueueWire(w deathQueueWire) DeathQueueSnapshot {
+	s := DeathQueueSnapshot{
+		Pending:     make([]DeathQueueEntrySnapshot, len(w.Pending)),
+		RealisedIDs: append([]uint64(nil), w.RealisedIDs...),
+		RealisedAt:  make(map[uint64]int64, len(w.RealisedAt)),
+		Handoff:     make([]RealisedDeath, len(w.Handoff)),
+	}
+	for i, e := range w.Pending {
+		s.Pending[i] = DeathQueueEntrySnapshot(e)
+	}
+	for k, v := range w.RealisedAt {
+		s.RealisedAt[k] = v
+	}
+	for i, h := range w.Handoff {
+		s.Handoff[i] = RealisedDeath(h)
+	}
+	return s
+}
+
 // citizensHead is the small, RESIDENT part of the save (everything but the
 // streamed cold population): the meta record plus the sorted household and
-// fidelity slices. Snapshotted once under a single read lock.
+// fidelity slices, and the FEAT-087 AC-20 death-queue snapshot. Snapshotted
+// once under a single read lock (deathQueue is snapshotted under its OWN
+// mu — see DeathQueue.Snapshot — never under c.mu; the two locks are always
+// taken c.mu-then-q.mu across this whole package, never the reverse, so
+// nesting the call here is deadlock-safe).
 type citizensHead struct {
 	meta       citizensMetaWire
 	households []householdWire // sorted by id (GR#21)
 	fidelity   []fidelityWire  // sorted by id (GR#21)
+	deathQueue deathQueueWire
 }
 
 // snapshotHead copies the meta scalars, the households, and the hot Fidelity
@@ -351,6 +429,12 @@ func (c *CitizensAPI) snapshotHead() (citizensHead, error) {
 	for _, id := range hotIDs {
 		head.fidelity = append(head.fidelity, fidelityWire{ID: id, Fidelity: c.hot[id].Fidelity})
 	}
+
+	// FEAT-087 AC-20: the death queue's own Snapshot takes q.mu, NOT c.mu —
+	// safe to call while still holding c.mu.RLock above since the whole
+	// package only ever nests c.mu-then-q.mu, never q.mu-then-c.mu (see
+	// citizensHead's own doc comment).
+	head.deathQueue = toDeathQueueWire(c.deathQueue.Snapshot(errs.NewCorrelationID()))
 
 	return head, nil
 }
@@ -449,6 +533,20 @@ func (c *CitizensAPI) resetForLoad() error {
 	c.lastMonthBirths = 0
 	c.lastMonthDeaths = 0
 	c.monthParams = ColdPassParams{MortalityMultiplier: 1.0}
+
+	// FEAT-087 AC-20: reset the death queue to NewDeathQueue's empty state
+	// too — RestoreSnapshot on the zero-value DeathQueueSnapshot{} clears
+	// pending/realisedIDs/realisedAt/handoff and rebuilds (empty) shardIndex,
+	// WITHOUT replacing c.deathQueue's pointer identity (any external
+	// SetDrainCapacity wiring on this object survives a load exactly like
+	// citizens' own re-wired-not-persisted fertilityCfg). An old save with
+	// no "citizens.deathqueue" record leaves this empty reset as the final
+	// state (GR#16: old saves default to an empty queue, never a decode
+	// error); a save that DOES carry the record overwrites it below via
+	// applyLoadRecord's recCitizensDeathQueue case.
+	if err := c.deathQueue.RestoreSnapshot(DeathQueueSnapshot{}, errs.NewCorrelationID()); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -543,6 +641,22 @@ func (c *CitizensAPI) applyLoadRecord(rec serialize.Record) error {
 		cit.Fidelity = w.Fidelity
 		c.hot[w.ID] = &cit
 
+	case recCitizensDeathQueue:
+		var w deathQueueWire
+		if err := json.Unmarshal(rec.Data, &w); err != nil {
+			return fmt.Errorf("citizens: decoding %s record: %w", rec.Kind, err)
+		}
+		// FEAT-087 AC-20: RestoreSnapshot replaces the queue's DATA wholesale
+		// AND rebuilds shardIndex from the just-restored Pending set under
+		// shardMu (BUG-663 r3's mandatory rebuild — see
+		// DeathQueue.RestoreSnapshot's own doc for the immortal-citizen
+		// hazard of skipping it). resetForLoad already cleared c.deathQueue
+		// to empty before this record ever arrives, so this call is safe to
+		// treat as a full replace.
+		if err := c.deathQueue.RestoreSnapshot(fromDeathQueueWire(w), errs.NewCorrelationID()); err != nil {
+			return fmt.Errorf("citizens: decoding %s record: %w", rec.Kind, err)
+		}
+
 	default:
 		return fmt.Errorf("citizens: unknown citizens save record kind %q", rec.Kind)
 	}
@@ -585,12 +699,13 @@ func (p *SaveParticipant) Kind() string {
 }
 
 // Source returns a fresh pull-iterator over the citizen state. It snapshots
-// the small resident head (meta + households + fidelity) under the lock once,
-// up front, then streams the cold population shard-by-shard through coldStream
-// — never buffering the whole 6.7GB cold store before the first yield. The
-// emission order is meta, then every cold citizen (shard 0→255, row order),
-// then households (sorted), then the hot fidelity set (sorted). A
-// copied-value guard failure (SEC-020) surfaces on the first pull.
+// the small resident head (meta + death queue + households + fidelity) under
+// the lock once, up front, then streams the cold population shard-by-shard
+// through coldStream — never buffering the whole 6.7GB cold store before the
+// first yield. The emission order is meta, then the FEAT-087 AC-20 death
+// queue record, then every cold citizen (shard 0→255, row order), then
+// households (sorted), then the hot fidelity set (sorted). A copied-value
+// guard failure (SEC-020) surfaces on the first pull.
 func (p *SaveParticipant) Source() serialize.RecordSource {
 	if err := p.c.checkNotCopied(errs.NewCorrelationID(), "Source"); err != nil {
 		return func() (serialize.Record, bool, error) { return serialize.Record{}, false, err }
@@ -598,6 +713,7 @@ func (p *SaveParticipant) Source() serialize.RecordSource {
 	head, headErr := p.c.snapshotHead()
 	cold := p.c.newColdStream()
 	metaEmitted := false
+	deathQueueEmitted := false
 	hi, fi := 0, 0
 	emit := func(kind string, value any) (serialize.Record, bool, error) {
 		data, err := json.Marshal(value)
@@ -615,6 +731,10 @@ func (p *SaveParticipant) Source() serialize.RecordSource {
 		if !metaEmitted {
 			metaEmitted = true
 			return emit(recCitizensMeta, head.meta)
+		}
+		if !deathQueueEmitted {
+			deathQueueEmitted = true
+			return emit(recCitizensDeathQueue, head.deathQueue)
 		}
 		if w, ok := cold.next(); ok {
 			return emit(recCitizensCold, w)

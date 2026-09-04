@@ -123,7 +123,27 @@ func buildPopulation(t *testing.T, seed uint64, cid string) *CitizensAPI {
 		_, _, err := api.AdvanceDayTick(cid)
 		must(t, err)
 	}
+
+	// FEAT-087 AC-20: put genuine death-queue state into the fixture -- two
+	// PENDING (selected-but-unrealised) entries and one already-REALISED
+	// entry, spanning two distinct selection months, so every round-trip test
+	// below (round-trip, prove-can-fail, byte determinism) actually exercises
+	// the new "citizens.deathqueue" record instead of trivially round-tripping
+	// an empty queue. IDs are drawn from the 300 already-seeded citizens (the
+	// death queue itself has no notion of "does this citizen exist" -- it is
+	// pure bookkeeping keyed by citizenID, see deathwave.go's own doc).
+	must(t, api.deathQueue.Enqueue(101, api.month, cid))
+	must(t, api.deathQueue.Enqueue(102, api.month, cid))
+	must(t, api.deathQueue.Enqueue(103, api.month+1, cid))
+	must(t, api.deathQueue.RealiseByID(101, api.month, cid))
 	return api
+}
+
+// deathQueueStateOf extracts a *DeathQueue's full DATA snapshot for
+// comparison — the FEAT-087 AC-20 counterpart of coldRecordsOf/householdsOf/
+// fidelitiesOf above.
+func deathQueueStateOf(c *CitizensAPI, cid string) DeathQueueSnapshot {
+	return c.deathQueue.Snapshot(cid)
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +229,11 @@ func assertSameState(t *testing.T, a, b *CitizensAPI, label string) {
 	}
 	if a.PopulationHash(label) != b.PopulationHash(label) {
 		t.Fatalf("%s: PopulationHash differs", label)
+	}
+	// FEAT-087 AC-20: pending/realisedIDs/realisedAt/handoff must all survive
+	// a save/restore boundary byte-identically (BUG-483 F3).
+	if !reflect.DeepEqual(deathQueueStateOf(a, label), deathQueueStateOf(b, label)) {
+		t.Fatalf("%s: death queue state differs\n a=%+v\n b=%+v", label, deathQueueStateOf(a, label), deathQueueStateOf(b, label))
 	}
 }
 
@@ -336,6 +361,17 @@ func TestCitizensWireFieldsMatchDomain(t *testing.T) {
 	assertFieldParity(t,
 		reflect.TypeOf((*ColdPassParams)(nil)).Elem(),
 		reflect.TypeOf((*coldPassParamsWire)(nil)).Elem(), nil)
+	// FEAT-087 AC-20: DeathQueueEntrySnapshot ↔ deathQueueEntryWire,
+	// DeathQueueSnapshot ↔ deathQueueWire, RealisedDeath ↔ realisedDeathWire.
+	assertFieldParity(t,
+		reflect.TypeOf((*DeathQueueEntrySnapshot)(nil)).Elem(),
+		reflect.TypeOf((*deathQueueEntryWire)(nil)).Elem(), nil)
+	assertFieldParity(t,
+		reflect.TypeOf((*DeathQueueSnapshot)(nil)).Elem(),
+		reflect.TypeOf((*deathQueueWire)(nil)).Elem(), nil)
+	assertFieldParity(t,
+		reflect.TypeOf((*RealisedDeath)(nil)).Elem(),
+		reflect.TypeOf((*realisedDeathWire)(nil)).Elem(), nil)
 }
 
 // TestCitizensAPIFieldsAllClassified is the highest-teeth AC-2 test: every
@@ -349,17 +385,8 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 		"workers":      "perf pool size (AC-17: affects wall-clock only, never results)",
 		"fertilityCfg": "immutable data/fertility.json config, reloaded by NewCitizensAPI",
 		"mortalityCfg": "immutable data/mortality.json config, reloaded by NewCitizensAPI",
-		"deathQueue": "FEAT-087 (mkey feat.deathwave) inc1.5 KNOWN GAP, disclosed not silent: " +
-			"the live smoothing queue's pending (selected-but-unrealised) entries are mutable " +
-			"per-citizen simulation state, not yet serialized. A save/reload across a pending " +
-			"queue entry silently drops that citizen's queue membership -- the citizen itself is " +
-			"unharmed (still resident in the cold store, never double-removed, never phantom-" +
-			"killed) but loses its FIFO queue priority, and AC-2's totalRealised==totalSelected " +
-			"count is no longer guaranteed to hold ACROSS a reload boundary (it still holds " +
-			"within one continuous run). Flagged as inc1.5's own follow-up (death-queue wire " +
-			"serialization), out of this increment's cold-pass-wiring scope.",
-		"mu":   "runtime lock, not state",
-		"self": "SEC-020 copy-guard pointer, re-armed by NewCitizensAPI",
+		"mu":           "runtime lock, not state",
+		"self":         "SEC-020 copy-guard pointer, re-armed by NewCitizensAPI",
 		"season": "FEAT-087 (mkey feat.deathwave) inc2 — an INJECTED DEPENDENCY " +
 			"(*season.SeasonAPI), re-wired by the composition root on load via SetSeason, " +
 			"not simulation state this module owns (mirrors engine.consumption's own " +
@@ -372,6 +399,14 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 		"households": true, "nextHouseholdID": true, "nextFertilityChildID": true,
 		"curMonthBirths": true, "curMonthDeaths": true,
 		"lastMonthBirths": true, "lastMonthDeaths": true, "monthParams": true,
+		// FEAT-087 AC-20 (BUG-483 F3): the death queue's pending/realisedIDs/
+		// realisedAt/handoff DATA now round-trips via the "citizens.deathqueue"
+		// record (participant.go's toDeathQueueWire/DeathQueue.Snapshot) — see
+		// DeathQueueSnapshot's own doc comment in deathwave.go for the
+		// durable-vs-derived breakdown, and RestoreSnapshot's doc for the
+		// mandatory shardIndex rebuild that closes the inc1.5-era KNOWN GAP
+		// this field used to be excluded under.
+		"deathQueue": true,
 	}
 	ct := reflect.TypeOf((*CitizensAPI)(nil)).Elem()
 	for i := 0; i < ct.NumField(); i++ {
@@ -517,6 +552,33 @@ func TestCitizensParticipant_ProveCanFail(t *testing.T) {
 	}
 	if reflect.DeepEqual(fidelitiesOf(orig), fidelitiesOf(reloaded)) {
 		t.Fatalf("prove-can-fail: dropping a hot fidelity entry did not diverge")
+	}
+
+	// FEAT-087 AC-20: dropping a pending death-queue entry (the exact BUG-483
+	// F3 defect this AC closes) must diverge too.
+	deathQueueMutators := map[string]func(c *CitizensAPI){
+		"drop a pending entry": func(c *CitizensAPI) {
+			c.deathQueue.mu.Lock()
+			c.deathQueue.pending = c.deathQueue.pending[:len(c.deathQueue.pending)-1]
+			c.deathQueue.mu.Unlock()
+		},
+		"drop a realisedID": func(c *CitizensAPI) {
+			c.deathQueue.mu.Lock()
+			c.deathQueue.realisedIDs = nil
+			c.deathQueue.mu.Unlock()
+		},
+		"drop realisedAt": func(c *CitizensAPI) {
+			c.deathQueue.mu.Lock()
+			c.deathQueue.realisedAt = map[uint64]int64{}
+			c.deathQueue.mu.Unlock()
+		},
+	}
+	for name, fn := range deathQueueMutators {
+		r := reloadFrom(t, root, seed, "r")
+		fn(r)
+		if reflect.DeepEqual(deathQueueStateOf(orig, "cmp"), deathQueueStateOf(r, "cmp")) {
+			t.Fatalf("prove-can-fail: death queue mutation %q did not diverge — that field does not round-trip / is not compared", name)
+		}
 	}
 }
 
@@ -766,8 +828,10 @@ func TestCitizensParticipant_SourceStreamsRecordShape(t *testing.T) {
 	if !ok || rec.Kind != recCitizensMeta {
 		t.Fatalf("first record is not %s", recCitizensMeta)
 	}
-	// Kinds must appear in the order meta, cold*, household*, fidelity*.
-	order := map[string]int{recCitizensMeta: 0, recCitizensCold: 1, recCitizensHousehold: 2, recCitizensFidelity: 3}
+	// Kinds must appear in the order meta, deathqueue, cold*, household*,
+	// fidelity* (FEAT-087 AC-20 adds the single deathqueue record right
+	// after meta).
+	order := map[string]int{recCitizensMeta: 0, recCitizensDeathQueue: 1, recCitizensCold: 2, recCitizensHousehold: 3, recCitizensFidelity: 4}
 	last := 0
 	counts := map[string]int{recCitizensMeta: 1}
 	for {
@@ -786,7 +850,7 @@ func TestCitizensParticipant_SourceStreamsRecordShape(t *testing.T) {
 		last = phase
 		counts[rec.Kind]++
 	}
-	if counts[recCitizensCold] == 0 || counts[recCitizensHousehold] == 0 || counts[recCitizensFidelity] == 0 {
+	if counts[recCitizensDeathQueue] == 0 || counts[recCitizensCold] == 0 || counts[recCitizensHousehold] == 0 || counts[recCitizensFidelity] == 0 {
 		t.Fatalf("missing record kinds: %+v", counts)
 	}
 }

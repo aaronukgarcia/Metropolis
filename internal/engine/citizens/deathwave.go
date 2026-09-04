@@ -764,3 +764,171 @@ func (q *DeathQueue) RealiseDrained(cfg MortalityConfig, emergency bool, month i
 	}
 	return out
 }
+
+// DeathQueueEntrySnapshot is one FEAT-087 AC-20 pending (hazard-selected,
+// not yet realised) death, captured for save/restore (BUG-483 F3). It is the
+// wire-agnostic twin of the unexported deathQueueEntry — participant.go's
+// wire type converts to/from this, never touching deathQueueEntry directly,
+// so this file stays the single place that knows the private struct shape.
+type DeathQueueEntrySnapshot struct {
+	CitizenID      uint64
+	SelectionMonth int64
+}
+
+// DeathQueueSnapshot is FEAT-087 AC-20's complete save/restore payload for
+// one DeathQueue: every DATA field, captured together as one atomic unit
+// under q.mu by [DeathQueue.Snapshot] and installed together by
+// [DeathQueue.RestoreSnapshot].
+//
+// # Durable-vs-derived analysis (mirrors participant.go's citizens-wide one)
+//
+//	DURABLE -- carried here:
+//	  - Pending: the queued-but-not-realised selections (AC-20's actual
+//	    scope: BUG-483 F3, "a mid-queue save+exit+reload does not drop
+//	    in-flight selections"). This is deathQueueEntry's DATA — citizenID
+//	    and the month it was hazard-selected.
+//	  - RealisedIDs: the FIFO realisation order so far (AC-4). Without this,
+//	    a save/restore boundary would truncate [DeathQueue.RealisedSequence]
+//	    at the restore point instead of the deterministic full history a
+//	    never-saved run produces — the "identical realised sequence over 24
+//	    more months" proof this AC's test evidence requires needs the PAST
+//	    sequence carried across the boundary, not just the future one.
+//	  - RealisedAt: per-citizen realisation month, the double-realisation
+//	    guard Enqueue/RealiseByID consult (ErrCitizenAlreadyQueued/
+//	    ErrDoubleRealisation) — dropping it on restore would let a citizen
+//	    id that happens to be reused (or a stale re-departure command
+//	    replayed against the restored engine) slip past a guard that held
+//	    before the save.
+//	  - Handoff: FEAT-088's ordered (citizenId, deathMonth, emergencyFlag)
+//	    handoff stream ([DeathQueue.RealisedDeaths]/[DeathQueue.DeathHandoffSince]).
+//	    Carried for the same reason RealisedIDs is: a future FEAT-088
+//	    consumer's cursor is counted against the CUMULATIVE stream, and a
+//	    save/restore silently truncating it out from under a live cursor
+//	    would be exactly the kind of silent data loss AC-20 exists to close.
+//	    (Pre-existing, inherited debt: this stream already has no
+//	    acknowledged-truncation mechanism — see DeathHandoffSince's own doc
+//	    — so it grows for the life of a save exactly as it already grows for
+//	    the life of an un-saved run; AC-20 does not make that worse, it just
+//	    stops it from being silently reset to empty at every restore.)
+//
+//	DERIVED / RUNTIME -- NOT carried, NOT serialized:
+//	  - shardIndex/shardMu (BUG-663): a pure membership MIRROR of Pending,
+//	    sharded by [det.ShardForEntity]. Serializing it would duplicate
+//	    Pending's own data on the wire for no benefit, AND would be actively
+//	    dangerous if the two ever drifted (a hand-edited save, or a future
+//	    bug) — RestoreSnapshot instead REBUILDS it from the just-restored
+//	    Pending under shardMu, mirroring [CitizensAPI]'s own
+//	    ColdShard-index-rebuild precedent this AC's own brief calls out.
+//	    Skipping this rebuild is the exact immortal-citizen hazard flagged
+//	    on BUG-663's follow-up: IsQueuedInShard would report false for every
+//	    restored pending citizen, the live cold pass
+//	    (registry.go's applyMonthly) would then treat them as not-pending
+//	    (already dead) forever, Enqueue would refuse to re-queue them
+//	    (ErrCitizenAlreadyQueued: they are still in `queued`), and
+//	    Realise/RealiseDrained never surfaces them again because the
+//	    day-tick path never re-confirms membership through `queued` at
+//	    all — the citizen is queued forever and realised never.
+//	  - drain (DrainCapacity): an INJECTED FEAT-088 dependency (a hearse
+//	    fleet size, a func closure), not gameplay data — exactly like
+//	    citizens' own fertilityCfg, a load target is expected to have
+//	    [DeathQueue.SetDrainCapacity] called again by whatever composed it,
+//	    not to have a serialized interface value magically re-wired.
+//	  - negativeDrainWarned: a one-time log-dedup latch (GR#17), not
+//	    gameplay state — restoring false at worst re-logs one
+//	    [ErrNegativeDrainCapacity] warning after a load, never a
+//	    determinism or conservation hazard.
+type DeathQueueSnapshot struct {
+	Pending     []DeathQueueEntrySnapshot
+	RealisedIDs []uint64
+	RealisedAt  map[uint64]int64
+	Handoff     []RealisedDeath
+}
+
+func (q *DeathQueue) Snapshot(correlationID string) DeathQueueSnapshot {
+	_ = q.checkNotCopied(correlationID, "Snapshot")
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	out := DeathQueueSnapshot{
+		Pending:     make([]DeathQueueEntrySnapshot, len(q.pending)),
+		RealisedIDs: make([]uint64, len(q.realisedIDs)),
+		RealisedAt:  make(map[uint64]int64, len(q.realisedAt)),
+		Handoff:     make([]RealisedDeath, len(q.handoff)),
+	}
+	for i, e := range q.pending {
+		out.Pending[i] = DeathQueueEntrySnapshot{CitizenID: e.citizenID, SelectionMonth: e.selectionMonth}
+	}
+	copy(out.RealisedIDs, q.realisedIDs)
+	for k, v := range q.realisedAt {
+		out.RealisedAt[k] = v
+	}
+	copy(out.Handoff, q.handoff)
+	return out
+}
+
+// RestoreSnapshot replaces q's DATA fields with snap's contents (AC-20's
+// load path) and REBUILDS shardIndex from the restored Pending set under
+// shardMu — see [DeathQueueSnapshot]'s own doc for why shardIndex is
+// derived rather than carried, and the immortal-citizen hazard of skipping
+// this rebuild (BUG-663's follow-up finding, the mandatory part of this
+// AC).
+//
+// RestoreSnapshot is meant to be called on a FRESH (or freshly reset)
+// DeathQueue — exactly like every other *ForLoad collection reset in this
+// package (participant.go's resetForLoad), it REPLACES q's data wholesale
+// rather than merging with whatever was already queued; calling it on a
+// queue that already has pending/realised entries clobbers them. Passing
+// the zero-value DeathQueueSnapshot{} resets q to the same empty state
+// NewDeathQueue constructs (GR#16: an old save with no "citizens.deathqueue"
+// record decodes as this empty default, never a decode error).
+func (q *DeathQueue) RestoreSnapshot(snap DeathQueueSnapshot, correlationID string) error {
+	if err := q.checkNotCopied(correlationID, "RestoreSnapshot"); err != nil {
+		return err
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.pending = make([]deathQueueEntry, len(snap.Pending))
+	q.queued = make(map[uint64]int64, len(snap.Pending))
+	for i, e := range snap.Pending {
+		q.pending[i] = deathQueueEntry{citizenID: e.CitizenID, selectionMonth: e.SelectionMonth}
+		q.queued[e.CitizenID] = e.SelectionMonth
+	}
+
+	q.realisedIDs = make([]uint64, len(snap.RealisedIDs))
+	copy(q.realisedIDs, snap.RealisedIDs)
+	q.realisedAt = make(map[uint64]int64, len(snap.RealisedAt))
+	for k, v := range snap.RealisedAt {
+		q.realisedAt[k] = v
+	}
+	q.handoff = make([]RealisedDeath, len(snap.Handoff))
+	copy(q.handoff, snap.Handoff)
+	q.negativeDrainWarned = false
+
+	// BUG-663 r3 MANDATORY rebuild: shardIndex is a pure derived mirror of
+	// `queued`/Pending (see DeathQueueSnapshot's doc) — it is never itself
+	// on the wire, so every shard's index must be thrown away and re-derived
+	// from the data that WAS just restored, exactly mirroring
+	// ColdShard.rebuildIndexLocked's precedent. Skipping this step is the
+	// silent-immortal-citizen defect this AC was written to close.
+	// BUG (round REJECT, attacker's hammer test): the nil-out MUST take
+	// shardMu[i] too, exactly like indexInsert/indexRemove do -- shardMu is
+	// the lock IsQueuedInShard actually reads under (it never touches q.mu
+	// at all, by this file's own leaf-lock design), so writing
+	// q.shardIndex[i] = nil while holding only q.mu races a concurrent
+	// IsQueuedInShard(i, ...) reading that same slot. RestoreSnapshot is
+	// reached with q.mu already held here, but shardMu is the SEPARATE lock
+	// this specific field is published under -- q.mu alone does not make
+	// this write safe.
+	for i := range q.shardIndex {
+		q.shardMu[i].Lock()
+		q.shardIndex[i] = nil
+		q.shardMu[i].Unlock()
+	}
+	for _, e := range q.pending {
+		// indexInsert takes its own shardMu[shard] internally -- consistent
+		// with the nil-out above and with Enqueue's existing discipline.
+		q.indexInsert(e.citizenID, correlationID)
+	}
+	return nil
+}
