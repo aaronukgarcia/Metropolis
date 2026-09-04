@@ -5,7 +5,8 @@ import type { NamedSaveMeta } from '../sim/namedsaves';
 import type { RecentOpened } from '../sim/recentfiles';
 
 export function FileMenu() {
-  const { cityName, listSaves, listRecent, saveGame, saveGameAs, loadGame, loadNamed, renameCity } = useSim();
+  const { cityName, listSaves, listRecent, saveGame, saveGameAs, loadGame, loadNamed, renameCity, exportCity, importCity } =
+    useSim();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<'menu' | 'saveAs' | 'rename' | 'load'>('menu');
   const [name, setName] = useState(cityName);
@@ -80,6 +81,12 @@ export function FileMenu() {
                 }}
               >
                 Rename…
+              </button>
+              <button className="brand-menu-item" onClick={() => void exportCity().then(close)} title="Download a compressed backup of this city">
+                Export City
+              </button>
+              <button className="brand-menu-item" onClick={() => void importCity().then(close)} title="Load a city from an exported/saved file">
+                Import City…
               </button>
             </>
           )}

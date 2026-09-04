@@ -209,6 +209,8 @@ test('BUG-605: ConstructionQueueTab renders building name, location, ticks-left 
     loadGame: async () => {},
     loadNamed: async () => {},
     renameCity: () => ({ ok: true }),
+    exportCity: async () => true,
+    importCity: async () => true,
   };
   const html = renderToString(
     React.default.createElement(SimContext.Provider, {

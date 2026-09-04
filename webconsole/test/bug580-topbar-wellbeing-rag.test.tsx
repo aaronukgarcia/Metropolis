@@ -95,6 +95,8 @@ test('BUG-580: TopBar wb-dot colour matches ragColor(ragForWellbeing(wb.overall)
     loadGame: async () => {},
     loadNamed: async () => {},
     renameCity: () => ({ ok: true }),
+    exportCity: async () => true,
+    importCity: async () => true,
   };
 
   const html = renderToString(

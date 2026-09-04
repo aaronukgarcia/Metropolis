@@ -21,6 +21,7 @@ import {
   loadJournal,
   journalTail,
   createJournalPersister,
+  JOURNAL_KEY,
   type Journal,
   type JournalPersister,
   type JournalEntry,
@@ -37,6 +38,7 @@ import {
   replayTailChunked,
   checkConsistencyRecoveringStaleFlows,
   LARGE_TAIL_REPLAY_THRESHOLD,
+  SAVEPOINT_CAP,
 } from './replay';
 import {
   needsRebuild,
@@ -50,7 +52,19 @@ import {
   type ReplayProgress,
   type ProgressSample,
 } from './genesisReplay';
-import { attemptWipe, captureOnUnload, captureBeforeWipe } from './captureBeforeWipe';
+import { attemptWipe, captureOnUnload, captureBeforeWipe, PREWIPE_ARCHIVE_KEY } from './captureBeforeWipe';
+// FEAT-2326609778 (Aaron Q100121, 2026-09-04): the async IndexedDB durable
+// save layer. localStorage stays the synchronous boot-time fast path
+// (unchanged above); this mirrors WRITE results into IndexedDB, best-effort,
+// so a save survives beyond localStorage's 5MB quota. See saveStore.ts's
+// header for the full architecture + trade-off writeup.
+import {
+  getDefaultSaveStore,
+  migrateFromLocalStorage,
+  mirrorKeyFromLocalStorage,
+  mirrorSaveCheckpoint,
+} from './saveStore';
+import { encode, decode } from './saveCodec';
 // FEAT-webworker-sim-offload Stage 1 / Landing 2 (2026-09-02): tick-only
 // worker offload — flag, protocol types, and the queue-depth groundwork
 // (FEAT-2326609734). See simWorkerProtocol.ts's header for the full design
@@ -96,6 +110,9 @@ import {
   displayCityName,
   cityNameToSlug,
   checkNamedSaveCollision,
+  NAMED_SAVE_SLOT_PREFIX,
+  NAMED_SAVES_INDEX_KEY,
+  CURRENT_CITY_NAME_KEY,
   type NamedSaveCollision,
 } from './namedsaves';
 import { versionRaw, versionBadgeLabel } from './version';
@@ -160,8 +177,8 @@ import { SimContext } from './simContext';
 
 type StandbyKind = 'rebuild' | 'load';
 
-function triggerJsonDownload(filename: string, text: string): void {
-  const blob = new Blob([text], { type: 'application/json' });
+function triggerJsonDownload(filename: string, text: string, mime: string = 'application/json'): void {
+  const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -230,6 +247,110 @@ function pickOpenFile(): Promise<string | null> {
     };
     input.click();
   });
+}
+
+/**
+ * FEAT-2326609778/Q100131 Export/Import City: like `pickOpenFile`, but
+ * without the `.json`-only file-type filter — an exported city is
+ * LZ-compressed (saveCodec.ts's `LZv1:` prefix), not valid JSON text, so a
+ * strict `.json`/`application/json` picker would reject it in engines that
+ * enforce the `accept` filter. `decode()` on the read side tolerates a plain
+ * (uncompressed) JSON save too, so importing either an Export or an ordinary
+ * File→Save output both work through this one picker.
+ */
+function pickAnyFile(): Promise<string | null> {
+  const w = window as Window & {
+    showOpenFilePicker?: (opts: {
+      types: { description: string; accept: Record<string, string[]> }[];
+      multiple?: boolean;
+    }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+  };
+  if (typeof w.showOpenFilePicker === 'function') {
+    return w
+      .showOpenFilePicker({
+        types: [{ description: 'Metropolis city', accept: { 'application/octet-stream': ['.mcity', '.json'] } }],
+        multiple: false,
+      })
+      .then(async ([handle]) => {
+        const file = await handle.getFile();
+        return file.text();
+      })
+      .catch((e: unknown) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return null;
+        throw e;
+      });
+  }
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.mcity,.json,application/json,application/octet-stream';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      void file.text().then(resolve);
+    };
+    input.click();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// FEAT-2326609778: async IndexedDB mirror helpers. Every call here is
+// fire-and-forget from the caller's perspective (`void mirrorXxx(...)`) —
+// these NEVER throw and NEVER block the synchronous localStorage write that
+// remains authoritative. See saveStore.ts's header for the full writeup.
+// ---------------------------------------------------------------------------
+
+/** Mirror the rotating savepoint slots + the full journal, crash-consistency ordered. */
+function mirrorSavepointCheckpoint(): void {
+  try {
+    void mirrorSaveCheckpoint(getDefaultSaveStore(), window.localStorage, {
+      savepointSlots: SAVEPOINT_CAP,
+      journalKey: JOURNAL_KEY,
+    });
+  } catch {
+    /* best-effort — localStorage's own write already succeeded/failed on its own terms */
+  }
+}
+
+/** Mirror one named-save slot plus its index + current-city-name keys. */
+function mirrorNamedSave(slug: string): void {
+  try {
+    const store = getDefaultSaveStore();
+    void mirrorKeyFromLocalStorage(store, window.localStorage, `${NAMED_SAVE_SLOT_PREFIX}${slug}`);
+    void mirrorKeyFromLocalStorage(store, window.localStorage, NAMED_SAVES_INDEX_KEY);
+    void mirrorKeyFromLocalStorage(store, window.localStorage, CURRENT_CITY_NAME_KEY);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Mirror the GR#27 pre-wipe archive after a successful synchronous capture. */
+function mirrorPreWipeArchive(): void {
+  try {
+    void mirrorKeyFromLocalStorage(getDefaultSaveStore(), window.localStorage, PREWIPE_ARCHIVE_KEY);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * One-time (per browser profile) copy of every existing localStorage save
+ * into the durable IndexedDB layer. Called once from a mount effect — never
+ * blocks first paint (boot's synchronous localStorage restore already ran in
+ * the lazy useState initializer above this component). Fire-and-forget: a
+ * migration failure degrades to "this browser keeps using localStorage as
+ * its effective durable store, same as before this feature existed" — never
+ * a regression, per the layer's own fail-safe contract.
+ */
+function runOneTimeSaveMigration(): void {
+  try {
+    void migrateFromLocalStorage(getDefaultSaveStore(), window.localStorage);
+  } catch {
+    /* best-effort */
+  }
 }
 
 export function SimProvider({ children }: { children: ReactNode }) {
@@ -338,6 +459,13 @@ export function SimProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     journalRef.current = journal;
   }, [journal]);
+  // FEAT-2326609778: one-time (per browser profile) copy of every existing
+  // localStorage save into the durable IndexedDB layer. Runs in an effect
+  // (AFTER first paint) so it never touches the synchronous boot-time restore
+  // above — the instant-boot contract (BUG-617) is unaffected.
+  useEffect(() => {
+    runOneTimeSaveMigration();
+  }, []);
   // BUG-458: the coalescing journal persister — created once (lazy ref init,
   // no useEffect indirection so it exists on the very first render). `schedule`
   // is called on every dispatch (cheap: debounced/coalesced); `flush` is called
@@ -523,6 +651,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
           // on-disk journal tail sitting behind a pending debounce timer.
           journalPersisterRef.current?.flush(journalRef.current);
           attemptWipe(stateRefForDispatch.current, versionRaw, window.localStorage, () => recordAndDispatch(action));
+          // FEAT-2326609778: mirror the just-written archive entry into the
+          // durable layer. GR#27's fail-closed gate has ALREADY run above
+          // (attemptWipe threw and aborted if it failed) — this is purely an
+          // additional durability copy, never part of the fail-closed decision.
+          mirrorPreWipeArchive();
           setCaptureError(null);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -1309,6 +1442,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
         if (success) {
           // Update lastSaveIndex to mark this checkpoint.
           setLastSaveIndex(journal.entries.length);
+          // FEAT-2326609778: mirror into the durable IndexedDB layer,
+          // savepoint-slots-before-journal ordered (crash-consistency contract).
+          mirrorSavepointCheckpoint();
         }
       } catch (e) {
         // Catch-all for any error during autosave (e.g., localStorage throws).
@@ -1733,6 +1869,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
     journalPersisterRef.current?.flush(journalRef.current);
     try {
       captureBeforeWipe(stateRefForDispatch.current, versionRaw, window.localStorage);
+      mirrorPreWipeArchive();
       return true;
     } catch {
       try {
@@ -1806,6 +1943,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
           'Named-city slot not updated (storage quota). Use Config → Reclaim storage, then Save As again.',
           { type: 'app', action: 'save' },
         );
+      } else {
+        // FEAT-2326609778: mirror the named-save slot into the durable layer.
+        mirrorNamedSave(cityNameToSlug(save.name));
       }
     }
   };
@@ -1896,6 +2036,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // hotJournalRef here would instead go STALE the moment the player keeps
         // playing post-load and a LATER version-crossing rebuild reads it back.)
         journalPersisterRef.current?.flush(save.journal);
+        if (persisted) mirrorSavepointCheckpoint();
         persistStashedCamera(window.localStorage, save.savepoint.camera ?? currentCamera());
         setRebuildProgress({ actionsDone: 3, actionsTotal: 4, phaseLabel: 'Hydrating city…' });
         setCityName(displayCityName(save.name));
@@ -1951,6 +2092,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         return false;
       }
       setAutoSaveError(false);
+      mirrorSavepointCheckpoint();
       rememberOpened(save);
       return true;
     } catch (e) {
@@ -1984,6 +2126,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // BUG-458: flush — Save As is a save boundary, same as saveGame.
       journalPersisterRef.current?.flush(emptyJournal());
       setLastSaveIndex(journalRef.current.entries.length);
+      mirrorSavepointCheckpoint();
       setCityName(label);
       try {
         setCurrentCityName(window.localStorage, label);
@@ -2066,6 +2209,79 @@ export function SimProvider({ children }: { children: ReactNode }) {
     applyLoadedSave(save);
   };
 
+  /**
+   * FEAT-2326609778/Q100131 (Aaron, rides along with Q100121's IndexedDB
+   * ruling): one-click, no-picker-dialog city backup — downloads the CURRENT
+   * city's savepoint+journal, LZ-compressed (saveCodec.ts) exactly like the
+   * durable stores already compress their payloads, so the exported file is
+   * the same ~5-6x smaller shape as an in-app save rather than the larger
+   * plain-JSON `Save As` output. Distinct from `saveGameAs` (which prompts a
+   * filename/location via the File System Access API and writes uncompressed,
+   * human-diffable JSON) — Export is the fast "grab a backup right now" path.
+   */
+  const exportCity = async (): Promise<boolean> => {
+    try {
+      // BUG-458: flush first — an export must reflect the current journal
+      // tail, not a stale pre-debounce one.
+      journalPersisterRef.current?.flush(journalRef.current);
+      const save = buildCurrentSave(cityName);
+      const compressed = encode(gameSaveText(save));
+      const filename = suggestedSaveName(save.savepoint.snapshot.tick, cityName).replace(/\.json$/, '.mcity');
+      triggerJsonDownload(filename, compressed, 'application/octet-stream');
+      return true;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      recordError(`Export City failed: ${msg}`, { type: 'app', action: 'save', code: 'MET-V862' });
+      return false;
+    }
+  };
+
+  /**
+   * FEAT-2326609778/Q100131: import a city previously produced by
+   * `exportCity` (or a plain `Save As` file — `decode()` is a no-op on
+   * uncompressed input, so both shapes load through this one path). Validates
+   * via the SAME MET-V850 structural-rejection machinery as File→Open/named
+   * saves (GR#3 SSOT — gamesave.ts's `parseGameSave`), then hydrates through
+   * the normal `applyLoadedSave` path (pre-wipe archive of the outgoing city,
+   * rebuild-decision prompt if the import crosses a build boundary, etc.).
+   */
+  const importCity = async (): Promise<boolean> => {
+    let raw: string | null;
+    try {
+      raw = await pickAnyFile();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      recordError(`Import City failed: ${msg}`, { type: 'app', action: 'load', code: 'MET-V863' });
+      showCaptureError(msg, 'load', 'MET-V863');
+      return false;
+    }
+    if (raw == null) return false;
+    if (raw.length > 15_000_000) {
+      const msg = 'Import refused: file is larger than 15 MB.';
+      recordError(msg, { type: 'app', action: 'load', code: 'MET-V863' });
+      showCaptureError(msg, 'load', 'MET-V863');
+      return false;
+    }
+    let parsed;
+    try {
+      parsed = parseGameSave(decode(raw));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const code = (e as { code?: string })?.code ?? 'MET-V863';
+      recordError(`Import City rejected: ${msg}`, { type: 'app', action: 'load', code });
+      showCaptureError(msg, 'load', code);
+      return false;
+    }
+    if (!parsed.ok || !parsed.save) {
+      const reason = parsed.reason ?? 'invalid save';
+      recordError(`Import City rejected: ${reason}`, { type: 'app', action: 'load', code: 'MET-V863' });
+      showCaptureError(reason, 'load', 'MET-V863');
+      return false;
+    }
+    applyLoadedSave(parsed.save);
+    return true;
+  };
+
   const listSaves = () => {
     try {
       return listNamedSaves(window.localStorage);
@@ -2130,6 +2346,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
       loadGame,
       loadNamed,
       renameCity,
+      exportCity,
+      importCity,
     }),
     [state, guardedDispatch, cityName],
   );

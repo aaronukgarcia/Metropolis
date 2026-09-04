@@ -89,6 +89,8 @@ async function renderWithState(state: any, Comp: () => any): Promise<string> {
     loadGame: async () => {},
     loadNamed: async () => {},
     renameCity: () => ({ ok: true }),
+    exportCity: async () => true,
+    importCity: async () => true,
   };
   return renderToString(
     React.default.createElement(SimContext.Provider, {

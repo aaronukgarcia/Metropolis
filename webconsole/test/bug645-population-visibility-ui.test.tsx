@@ -74,6 +74,8 @@ function fakeCtx(state: any) {
     loadGame: async () => {},
     loadNamed: async () => {},
     renameCity: () => ({ ok: true }),
+    exportCity: async () => true,
+    importCity: async () => true,
   };
 }
 

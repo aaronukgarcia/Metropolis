@@ -84,6 +84,8 @@ async function renderCard(state: SimState, building: SimState['buildings'][numbe
     loadGame: async () => {},
     loadNamed: async () => {},
     renameCity: () => ({ ok: true }),
+    exportCity: async () => true,
+    importCity: async () => true,
   };
 
   return renderToString(

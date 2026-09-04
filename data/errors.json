@@ -127,7 +127,8 @@
       "V854-V855": "reserved for ui.webconsole (FEAT-1972079885 debug commit queue byte-budget + compaction: MET-V854 oversize-entry drop + MET-V855 quota-exhausted give-up; same owner as the V800-V853 webconsole error framework. Auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V853-V853": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "P040-P049": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
-      "V856-V856": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V856-V856": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V858-V863": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5334,6 +5335,42 @@
       "module": "ui.webconsole",
       "message": "Web Worker tick offload disabled: {reason} -- falling back to synchronous main-thread ticks",
       "remedy": "The worker failed to construct, errored during handshake, or its first tick reply did not arrive within the derived timeout. Every tick and action already applied is intact; the sim continues on the main-thread reducer for the rest of this session (same code path as the metropolis.webworker=off default). No action needed unless this repeats every session, which would suggest a persistent Worker-construction failure worth reporting."
+    },
+    "MET-V858": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "IndexedDB is unavailable ({reason}) - saves are running in-memory only and will NOT survive a reload",
+      "remedy": "Check browser storage permissions / private-mode settings; export a city backup via File > Export City until resolved"
+    },
+    "MET-V859": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "Durable save write failed for {store}/{key} ({reason}) - falling back to in-memory storage for this session",
+      "remedy": "Free up browser storage quota or export a city backup via File > Export City"
+    },
+    "MET-V860": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "Migrating existing localStorage save {key} into IndexedDB failed ({reason}) - the original localStorage copy was left untouched",
+      "remedy": "Retry on next load; the localStorage original is safe and unmodified"
+    },
+    "MET-V861": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "Batched journal flush to IndexedDB failed ({reason}) - {count} pending entries are held in memory and will retry",
+      "remedy": "Check storage quota; entries are not lost until a hard reload occurs while degraded"
+    },
+    "MET-V862": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "Export City failed ({reason})",
+      "remedy": "Retry; if the problem persists use File > Save As instead"
+    },
+    "MET-V863": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "Import City rejected the selected file ({reason})",
+      "remedy": "Confirm the file was produced by File > Export City or File > Save, and was not edited"
     }
   }
 }

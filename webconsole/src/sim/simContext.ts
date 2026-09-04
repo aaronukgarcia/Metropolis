@@ -27,6 +27,10 @@ export interface SimContextValue {
   loadGame: () => Promise<void>;
   loadNamed: (slug: string) => Promise<void>;
   renameCity: (name: string, opts?: { confirmedOverwrite?: boolean }) => NamedSaveWriteOutcome;
+  /** FEAT-2326609778/Q100131: one-click LZ-compressed city export, browser download. */
+  exportCity: () => Promise<boolean>;
+  /** FEAT-2326609778/Q100131: import a city previously produced by exportCity(). */
+  importCity: () => Promise<boolean>;
 }
 
 const g = globalThis as unknown as { __metroSimContext?: Context<SimContextValue | null> };
