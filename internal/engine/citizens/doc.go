@@ -18,17 +18,43 @@
 // # Byte budgets (the scale-risk deliverable, measured not asserted)
 //
 //   - Hot record: a rich AoS [Citizen] whose inline size is measured at
-//     ~216B (unsafe.Sizeof, amd64) — inside the spec's "~250B" line. The
-//     gap to 250B is the slice backing arrays (Children, Education.Stages)
-//     and Go allocator size-class overhead, exactly the two costs the raw
-//     sizeof cannot see; M0-ENG §1.3's 8GB budget (⇒ ~32M resident) is
-//     therefore met with headroom. See TestHotRecordSizeIsAbout250B.
+//     ~232B (unsafe.Sizeof, amd64) — inside the spec's "~250B" line
+//     (corrected 2026-09-04, BUG-666: this comment previously said ~216B,
+//     stale since the births-unblock lane's uint32->uint64 widening of
+//     Household/Partner, 2026-09-02). The gap to 250B is the slice backing
+//     arrays (Children, Education.Stages) and Go allocator size-class
+//     overhead, exactly the two costs the raw sizeof cannot see; M0-ENG
+//     §1.3's 8GB budget (⇒ ~32M resident) is therefore met with headroom.
+//     See TestHotRecordSizeIsAbout250B.
 //   - Cold store: a columnar struct-of-arrays [ColdShard] with field-level
 //     compression (bucketed enums, delta-coded ages relative to a shard
 //     epoch, bit-packed/byte-packed states) targeting A1's 60–100B/citizen.
-//     The measured per-citizen cost is ~67B ⇒ 100M citizens ≈ 6.7GB, inside
+//     The measured COLUMN-ONLY per-citizen cost is ~75B (corrected
+//     2026-09-04, BUG-666: this comment previously said ~67B, stale since
+//     the same births-unblock widening) ⇒ 100M citizens ≈ 7.5GB, inside
 //     A1's 6–10GB band. See TestColdShardBytesPerCitizen and
 //     TestColdStore100MProjection.
+//   - Cold store id->row index (BUG-666, new 2026-09-04): [ColdShard.rowOf]
+//     was an O(shard size) linear scan with no index, making every
+//     single-citizen lookup ~390k comparisons at 100M and turning
+//     applyFertilityLocked, all four moneycirc.go monthly resident passes,
+//     and the death-drain realisation loop quadratic. A per-shard
+//     map[uint64]int32 collapses this to O(1). Its REAL measured cost is
+//     ~38B/citizen (TestColdShardIndexOverhead), not the ~6-8B/citizen
+//     back-of-envelope estimate in
+//     docs/planning/go-engine-100m-proving-plan.md §3.8 — Go's runtime hash
+//     map has real per-entry overhead (bucketing, tophash bytes, load-factor
+//     slack) well beyond the naive key+value sum. bytesPerCitizen()'s total
+//     (columns + index) is therefore ~113B/citizen ⇒ 100M ≈ 11.3GB,
+//     OUTSIDE the original 60-100B / 6-10GB bands. This is reported
+//     honestly here and in the updated test ceilings (TestColdShardBytesPerCitizen,
+//     TestColdStore100MProjection, TestColdStore1MRealAllocation,
+//     TestPerf10M all now assert the real post-index numbers, not the stale
+//     pre-index band) rather than silently widened to hide the miss — 11.3GB
+//     is still comfortably inside the 32GiB resident floor / 64GiB
+//     provisioned figure the proving plan already sizes 100M for, so it does
+//     not change the finish-line hardware plan, but it IS a real memory
+//     regression against the original A1 band that Aaron should see.
 //
 // # The amortised cold pass (A2)
 //

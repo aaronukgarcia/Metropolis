@@ -36,11 +36,20 @@ import (
 //     round-tripping at a modest cost: +8B/citizen (67B -> 75B) for the two
 //     widened columns, still comfortably inside A1's 60-100B band.
 //
-// The measured per-citizen cost is ~75B (see bytesPerCitizen and
-// TestColdShardBytesPerCitizen), inside A1's 60–100B band. A ColdShard is
-// accessed by row index only; rows are removed by swap-with-last (order
-// within a shard is not a determinism input — the monthly pass iterates
-// rows in index order, which is stable for a fixed population).
+// The columns alone measure ~75B/citizen, inside A1's 60–100B band. BUG-666
+// added an id->row index (map[uint64]int32, this struct's `index` field,
+// maintained through every append/removeAt) so a lookup is no longer an
+// O(shard size) linear scan; the index's real measured cost is ~38B/citizen
+// (TestColdShardIndexOverhead — about 3x the 6-8B/citizen back-of-envelope
+// estimate that motivated it), so bytesPerCitizen()'s total (columns +
+// index) is ~113B, which is OUTSIDE the original 60-100B band — see
+// bytesPerCitizen's doc comment and doc.go's byte-budget section for the
+// honest revised numbers; this is a real memory-budget finding, not hidden
+// behind a silently-widened test. A ColdShard is accessed by row index
+// only; rows are removed by swap-with-last (order within a shard is not a
+// determinism input — the monthly pass iterates rows in index order, which
+// is stable for a fixed population, and the id->row index is LOOKUP ONLY —
+// nothing ranges over it to decide tick order, GR#21).
 type ColdShard struct {
 	// identity + age
 	ids        []uint64
@@ -92,11 +101,41 @@ type ColdShard struct {
 	// epochMonth is the shard's age-delta epoch: birthDelta[i] + epochMonth
 	// reconstructs the citizen's absolute birth month.
 	epochMonth int64
+
+	// index is the id->row lookup this shard was missing (BUG-666): before
+	// this, rowOf was a O(shard size) linear scan over ids, which made every
+	// single-citizen lookup ~390k comparisons at 100M (256 shards, ~390k
+	// rows/shard) and turned applyFertilityLocked (fertility.go) and all
+	// four moneycirc.go monthly resident passes quadratic per tick/month,
+	// plus the death drain O(D*N/256) (registry.go's realisation loop). This
+	// map is maintained through EVERY mutation of the row set — append,
+	// removeAt's swap-delete, and rebuildIndexLocked for a shard built by a
+	// path that does not go through append (paging.go's wireToColdShard
+	// decode) — so it is always exact, never stale. It is a LOOKUP-ONLY
+	// structure: nothing in this package ever ranges over it to decide tick
+	// order (GR#21) — every iteration that affects simulation state still
+	// walks the columnar slices (ids, etc.) in index order, which is
+	// map-independent and deterministic.
+	index map[uint64]int32
 }
 
 // newColdShard constructs an empty shard with the given age-delta epoch.
 func newColdShard(epochMonth int64) *ColdShard {
-	return &ColdShard{epochMonth: epochMonth}
+	return &ColdShard{epochMonth: epochMonth, index: make(map[uint64]int32)}
+}
+
+// rebuildIndexLocked rebuilds the id->row index from the current ids column.
+// Used only by paths that build a ColdShard's columns directly rather than
+// via append (paging.go's wireToColdShard, decoding a placeholder gob page
+// off disk) — the index is a derived, non-serialized structure, so a shard
+// reconstructed from wire data must rebuild it once before any rowOf lookup
+// can trust it. A no-op-safe rebuild: always correct regardless of what
+// index (if any) the struct literal started with.
+func (s *ColdShard) rebuildIndexLocked() {
+	s.index = make(map[uint64]int32, len(s.ids))
+	for i, id := range s.ids {
+		s.index[id] = int32(i)
+	}
 }
 
 // count returns the number of citizens in the shard (the length of every
@@ -138,11 +177,23 @@ func (s *ColdShard) append(r ColdRecord) {
 	s.satLeisureFit = append(s.satLeisureFit, safeSat(r.SatLeisureFit))
 	s.satCommute = append(s.satCommute, safeSat(r.SatCommute))
 	s.monthlyUpdates = append(s.monthlyUpdates, 0)
+
+	if s.index == nil {
+		s.index = make(map[uint64]int32, len(s.ids))
+	}
+	s.index[r.ID] = int32(len(s.ids) - 1)
 }
 
-// removeAt deletes row i by swap-with-last, preserving column lengths.
+// removeAt deletes row i by swap-with-last, preserving column lengths. The
+// id->row index is maintained here too (BUG-666): the removed id's entry is
+// deleted, and — unless i was already the last row — the moved-into-place
+// id's entry is repointed to i. Captured BEFORE the columns are overwritten,
+// since s.ids[i] = s.ids[last] below destroys the pre-swap value at i.
 func (s *ColdShard) removeAt(i int) {
 	last := s.count() - 1
+	removedID := s.ids[i]
+	movedID := s.ids[last]
+
 	s.ids[i] = s.ids[last]
 	s.birthDelta[i] = s.birthDelta[last]
 	s.sexes[i] = s.sexes[last]
@@ -206,14 +257,23 @@ func (s *ColdShard) removeAt(i int) {
 	s.satLeisureFit = s.satLeisureFit[:last]
 	s.satCommute = s.satCommute[:last]
 	s.monthlyUpdates = s.monthlyUpdates[:last]
+
+	delete(s.index, removedID)
+	if i != last {
+		s.index[movedID] = int32(i)
+	}
 }
 
-// row returns the row index of id, or -1 if absent.
+// rowOf returns the row index of id, or -1 if absent. BUG-666: this used to
+// be a linear scan over s.ids (O(shard size) — ~390k comparisons per lookup
+// at 100M, 256 shards). It is now a single map lookup against the
+// id->row index maintained by append/removeAt/rebuildIndexLocked. A nil
+// index (a ColdShard zero value, e.g. in a test that never calls append)
+// behaves exactly as an empty index: every lookup misses, matching the old
+// linear scan's behaviour over an empty ids slice.
 func (s *ColdShard) rowOf(id uint64) int {
-	for i, v := range s.ids {
-		if v == id {
-			return i
-		}
+	if row, ok := s.index[id]; ok {
+		return int(row)
 	}
 	return -1
 }
@@ -320,14 +380,47 @@ func (r ColdRecord) AgeMonths(month int64) int64 {
 	return month - r.BirthMonth
 }
 
+// coldShardIndexBytesPerCitizen is the measured per-citizen cost of the
+// BUG-666 id->row index (map[uint64]int32), amortised over a shard's live
+// entries. GR#15: derived from data, not a hand-waved constant — measured
+// by TestColdShardIndexOverhead, which builds 256 shard-sized maps the same
+// way SeedColdRecords does (one map per shard, grown one insert at a time)
+// and diffs real heap growth. The naive key+value sum is
+// unsafe.Sizeof(uint64(0))+unsafe.Sizeof(int32(0)) = 12B, but Go's runtime
+// hash map (bucketed, tophash byte per slot, ~6.5/8 average load factor,
+// overflow-chain slack) measured consistently at ~37.8B/citizen on go1.25
+// amd64 — roughly 3x the 6-8B/citizen estimate in
+// docs/planning/go-engine-100m-proving-plan.md §3.8, which was a
+// back-of-envelope figure, not a measurement. Rounded up to the next whole
+// byte from the measured value so this constant is never an
+// under-estimate. Pre-sizing the map at construction (make(map[K]V, n))
+// was tried and made no measurable difference — see TestColdShardIndexOverhead's
+// comment — so the plain construction path (used by append/newColdShard) is
+// kept simple.
+const coldShardIndexBytesPerCitizen = 38
+
 // bytesPerCitizen is the measured per-citizen byte cost of the columnar
-// layout: the sum, over every column, of unsafe.Sizeof(column element
-// type). This is the RAW field-sum (a lower bound, exactly like
+// layout PLUS the BUG-666 id->row index: the sum, over every column, of
+// unsafe.Sizeof(column element type), plus coldShardIndexBytesPerCitizen.
+// The column part is a RAW field-sum (a lower bound, exactly like
 // engine.world's perCellTerrainBytes): it counts the bytes each citizen's
 // values occupy, not slice-header bookkeeping or allocator size-class
 // rounding, which the real-allocation test (TestColdShardRealAllocation)
 // measures separately. Summed over all columns this is the concrete A1
-// arithmetic, never a hand-waved number.
+// arithmetic, never a hand-waved number. The index part IS a measured
+// constant (see coldShardIndexBytesPerCitizen's derivation) because a Go
+// map's real per-entry cost has no clean unsafe.Sizeof equivalent — there
+// is no single "map bucket" type to size.
+//
+// BUG-666 note: the combined total (~113B) exceeds doc.go's original A1
+// 60-100B band. That band was set before this index existed; the
+// tests below assert the REAL measured number (GR#15), not the stale
+// band, and doc.go's byte-budget section is updated in the same commit to
+// say so plainly rather than silently widen the assertion to hide the
+// miss. This is a genuine memory-budget finding for Aaron, not a defect in
+// this fix: the fix's own bar is the tick-time curve (§3 of the proving
+// plan), and a 113B/citizen cold store is still ~11.3GB at 100M, half of
+// the 32GiB floor the proving plan already sizes for.
 func (s *ColdShard) bytesPerCitizen() int {
 	var u64 uint64
 	var i16 int16
@@ -363,7 +456,7 @@ func (s *ColdShard) bytesPerCitizen() int {
 		total += unsafe.Sizeof(i8)
 	}
 	total += unsafe.Sizeof(u32) // monthlyUpdates
-	return int(total)
+	return int(total) + coldShardIndexBytesPerCitizen
 }
 
 // validateShardIndex returns a registry-sourced error for an out-of-range

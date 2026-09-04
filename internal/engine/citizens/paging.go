@@ -127,8 +127,14 @@ func (s *ColdShard) toWire() coldShardWire {
 	}
 }
 
+// wireToColdShard reconstructs a *ColdShard from its placeholder gob wire
+// form. BUG-666: the id->row index is a derived, non-serialized structure
+// (nothing in coldShardWire carries it), so a shard built this way — bypassing
+// append entirely — must have its index rebuilt before any rowOf lookup
+// against it can be trusted; rebuildIndexLocked does that from the decoded
+// ids column.
 func wireToColdShard(w coldShardWire) *ColdShard {
-	return &ColdShard{
+	s := &ColdShard{
 		epochMonth: w.EpochMonth,
 		ids:        w.IDs, birthDelta: w.BirthDelta, sexes: w.Sexes,
 		households: w.Households, partners: w.Partners, childCount: w.ChildCount,
@@ -145,6 +151,8 @@ func wireToColdShard(w coldShardWire) *ColdShard {
 		satLeisureFit: w.SatLeisureFit, satCommute: w.SatCommute,
 		monthlyUpdates: w.MonthlyUpdates,
 	}
+	s.rebuildIndexLocked()
+	return s
 }
 
 // pathFor returns the on-disk path for a shard's page file.
