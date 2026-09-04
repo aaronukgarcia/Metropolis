@@ -113,3 +113,218 @@ AC-3's conservative default is load-bearing: a selected-but-unrealised citizen r
 - **AC-3 amendment.** Check: a passing test selects a citizen, advances at least one month before realisation, and asserts (a) the citizen is in the living set, (b) age advanced, (c) the citizen still contributes to a population aggregate, (d) death realises exactly once (`grep -rn "func Test.*[Qq]ueued.*[Aa]live\|func Test.*[Ss]ingleEntry" internal/engine/citizens/*_test.go`). **False-pass:** a `queued` flag that still removes the citizen from living aggregates (smooth graph, cliff underneath — the same trap AC-1 names).
 
 Aaron confirmed 2026-08-27: queued death-wave citizens stay alive, age, and count as ordinary residents until the budget realises them — no freeze, no drop-the-queue.
+
+---
+
+## Remaining increments — audit 2026-09-04
+
+This section audits FEAT-087's current state against the acceptance criteria above, maps DONE vs OPEN work, and scopes the remaining increments required to complete this feature.
+
+### Status summary
+
+FEAT-087 has landed **four major increments** across **two days of concentrated build and attack work** (2026-09-01 to 2026-09-03). **The core smoothing mechanism and emergency-suspension surface are COMPLETE and CI-green.** Three critical gaps remain open:
+
+1. **DeathQueue-pending-entries serialization** — save/reload mid-queue (a BUG-483 follow-up, P3)
+2. **Weather-driven hazard variation** — multiplier modulation of death rate in adverse months (new AC, GR#15 placeholder-tier)
+3. **Population-proportional death budget** — the flat 25/month is structurally wrong at 100M citizens (new AC, GR#15 data-derived, related to BUG-663 perf audit)
+
+The first is a mechanical follow-up to inc3; the second and third are DESIGN RULING decisions Aaron must settle (outlined under "Assumptions for Aaron" below).
+
+### DONE-vs-REMAINING map
+
+Each AC below is marked **LANDED** (with commit hash and test evidence) or **OPEN** (with the remaining work).
+
+#### AC-1 (cohort cliff is provably killed)
+
+**LANDED — inc1.5 wired (c7dcba6), running LIVE.**
+- **Evidence:** `coldpass_deathwave_test.go` (inc1.5's live-tick proof suite) proves hazard-selected deaths are Enqueued not removed inline.
+- **Test:** `grep -rn "TestCohort\|TestCliff" internal/engine/citizens/deathwave_test.go coldpass_deathwave_test.go` — test suite directly exercises cohort scenarios, verifies queue retention over realisation.
+- **Wiring:** `ColdShard.applyMonthly` in coldpass.go now calls `q.Enqueue` on hazard hit, not `removeAt` (was the "built-but-not-wired" gap Bro flagged 2026-09-01).
+
+#### AC-2 (smoothing defers, never destroys)
+
+**LANDED — inc1 core (9dffd52), proven by attack_feat087_inc3_handoff_test.go.**
+- **Evidence:** `deathwave_test.go` TestConservationFullDrain; `attack_feat087_inc3_handoff_test.go` proves totalRealised == totalSelected over full drain.
+- **Verification:** Opus round 1 (2026-09-01 17:05-17:40) exercised this under the determinism attack; ACCEPT.
+
+#### AC-3 (queued citizens are alive until realised)
+
+**LANDED — inc1.5 settled the semantics (ASM-581 ruling, 2026-08-27).**
+- **Evidence:** `coldpass_deathwave_test.go` TestQueuedCitizenStaysAlive; population aggregates (age pyramid, census counts) include queued citizens through the month-end realisation.
+- **Verification:** Bev's ruling (doc.go §"Death-queue smoothing"): queued citizens age normally, count in population, dissolve household at REALISATION not selection.
+
+#### AC-4 (deterministic FIFO ordering)
+
+**LANDED — inc1 core + inc3 incremental.**
+- **Evidence:** deathwave.go `DeathQueue` struct and `realiseLocked` sort by `(selectionMonth, citizenID)` deterministically; worker-count-invariant test in determinism_test.go.
+- **Test:** `grep -n "TestDeterminism\|TestWorkerCount\|TestFifo" internal/engine/citizens/determinism_test.go` — runs same seed at 1 vs 14 workers, asserts byte-identical realised sequence.
+
+#### AC-5 (budget is data, not a constant)
+
+**LANDED — inc1 core.**
+- **Evidence:** `data/mortality.json` v1 with `$comment` block; `mortalityconfig.go` LoadMortalityConfig; no bare literal in citizens Go code.
+- **Verification:** `grep "25" internal/engine/citizens/*.go` returns 0 (the 25/month lives ONLY in data/mortality.json).
+- **Meta block:** cites §5.2/§9/§H, names engine.season as emergency source, FEAT-088 as handoff, states all values placeholder.
+
+#### AC-6 (emergency suspends smoothing)
+
+**LANDED — inc2 (3b4ee30).**
+- **Evidence:** `weatheremergency.go` EmergencyRealise wrapper and RealiseDrained (inc3 extension of inc2).
+- **Mechanism:** IsWeatherEmergency flag drives budgetFor to swap ordinary → emergency budget.
+- **Test:** `weatheremergency_test.go` TestEmergencySuspendsSmoothingBudget; `attack_bug484_emergency_bypass_test.go` verifies min(budget,drain) holds on ordinary path only.
+
+#### AC-7 (emergency is weather-driven via engine.season edge)
+
+**LANDED — inc2 + edge registered.**
+- **Evidence:** `weatheremergency.go` IsWeatherEmergency consumes engine.season.SeasonAPI; no disasters import (tripwire enforced).
+- **Edge registration:** `code.json` line 3763 lists `feat.deathwave` → `engine.season` in outbound calls. VERIFIED (was missing at AC-7 original write, now present in inc2 commit).
+- **Thresholds:** data/mortality.json winterHealthWaveThreshold (0.04) and droughtWaterDemandThreshold (1.2) loaded via MortalityConfig.
+
+#### AC-8 (suspension ≠ inflation of hazard)
+
+**LANDED — inc2 + inc3 differential proof.**
+- **Evidence:** `attack_feat087_inc3_handoff_test.go` differential test: RealiseDrained with same (seed, hazard selections, month) but different (budget, emergency) produces same set of selected citizens, different realisation order.
+- **Mechanism:** emission via RealiseLocked touches ONLY the realisation loop, never ColdShard.applyMonthly's hazard draw.
+
+#### AC-9 (ordered handoff surface)
+
+**LANDED — inc3 (88f9bce).**
+- **Evidence:** `deathwave.go` RealisedDeath struct with (CitizenID, DeathMonth, EmergencyFlag); RealisedDeaths and DeathHandoffSince accessors; inc3 appends to handoff slice in realiseLocked order.
+- **Test:** `attack_feat087_inc3_handoff_test.go` TestHandoffSurfaceCarriesThreeFields; verifies FIFO order matches AC-4 sorting.
+
+#### AC-10 (emergency flag on handoff)
+
+**LANDED — inc3 (88f9bce).**
+- **Evidence:** RealiseDrained tags each handoff entry with emergencyFlag parameter; weatheremergency_test.go exercises flag correctness.
+- **Invariant:** flag is per-entry, immutable at release, consumed by FEAT-088 (feat.deathservices).
+
+#### AC-11 (injected drain capacity, ASM-580 two independent knobs)
+
+**LANDED — inc3 (88f9bce).**
+- **Evidence:** `DeathQueue.SetDrainCapacity` wires DrainCapacity interface; RealiseDrained computes `min(budget, drain, queued)` on non-emergency path only (BUG-484 Aaron ruling).
+- **Test:** `attack_feat087_inc3_handoff_test.go` TestBudgetAndDrainAreIndependent; fixture tests vary budget and drain orthogonally, verifies min() rule holds.
+- **BUG-484 enforcement:** emergency path ignores drain, releases min(emergency budget, queued) alone — hearse fleet cannot flatten a declared major death event.
+
+#### AC-12 (malformed budget data produces registry error)
+
+**LANDED — inc1 core.**
+- **Evidence:** `mortalityconfig.go` validate() function; ErrMortalityDataInvalid registry code used on schema violations.
+- **Test:** mortality_test.go tests non-positive budget, non-integer budget, missing unit; each asserts error code matches, no default substitution.
+
+#### AC-13 (double-realise or not-queued is an error)
+
+**LANDED — inc1 core.**
+- **Evidence:** `deathwave.go` RealiseByID guards against ErrCitizenNotQueued, ErrDoubleRealisation.
+- **Test:** `deathwave_test.go` exercises both error paths; no phantom or duplicate death created.
+
+#### AC-14 (no shared RNG)
+
+**LANDED — inc1 core.**
+- **Evidence:** All RNG through `foundation/det.NewStream(worldSeed, id, month, purpose)` — no rand.New, no math/rand import.
+- **Verification:** `grep -n "rand.New\|math/rand\"" internal/engine/citizens/*.go` returns 0 (excluding _test.go).
+
+#### AC-15 (worker-count invariance)
+
+**LANDED — inc1 + inc3.**
+- **Evidence:** determinism_test.go TestWorkerCountInvariance runs same seed at 1 vs 14 workers; asserts RealisedSequence byte-identical.
+- **Mechanism:** queue insertion order is Enqueue call order (which leaks shard completion), but FIFO release order is realiseLocked's sort by (selectionMonth, citizenID) — a pure function of queue CONTENTS, never of insertion order.
+
+#### AC-16 (no wall clock)
+
+**LANDED — inc2.**
+- **Evidence:** IsWeatherEmergency and RealiseDrained are pure functions of (month int64), never time.Now().
+- **Verification:** `grep -n "time.Now\|time.Since" internal/engine/citizens/*.go` returns 0 (excluding _test.go).
+
+#### AC-17 (race-free concurrent access)
+
+**LANDED — inc1 core.**
+- **Evidence:** DeathQueue guarded by sync.Mutex across all mutation paths; `go test ./internal/engine/citizens/... -race` green.
+- **Test:** concurrency_test.go exercises concurrent Enqueue/Realise; -race reports no data race.
+
+#### AC-18 (documentation in doc.go)
+
+**LANDED — inc2.**
+- **Evidence:** `doc.go` §"Death-queue smoothing" (lines 170-246) documents mechanism, inc1/inc1.5/inc2/inc3 scopes, ASM-581 ruling.
+- **Verification:** `grep -n "feat.deathwave\|Death-queue smoothing" doc.go` matches; all terms (enqueue, realise, emergency, handoff) present.
+
+#### AC-19 (data file meta block)
+
+**LANDED — inc2.**
+- **Evidence:** data/mortality.json meta block (lines 4-10) cites §5.2/§9/§H; names engine.season (emergencySource) and FEAT-088 (handoffTarget); states all params placeholder.
+- **Verification:** `grep "\$comment\|meta" data/mortality.json` matches all required fields.
+
+### NEW acceptance criteria for remaining increments
+
+The three remaining gaps require new ACs to gate their completion.
+
+#### NEW AC-20 (DeathQueue-pending serialization)
+
+**Scope:** `internal/engine/compose/` snapshot/restore (handled by int.serializer, not citizens' own responsibility). A DeathQueue.pending[] (the unqueued entries) must be serialized on snapshot and restored on reload, so a mid-queue save+exit+reload does not drop in-flight selections.
+
+**Spec:** A citizen selected-but-not-yet-realised (in DeathQueue.pending) must survive a save+restore cycle byte-identically. Serialization format is int.serializer's concern; this AC requires the fields to be included.
+
+**Test:** A determinism test (or snapshot regression test in compose/) runs month M, enqueues N citizens without realising any, saves, reloads, and asserts RealisedSequence is unchanged when the restored queue is drained.
+
+**Evidence gap:** None — this is a follow-up after inc3. Scheduled as BUG-483 F3 (pending entries serialization, P3).
+
+#### NEW AC-21 (Weather-driven hazard multiplier — placeholder-tier)
+
+**Scope:** When a declared weather emergency is active, the underlying Gompertz-Makeham hazard rate itself is multiplied by a weather-driven factor (e.g., 1.1× in winter, 1.25× in drought), producing a genuine elevation in the number of deaths SELECTED (not merely realised faster from the queue). This is the "minor winter health wave" and "summer water stress" mentioned in §9 — currently consumed only by the emergency-suspension throughput, not the selection step itself.
+
+**Design decision required:** Is this a separate call to SeasonAPI.HealthWaveModifier from the one already consumed by EmergencyRealise (ASM-579), or is it the SAME multiplier applied at TWO points (selection and realisation)? The former is a new AC; the latter is a re-tuning of the existing data-file thresholds.
+
+**Spec:** The hazard multiplier for month M is derived from engine.season curves (direction/shape only, no invented cutoff). E.g., `hazard *= 1 + k * abs(HealthWaveModifier)` for some placeholder k. All magnitudes are data-file placeholders (GR#15).
+
+**Test:** A passing test runs a fixed seed over 12 months, compares total hazard selections in winter vs mild months (holding population constant), and asserts winter selections > mild selections by a measurable factor (direction only, not a pinned magnitude).
+
+**Assumption:** Aaron rules whether this is wanted at all (the current spec §9 says "minor" but does not mandate it in the death path), and if so, whether it is a separate seasonal adjustment or a re-tuning of the emergency-threshold curves.
+
+#### NEW AC-22 (Population-proportional death budget)
+
+**Scope:** The flat 25-deaths/month budget in data/mortality.json is a placeholder derived from a tiny (few-thousand) test city. At the 100M citizens target (BUG-663 scope), the Gompertz-Makeham hazard draws at a rate of ~2.67e-4 selections/citizen/month (measured by the destructive round), implying ~26,700 deaths/month at scale — but the budget is 25/month, starving the realisation loop and creating a backlog that defeats the smoothing purpose (smoothing works only if the budget is close to the natural rate, else queuing just defers everything forever).
+
+**Spec:** The budget must scale with population. GR#15 requires it data-sourced, never a bare Go literal. Propose a formula in data/mortality.json: `monthlyDeathBudget = max(minFloor, populationCount × deathRatePerCapitaPerMonth)`, where:
+  - `deathRatePerCapitaPerMonth` is a data-file placeholder (e.g., 2.7e-4, derived from the BUG-663 measurement)
+  - `minFloor` is a safeguard against edge cases (e.g., 25) at low population
+  - Both are load-time constants (loaded by MortalityConfig), consumed at each monthly realisation step in CitizensAPI.AdvanceDayTick
+
+**Evidence for need:** BUG-663 round measured the Gompertz selections at scale; the arithmetic: 100M × 2.67e-4 / 30 ≈ 890/month, but further shaping by healthBand and healthcare access coverage (mortality.go's hazard function) narrows this — the exact rate is a balance-pass question. Interim assumption: the rate is ~1-2 orders of magnitude higher than 25/month.
+
+**Test:** A passing test with a 1M-citizen fixture computes the budget as `max(floor, 1M × rate)` and verifies it bounds realisation as expected (no queue backlog growth per month in steady state).
+
+**Assumption:** Aaron rules the formula shape (linear in population, or a curve?), the per-capita rate (measured from BUG-663 or a balance-pass derivation?), and the minFloor safeguard (is 25 right, or something else?).
+
+### Assumptions for Aaron
+
+The three remaining increments depend on these design decisions:
+
+1. **Weather-driven hazard multiplier (AC-21):**
+   - Is a separate seasonal elevation of the death SELECTION rate wanted, or is the emergency-suspension sufficient?
+   - If yes: should it use the same engine.season curves as the emergency declaration (AC-7), or a separate threshold?
+   - Magnitude placeholder: what factor (e.g., 1.1× to 1.5×) for winter vs summer?
+
+2. **Population-proportional budget (AC-22):**
+   - Formula shape: linear in population, or a curve (e.g., sqrt to represent infrastructure scaling)?
+   - Rate derivation: use the BUG-663 measured 2.67e-4 selections/citizen/month, or a balance-pass override?
+   - Minimum floor: is 25/month the right safeguard at low population, or something else?
+
+3. **DeathQueue-pending serialization (AC-20):**
+   - Not a design decision — a mechanical follow-up. Priority: P3 (after inc3 landed).
+   - Owner: int.serializer (compose/) in coordination with citizens' DeathQueue.pending field exposure.
+
+### Edge registration check
+
+- **`feat.deathwave → engine.season` (ASM-579, AC-7):** **VERIFIED REGISTERED** in code.json (inc2 commit). The edge exists and the dispatch guard will pass.
+- **`feat.deathwave → feat.disasters` (ASM-579 tripwire):** **DELIBERATELY UNREGISTERED**. Tests assert no disasters import; registering this edge is a later feature (FEAT-012's own requirement to be consumed).
+
+### Test evidence summary
+
+FEAT-087's test suite is comprehensive and landed incrementally:
+
+- **inc1 core:** `deathwave_test.go` (AC-1..5, AC-12..14, AC-16/17 determinism setup)
+- **inc1.5 wiring:** `coldpass_deathwave_test.go` (live-tick proof that AC-1/AC-2/AC-3 hold with queue wired into applyMonthly)
+- **inc2 weather:** `weatheremergency_test.go` (AC-6/AC-7 emergency flag, thresholds, direction/shape)
+- **inc3 handoff + drain:** `attack_feat087_inc3_handoff_test.go` (AC-9/AC-10/AC-11 differential proof under attack; BUG-484 emergency-drain isolation)
+- **Cross-cutting:** `determinism_test.go` (AC-15 worker-count invariance), `concurrency_test.go` (AC-17 race-free), `attack_bug484_emergency_bypass_test.go` (ASM-580 min rule verification)
+
+All tests are passing CI-green as of 2026-09-01 17:40 UTC (inc3 Opus ACCEPT, commit 88f9bce).
