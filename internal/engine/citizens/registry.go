@@ -248,6 +248,76 @@ func (c *CitizensAPI) SeedColdRecords(records []ColdRecord, correlationID string
 	return nil
 }
 
+// SeedHouseholds bulk-registers REAL households for a bulk-seeded
+// population (the harness.headless/harness.synth path, mirroring
+// SeedColdRecords' own doc comment) — a pure O(len(records)) map
+// registration, no ColdShard.rowOf lookup, so it stays cheap even at the
+// 100,000,000-citizen scale SeedColdRecords itself already targets.
+//
+// # Why this exists as its own call, separate from SeedColdRecords
+//
+// SeedColdRecords' own ValidateColdRecord does NOT check household
+// existence (unlike ValidateCitizen, the command-path validator
+// LifeEventBirth/LifeEventPartner use, which rejects a non-zero Household
+// that has no c.households entry — see ValidateCitizen's doc comment). So
+// a bulk-seed caller can write ANY Household/Partner column values via
+// SeedColdRecords with zero registration side effects — exactly the gap
+// an independent destructive round proved against BUG-665's harness
+// seeding: a raw ColdRecord.Household write alone made every subsequent
+// birth attempt into that "household" fail ValidateCitizen's
+// householdExists check (fertility.go's birthChildLocked), because no
+// c.households entry backed it. Folding household registration directly
+// INTO SeedColdRecords was deliberately rejected as the fix: SeedColdRecords
+// is called by over a dozen existing test files in this package using
+// incidental, non-partnership Household values (e.g. this package's own
+// mkRecord test helper) that never intended to form real households —
+// silently promoting every non-zero Household column into a live
+// c.households entry would risk changing THEIR behaviour too. This method
+// is additive and opt-in instead: nothing calls it except a caller that
+// explicitly wants its bulk-seeded Household columns to become real,
+// ValidateCitizen-visible households.
+//
+// Every record with Household != 0 is grouped by that value: a
+// not-yet-seen Household id gets a fresh entry with this record's id as
+// its first member; an already-registered one gets this record's id
+// appended (AddMember) — so calling this with BOTH partners of a pair
+// (sharing the same Household value, e.g. headless's own
+// generateSeedPopulation pairing pass) produces exactly the two-member
+// household FormHousehold itself would have built via the command path,
+// without paying that path's own ColdShard.rowOf-driven cost
+// (detachFromHouseholdLocked/setColdHouseholdLocked). A record with
+// Household==0 (the universal "no household" sentinel) is skipped.
+//
+// c.nextHouseholdID is advanced past the highest id this call registers,
+// so a LATER real household mint via the command path
+// (ApplyLifeEventCommand(LifeEventPartner), e.g. compose's own
+// formResidentHouseholds) can never collide with a bulk-seeded household
+// id — the same disjoint-id-space discipline this package's citizen ids
+// already enforce (FEAT-169's ErrCitizenIDNamespaceSeam), applied here to
+// the separate household-id space.
+func (c *CitizensAPI) SeedHouseholds(records []ColdRecord, correlationID string) error {
+	if err := c.checkNotCopied(correlationID, "SeedHouseholds"); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, r := range records {
+		if r.Household == 0 {
+			continue
+		}
+		if h, ok := c.households[r.Household]; ok {
+			h.AddMember(r.ID)
+		} else {
+			nh := Household{ID: r.Household, Members: []uint64{r.ID}}
+			c.households[r.Household] = &nh
+		}
+		if r.Household >= c.nextHouseholdID {
+			c.nextHouseholdID = r.Household + 1
+		}
+	}
+	return nil
+}
+
 // CitizenAt returns the citizen's current record — the rich hot record if
 // the citizen is elevated, otherwise a widened view of their cold record.
 func (c *CitizensAPI) CitizenAt(id uint64, correlationID string) (Citizen, bool) {

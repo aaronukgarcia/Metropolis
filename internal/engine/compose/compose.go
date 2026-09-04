@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"errors"
+	"math"
 	"sync/atomic"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
@@ -281,6 +282,49 @@ type Deps struct {
 	// ErrModuleFailed naming "traffic" with zero hooks left behind (AC-4's
 	// discipline, docs/planning/icd/engine.traffic-tick.md §2/§8).
 	LoadTraffic func(correlationID string) (*traffic.TrafficAPI, error)
+
+	// SeedResidentIDBase/SeedResidentIDCount (BUG-665, independent round
+	// finding) register a contiguous, externally-seeded citizen id range
+	// — [SeedResidentIDBase+1, SeedResidentIDBase+SeedResidentIDCount] —
+	// as compose-visible for moneycirc.go's four resident-scoped monthly
+	// passes (markEmploymentAndCount/employedResidentCount/
+	// formResidentHouseholds/distributeWagesToResidents, all keyed on
+	// liveResidentIDs()). Without this, a caller that bulk-injects
+	// citizens directly into Deps.Citizens' cold store (via
+	// citizens.CitizensAPI.SeedColdRecords — bypassing spawnCitizens' own
+	// per-citizen LifeEventBirth command path, which is what actually
+	// grows nextCitizenID/residentIDs()) produces citizens compose's own
+	// resident enumeration never sees: real in
+	// CitizensAPI.TotalPopulation, invisible to employment marking, wage
+	// distribution, and household formation. The round's own live proof:
+	// Composition.MoneyFlows was byte-identical after one ticked month
+	// whether SeedCitizenCount was 0 or 50,000.
+	//
+	// Deliberately widens ONLY liveResidentIDs(), never residentIDs()
+	// itself: residentIDs() ALSO feeds attract.MigrationCommand.
+	// ResidentIDs (the emigration-eligible set, compose.go's
+	// applyMigration) and its own doc comment records a live, previously-
+	// shipped regression from widening exactly that function (a
+	// BUG-529/BUG-535 first cut caused "a sawtooth boom/bust population
+	// collapse every few months" once migrants/fertility children became
+	// emigration-eligible). Folding a large SeedResidentIDCount range
+	// into emigration eligibility too would risk reproducing that same
+	// class of regression at a much larger scale — out of scope for this
+	// fix, which only needs the moneycirc wage/employment/household
+	// surface to see the seeded population, never emigration.
+	//
+	// Wire validates the range stays disjoint from [1, seedCitizenCount],
+	// attract.MigrantIDBase, and citizens.FertilityChildIDBase (the same
+	// three-way id-seam CONTRACT spawnCitizens' own mint-time check
+	// enforces, ErrCitizenIDNamespaceSeam) and returns
+	// ErrSeedResidentIDRangeCollides (its own registry code, MET-G814 —
+	// NOT ErrCitizenIDNamespaceSeam, whose message template renders a
+	// different per-citizen-mint shape) rather than silently unioning a
+	// colliding range. SeedResidentIDCount == 0 (the default, every
+	// existing caller) is byte-identical to prior behaviour: no extra
+	// range, liveResidentIDs() unchanged.
+	SeedResidentIDBase  uint64
+	SeedResidentIDCount int64
 }
 
 // moduleRegistration is one fixed slot in the composition order.
@@ -556,6 +600,55 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	cid := deps.CorrelationID
 	if cid == "" {
 		cid = errs.NewCorrelationID()
+	}
+
+	// BUG-665: validate Deps.SeedResidentIDCount's range stays disjoint
+	// from compose's own [1, seedCitizenCount] founder range and from
+	// engine.attract's/engine.citizens' migrant/fertility-child id bases
+	// -- the SAME three-way id-seam CONTRACT spawnCitizens' own mint-time
+	// check (below, ErrCitizenIDNamespaceSeam) enforces for its own
+	// counter, checked here BEFORE any hook registers so a colliding
+	// caller-supplied range never reaches liveResidentIDs() at all. Uses
+	// its OWN registry code (ErrSeedResidentIDRangeCollides, MET-G814),
+	// not ErrCitizenIDNamespaceSeam -- see that code's own doc comment
+	// (errors.go) for why reusing it left "{id}"/"{base}" surviving as
+	// literal, unsubstituted text (caught live by
+	// internal/foundation/errs' whole-tree render gate,
+	// TestRenderGate_WholeTreeHasNoLiteralTokens).
+	if deps.SeedResidentIDCount > 0 {
+		if deps.SeedResidentIDCount < 0 {
+			return nil, errs.New(ErrSeedResidentIDRangeCollides, cid, map[string]any{
+				"reason": "SeedResidentIDCount is negative", "count": deps.SeedResidentIDCount,
+			})
+		}
+		// Manual overflow check (uint64 has no signed-style SafeAdd in
+		// foundation/num today): base+count must not wrap past
+		// math.MaxUint64.
+		if deps.SeedResidentIDBase > math.MaxUint64-uint64(deps.SeedResidentIDCount) {
+			return nil, errs.New(ErrSeedResidentIDRangeCollides, cid, map[string]any{
+				"reason": "SeedResidentIDBase+SeedResidentIDCount overflows uint64",
+				"base":   deps.SeedResidentIDBase, "count": deps.SeedResidentIDCount,
+			})
+		}
+		maxSeededID := deps.SeedResidentIDBase + uint64(deps.SeedResidentIDCount)
+		if deps.SeedResidentIDBase+1 <= seedCitizenCount {
+			return nil, errs.New(ErrSeedResidentIDRangeCollides, cid, map[string]any{
+				"reason": "SeedResidentIDBase+1 collides with compose's own [1,seedCitizenCount] founder range",
+				"base":   deps.SeedResidentIDBase, "seedCitizenCount": seedCitizenCount,
+			})
+		}
+		if maxSeededID >= attract.MigrantIDBase {
+			return nil, errs.New(ErrSeedResidentIDRangeCollides, cid, map[string]any{
+				"reason":      "SeedResidentIDBase+SeedResidentIDCount reaches attract.MigrantIDBase",
+				"maxSeededID": maxSeededID, "migrantIDBase": attract.MigrantIDBase,
+			})
+		}
+		if maxSeededID >= citizens.FertilityChildIDBase {
+			return nil, errs.New(ErrSeedResidentIDRangeCollides, cid, map[string]any{
+				"reason":      "SeedResidentIDBase+SeedResidentIDCount reaches citizens.FertilityChildIDBase",
+				"maxSeededID": maxSeededID, "fertilityChildIDBase": citizens.FertilityChildIDBase,
+			})
+		}
 	}
 
 	// AC-3: compose is the only real hook registrar, so any pre-existing
@@ -929,6 +1022,8 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		treasury:                ledgerBalance(financeAPI, finance.AcctTreasury),
 		citizenWealth:           ledgerBalance(financeAPI, finance.AcctHouseholds),
 		nextCitizenID:           1,
+		seedResidentIDBase:      deps.SeedResidentIDBase,
+		seedResidentIDCount:     deps.SeedResidentIDCount,
 	}
 	// treasury is seeded through setTreasury (never assigned directly)
 	// so the BUG-324 publish mirror is correct from before the engine
@@ -1252,6 +1347,13 @@ type simState struct {
 	netMigration         int64
 
 	nextCitizenID uint64
+
+	// seedResidentIDBase/seedResidentIDCount (BUG-665) mirror
+	// Deps.SeedResidentIDBase/SeedResidentIDCount verbatim — see that
+	// field's doc comment. seedResidentIDCount == 0 (the default) means
+	// liveResidentIDs() computes exactly what it always did.
+	seedResidentIDBase  uint64
+	seedResidentIDCount int64
 
 	// liveResidentIDsCache/liveResidentIDsCacheMigrants/
 	// liveResidentIDsCacheChildren/liveResidentIDsCacheNextID are
@@ -2195,6 +2297,23 @@ func (st *simState) residentIDs() []uint64 {
 // the three ranges (death/emigration) is simply skipped by every consumer's
 // existing CitizenAt !ok check, exactly as it already was for the seed
 // range.
+//
+// BUG-665 (2026-09-04): a FOURTH, optional term -- the caller-supplied
+// [SeedResidentIDBase+1, SeedResidentIDBase+SeedResidentIDCount] range
+// (Deps.SeedResidentIDBase/SeedResidentIDCount) -- is unioned in too, when
+// non-empty. This is for a caller that bulk-injects citizens directly into
+// the cold store (citizens.CitizensAPI.SeedColdRecords) rather than through
+// spawnCitizens' per-citizen command path, which is what the [1,
+// nextCitizenID) seed range above actually requires to grow. Unlike the
+// three ranges above, this one is STATIC for the life of a Composition (set
+// once from Deps at Wire time, never grows) -- it needs no cache-
+// invalidation key of its own, unlike migrants/children/nextCitizenID
+// which are live, growing counters. Deliberately NOT folded into
+// residentIDs() itself -- see Deps.SeedResidentIDCount's own doc comment
+// for why (residentIDs() also feeds emigration eligibility, and widening
+// IT to a large externally-seeded range risks reproducing the exact
+// "sawtooth boom/bust population collapse" residentIDs()'s own doc comment
+// already records from a past over-widening).
 func (st *simState) liveResidentIDs() []uint64 {
 	migrants := st.attract.MigrantsAdmitted()
 	children := st.citizens.FertilityChildrenBorn(st.cid)
@@ -2202,7 +2321,11 @@ func (st *simState) liveResidentIDs() []uint64 {
 	// pure function of to be unchanged since the cache was populated — see
 	// this cache's own field doc comment (compose.go's simState struct)
 	// for why counter-keyed invalidation is exact, not tick-boundary
-	// approximate.
+	// approximate. seedResidentIDBase/seedResidentIDCount (BUG-665) need
+	// no fourth cache key: they are immutable Deps values copied once at
+	// construction (see their own field doc comment), so a cache hit
+	// keyed on the three LIVE counters is exactly as valid with that
+	// static fourth term folded in below as without it.
 	if st.liveResidentIDsCache != nil &&
 		st.liveResidentIDsCacheMigrants == migrants &&
 		st.liveResidentIDsCacheChildren == children &&
@@ -2210,6 +2333,11 @@ func (st *simState) liveResidentIDs() []uint64 {
 		return st.liveResidentIDsCache
 	}
 	ids := st.residentIDs()
+	if st.seedResidentIDCount > 0 {
+		for i := uint64(1); i <= uint64(st.seedResidentIDCount); i++ {
+			ids = append(ids, st.seedResidentIDBase+i)
+		}
+	}
 	for i := uint64(1); i <= migrants; i++ {
 		ids = append(ids, attract.MigrantIDBase+i)
 	}

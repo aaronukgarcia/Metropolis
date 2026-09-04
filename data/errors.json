@@ -775,6 +775,12 @@
       "message": "invalid -months value {months}: {cause}",
       "remedy": "Months must be positive, and months*DailyTicksPerMonth must fit in int64. cmd/metropolis's -months flag already enforces > 0 at the CLI layer; this is driveTicks' own library-level guard (BUG-305) against a caller that reaches Run directly with an out-of-range or overflow-inducing value."
     },
+    "MET-H208": {
+      "severity": "error",
+      "module": "harness.headless",
+      "message": "Failed to bulk-seed the SeedCitizenCount population before Wire: {cause}",
+      "remedy": "Check the citizens.NewCitizensAPI/SeedColdRecords error printed alongside this code; a data/fertility.json or data/mortality.json load failure, or an out-of-domain generated ColdRecord, are the two known causes."
+    },
     "MET-E100": {
       "severity": "error",
       "module": "engine.detgate",
@@ -2412,6 +2418,12 @@
       "module": "feat.compositionroot",
       "message": "compose: snapshot write refused for city {city} (tick {tick}): the durable journaler has recorded at least one failed append this process lifetime, so a new snapshot could never be tail-consistent",
       "remedy": "BUG-480/BUG-472: once persistCommandJournaler observes a failed AppendJournal it latches dirty for the process lifetime (see internal/engine/compose/persistjournal.go) -- a snapshot taken after a lost command can never be proven tail-consistent with the journal, so MaybeSnapshotEvery refuses to write one at every subsequent cadence boundary (this code is logged ONCE, not per boundary). The journal and live state are unaffected -- genesis replay and any earlier, still-consistent snapshot remain fully correct. Restart the process (or otherwise re-establish a durably clean journal) to clear the flag."
+    },
+    "MET-G814": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "compose.Deps.SeedResidentIDBase/SeedResidentIDCount is invalid: {reason}",
+      "remedy": "The externally-seeded resident id range [SeedResidentIDBase+1, SeedResidentIDBase+SeedResidentIDCount] must stay strictly disjoint from compose's own [1, seedCitizenCount] founder range and below engine.attract.MigrantIDBase and engine.citizens.FertilityChildIDBase. Adjust the caller's SeedResidentIDBase/SeedResidentIDCount so the range no longer collides."
     },
     "MET-G900": {
       "severity": "error",

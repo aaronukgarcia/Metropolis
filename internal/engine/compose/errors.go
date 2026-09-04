@@ -143,4 +143,20 @@ const (
 	// never once per cadence boundary, so an ongoing dirty condition does
 	// not flood the log.
 	ErrSnapshotRefusedDirty = "MET-G813"
+
+	// ErrSeedResidentIDRangeCollides (BUG-665 round finding, 2026-09-04):
+	// Deps.SeedResidentIDBase/SeedResidentIDCount — the caller-supplied,
+	// externally-seeded citizen id range Wire unions into liveResidentIDs()
+	// (see that field's own doc comment) — collides with compose's own
+	// [1, seedCitizenCount] founder range, or reaches attract.MigrantIDBase
+	// or citizens.FertilityChildIDBase, or the range itself overflows
+	// uint64. Deliberately a SEPARATE code from ErrCitizenIDNamespaceSeam
+	// (MET-G805): that code's registered message template renders
+	// {id}/{base} from a single per-citizen mint check, which do not match
+	// this caller-supplied-RANGE check's {reason} context — reusing it
+	// left "{id}"/"{base}" surviving as literal, unsubstituted text in the
+	// rendered message, exactly what internal/foundation/errs'
+	// TestRenderGate_WholeTreeHasNoLiteralTokens (the whole-tree render
+	// gate) exists to catch, and did.
+	ErrSeedResidentIDRangeCollides = "MET-G814"
 )

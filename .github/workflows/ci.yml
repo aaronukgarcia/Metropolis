@@ -626,6 +626,30 @@ jobs:
   #        condition). The ::warning:: retained in the run step is a
   #        diagnostic on the way to the non-zero exit, never a terminal
   #        pass. perf-smoke's exit-3 warning is OUT of scope and stays.
+  # BUG-665, 2026-09-04, THE HONESTY FIX (Aaron/Q100168 asked for a
+  # named-check rename or repoint -- that is a repo-admin action on
+  # branch protection's required-checks list, which this workflow file
+  # cannot perform on its own; see the loud annotation step below and
+  # this item's own BOW report for the exact steps Aaron/the lead needs
+  # to run once ready). Until that happens, this job's NAME on GitHub's
+  # required-checks list keeps advertising "the real merge-blocking 1M
+  # scale gate" when it has never once ticked 1,000,000 citizens --
+  # `internal/harness/synth`'s `-preset 1M` only ever fed 1,000,000 into
+  # `Generate()`'s throwaway synthetic-record cost model
+  # (`internal/harness/synth/headless_seam.go`'s `runHeadless`), and
+  # `harness.headless.Config` (the struct that ACTUALLY constructs and
+  # ticks a real `citizens.CitizensAPI`) had no citizen-count field at
+  # all until this same commit added `SeedCitizenCount` -- so the engine
+  # this job has ticked, every single run since it went live, has always
+  # held compose's own ~64-citizen genesis-only seed population,
+  # regardless of the "1M" in its name and its preset flag.
+  #
+  # This job is LEFT RUNNING AS-IS below (green, unmodified logic) --
+  # its generation-cost measurement is real and worth keeping, it is
+  # just mislabelled. The REAL population-scale gate is the separate
+  # `perf-population-probe` job further down, which seeds and ticks an
+  # ACTUAL 1,000,000-citizen population via the new `SeedCitizenCount`
+  # plumbing (`internal/harness/headless/bug665_population_perf_gate_test.go`).
   perf-1m-probe:
     runs-on: windows-latest
     timeout-minutes: 20
@@ -641,6 +665,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # BUG-665 loud annotation (THE HONESTY FIX): this step does no
+      # work -- it exists solely to print an unmissable warning
+      # annotation on every run of this job, in the GitHub Actions UI,
+      # for as long as this job's name keeps overstating what it proves.
+      # See the job-level comment block immediately above for the full
+      # story and go-engine-100m-proving-plan.md §1.1 for the measured
+      # proof (this job's own local re-run: GenerationTime ~30s for 1M
+      # throwaway records, TickTime measured against a few-thousand-
+      # citizen city, never 1M real citizens).
+      - name: "BUG-665: this check's name overstates what it proves"
+        shell: pwsh
+        run: |
+          Write-Host "::warning title=perf-1m-probe never ticks 1M citizens (BUG-665)::This REQUIRED check's name claims a 1M-citizen scale gate. It does not provide one: the '1M' preset feeds internal/harness/synth's throwaway Generate() cost model only -- the engine this job actually ticks has always held compose's own ~64-citizen genesis seed, regardless of the preset. The real population-scale gate is the separate 'perf-population-probe' job (internal/harness/headless, SeedCitizenCount). This job's own generation-cost measurement below is real and kept as-is -- only its NAME is the defect. Renaming/repointing the branch-protection required-check entry is a repo-admin action outside this workflow file's own reach -- see BUG-665's BOW report for the exact rename instructions once ready to apply."
+          "## :warning: perf-1m-probe naming defect (BUG-665)" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "This REQUIRED check has never ticked 1,000,000 citizens -- see the job's own header comment in .github/workflows/ci.yml and docs/planning/go-engine-100m-proving-plan.md section 1.1. The real population-scale gate is the 'perf-population-probe' job." | Out-File -Append $env:GITHUB_STEP_SUMMARY
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -811,3 +851,90 @@ jobs:
             Write-Host "deleting stale cache entry $($e.key) (id $($e.id), created $($e.createdAt))"
             gh cache delete $e.id --repo ${{ github.repository }}
           }
+
+  # --- BUG-665: THE REAL population-scale gate -------------------------
+  #
+  # perf-1m-probe above has never ticked 1,000,000 citizens (see its own
+  # loud step annotation and job-header comment) -- it measures
+  # internal/harness/synth's throwaway synthetic-record generation cost
+  # against a genesis-only ~64-citizen city. This job is the actual
+  # thing: it seeds a real citizens.CitizensAPI with 1,000,000
+  # citizens.ColdRecord values (headless.Config.SeedCitizenCount, new
+  # this commit) and drives them through 90 REAL day-ticks via
+  # headless.Run's genuine protocol.Command path -- never
+  # core.Engine.AdvanceTicks directly (see
+  # TestPackage_NeverCallsAdvanceTicksDirectly).
+  #
+  # Self-testing gate: TestPopulationPerfGate1M
+  # (internal/harness/headless/bug665_population_perf_gate_test.go) IS
+  # the probe -- it seeds, ticks, measures, and asserts inside one Go
+  # test, with `-v` so the measured numbers (perTick, TicksAdvanced,
+  # cumulative TotalAlloc/citizen, final Population) are ALWAYS printed
+  # to this job's log via t.Logf, pass or fail -- there is nothing
+  # separate to build or wire up the way perf-1m-probe needs perfci.exe.
+  #
+  # Bounds are DELIBERATELY GENEROUS on this first landing (see
+  # popPerfGateTickBoundPerTick's and
+  # popPerfGateAllocBytesPerCitizenBound's own doc comments in that test
+  # file for the exact multiples and the tightening plan) -- per the
+  # house rule this item's own build session re-learned three times in
+  # one day: a bound must come from the machine that enforces it, not
+  # from a different box's one-off measurement. The FIRST real run of
+  # this job on CI establishes that machine's own baseline; a follow-up
+  # commit tightens the two constants against the CI-measured median
+  # this job's log will show, not a guess.
+  #
+  # ROUND-2 UPDATE (2026-09-04): an independent destructive round found
+  # the FIRST landing's seeded population invisible to BOTH fertility
+  # (no real partner/household) and moneycirc (never enumerated by
+  # compose's own resident set) -- so its 21-30 ms/tick reading measured
+  # an effectively idle ~64-citizen city, not 1,000,000 residents. The
+  # fix (generateSeedPopulation pairs a childbearing-age fraction into
+  # real households, SeedHouseholds registers them, compose.Deps.
+  # SeedResidentIDBase/SeedResidentIDCount makes them moneycirc-visible)
+  # makes the population genuinely live -- and the real number is far
+  # worse: ~1.3-1.4 s/tick on this dev box (fertility's O(N^2/7680) term
+  # plus moneycirc's four O(N^2/256) monthly terms, both now executing
+  # for real against citizens.CitizensAPI.ColdShard's un-indexed rowOf
+  # linear scan -- BUG-666's id->row index has not landed on main yet).
+  # popPerfGateTickBoundPerTick/popPerfGateAllocBytesPerCitizenBound were
+  # re-derived against THIS number, not the earlier vacuous one -- see
+  # that test file's own "ROUND-2 FINDING" doc comment for the full
+  # story and the BUG-666 re-measurement this gate still owes once that
+  # index lands.
+  #
+  # NOT required (yet): unlike perf-1m-probe, this job does not (yet)
+  # appear on branch protection's required-checks list -- see BUG-665's
+  # BOW report for Aaron's/the lead's decision on promoting it to
+  # required once its first few CI runs have established a real
+  # CI-measured baseline and the tightened bounds are landed. Until
+  # then it still runs on every push/PR (so its signal is visible
+  # immediately) but a failure here does not itself block a merge.
+  #
+  # timeout-minutes: local measurement (this item's own dev box, see the
+  # test's own doc comment) is ~2 MINUTES total (seed + wire + 90 REAL,
+  # demographically-live ticks + snapshot write) for 1,000,000 citizens
+  # across 3 simulated months, post-round-2-fix -- 10 minutes leaves
+  # generous headroom for a slower/noisier shared CI runner without
+  # masking a genuine multi-minute regression the way an
+  # hour-long timeout would.
+  perf-population-probe:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Seed + tick 1,000,000 citizens (BUG-665 real population gate)
+        shell: pwsh
+        run: |
+          go test ./internal/harness/headless/... -run TestPopulationPerfGate1M -v -count=1 -timeout 8m
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error title=perf-population-probe failed (BUG-665)::TestPopulationPerfGate1M did not pass -- see the test output above for the exact measured perTick/AllocBytes-per-citizen figure and which bound it exceeded (internal/harness/headless/bug665_population_perf_gate_test.go)."
+          }
+          exit $LASTEXITCODE

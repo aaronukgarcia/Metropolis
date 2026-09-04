@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
@@ -105,6 +106,32 @@ type Config struct {
 	// against).
 	Debug bool
 
+	// SeedCitizenCount (BUG-665), when > 0, bulk-seeds this many real
+	// citizens.ColdRecord values into the CitizensAPI Wire drives BEFORE
+	// any tick advances — the plumbing that let a "1M citizens" preset
+	// reach ONLY internal/harness/synth's throwaway Generate() and never
+	// the ticked engine at all (harness.headless.Config had no
+	// citizen-count field, so the engine that actually ticked always
+	// held compose's own 64-citizen genesis seed regardless of what a
+	// caller asked for). Records are generated deterministically from
+	// cfg.Seed (see generateSeedPopulation — GR#21: no math/rand, no wall
+	// clock, id-keyed det.Stream draws only) and injected via
+	// compose.Deps.Citizens, the SAME test seam engine.compose's own
+	// suite already uses to pre-construct a CitizensAPI — Run never
+	// reaches into citizens.ColdShard directly. compose.Wire's own
+	// unconditional 64-citizen founder seed (AC-8's non-zero seed
+	// population) still runs on top, at disjoint ids (this population
+	// starts at PerfSeedIDBase, far above compose's [1,64] founder range
+	// and far below engine.attract's MigrantIDBase), so
+	// Result.Population after a SeedCitizenCount=N run is N+64, not N —
+	// callers that need the exact seeded count back should read
+	// Result.Population and subtract the documented 64-citizen baseline
+	// founder seed (compose.go's own seedCitizenCount constant), rather
+	// than assuming population==N. Zero (the default) preserves this
+	// package's prior behaviour byte-for-byte: no extra citizens, the
+	// ordinary 64-citizen genesis-only population.
+	SeedCitizenCount int64
+
 	// InDir, if non-empty, names a prior headless bundle directory
 	// (previously written via -out) whose header.json this run reads
 	// before constructing its own header, carrying the prior run's
@@ -147,6 +174,42 @@ type Result struct {
 	// is surfaced rather than either silently dropped or treated as a
 	// run-aborting failure).
 	ReportWriteErr error
+
+	// Population (BUG-665) is the CitizensAPI's TotalPopulation read
+	// AFTER every tick has advanced — the count actually reached and
+	// driven by AdvanceDayTick, not the count a caller merely asked
+	// Generate/SeedCitizenCount to produce. This is the field a perf
+	// probe or a test proves against, precisely because "the count
+	// reaches Generate and nothing else" is the defect this item closes:
+	// a caller that only checked its own input parameter, never this
+	// output, would have stayed blind to that gap indefinitely.
+	Population int
+
+	// TickWallTime (BUG-665) is the wall-clock time spent strictly
+	// inside driveTicks — i.e. advancing Config.Months worth of daily
+	// ticks through the real protocol.Command path — excluding
+	// compose.Wire, citizen seeding, scenario replay, and shutdown/
+	// snapshot-write overhead. A caller computing a per-tick perf figure
+	// (TickWallTime / TicksAdvanced) gets the tick loop's own cost in
+	// isolation, not a figure diluted by one-time setup/teardown work
+	// that would make a large-population probe's per-tick number look
+	// artificially better than it is.
+	TickWallTime time.Duration
+
+	// Births/Deaths (BUG-665 round finding) are the cumulative real
+	// per-citizen fertility births and mortality deaths the run's
+	// composition produced (compose.Composition.VitalBirths/VitalDeaths),
+	// read after every tick has advanced. An independent destructive
+	// round proved a bulk-seeded population that never pairs into real
+	// partnerships/households is invisible to fertility.go's
+	// applyFertilityLocked (Partner==0 is skipped outright) — a
+	// SeedCitizenCount run whose demographic engine never actually does
+	// any work would exercise a materially cheaper code path than a real
+	// population, silently understating tick cost. A caller (this
+	// package's own population perf gate) asserts Births+Deaths > 0 as a
+	// pinned liveness invariant, never merely hoped for.
+	Births int64
+	Deaths int64
 }
 
 // Run drives one headless simulation run to completion: constructs a
@@ -211,13 +274,67 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 	e := core.NewEngine(opts...)
 
+	// BUG-665 (round finding, 2026-09-04): when the caller asked for a
+	// bulk-seeded population, build and pre-seed a *citizens.CitizensAPI
+	// BEFORE Wire runs, then inject it via compose.Deps.Citizens — the
+	// exact seam engine.compose's own test suite already uses to hand
+	// Wire a pre-constructed API (see compose.Deps.Citizens' doc comment:
+	// "nil means construct the default"). Wire's own genesis founder seed
+	// (64 citizens, disjoint ids) still mints on top of this — see
+	// SeedCitizenCount's doc comment on why Result.Population is N+64,
+	// not N.
+	//
+	// Two more steps close the round's own "vacuity in a subtler coat"
+	// finding, beyond the bare SeedColdRecords call the first landing
+	// stopped at:
+	//
+	//  1. generateSeedPopulation's own second pass pairs a childbearing-
+	//     age fraction of the seeded population into mutual partners
+	//     (Household/Partner columns, GR#21-safe pure arithmetic — see
+	//     its own doc comment), and SeedHouseholds registers those
+	//     households as REAL, ValidateCitizen-visible entries — without
+	//     both, fertility.go's applyFertilityLocked never fires
+	//     (ColdRecord.Partner==0 skips a citizen outright) and even a
+	//     paired-but-unregistered household would make every birth
+	//     attempt fail ValidateCitizen's householdExists check (see
+	//     SeedHouseholds' own doc comment for why this is a separate,
+	//     explicit call rather than folded into SeedColdRecords).
+	//  2. compose.Deps.SeedResidentIDBase/SeedResidentIDCount registers
+	//     the seeded id range as compose-visible for moneycirc.go's four
+	//     resident-scoped monthly passes (markEmploymentAndCount/
+	//     employedResidentCount/formResidentHouseholds/
+	//     distributeWagesToResidents) — without it, the round proved
+	//     Composition.MoneyFlows is byte-identical whether
+	//     SeedCitizenCount is 0 or 50,000, i.e. the seeded population is
+	//     invisible to wage/tax/household-formation cost at ANY scale.
+	var deps *compose.Deps
+	if cfg.SeedCitizenCount > 0 {
+		citizensAPI, ctErr := citizens.NewCitizensAPI(cfg.Seed, correlationID)
+		if ctErr != nil {
+			return Result{}, errs.Wrap(ErrSeedPopulationFailed, correlationID, ctErr, map[string]any{"stage": "NewCitizensAPI", "cause": ctErr.Error()})
+		}
+		records := generateSeedPopulation(cfg.Seed, cfg.SeedCitizenCount)
+		if seedErr := citizensAPI.SeedColdRecords(records, correlationID); seedErr != nil {
+			return Result{}, errs.Wrap(ErrSeedPopulationFailed, correlationID, seedErr, map[string]any{"stage": "SeedColdRecords", "cause": seedErr.Error()})
+		}
+		if hhErr := citizensAPI.SeedHouseholds(records, correlationID); hhErr != nil {
+			return Result{}, errs.Wrap(ErrSeedPopulationFailed, correlationID, hhErr, map[string]any{"stage": "SeedHouseholds", "cause": hhErr.Error()})
+		}
+		deps = &compose.Deps{
+			Citizens:            citizensAPI,
+			SeedResidentIDBase:  PerfSeedIDBase,
+			SeedResidentIDCount: cfg.SeedCitizenCount,
+		}
+	}
+
 	// FEAT-082 (ASM-001/ASM-421): every headless/perfci/synth run now
 	// drives a REAL simulation through the composition root, not a
 	// zero-hook walking skeleton. compose.Wire is the single wiring path
 	// (AC-1/AC-13 of feat.compositionroot); a wiring failure (e.g.
 	// market.LoadDefault cannot load data/market.json) aborts the run with
 	// a registry-sourced error before any tick advances.
-	if _, err := compose.Wire(e, nil); err != nil {
+	comp, err := compose.Wire(e, deps)
+	if err != nil {
 		return Result{}, err
 	}
 
@@ -302,7 +419,12 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		}
 	}
 
+	// BUG-665: timed strictly around driveTicks (not Wire/seed/shutdown/
+	// snapshot-write) so Result.TickWallTime is the tick loop's own cost
+	// in isolation — see TickWallTime's doc comment.
+	ticksStart := time.Now()
 	ticksAdvanced, err := driveTicks(transport, cfg.Months, correlationID)
+	tickWallTime := time.Since(ticksStart)
 	if err != nil {
 		_ = shutdown()
 		return Result{}, err
@@ -330,6 +452,10 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		TicksAdvanced:    ticksAdvanced,
 		ScenarioCommands: scenarioCommands,
 		PhaseHookCount:   e.HookCount(),
+		Population:       comp.Population(),
+		TickWallTime:     tickWallTime,
+		Births:           comp.VitalBirths(),
+		Deaths:           comp.VitalDeaths(),
 		ReportWriteErr:   rw.err,
 	}, nil
 }

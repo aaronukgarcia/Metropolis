@@ -74,4 +74,15 @@ const (
 	// SUCCESSFUL Result carrying a bogus, wrapped TicksAdvanced instead of
 	// failing loudly — the poisoned-perf-baseline shape this code closes.
 	ErrInvalidMonths = "MET-H207"
+
+	// ErrSeedPopulationFailed (BUG-665): Config.SeedCitizenCount was
+	// positive but constructing the pre-Wire *citizens.CitizensAPI
+	// (citizens.NewCitizensAPI — a data/fertility.json or
+	// data/mortality.json load failure) or seeding the deterministically
+	// generated population into it (citizens.SeedColdRecords rejecting a
+	// generated ColdRecord, e.g. via ValidateColdRecord) failed. Checked
+	// before compose.Wire runs, so a seeding failure never leaves a
+	// partially-wired engine and never silently falls back to the
+	// ordinary 64-citizen genesis-only population.
+	ErrSeedPopulationFailed = "MET-H208"
 )
