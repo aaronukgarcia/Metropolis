@@ -453,8 +453,10 @@ test('Z_INDEX registry stays in sync with styles.css (SSOT parity — a drift he
   const parity: Array<[string, keyof typeof Z_INDEX]> = [
     ['.forced-asset-sales-panel', 'FORCED_ASSET_SALES_PANEL'],
     ['.insolvency-banner', 'INSOLVENCY_BANNER'],
-    ['.place-notice-banner', 'PLACE_NOTICE_BANNER'],
-    ['.levelup-banner', 'LEVELUP_BANNER'],
+    // FEAT-2326609784: .place-notice-banner/.levelup-banner (PLACE_NOTICE_BANNER/
+    // LEVELUP_BANNER) are retired — both absorbed into the single scrolling
+    // news feed, which kept the higher of their two z-index slots.
+    ['.news-feed', 'NEWS_FEED'],
     ['.busy-chip', 'BUSY_CHIP'],
     ['.insolvency-popup-overlay', 'INSOLVENCY_POPUP'],
     ['.perf-hud', 'PERF_HUD'],

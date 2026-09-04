@@ -318,38 +318,64 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .tier-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 .tier-fill-note { color: var(--muted); font-style: italic; }
 
-/* ---------- level-up reward banner (FEAT-1972079884) ---------- */
-.levelup-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); min-width: 260px; max-width: 70%; background: rgba(15, 18, 22, 0.95); border: 1px solid var(--warn); border-radius: 10px; padding: 8px 14px; box-shadow: var(--shadow); z-index: 20; }
-.levelup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.levelup-head b { color: var(--warn); font-size: 14px; }
-.levelup-cash { margin: 4px 0 2px; font-size: 12px; color: var(--ink); }
-.levelup-cash b { color: var(--done); }
-.levelup-unlocks { margin: 0; font-size: 11px; color: var(--muted); }
-
-/* ---------- IMF insolvency flow inc1 (FEAT-1972079923) ---------- */
-/* Cannot-afford placement feedback (BUG-396/AC-9) — mirrors .levelup-banner
-   positioning but sits just below it so both can be visible at once. */
-.place-notice-banner {
-  position: absolute;
-  top: 62px;
-  left: 50%;
-  transform: translateX(-50%);
-  min-width: 260px;
-  max-width: 70%;
+/* ---------- news feed (FEAT-2326609784) ----------
+   Replaces the old stacked .levelup-banner / .milestone-banner /
+   .place-notice-banner popups (Aaron 2026-09-04: "layered pop ups need to be
+   got rid of in stead build a better info news list that scrolls") with ONE
+   collapsed ticker that expands into a bounded, scrolling list. Keeps the
+   old top-centre anchor and z-index slot (20) those three banners shared. */
+.news-feed { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 20; max-width: 70%; }
+.news-feed-ticker {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  background: rgba(60, 18, 16, 0.92);
-  border: 1px solid var(--danger);
+  gap: 8px;
+  min-width: 260px;
+  max-width: 100%;
+  background: rgba(15, 18, 22, 0.95);
+  border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 6px 14px;
+  padding: 6px 12px;
   box-shadow: var(--shadow);
-  color: var(--danger);
+  color: var(--ink);
   font-size: 12px;
-  font-weight: 600;
-  z-index: 19;
+  cursor: pointer;
+  text-align: left;
 }
+.news-feed-ticker.has-unread { border-color: var(--warn); }
+.news-feed-ticker-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.news-feed-date { color: var(--muted); font-size: 11px; margin-right: 4px; }
+.news-feed-badge {
+  background: var(--warn);
+  color: #171717;
+  border-radius: 999px;
+  min-width: 16px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 16px;
+}
+.news-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.news-dot.news-info, .news-info .news-dot { background: var(--accent, #7894ff); }
+.news-dot.news-success, .news-success .news-dot { background: var(--done); }
+.news-dot.news-warning, .news-warning .news-dot { background: var(--warn); }
+.news-dot.news-error, .news-error .news-dot { background: var(--danger); }
+.news-feed-panel {
+  margin-top: 6px;
+  background: rgba(15, 18, 22, 0.97);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  max-height: 260px;
+  display: flex;
+  flex-direction: column;
+}
+.news-feed-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.news-feed-panel-actions { display: flex; gap: 6px; }
+.news-feed-empty { padding: 10px; margin: 0; }
+.news-feed-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; }
+.news-feed-entry { display: flex; align-items: baseline; gap: 6px; padding: 4px 10px; font-size: 12px; }
+.news-feed-entry .news-feed-text { color: var(--ink); }
 
 /* Persistent insolvency band banner (AC-1). BUG-500 audit: every variant of
    this banner (warning/crisis/administration/second-bailout) is pure status

@@ -1072,7 +1072,10 @@ test('BUG-497 (3): decline-screen-overlay is pinned above every other known over
   const otherOverlays = [
     '.insolvency-popup-overlay',
     '.forced-asset-sales-panel',
-    '.levelup-banner',
+    // FEAT-2326609784: .levelup-banner is retired (absorbed into the news
+    // feed) — .news-feed kept its z-index slot, so the invariant now checks
+    // that.
+    '.news-feed',
     '.perf-hud',
   ];
   for (const sel of otherOverlays) {

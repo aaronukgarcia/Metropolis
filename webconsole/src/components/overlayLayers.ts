@@ -40,10 +40,10 @@ export const Z_INDEX = {
   FORCED_ASSET_SALES_PANEL: 17,
   /** .insolvency-banner (warning/crisis/administration/second-bailout). */
   INSOLVENCY_BANNER: 18,
-  /** .place-notice-banner — cannot-afford placement feedback. */
-  PLACE_NOTICE_BANNER: 19,
-  /** .levelup-banner — level-up reward notice. */
-  LEVELUP_BANNER: 20,
+  /** .news-feed — FEAT-2326609784: the scrolling news feed. Replaces the old
+   *  .place-notice-banner (19) / .levelup-banner (20) stacked popups; kept at
+   *  the higher of the two retired slots since it is now the only occupant. */
+  NEWS_FEED: 20,
   /** .busy-chip — the "working…" indicator. */
   BUSY_CHIP: 99,
   /** .about-backdrop / .spec-card-backdrop / .help-overlay-backdrop — the

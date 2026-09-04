@@ -52,6 +52,7 @@ import { buildingRef, buildingRefLabel } from '../sim/refs';
 import { useBusy } from './Busy';
 import { HelpOverlay } from './HelpOverlay';
 import { AffordabilityConfirm } from './AffordabilityConfirm';
+import { NewsFeed } from './NewsFeed';
 import { evaluatePlacementBatch, type PendingBatchPlacement } from './placementGate';
 import { makeKeydownHandler } from '../sim/keyhandler';
 import type { Building, ZoneKind, TaxRates } from '../sim/types';
@@ -1349,9 +1350,7 @@ export function MapView() {
         <span><i className="tier-dot" style={{ background: TIER_COLORS[3] }} />3 high</span>
         <span className="tier-fill-note">fill = % occupied</span>
       </div>
-      <LevelUpBanner />
-      <MilestoneBanner />
-      <PlaceNoticeBanner />
+      <NewsFeed />
       <InsolvencyBanner />
       <AdministrationBanner />
       <SecondBailoutBanner />
@@ -1480,85 +1479,17 @@ export function MapView() {
   }
 }
 
-// FEAT-1972079884 — dismissible level-up banner. Reads the reward notice the
-// reducer stamped on state when experience crossed a new level, showing the
-// cash injection (through fmtMoney) and what the level unlocked. Dismiss clears
-// it; it fires exactly once because the reward is guarded by lastRewardedLevel.
-function LevelUpBanner() {
-  const { state, dispatch } = useSim();
-  const n = state.notice;
-  if (!n) return null;
-  return (
-    <div className="levelup-banner" role="status">
-      <div className="levelup-head">
-        <b>Level {n.level} reached</b>
-        <button className="btn tiny" onClick={() => dispatch({ type: 'dismissNotice' })}>
-          Dismiss
-        </button>
-      </div>
-      {n.cash > 0 ? (
-        <p className="levelup-cash">
-          Cash injection <b>{fmtMoney(n.cash)}</b> granted.
-        </p>
-      ) : (
-        <p className="levelup-cash">No cash injection this level.</p>
-      )}
-      <p className="levelup-unlocks">
-        {n.unlocked.length > 0
-          ? `Unlocked: ${n.unlocked.join(', ')}`
-          : 'No new structures at this level — keep building.'}
-      </p>
-    </div>
-  );
-}
-
-// FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1) — dismissible
-// milestone-reward banner. Mirrors LevelUpBanner exactly: reads the
-// milestoneNotice the reducer stamped on state when a MILESTONES predicate
-// was first observed met, showing the cash injection (through fmtMoney).
-// Dismiss clears it; it fires exactly once per milestone because the reward
-// is guarded by claimedMilestones (engine.ts's advance()).
-function MilestoneBanner() {
-  const { state, dispatch } = useSim();
-  const n = state.milestoneNotice;
-  if (!n) return null;
-  return (
-    <div className="levelup-banner milestone-banner" role="status">
-      <div className="levelup-head">
-        <b>Milestone reached: {n.label}</b>
-        <button className="btn tiny" onClick={() => dispatch({ type: 'dismissMilestoneNotice' })}>
-          Dismiss
-        </button>
-      </div>
-      {n.cash > 0 ? (
-        <p className="levelup-cash">
-          Cash injection <b>{fmtMoney(n.cash)}</b> awarded.
-        </p>
-      ) : (
-        <p className="levelup-cash">No cash injection for this milestone.</p>
-      )}
-    </div>
-  );
-}
-
-// FEAT-1972079923 inc1 (AC-9 companion to BUG-396): renders the cannot-afford
-// placement notice the reducer already stamps on state.placeNotice — the fix
-// for BUG-396's silent-no-op complaint was never visible because nothing
-// rendered this field. Auto-clears on the next successful place() (existing
-// reducer behaviour); Dismiss lets the player acknowledge it explicitly too.
-function PlaceNoticeBanner() {
-  const { state, dispatch } = useSim();
-  const msg = state.placeNotice;
-  if (!msg) return null;
-  return (
-    <div className="place-notice-banner" role="alert">
-      <span>{msg}</span>
-      <button className="btn tiny" onClick={() => dispatch({ type: 'dismissPlaceNotice' })}>
-        Dismiss
-      </button>
-    </div>
-  );
-}
+// FEAT-1972079884/FEAT-milestone-cash-rewards-2026-09-02/BUG-396's
+// LevelUpBanner, MilestoneBanner and PlaceNoticeBanner (the layered
+// top-centre popup stack Aaron's 2026-09-04 screenshot called out) are
+// RETIRED as of FEAT-2326609784 — replaced by <NewsFeed /> (NewsFeed.tsx),
+// which observes the same state.notice / state.milestoneNotice /
+// state.placeNotice fields (via sim/newsFeed.ts's pure observeNews) and
+// turns each activation into one scrolling feed entry instead of a stacked,
+// occluding overlay. The underlying dismiss actions (dismissNotice /
+// dismissMilestoneNotice / dismissPlaceNotice) and the fields' existing
+// clearing semantics are UNCHANGED — only these three overlay renderers are
+// gone.
 
 // FEAT-1972079923 inc1 (AC-1): persistent status banner for the insolvency band.
 // Solvent renders nothing. 'warning' gives advance notice before the crisis
