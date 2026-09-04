@@ -29,13 +29,14 @@ import {
   computeFailedGates,
   AUTO_BUILD_DEMAND_PERCENT,
   footprintOf,
+  occupiedColumnsOf,
 } from '../sim/data';
 import { computePath, type Tile } from '../sim/roadTracker';
 import { viewportTileRect, visibleBuildingsOf } from '../render/viewportCull';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim } from '../sim/simContext';
 import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets, TICKS_PER_YEAR, CONSOLIDATOR_ENABLED_DEFAULT, CONSOLIDATOR_MODE_DEFAULT } from '../sim/engine';
-import { monthlyScopeOf, sectionOriginOf, sectionTilesOf } from '../sim/consolidator';
+import { monthlyScopeOf, sectionOriginOf, sectionTilesOf, sectionIndexOf } from '../sim/consolidator';
 import { currentConsolidatorFocus } from '../sim/consolidatorFocus';
 import { glideWindowForDay } from '../sim/consolidatorGlide';
 import { isConsolidatorBoxVisible } from '../sim/consolidatorDisplayFlag';
@@ -791,6 +792,14 @@ export function MapView() {
     if (consolidatorBoxOn && consolidatorMode === 'monthly-twelfth') {
       const scope = monthlyScopeOf(state.tick);
       const focusKey = currentConsolidatorFocus();
+      // SKIP-EMPTY-LAND, display half (Aaron, 2026-09-04): sectionIndexOf(s)
+      // (consolidator.ts) is ALREADY the machinery findOpportunities/
+      // findOpportunities' own O(buildings) fold uses every pass, and it is
+      // memoised on state.buildings' array identity (its own doc comment) —
+      // sections with zero buildings are simply ABSENT from the returned
+      // Map, so `.has(key)` is an O(1) lookup, never a fresh O(buildings)
+      // scan in this draw path (GR#3 — reuse, don't re-derive).
+      const occupiedSections = sectionIndexOf(state);
       ctx.save();
       ctx.strokeStyle = 'rgba(255, 40, 40, 0.55)';
       ctx.lineWidth = Math.max(1, geom.s * 0.08);
@@ -800,6 +809,7 @@ export function MapView() {
         // (solid+ants, below/via the rAF overlay) so it isn't double-outlined
         // here.
         if (key === focusKey) continue;
+        if (!occupiedSections.has(key)) continue; // skip empty land — nothing built here, nothing to outline.
         const { x0, y0, w, h } = sectionOriginOf(key);
         ctx.strokeRect(geom.ox + x0 * geom.s, geom.oy + y0 * geom.s, w * geom.s, h * geom.s);
       }
@@ -820,7 +830,13 @@ export function MapView() {
       if (!cv || !c2 || !consolidatorBoxOn) return;
       let box: { x0: number; y0: number; w: number; h: number } | null = null;
       if (consolidatorMode === 'glide') {
-        box = glideWindowForDay(state.tick, consolidatorSectionTilesNow);
+        // SKIP-EMPTY-LAND (Aaron, 2026-09-04): the ants cursor follows the
+        // SAME column-skipping mapping engine.ts's sectionKeysForGlideWindow
+        // now drives the real pass with (occupiedColumnsOf(state)) — no
+        // separate display-only rule is needed, and no display change is
+        // needed to the box itself (it already just follows whatever window
+        // glideWindowForDay hands back).
+        box = glideWindowForDay(state.tick, consolidatorSectionTilesNow, occupiedColumnsOf(state));
       } else {
         const scope = monthlyScopeOf(state.tick);
         const focusKey = currentConsolidatorFocus();

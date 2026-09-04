@@ -4427,6 +4427,60 @@ function buildOccupiedSet(buildings: SimState['buildings'], ignoreId: number | u
 }
 
 /**
+ * FEAT-2326609839 (Aaron, 2026-09-04, "skip empty land" glide ruling,
+ * verbatim: "marchin ants and red squares only need to look at squares with
+ * contnet so skip where nothing is built"): a column-occupancy index over
+ * the map's MAP_W tile columns — column `x` is occupied iff at least one
+ * building's REAL footprint (`footprintOf`, GR#3 — never a grown building's
+ * stale spec-only w/h) intersects it. Powers TWO consumers, both of which
+ * already import this module: consolidatorGlide.ts's skip-empty-columns
+ * cursor (engine.ts's sectionKeysForGlideWindow passes this in so the
+ * day->column walk never spends a day gliding over land with nothing built)
+ * and MapView.tsx's monthly-twelfth static scope grid (reuses
+ * consolidator.ts's sectionIndexOf instead — see that call site — but this
+ * is the same idiom, kept here as the shared SSOT column-level index, GR#3).
+ *
+ * Memoised (occupiedSet's own idiom immediately above): a WeakMap keyed on
+ * `s.buildings`' ARRAY identity, one O(buildings) fold per buildings-array
+ * change — NEVER per glide-day call, which is the entire point (a glide day
+ * runs once per game tick; recomputing this from scratch every tick would
+ * reintroduce exactly the O(buildings)-per-day cost the whole glide-mode
+ * perf design (consolidator.ts's sectionIndexOf doc comment) exists to
+ * avoid).
+ *
+ * Order-independent by construction (GR#21): the per-building loop only
+ * ever SETS bits in a fixed-size boolean array (no accumulation order
+ * dependency — painting column 5 twice, in any order, leaves it painted
+ * once), and the returned array is built by a single ascending scan over
+ * column index 0..MAP_W-1 — so a shuffled `buildings` array (same buildings,
+ * different array order/reference) always yields an array that is
+ * value-identical to the unshuffled one, even though it is cached under a
+ * DIFFERENT WeakMap key (a fresh array reference is, correctly, a fresh
+ * cache miss — see the memo-identity test in
+ * consolidator-glide-skip-empty.test.mjs for why that's the right contract,
+ * not a bug).
+ */
+const occupiedColumnsCache = new WeakMap<object, number[]>();
+
+export function occupiedColumnsOf(s: SimState): number[] {
+  const cached = occupiedColumnsCache.get(s.buildings);
+  if (cached) return cached;
+  const occupied = new Array<boolean>(MAP_W).fill(false);
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp) continue; // GR#16: an unknown spec id (corrupt/old save) contributes nothing rather than throwing.
+    const { w } = footprintOf(b, sp);
+    const xStart = Math.max(0, b.x);
+    const xEnd = Math.min(MAP_W, b.x + w);
+    for (let x = xStart; x < xEnd; x++) occupied[x] = true;
+  }
+  const columns: number[] = [];
+  for (let x = 0; x < MAP_W; x++) if (occupied[x]) columns.push(x);
+  occupiedColumnsCache.set(s.buildings, columns);
+  return columns;
+}
+
+/**
  * BUG-646 (Aaron, 2026-09-03, cap 250 -> 2000) — THE root-cause fix. Profiled
  * against Aaron's real 29,831-building savepoint: the 'place' reducer case
  * (engine.ts) calls `occupiedSet(placedState)` immediately after building

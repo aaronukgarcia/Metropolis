@@ -80,6 +80,7 @@ import {
   stampJobsGrandfather,
   stampTunnelFootprintGrandfather,
   TUNNEL_FOOTPRINT_GRANDFATHER_EPOCH,
+  occupiedColumnsOf,
 } from './data.ts';
 import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -1632,7 +1633,16 @@ export const CONSOLIDATOR_LOG_CAP = 32;
  * fixed section twice in one day.
  */
 function sectionKeysForGlideWindow(s: SimState, tick: number): number[] {
-  const win = glideWindowForDay(tick, sectionTilesOf(s));
+  // SKIP-EMPTY-LAND (Aaron, 2026-09-04): occupiedColumnsOf(s) is the
+  // memoised (keyed on s.buildings' array identity, data.ts) list of tile
+  // columns any building's footprint actually intersects — passing it here
+  // is the whole scan-side change: the glide day->column mapping now hops
+  // between non-empty columns only, instead of crawling one column at a
+  // time over empty land. glideWindowForDay/glideGridOf fall back to the
+  // pre-existing dense behaviour whenever this list is empty (see
+  // consolidatorGlide.ts's own doc comment) — a genesis city with zero
+  // buildings still produces a valid, non-throwing window.
+  const win = glideWindowForDay(tick, sectionTilesOf(s), occupiedColumnsOf(s));
   const keys = new Set<number>([
     sectionKeyOf(win.x0, win.y0),
     sectionKeyOf(win.x0 + win.w - 1, win.y0),
