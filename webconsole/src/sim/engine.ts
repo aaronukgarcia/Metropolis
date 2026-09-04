@@ -118,23 +118,6 @@ import {
 // this import creates no cycle even though consolidator.ts already imports
 // FROM this file.
 import { glideWindowForDay } from './consolidatorGlide.ts';
-// FEAT-2326609779 (consolidator inc3): the LAYOUT HIERARCHY's pure planner +
-// geometry leaf (zero imports of its own — see its file header), imported
-// here (the mutation lane) for the same reason consolidator.ts's read-only
-// helpers are: this file owns every primitive needed to actually MUTATE
-// state (buildings/funds/nextId).
-import {
-  TIER_ORDER,
-  TIER_SPEC_ID,
-  MIN_TIER_RUN_TILES,
-  layoutSeedOf,
-  candidateTierPath,
-  resolveTierConflicts,
-  isValidBendPath,
-  wouldSever,
-  classifyFreeSpace,
-} from './consolidatorLayout.ts';
-import type { TierKind, TileXY, TierPlan, TierImplementation } from './consolidatorLayout.ts';
 import type { ConsolidationPass, ConsolidationTransaction, ConsolidationRecord, SectionAudit } from './consolidator.ts';
 import type {
   FlowItem,
@@ -1713,203 +1696,6 @@ function sectionNeighbourKeysOf(key: number): number[] {
 }
 
 /**
- * FEAT-2326609779 (consolidator inc3) — THE LAYOUT HIERARCHY. For section
- * `key`, lays rail -> motorway -> dual -> A-road -> minor infrastructure
- * tiers, in that strict order, on the section's genuinely FREE tiles only
- * (AC-1: this increment's generator never demolishes an existing building or
- * road — see the module-level scope note below), each tier atomic (all its
- * planned tiles land, or the whole tier is skipped and recorded — AC-1),
- * funds-gated and severance-gated (AC-4/AC-9), then classifies whatever free
- * space remains as parks or growth reserve (AC-7/AC-8). Booked through the
- * SAME 'Consolidation' flow line as every other consolidator transaction
- * (advance() sums `txn.buildCost`/`txn.scrapRecovered` across ALL
- * transaction kinds, `'layout'` included — see applyConsolidatorPass's own
- * per-transaction summation loop, unchanged by this addition).
- *
- * SCOPE NOTE (disclosed, FEAT-2326609779 §"non-goals" / this build's report):
- * this generator only ever claims tiles that are currently free (no
- * building, no road, no rail) — it never overwrites a pre-existing tier's
- * tiles. That makes AC-4's literal "later tier demolishes an earlier one's
- * connector" trigger UNREACHABLE from live play in this increment (adding
- * tiles to a graph can only merge components, never split one — see
- * `wouldSever`'s own doc). AC-4's CHECKER (`wouldSever`, a real 4-neighbour
- * flood-fill component comparison) is fully implemented and wired here for
- * defense-in-depth against a future demolition-capable increment, and is
- * independently unit-tested with a constructed before/after tile set that
- * DOES sever — proving the mechanism works even though this build's
- * generator cannot trigger it live. A future increment that lets a tier
- * demolish a lower pre-existing tier (AC-9's "rare" case) plugs straight
- * into the `removedTiles` parameter `wouldSever` already accepts.
- *
- * Returns null when the section has no free space worth laying anything on
- * (fewer than MIN_TIER_RUN_TILES free tiles) — an honest "nothing to do",
- * never pushed as a transaction, exactly like a section with zero
- * consolidation opportunities today.
- */
-function applyTierLayoutForSection(
-  cur: SimState,
-  key: number,
-  tick: number,
-): { state: SimState; txn: ConsolidationTransaction } | null {
-  const box = sectionOriginOf(key);
-  const occupied = occupiedSet(cur);
-  const freeSet = new Set<string>();
-  for (let dx = 0; dx < box.w; dx++) {
-    for (let dy = 0; dy < box.h; dy++) {
-      const k = `${box.x0 + dx},${box.y0 + dy}`;
-      if (!occupied.has(k)) freeSet.add(k);
-    }
-  }
-  if (freeSet.size < MIN_TIER_RUN_TILES) return null;
-
-  // AC-10: the layout seed derived ONLY from sectionKey+tick (never a clock
-  // or Math.random) — offset by tier index (a pure arithmetic bump, not a
-  // second random source) purely so all five tiers don't all scan starting
-  // at the same row/column.
-  const seed = layoutSeedOf(key, tick);
-  const rawPaths = {
-    rail: candidateTierPath(freeSet, box, seed),
-    motorway: candidateTierPath(freeSet, box, seed + 1),
-    dual: candidateTierPath(freeSet, box, seed + 2),
-    aroad: candidateTierPath(freeSet, box, seed + 3),
-    minor: candidateTierPath(freeSet, box, seed + 4),
-  } as Record<TierKind, TileXY[]>;
-  const resolved = resolveTierConflicts(rawPaths);
-
-  // AC-4's severance graph: every rail/motorway/road tile ALREADY in the
-  // section (pre-pass), grown as each tier commits below — "all
-  // previously-placed tiers", per the AC's own wording.
-  const existingNetworkTiles = new Set<string>();
-  for (const b of cur.buildings) {
-    if (b.x < box.x0 || b.x >= box.x0 + box.w || b.y < box.y0 || b.y >= box.y0 + box.h) continue;
-    const sp = SPECS[b.spec];
-    if (sp && (sp.kind === 'rail' || sp.kind === 'motorway' || sp.kind === 'road')) {
-      existingNetworkTiles.add(`${b.x},${b.y}`);
-    }
-  }
-
-  let attempt = cur;
-  const tierAudit: TierImplementation[] = [];
-  const addedAll: ConsolidationRecord[] = [];
-  const claimedTiles = new Set<string>();
-  let totalBuildCost = 0;
-
-  for (const tier of TIER_ORDER) {
-    const path = resolved.paths[tier] ?? [];
-    const specId = TIER_SPEC_ID[tier];
-    const spec = SPECS[specId];
-    const estimatedCost = spec ? placementCost(spec) * path.length : 0;
-    const plan: TierPlan = {
-      tier,
-      plannedTiles: path,
-      estimatedCost,
-      estimatedScrap: 0,
-      validationTests: {
-        bendGeometry: isValidBendPath(tier, path),
-        severanceTest: !wouldSever(
-          existingNetworkTiles,
-          new Set(path.map((p) => `${p.x},${p.y}`)),
-        ),
-        junctionRules: true, // AC-3: resolveTierConflicts already removed every tile-spread conflict before this loop runs.
-      },
-    };
-    const fail = (reason: string) => {
-      tierAudit.push({ ...plan, actuallyPlaced: false, failureReason: reason, actualTiles: [], actualCost: 0, conflictsResolved: [] });
-    };
-
-    if (path.length === 0) {
-      fail('tier failed: no space');
-      continue;
-    }
-    if (!plan.validationTests.bendGeometry) {
-      fail('tier failed: bend geometry');
-      continue;
-    }
-    if (!plan.validationTests.severanceTest) {
-      fail('tier failed: severance');
-      continue;
-    }
-    if (!spec || attempt.funds - estimatedCost < INSOLVENCY_WARNING_THRESHOLD) {
-      fail('tier failed: insufficient funds');
-      continue;
-    }
-
-    // AC-1: commit the WHOLE tier atomically — every tile above already
-    // passed every gate as one unit, so there is nothing left to roll back
-    // partway through.
-    const placedRecords: ConsolidationRecord[] = [];
-    let nextId = attempt.nextId;
-    const newBuildings = attempt.buildings.slice();
-    for (const p of path) {
-      const rec: ConsolidationRecord = { id: nextId, spec: specId, x: p.x, y: p.y, builtTick: tick, placedBy: 'auto' };
-      newBuildings.push(recordToBuilding(rec));
-      placedRecords.push(rec);
-      existingNetworkTiles.add(`${p.x},${p.y}`);
-      claimedTiles.add(`${p.x},${p.y}`);
-      nextId += 1;
-    }
-    attempt = { ...attempt, buildings: newBuildings, nextId, funds: attempt.funds - estimatedCost };
-    addedAll.push(...placedRecords);
-    totalBuildCost += 0; // RED-PROOF MUTATION — must revert (should be += estimatedCost)
-    tierAudit.push({
-      ...plan,
-      actuallyPlaced: true,
-      actualTiles: path,
-      actualCost: estimatedCost,
-      conflictsResolved: resolved.conflictsDetected.filter((c) =>
-        path.some((p) => p.x === c.x && p.y === c.y),
-      ),
-    });
-  }
-
-  // AC-7/AC-8: whatever free space the five tiers did not claim is
-  // classified as a park candidate or growth reserve. `nearAmenity` reuses
-  // this section's OWN hasResidents fact (consolidator.ts's sectionIndexOf,
-  // AC-7 assumption 2's disclosed heuristic — Aaron may rule a different
-  // strategy) rather than re-deriving amenity proximity from scratch.
-  const remainingFree: TileXY[] = [];
-  for (const k of freeSet) {
-    if (claimedTiles.has(k)) continue;
-    const [xs, ys] = k.split(',');
-    remainingFree.push({ x: Number(xs), y: Number(ys) });
-  }
-  const sectionAudit = sectionIndexOf(attempt).get(key);
-  const nearAmenity = () => !!sectionAudit?.hasResidents;
-  const freeSpaceAllocation = classifyFreeSpace(remainingFree, nearAmenity);
-
-  // AC-8: a reserve tile actually reused by one of this pass's tiers is
-  // cleared from the reserved map (it is no longer free/reserved — it now
-  // carries infrastructure); every OTHER unclaimed tile classified as
-  // reserve is (re)marked. Reuse costs exactly the tier's normal build cost
-  // and ZERO scrap — nothing was ever built on a reserve tile to demolish.
-  const priorReserved = attempt.consolidatorReservedTiles ?? {};
-  const nextReserved: Record<string, true> = { ...priorReserved };
-  for (const k of claimedTiles) delete nextReserved[k];
-  for (const p of freeSpaceAllocation.tilesByKind.reserve) nextReserved[`${p.x},${p.y}`] = true;
-  for (const p of freeSpaceAllocation.tilesByKind.parks) delete nextReserved[`${p.x},${p.y}`];
-  attempt = { ...attempt, consolidatorReservedTiles: nextReserved };
-
-  if (addedAll.length === 0 && tierAudit.every((t) => !t.actuallyPlaced)) {
-    // Nothing landed at all — still worth ONE audit record (AC-11 wants the
-    // attempt/failure sequence visible), but never charges anything and
-    // never touches `attempt.buildings`/`nextId` (already untouched here).
-  }
-
-  const txn: ConsolidationTransaction = {
-    sectionKey: key,
-    kind: 'layout',
-    removed: [],
-    added: addedAll,
-    buildCost: totalBuildCost,
-    scrapRecovered: 0,
-    netCost: totalBuildCost,
-    tierAudit,
-    freeSpaceAllocation,
-  };
-  return { state: attempt, txn };
-}
-
-/**
  * One consolidator pass — the monthly-twelfth rotation's own monthly
  * cadence (AC-6/ruling 7, AC-12's one-transaction-per-section, AC-17's
  * atomic validate-then-mutate) OR, per FEAT-2326609761 inc2's GLIDE MODE
@@ -2524,41 +2310,6 @@ function applyConsolidatorPass(
       scrapRecovered,
       netCost: realNetCost,
     });
-  }
-
-  // ---- FEAT-2326609779 (consolidator inc3): layout hierarchy -------------
-  // Runs LAST in the pass (after reconnect/density have already decided
-  // which buildings this section keeps) so the tier layout only ever claims
-  // tiles that are STILL free once this pass's own building work is done.
-  // AC-12 (glide interaction): sectionKeys here is EXACTLY the calling day's
-  // scope (a glide day's 1-4 overlapping fixed sections, or the whole map on
-  // the monthly/month-12 pass) — this loop calls
-  // applyTierLayoutForSection ONCE per section, and that function itself
-  // always attempts ALL FIVE tiers, in order, to completion (success or
-  // recorded failure) before returning. There is no partial-tier resumable
-  // state, so a glide day can never leave "rail done, motorway pending" for
-  // a later day to pick up out of order — the next day's call for a
-  // DIFFERENT section starts its own fresh rail-first sequence, and if the
-  // SAME section is revisited later (a subsequent whole-map pass), free
-  // space already consumed by this pass's tiers is simply no longer free,
-  // so nothing can be interleaved out of order for that column either.
-  const orderedLayoutKeys = sectionKeys.slice().sort((a, b) => a - b);
-  for (const key of orderedLayoutKeys) {
-    if (overBudget()) {
-      skipped.push({ sectionKey: key, reason: 'action budget' });
-      continue;
-    }
-    if (cur.administrationState) {
-      skipped.push({ sectionKey: key, reason: 'administration' });
-      continue;
-    }
-    const layoutResult = applyTierLayoutForSection(cur, key, tick);
-    if (!layoutResult) continue; // AC-1: no free space worth laying anything on.
-    cur = layoutResult.state;
-    transactions.push(layoutResult.txn);
-  }
-  if (transactions.some((t) => t.kind === 'layout')) {
-    cur = { ...cur, roadConnectivity: computeRoadConnectivity(cur) };
   }
 
   if (transactions.length === 0 && skipped.length === 0) {
@@ -3658,6 +3409,21 @@ export const CONNECT_EXEMPT_KINDS = new Set<Spec['kind']>([
  * Pure + deterministic (GR#21): all tie-breaking flows from the router; no Date/random.
  * Called with `s` = state AFTER the player's building was inserted.
  */
+
+/**
+ * BUG-660: add one building's real footprint (footprintOf — respects a
+ * GROWN building, same SSOT autoConnect's own from-scratch board and
+ * occupiedSet()/buildOccupiedSet() use) into a Set IN PLACE. The shared,
+ * mutating half of the batch-board pattern this bug introduces — the
+ * counterpart to occupiedSetIncremental()/roadTileSetIncremental() (data.ts),
+ * which instead clone. MUTATES its `set` argument; callers own that choice.
+ */
+function addFootprintTiles(set: Set<string>, b: Building, sp: Spec): void {
+  const { w, h } = footprintOf(b, sp);
+  for (let dx = 0; dx < w; dx++)
+    for (let dy = 0; dy < h; dy++) set.add(`${b.x + dx},${b.y + dy}`);
+}
+
 export function autoConnect(
   s: SimState,
   placed: Building,
@@ -4864,6 +4630,51 @@ function shortfallReason(state: SimState, sp: Spec, specId: string): string {
  * report the TRUE reason (GR#1 aggressive error trapping: never blame
  * "insufficient funds" for a perf guard).
  */
+/**
+ * BUG-660 (Aaron, P1, "Fix-All 2000-unit batch still blocks ~66s median" —
+ * the residual left AFTER BUG-646's spot-search fix): placePlanItem()'s loop
+ * calls reduceCore({type:'place',...}) once per unit, and the 'place' case
+ * hands autoConnect() a per-CALL occupied/road board via
+ * occupiedSetIncremental()/roadTileSetIncremental() (data.ts). Those
+ * functions are a cache HIT on their BASE Set (occupiedSet(state) /
+ * roadTileSetOf(state)) only when the previous iteration's result changed
+ * buildings by EXACTLY one append — true when a placement is already
+ * road-adjacent, but the instant autoConnect lays a REAL connector (routes
+ * around occupied tiles to the nearest road — the "road-BFS" this bug is
+ * named for) it appends the connector's tiles too, so `state.buildings`
+ * grows by MORE than one element. The next iteration's `fits(occupiedSet(
+ * state), ...)` guard (case 'place', below) then sees a brand-new array
+ * reference with NO cached entry and pays a full O(buildings) rebuild — and
+ * even where the cache does hit, occupiedSetIncremental() itself does an
+ * UNCONDITIONAL `new Set(base)` full clone every call (data.ts), unlike its
+ * sibling roadTileSetIncremental()'s copy-on-write. Measured directly against
+ * Aaron's real 49,174-building save (test/scratch/profile-bug660.mjs, kept
+ * out of the shipped test tree): a fresh-clone autoConnect call costs
+ * ~10.5ms (of which ~2.7ms is the BFS/board-mutation work itself and the
+ * rest is Set-cloning + cache-miss rebuild overhead) — at a 2000-unit batch
+ * that waste alone accounts for double-digit seconds, compounding with every
+ * unit that is NOT already road-adjacent (the common case away from existing
+ * road frontage).
+ *
+ * THE FIX: placePlanItem() builds ONE mutable board ({occupied, roads} Sets)
+ * from `cur` ONCE, up front — exactly mirroring the spotCtx pattern two
+ * paragraphs below (BUG-646's own precedent) — and threads it through every
+ * reduceCore('place') call in this loop via the new optional `batchBoard`
+ * param. The 'place' case (below) then uses THAT shared board directly for
+ * both its own `fits()` guard and the board it hands autoConnect(), MUTATING
+ * it in place with whatever tiles actually got added (the unit itself, plus
+ * any connector/branch tiles autoConnect appends) instead of ever cloning it
+ * — collapsing the per-unit board cost from O(buildings) to O(footprint),
+ * the same class of fix BUG-646 already applied to findSpot(). This changes
+ * ONLY which board object gets read/mutated; the CONTENTS at every step are
+ * provably identical to what occupiedSet(state)/roadTileSetOf(state) would
+ * have produced from scratch (same tiles added in the same order), so the
+ * resulting placements/connector paths are byte-identical to the pre-fix
+ * behaviour — see attack-bug660-round.test.mjs's cross-check against the
+ * non-batch per-placement path over the same plan. Single-tile 'place',
+ * 'placeMany' (drag-paint) and 'stampRegion' never pass batchBoard, so their
+ * behaviour and cost are completely unchanged by this fix.
+ */
 function placePlanItem(
   cur: SimState,
   item: DemandFixPlanItem,
@@ -4898,13 +4709,19 @@ function placePlanItem(
   // (data.ts) for the full measurement and the one assumption (never a
   // residential spec) this depends on.
   const spotCtx = createSpotSearchContext(s2, item.specId);
+  // BUG-660: the shared, mutated-in-place connectivity board for THIS whole
+  // batch — see this function's own doc comment above. Seeded from `cur`
+  // (occupiedSet/roadTileSetOf are themselves memoised, so this is a cache
+  // hit whenever `cur` was already touched this tick, and at worst a single
+  // O(buildings) rebuild for the WHOLE batch rather than one per unit).
+  const batchBoard = { occupied: new Set(occupiedSet(s2)), roads: new Set(roadTileSetOf(s2)) };
   for (let i = 0; i < target; i++) {
     if (cost > 0 && s2.administrationState) break;
     if (cost > 0 && s2.funds < cost) break;
     const spot = spotCtx.findNext();
     if (!spot) break; // findSpot() widened its search to the whole map (BUG-593) and still found nothing
     const beforeLen = s2.buildings.length;
-    const next = reduceCore(s2, { type: 'place', spec: item.specId, x: spot.x, y: spot.y });
+    const next = reduceCore(s2, { type: 'place', spec: item.specId, x: spot.x, y: spot.y }, batchBoard);
     if (next === s2) break; // defensive: 'place' declined for a reason not checked above
     if (next.buildings.length > beforeLen + 1) anyRoadTopologyChange = true;
     spotCtx.occupy(next.buildings.slice(beforeLen)); // sync ctx with what 'place' ACTUALLY added
@@ -4919,7 +4736,17 @@ function placePlanItem(
   return { state: s2, placed, roadTopologyChange: anyRoadTopologyChange, cappedByUnitLimit };
 }
 
-function reduceCore(state: SimState, action: Action): SimState {
+function reduceCore(
+  state: SimState,
+  action: Action,
+  // BUG-660: an optional shared, mutated-in-place connectivity board a batch
+  // caller (placePlanItem, see its doc comment) threads through every 'place'
+  // dispatch in the SAME batch so the per-unit board cost collapses from
+  // O(buildings) to O(footprint). undefined for every other caller (single
+  // 'place' click, 'placeMany' drag-paint, 'stampRegion') — those are
+  // completely unaffected and keep the exact pre-fix per-call board rebuild.
+  batchBoard?: { occupied: Set<string>; roads: Set<string> }
+): SimState {
   // FEAT-1972079923 inc4 (AC-11): the FINAL DECLINE screen is a HARD STOP on
   // the whole game, not just the tick clock — once declineState is set, EVERY
   // gameplay-mutating action (place, sellAsset, enterAdministration, policy,
@@ -5001,7 +4828,13 @@ function reduceCore(state: SimState, action: Action): SimState {
         action.y + sp.h > MAP_H
       )
         return state;
-      if (!fits(occupiedSet(state), sp.w, sp.h, action.x, action.y)) return state;
+      // BUG-660: a batch caller's shared board (see placePlanItem's doc
+      // comment) is kept in perfect sync with occupiedSet(state) at every
+      // step of the batch, so reading it here instead of occupiedSet(state)
+      // is contents-identical — it just avoids the O(buildings) cache-miss
+      // rebuild that a batch's own connector-laying triggers on `state`.
+      const fitsOcc = batchBoard ? batchBoard.occupied : occupiedSet(state);
+      if (!fits(fitsOcc, sp.w, sp.h, action.x, action.y)) return state;
       // ROUND r3 FIX (2026-09-04, F1/F2): NO affordability gate here — see
       // the Action union's 'place' case doc comment above for the full
       // rationale. The reducer always places once it reaches this point.
@@ -5038,16 +4871,59 @@ function reduceCore(state: SimState, action: Action): SimState {
       // any append-only loop (resolveDemand's placePlanItem, drag-placeMany) since
       // `state` is the previous iteration's `placedState` — and add just this one
       // building's own footprint (O(w*h)) instead of re-scanning every building.
-      const connected = autoConnect(placedState, placedBuilding, sp, undefined, {
-        occupied: occupiedSetIncremental(state, placedState.buildings),
-        roads: roadTileSetIncremental(state, placedState.buildings),
-      });
+      // BUG-660: a batch caller's board is MUTATED IN PLACE with this unit's
+      // own footprint (never cloned — see placePlanItem's doc comment above)
+      // instead of going through occupiedSetIncremental()/roadTileSetIncremental(),
+      // whose unconditional `new Set(base)` clone (data.ts) is the O(buildings)
+      // cost this bug fixes. Contents handed to autoConnect are identical
+      // either way — only HOW the board is assembled differs.
+      let connBoard: { occupied: Set<string>; roads: Set<string> };
+      if (batchBoard) {
+        addFootprintTiles(batchBoard.occupied, placedBuilding, sp);
+        if (isRoadSpec(sp)) addFootprintTiles(batchBoard.roads, placedBuilding, sp);
+        connBoard = batchBoard;
+      } else {
+        connBoard = {
+          occupied: occupiedSetIncremental(state, placedState.buildings),
+          roads: roadTileSetIncremental(state, placedState.buildings),
+        };
+      }
+      const connected = autoConnect(placedState, placedBuilding, sp, undefined, connBoard);
+      // BUG-660: sync the batch board with any tiles autoConnect itself
+      // appended (a laid connector or an upgraded junction — see autoConnect's
+      // own doc comment: a tier upgrade never changes Set membership, only a
+      // NEW connector tile does, and those are always appended at the tail of
+      // `buildings`, exactly like sweepOrphanConnects' own board maintenance
+      // above). Skipped entirely (no-op loop) on the common already-connected
+      // path where `connected.buildings === placedState.buildings`.
+      if (batchBoard) {
+        for (let i = placedState.buildings.length; i < connected.buildings.length; i++) {
+          const tile = connected.buildings[i];
+          const tileSp = SPECS[tile.spec];
+          if (!tileSp) continue;
+          addFootprintTiles(batchBoard.occupied, tile, tileSp);
+          addFootprintTiles(batchBoard.roads, tile, tileSp); // connector tiles are always road/trunk specs
+        }
+      }
       // FEAT-1972079902 inc3: if this is a GATEWAY (Ashford International /
       // International Airport), auto-lay deterministic branch lines to the nearest
       // slow-rail line AND the nearest HS1 line (routing around buildings), or
       // surface a "no rail route" notice. Deterministic; branch tiles journal via
       // the gateway `place` action through replay. Non-gateways just clear railNotice.
       let updated = autoBranchRail(connected, placedBuilding, sp);
+      // BUG-660: same board sync for any branch-rail tiles (gateway specs
+      // only — demandFixPlan() never targets one today, so this loop is
+      // provably a no-op in every current batch caller, kept for correctness
+      // if that ever changes rather than assumed away).
+      if (batchBoard) {
+        for (let i = connected.buildings.length; i < updated.buildings.length; i++) {
+          const tile = updated.buildings[i];
+          const tileSp = SPECS[tile.spec];
+          if (!tileSp) continue;
+          addFootprintTiles(batchBoard.occupied, tile, tileSp);
+          if (isRoadSpec(tileSp)) addFootprintTiles(batchBoard.roads, tile, tileSp);
+        }
+      }
 
       // BUG b2d31bc7 FIX 2: the placed building itself is road/trunk kind, OR
       // autoConnect/autoBranchRail appended extra tiles (a connector or branch
