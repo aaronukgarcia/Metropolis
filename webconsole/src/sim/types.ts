@@ -207,6 +207,33 @@ export interface LedgerEntry {
 
 export type PolicyId = 'recycling' | 'transitSubsidy' | 'tourismDrive' | 'austerity';
 
+/**
+ * FEAT-2326609761 inc2 (Aaron's glide-mode ruling, 2026-09-04): the
+ * consolidator's traversal mode. 'glide' is the DEFAULT continuous
+ * one-tile-per-day scanline (consolidatorGlide.ts); 'monthly-twelfth' is the
+ * pre-existing inc1 rotation (consolidator.ts's monthlyScopeOf), kept
+ * selectable as the legacy mode. Both modes share the month-12 whole-tile
+ * big-picture pass unconditionally (Aaron's addendum: "the FULL-TILE pass...
+ * always still runs regardless of the player's chosen section size" — and,
+ * by the same reasoning, regardless of traversal mode).
+ */
+export type ConsolidatorMode = 'glide' | 'monthly-twelfth';
+
+/**
+ * FEAT-2326609761 inc2 (Aaron's slider ruling, 2026-09-03): the four
+ * non-dwelling economic-direction sliders, each a WHOLE PERCENTAGE POINT
+ * (0..100). Deliberately closed to exactly these four employment kinds —
+ * services are excluded by design (Aaron: they "consolidate on their own
+ * need-based logic regardless of the slider mix"). validateConsolidatorSliders
+ * (engine.ts) is the SSOT for "must sum to exactly 100".
+ */
+export interface ConsolidatorSliders {
+  office: number;
+  mining: number;
+  farming: number;
+  factory: number;
+}
+
 /** Level-up notification (FEAT-1972079884): what a crossing unlocked + the cash granted. */
 export interface LevelUpNotice {
   level: number;
@@ -311,6 +338,56 @@ export interface SimState {
    * jobs pinned to zero, and bumps it to current once applied.
    */
   economyEpoch?: number;
+  /**
+   * FEAT-2326609761 inc2 (Aaron's glide-mode ruling, 2026-09-04): which
+   * traversal mode the consolidator uses to pick its focus window. 'glide'
+   * (the DEFAULT — "glide is the default mode unless the player switches")
+   * is the continuous one-tile-per-day scanline (consolidatorGlide.ts);
+   * 'monthly-twelfth' is the pre-existing inc1 rotation (consolidator.ts's
+   * monthlyScopeOf) kept as a selectable legacy mode. Journalled sim state
+   * (ASM-1504) — it changes which part of the map the mutation lane's pass
+   * touches on a given day, so replay determinism depends on it exactly
+   * like consolidatorEnabled. Optional for backward tolerance: an old save
+   * predating this field is treated as CONSOLIDATOR_MODE_DEFAULT ('glide',
+   * engine.ts — lives there, not consolidator.ts, for the same import-cycle
+   * reason documented on CONSOLIDATOR_ENABLED_DEFAULT) by every read site.
+   */
+  consolidatorMode?: ConsolidatorMode;
+  /**
+   * FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03: "player can... set the
+   * size of the consolidator"): the player-adjustable section/window size in
+   * METRES (mirrors CONSOLIDATOR_SECTION_METRES's unit). Defaults to 800m
+   * (the inc1 ruling value) but the player may widen or narrow it within
+   * CONSOLIDATOR_SECTION_METRES_MIN/MAX (engine.ts, derived from the same
+   * real-savepoint measurement that set the 800m default — never a bare new
+   * literal). Feeds BOTH the glide window's width (consolidatorGlide.ts)
+   * and, for the mutation lane, the audit/opportunity section size. Journalled
+   * sim state (ASM-1504) — a size change mid-glide changes which window the
+   * NEXT day derives (consolidatorGlide.ts's cursor is pure, no resume-state
+   * needed). Optional for backward tolerance: an old save predating this
+   * field is treated as CONSOLIDATOR_SECTION_METRES_DEFAULT (engine.ts).
+   */
+  consolidatorSectionMetres?: number;
+  /**
+   * FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): the economic-direction
+   * sliders — "Office / Mining / Farming / Factory, constrained to sum to
+   * exactly 100 percent, steering which employment type non-dwelling
+   * consolidation converts TOWARD". Services (education/health/power/police/
+   * water/waste/etc) are NOT steered by this — they "consolidate on their
+   * own need-based logic regardless of the slider mix" (Aaron's words) — so
+   * this is deliberately scoped to the four non-dwelling employment kinds
+   * only, never a general-purpose weighting the mutation lane could misapply
+   * to services. Journalled sim state (ASM-1504): it changes what the
+   * consolidator's objective function targets, so replay determinism depends
+   * on it. Optional for backward tolerance: an old save predating this field
+   * is treated as CONSOLIDATOR_SLIDERS_DEFAULT (engine.ts, an even 25/25/25/
+   * 25 split — "a kept mixture" is Aaron's own neutral-default phrase).
+   * validateConsolidatorSliders (engine.ts) is the SSOT for "must sum
+   * to 100" — the reducer refuses any action that fails it (never silently
+   * clamped/normalised, so a bad dispatch is visibly a no-op, not a silent
+   * distortion of the player's intended mix).
+   */
+  consolidatorSliders?: ConsolidatorSliders;
   buildings: Building[];
   nextId: number;
   movingId: number | null;

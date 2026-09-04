@@ -15,7 +15,15 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { SPECS, computeRoadConnectivity, BULLDOZE_REFUND_FRACTION, CONSOLIDATOR_SCRAP_FRACTION } from '../src/sim/data.ts';
-import { initialState, reducer, TICKS_PER_MONTH, CONSOLIDATOR_LOG_CAP } from '../src/sim/engine.ts';
+import {
+  initialState,
+  reducer,
+  TICKS_PER_MONTH,
+  CONSOLIDATOR_LOG_CAP,
+  CONSOLIDATOR_UNLOCK_LEVEL,
+  xpForLevel,
+  levelOf,
+} from '../src/sim/engine.ts';
 import { isStateAffecting } from '../src/sim/journal.ts';
 import { emptyJournal, recordAction } from '../src/sim/journal.ts';
 import { replayFromGenesis, replayIsDeterministic, stableStringify } from '../src/sim/genesisReplay.ts';
@@ -35,6 +43,37 @@ function mk(over) {
     tick: 0,
     consolidatorEnabled: false,
     consolidatorLog: [],
+    // FEAT-2326609761 inc2 (Aaron's level-10 unlock ruling, landed after this
+    // lane branched): toggleConsolidator's reducer case now structurally
+    // refuses to turn ON below CONSOLIDATOR_UNLOCK_LEVEL — every scenario in
+    // this file exercises the MECHANICS of an already-unlocked consolidator,
+    // never the unlock gate itself (that has its own dedicated coverage,
+    // consolidator-glide-inc2.test.mjs), so the shared fixture defaults to an
+    // unlocked xp. A test overriding `xp` explicitly still wins (spread order).
+    // ALSO bump lastRewardedLevel to match — this is a DIRECT xp jump (not a
+    // real debugXp/place-driven level-up), so without this the fixture's
+    // FIRST tick would queue a catch-up `pendingRewards` cash injection for
+    // every level "crossed" between initialState()'s default and level 10
+    // (computeLevelRewards compares against lastRewardedLevel) — a real,
+    // ~131M phantom-cash bug this file's own "funds move by exactly the
+    // booked netCost" test caught before this fix was added.
+    xp: xpForLevel(CONSOLIDATOR_UNLOCK_LEVEL),
+    lastRewardedLevel: levelOf(xpForLevel(CONSOLIDATOR_UNLOCK_LEVEL)),
+    // FEAT-2326609761 inc2 (Aaron's glide-mode ruling, landed after this
+    // lane branched): 'glide' is now CONSOLIDATOR_MODE_DEFAULT, which runs a
+    // pass every game DAY, not just on the monthly boundary — a genuinely
+    // different cadence from what every scenario in this file was written
+    // and round-audited against ("never runs on a non-boundary tick",
+    // "a pass log entry appears only on tick % TICKS_PER_MONTH === 0", etc.
+    // are legacy-cadence guarantees, not universal ones). Pinning the shared
+    // fixture to the legacy mode keeps this WHOLE file testing exactly the
+    // mechanics it always tested (applyConsolidatorPass's atomic validation/
+    // economics/logging are IDENTICAL regardless of mode — only the
+    // scope/cadence of when it's called differs) — glide mode's OWN cadence/
+    // perf/determinism gets its own dedicated coverage
+    // (consolidator-glide-inc2.test.mjs). A test overriding `consolidatorMode`
+    // explicitly still wins (spread order).
+    consolidatorMode: 'monthly-twelfth',
     ...over,
   };
 }
@@ -378,6 +417,18 @@ describe('CONSOLIDATOR mutation lane — journal + genesis replay (AC-32/33)', (
   }
 
   const SCRIPT = [
+    // FEAT-2326609761 inc2 (Aaron's level-10 unlock ruling, landed after this
+    // lane branched): toggleConsolidator now structurally refuses to turn ON
+    // below CONSOLIDATOR_UNLOCK_LEVEL, and `driveAndRecord` always starts from
+    // BARE `initialState()` (mirrors replayFromGenesis's own genesis-only
+    // contract — it cannot take a customised starting fixture), so the
+    // unlock must be granted BY AN ACTION inside the journal itself, exactly
+    // like consolidator-toggle.test.mjs's own ASM-1504 replay test.
+    // Otherwise every 'toggleConsolidator' below is silently a no-op, which
+    // is exactly why the RED-PROOF test just below needs this: with the
+    // toggle a no-op, dropping it from the mutated script produces ZERO
+    // observable difference, defeating the whole point of that test.
+    { type: 'debugXp', amount: xpForLevel(CONSOLIDATOR_UNLOCK_LEVEL) - initialState().xp },
     { type: 'place', spec: 'res_hut', x: 5, y: 5 },
     { type: 'tick' },
     { type: 'toggleConsolidator' },

@@ -34,9 +34,11 @@ import { computePath, type Tile } from '../sim/roadTracker';
 import { viewportTileRect, visibleBuildingsOf } from '../render/viewportCull';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim } from '../sim/simContext';
-import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets, TICKS_PER_YEAR, CONSOLIDATOR_ENABLED_DEFAULT } from '../sim/engine';
-import { monthlyScopeOf, sectionOriginOf } from '../sim/consolidator';
+import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets, TICKS_PER_YEAR, CONSOLIDATOR_ENABLED_DEFAULT, CONSOLIDATOR_MODE_DEFAULT } from '../sim/engine';
+import { monthlyScopeOf, sectionOriginOf, sectionTilesOf } from '../sim/consolidator';
 import { currentConsolidatorFocus } from '../sim/consolidatorFocus';
+import { glideWindowForDay } from '../sim/consolidatorGlide';
+import { isConsolidatorBoxVisible } from '../sim/consolidatorDisplayFlag';
 import {
   BAILOUT_DURATION_TICKS,
   ADMINISTRATION_DURATION_TICKS,
@@ -179,6 +181,22 @@ export function MapView() {
   const dragSpecRef = useRef<string | null>(null);
   const selectionAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+
+  // Consolidator marching-ants overlay (see the CONSOLIDATOR ruling block
+  // further down this file, BOW item 2326609761 increment 2, for the full
+  // rationale): the dashed-border animation counter. RENDER-ONLY — never sim
+  // state, never read by any reducer/journal/replay path (GR#21's
+  // determinism boundary is "does this affect what the city becomes", and
+  // this affects only pixels). Advanced once per animation frame by the
+  // dedicated rAF effect below, independent of the state-driven draw
+  // effect's own redraw cadence (so the ants keep marching even while the
+  // sim is paused/idle).
+  const consolidatorAntsOffsetRef = useRef(0);
+  // Rebuilt every time the main (state-driven) draw effect runs, so it always
+  // closes over the CURRENT ctx/geom/state; invoked every animation frame by
+  // the rAF effect so the highlighted box redraws with a fresh dash offset
+  // without needing the whole map to redraw 60x/sec.
+  const drawConsolidatorOverlayRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -754,26 +772,92 @@ export function MapView() {
     // "month 12 = whole map" case. Hidden entirely (draws nothing) while the
     // consolidator is OFF — same "no cost when off" contract the tab itself
     // observes (consolidatorTab.tsx).
-    if ((state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT) && geom.s > 0) {
+    // FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03 addendum): the
+    // month-12 whole-tile big-picture pass "always still runs regardless of
+    // the player's chosen section size" or traversal mode — so the static
+    // scope grid (every section this month's rotation covers) is drawn
+    // unconditionally of consolidatorMode, exactly as inc1 landed it. Only
+    // the SINGLE highlighted box below differs by mode.
+    const consolidatorMode = state.consolidatorMode ?? CONSOLIDATOR_MODE_DEFAULT;
+    const consolidatorSectionTilesNow = sectionTilesOf(state);
+    const consolidatorBoxOn = (state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT) && geom.s > 0 && isConsolidatorBoxVisible();
+    if (consolidatorBoxOn) {
       const scope = monthlyScopeOf(state.tick);
       const focusKey = currentConsolidatorFocus();
       ctx.save();
       ctx.strokeStyle = 'rgba(255, 40, 40, 0.55)';
       ctx.lineWidth = Math.max(1, geom.s * 0.08);
       for (const key of scope.sectionKeys) {
-        if (key === focusKey) continue; // drawn distinctly below, on top
+        // In monthly-twelfth mode the ranked focus section is drawn
+        // separately (solid+ants, below/via the rAF overlay) so it isn't
+        // double-outlined here; in glide mode there is no "focusKey" concept
+        // (the mailbox is only ever populated by ConsolidatorTab's
+        // monthly-twelfth-oriented ranking today) so this condition is
+        // simply always false and every scoped section draws the same dim
+        // outline.
+        if (consolidatorMode === 'monthly-twelfth' && key === focusKey) continue;
         const { x0, y0, w, h } = sectionOriginOf(key);
-        ctx.strokeRect(geom.ox + x0 * geom.s, geom.oy + y0 * geom.s, w * geom.s, h * geom.s);
-      }
-      if (focusKey != null && scope.sectionKeys.includes(focusKey)) {
-        const { x0, y0, w, h } = sectionOriginOf(focusKey);
-        ctx.strokeStyle = '#ff2828';
-        ctx.lineWidth = Math.max(2, geom.s * 0.16);
         ctx.strokeRect(geom.ox + x0 * geom.s, geom.oy + y0 * geom.s, w * geom.s, h * geom.s);
       }
       ctx.restore();
     }
-  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, state.consolidatorEnabled, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, roadTracker, geom, size]);
+
+    // The ANIMATED (marching-ants) highlighted box — GLIDE MODE (the
+    // default, Aaron's 2026-09-04 ruling) shows the pure tick-derived glide
+    // cursor (consolidatorGlide.ts, zero building/audit cost); monthly-
+    // twelfth mode keeps inc1's ranked-top-opportunity mailbox highlight.
+    // Captured as a closure over THIS render's ctx/geom/state so the
+    // dedicated rAF effect (mount-once, below) can redraw just this box
+    // every animation frame — with a fresh dash offset — without re-running
+    // the whole (expensive, buildings-dependent) map draw 60x/sec.
+    drawConsolidatorOverlayRef.current = () => {
+      const cv = canvasRef.current;
+      const c2 = cv?.getContext('2d');
+      if (!cv || !c2 || !consolidatorBoxOn) return;
+      let box: { x0: number; y0: number; w: number; h: number } | null = null;
+      if (consolidatorMode === 'glide') {
+        box = glideWindowForDay(state.tick, consolidatorSectionTilesNow);
+      } else {
+        const scope = monthlyScopeOf(state.tick);
+        const focusKey = currentConsolidatorFocus();
+        if (focusKey != null && scope.sectionKeys.includes(focusKey)) box = sectionOriginOf(focusKey);
+      }
+      if (!box) return;
+      c2.save();
+      c2.strokeStyle = '#ff2828';
+      c2.lineWidth = Math.max(2, geom.s * 0.16);
+      // Marching ants: a dashed stroke whose offset advances every frame
+      // (consolidatorAntsOffsetRef, render-only — see its own doc comment).
+      const dash = Math.max(4, geom.s * 0.5);
+      const gap = Math.max(3, geom.s * 0.35);
+      c2.setLineDash([dash, gap]);
+      c2.lineDashOffset = -consolidatorAntsOffsetRef.current;
+      c2.strokeRect(geom.ox + box.x0 * geom.s, geom.oy + box.y0 * geom.s, box.w * geom.s, box.h * geom.s);
+      c2.setLineDash([]);
+      c2.restore();
+    };
+    drawConsolidatorOverlayRef.current();
+  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, state.consolidatorEnabled, state.consolidatorMode, state.consolidatorSectionMetres, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, roadTracker, geom, size]);
+
+  // FEAT-2326609761 inc2 (Aaron's marching-ants ruling): a dedicated,
+  // mount-once animation loop. Deliberately SEPARATE from the state-driven
+  // draw effect above (which only re-runs when sim/UI state actually
+  // changes) — the ants must keep moving every frame regardless, and
+  // redrawing the ENTIRE map at 60fps purely to animate one dashed rectangle
+  // would reintroduce the buildings-scan cost this overlay was designed to
+  // avoid (see the inc1 comment on the static-scope block above). Reads
+  // drawConsolidatorOverlayRef.current (rebuilt by the effect above on every
+  // real redraw) so it always draws against fresh geometry/state.
+  useEffect(() => {
+    let raf = 0;
+    const step = () => {
+      consolidatorAntsOffsetRef.current = (consolidatorAntsOffsetRef.current + 1) % 10000;
+      drawConsolidatorOverlayRef.current?.();
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   function tileFrom(clientX: number, clientY: number): { x: number; y: number } | null {
     const cv = canvasRef.current;

@@ -27,6 +27,8 @@ import type {
   Building,
   BuildingMonitor,
   Clipboard,
+  ConsolidatorMode,
+  ConsolidatorSliders,
   DeclineState,
   DemographicFlow,
   FlowItem,
@@ -87,6 +89,9 @@ import {
   wellbeingOf,
   xpForLevel,
   CONSOLIDATOR_ENABLED_DEFAULT,
+  CONSOLIDATOR_MODE_DEFAULT,
+  CONSOLIDATOR_SECTION_METRES_DEFAULT,
+  CONSOLIDATOR_SLIDERS_DEFAULT,
 } from './engine.ts';
 import { SNAPSHOT_REFRESH_MS } from './throttle.ts';
 import type { MapUiState } from './uistate.ts';
@@ -290,6 +295,10 @@ export interface DebugJson {
     gridImportEnabled: boolean;
     /** FEAT-2326609761 inc1 (AC-1, ASM-1504) — consolidator enable toggle. */
     consolidatorEnabled: boolean;
+    /** FEAT-2326609761 inc2 (Aaron's glide-mode/slider rulings, 2026-09-03/04). */
+    consolidatorMode: ConsolidatorMode;
+    consolidatorSectionMetres: number;
+    consolidatorSliders: ConsolidatorSliders;
     /** BUG-504 Option A — how many FRESH first bailouts used so far (capped). */
     firstBailoutCount: number;
     /** BUG-506 (AC-506-1/2) — consecutive-tick sustained-recovery counter. */
@@ -599,6 +608,10 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   gridImportEnabled: 'sim.gridImportEnabled',
   // FEAT-2326609761 inc1 (AC-1, ASM-1504).
   consolidatorEnabled: 'sim.consolidatorEnabled',
+  // FEAT-2326609761 inc2 (Aaron's glide-mode/slider rulings, 2026-09-03/04).
+  consolidatorMode: 'sim.consolidatorMode',
+  consolidatorSectionMetres: 'sim.consolidatorSectionMetres',
+  consolidatorSliders: 'sim.consolidatorSliders',
   // BUG-504 Option A / BUG-506 / FEAT-2326609723 (FEAT-endgame-ladder).
   firstBailoutCount: 'sim.firstBailoutCount',
   recoveryStreak: 'sim.recoveryStreak',
@@ -931,6 +944,12 @@ export function buildDebugJson(
       // FEAT-2326609761 inc1 (AC-1, ASM-1504): backward tolerance for a
       // legacy state predating this field, mirrors gridImportEnabled above.
       consolidatorEnabled: s.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT,
+      // FEAT-2326609761 inc2 (Aaron's glide-mode/slider rulings, 2026-09-03/04):
+      // backward tolerance for a legacy state predating these fields, mirrors
+      // consolidatorEnabled immediately above.
+      consolidatorMode: s.consolidatorMode ?? CONSOLIDATOR_MODE_DEFAULT,
+      consolidatorSectionMetres: s.consolidatorSectionMetres ?? CONSOLIDATOR_SECTION_METRES_DEFAULT,
+      consolidatorSliders: s.consolidatorSliders ?? CONSOLIDATOR_SLIDERS_DEFAULT,
       // BUG-504 Option A / BUG-506 / FEAT-2326609723: backward tolerance for a
       // legacy state predating these fields, mirrors the fields above.
       firstBailoutCount: s.firstBailoutCount ?? 0,

@@ -37,7 +37,15 @@ import {
   isRoadConnected,
   CONSOLIDATOR_SCRAP_FRACTION,
 } from '../src/sim/data.ts';
-import { initialState, reducer, TICKS_PER_MONTH, CONSOLIDATOR_LOG_CAP } from '../src/sim/engine.ts';
+import {
+  initialState,
+  reducer,
+  TICKS_PER_MONTH,
+  CONSOLIDATOR_LOG_CAP,
+  CONSOLIDATOR_UNLOCK_LEVEL,
+  xpForLevel,
+  levelOf,
+} from '../src/sim/engine.ts';
 import { decode } from '../src/sim/saveCodec.ts';
 import { monthlyScopeOf } from '../src/sim/consolidator.ts';
 import { INSOLVENCY_WARNING_THRESHOLD } from '../src/sim/fiscal.ts';
@@ -59,6 +67,23 @@ function mk(over) {
     tick: 0,
     consolidatorEnabled: false,
     consolidatorLog: [],
+    // FEAT-2326609761 inc2 (landed after this round-attack file branched):
+    // toggleConsolidator now structurally refuses to turn ON below
+    // CONSOLIDATOR_UNLOCK_LEVEL, and 'glide' (a per-DAY cadence) is now
+    // CONSOLIDATOR_MODE_DEFAULT — every scenario here was written and round-
+    // audited against the ORIGINAL monthly-only cadence with an
+    // already-unlocked consolidator, so the shared fixture pins BOTH
+    // explicitly (a test overriding either still wins, spread order). Glide
+    // mode's own cadence/perf/determinism has its own dedicated coverage
+    // (consolidator-glide-inc2.test.mjs).
+    // ALSO bump lastRewardedLevel to match this DIRECT xp jump, so it never
+    // queues a catch-up `pendingRewards` cash injection on the fixture's
+    // first tick (computeLevelRewards compares current level against
+    // lastRewardedLevel) — a real, ~131M phantom-cash bug the "funds move by
+    // exactly the booked netCost" test in this same file caught.
+    xp: xpForLevel(CONSOLIDATOR_UNLOCK_LEVEL),
+    lastRewardedLevel: levelOf(xpForLevel(CONSOLIDATOR_UNLOCK_LEVEL)),
+    consolidatorMode: 'monthly-twelfth',
     ...over,
   };
 }
@@ -433,15 +458,26 @@ describe('ATTACK 4 — gates that hold', () => {
     assert.ok(pass.skipped.some((k) => k.reason === 'action budget'), 'the 5th is reported, not silently dropped');
   });
 
-  test('the pass log is a ring of 20 and the 21st pass evicts honestly (AC-25)', () => {
-    // Drive 22 boundaries with a state that always has SOMETHING to report and
-    // never mutates the map: the successor spec is NOT unlocked, so every pass
-    // logs a `skipped: 'not unlocked'` row. (Funds stay huge, so the city
-    // cannot slide into decline and stop ticking part-way through the run —
-    // which is exactly what a funds-starved variant of this fixture did.)
-    let s = { ...fireFixture({ funds: 1_000_000_000 }), unlockedAll: false, level: 1 };
+  test(`the pass log is a ring of CONSOLIDATOR_LOG_CAP (${CONSOLIDATOR_LOG_CAP}) and the (N+1)th pass evicts honestly (AC-25)`, () => {
+    // Drive CAP+2 boundaries (GR#15: derived from the real export, never a
+    // hardcoded count — FEAT-2326609761 inc2 widened CONSOLIDATOR_LOG_CAP
+    // 20 -> 32 for glide mode's higher daily pass rate, so this must scale
+    // with it rather than assume any particular value) with a state that
+    // always has SOMETHING to report and never mutates the map: the
+    // successor spec is NOT unlocked, so every pass logs a `skipped: 'not
+    // unlocked'` row. (Funds stay huge, so the city cannot slide into
+    // decline and stop ticking part-way through the run — which is exactly
+    // what a funds-starved variant of this fixture did.)
+    const RUNS = CONSOLIDATOR_LOG_CAP + 2;
+    // xp/lastRewardedLevel explicitly LOW here (overriding the shared
+    // fixture's level-10-unlocked default) — this scenario's whole point is
+    // a rung that stays PERMANENTLY unlock-gated (`unlockedAll: false` plus
+    // a genuinely low level, not just the field named `level` which nothing
+    // reads) so every one of the RUNS passes logs a fresh 'skipped: not
+    // unlocked' row instead of actually consolidating after the first one.
+    let s = { ...fireFixture({ funds: 1_000_000_000, xp: 0, lastRewardedLevel: levelOf(0) }), unlockedAll: false, level: 1 };
     const seen = [];
-    for (let m = 0; m < 22; m++) {
+    for (let m = 0; m < RUNS; m++) {
       // section 1 is in scope at tick 30 and at the whole-map month; simply
       // re-arm the same boundary each time by rewinding the tick.
       s = { ...s, tick: TICKS_PER_MONTH - 1 };
@@ -453,7 +489,7 @@ describe('ATTACK 4 — gates that hold', () => {
     assert.ok(log.length <= CONSOLIDATOR_LOG_CAP, `ring capped at ${CONSOLIDATOR_LOG_CAP}, saw ${log.length}`);
     assert.equal(log.length, CONSOLIDATOR_LOG_CAP, 'the ring is full');
     assert.equal(log[0].id, seen[seen.length - 1], 'newest-first');
-    assert.equal(log[0].id, 22, 'ids are monotonic across the whole run, never reused');
+    assert.equal(log[0].id, RUNS, 'ids are monotonic across the whole run, never reused');
     assert.ok(log[log.length - 1].id > seen[0], 'the two oldest entries were evicted, not overwritten in place');
     assert.ok(log.every((p) => p.skipped.length > 0 && p.transactions.length === 0), 'the unlock gate held on every pass (AC-8 rule 6)');
   });

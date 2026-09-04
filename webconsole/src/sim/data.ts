@@ -2925,6 +2925,32 @@ export function memoOnState<T>(compute: (s: SimState) => T): (s: SimState) => T 
 }
 
 /**
+ * FEAT-2326609761 inc2 (glide-mode perf): a shared id->Building lookup,
+ * memoised on the `buildings` ARRAY's own identity (not the whole SimState —
+ * mirrors viewportCull.ts's spatialIndexOf idiom, and unlike memoOnState is
+ * SAFE to key this way because a Building object's id/spec/x/y/capacityTier
+ * never mutate in place — this codebase's whole update discipline is
+ * immutable replace, never in-place mutation, so "same buildings array
+ * reference" really does mean "same set of Building objects, unchanged").
+ * Several call sites across engine.ts/consolidator.ts used to rebuild an
+ * `id -> Building` Map via a fresh O(buildings) fold on EVERY call — cheap
+ * once a month (the pre-inc2 monthly consolidator cadence) but a real cost
+ * if a hot path calls it once per GAME DAY (glide mode) instead. Reusing one
+ * cached Map when `buildings` hasn't changed since the last call (the common
+ * case on a day where the consolidator's glide pass finds nothing to do)
+ * turns that into an O(1) WeakMap hit.
+ */
+export function buildingByIdOf(buildings: SimState['buildings']): Map<number, SimState['buildings'][number]> {
+  const cached = buildingByIdCache.get(buildings);
+  if (cached) return cached;
+  const map = new Map<number, SimState['buildings'][number]>();
+  for (const b of buildings) map.set(b.id, b);
+  buildingByIdCache.set(buildings, map);
+  return map;
+}
+const buildingByIdCache = new WeakMap<SimState['buildings'], Map<number, SimState['buildings'][number]>>();
+
+/**
  * Service-capacity aggregate for the served-population/children services —
  * SINGLE pass over s.buildings computing every sum serviceCoverageOf() and
  * utilisationOf()'s health/police/fire cases used to each gather via their

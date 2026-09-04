@@ -14,8 +14,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emptyJournal, recordAction, isStateAffecting } from '../src/sim/journal.ts';
-import { initialState, reducer, CONSOLIDATOR_ENABLED_DEFAULT } from '../src/sim/engine.ts';
+import { initialState, reducer, CONSOLIDATOR_ENABLED_DEFAULT, CONSOLIDATOR_UNLOCK_LEVEL, xpForLevel } from '../src/sim/engine.ts';
 import { replayIsDeterministic, replayFromGenesis, stableStringify } from '../src/sim/genesisReplay.ts';
+
+// FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): the toggle now also
+// requires city level >= CONSOLIDATOR_UNLOCK_LEVEL to turn ON (see
+// consolidator-level-gate.test.mjs for the dedicated below-level-10 proof).
+// `initialState()`'s own default xp is far below that (an early city),
+// which is exactly right for a NEW city — but every test below this comment
+// that exercises turning the toggle ON needs an unlocked-level fixture, so
+// this helper bumps xp only, leaving every other field at its real default.
+function unlockedFixture() {
+  return { ...initialState(), xp: xpForLevel(CONSOLIDATOR_UNLOCK_LEVEL) };
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -29,8 +40,8 @@ test('AC-1: new cities default to consolidatorEnabled === false (CONSOLIDATOR_EN
   assert.equal(s.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT, false);
 });
 
-test('toggleConsolidator flips the flag and nothing else', () => {
-  const s0 = initialState();
+test('toggleConsolidator flips the flag and nothing else (level-unlocked city)', () => {
+  const s0 = unlockedFixture();
   const s1 = reducer(s0, { type: 'toggleConsolidator' });
   assert.equal(s1.consolidatorEnabled, true);
   const s2 = reducer(s1, { type: 'toggleConsolidator' });
@@ -49,9 +60,18 @@ test('AC-16 default (GR#16): a legacy state object with NO consolidatorEnabled f
 
 test('ASM-1504: a journal containing a toggle replays to a state with the SAME consolidatorEnabled — byte-identical, twice', () => {
   let journal = emptyJournal();
+  // replayFromGenesis (genesisReplay.ts) always reconstructs from
+  // initialState() — it has no way to start from a customised fixture — so
+  // the LEVEL-10 unlock (FEAT-2326609761 inc2) has to be granted BY AN
+  // ACTION INSIDE THE JOURNAL ITSELF (debugXp) for the live run and the
+  // replayed run to see the same xp/level at every step. Starting `state`
+  // from a pre-unlocked fixture here (as the other tests in this file do)
+  // would make the live run diverge from genesis replay for a reason that
+  // has nothing to do with what this test is actually proving.
   let state = initialState();
   const script = [
     { type: 'tick' },
+    { type: 'debugXp', amount: xpForLevel(CONSOLIDATOR_UNLOCK_LEVEL) - state.xp },
     { type: 'toggleConsolidator' },
     { type: 'tick' },
     { type: 'tick' },
@@ -84,7 +104,7 @@ test('ASM-1504: grep proves no consolidator code path reads localStorage', () =>
 });
 
 test('the toggle round-trips through a savepoint-shaped snapshot object (JSON serialize/deserialize)', () => {
-  const s = reducer(initialState(), { type: 'toggleConsolidator' });
+  const s = reducer(unlockedFixture(), { type: 'toggleConsolidator' });
   assert.equal(s.consolidatorEnabled, true);
   const roundTripped = JSON.parse(JSON.stringify(s));
   assert.equal(roundTripped.consolidatorEnabled, true, 'consolidatorEnabled must survive a plain JSON round-trip, same as every other SimState field');

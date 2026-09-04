@@ -24,17 +24,18 @@
 // Golden Rule #15 (validators derive from data): SECTION_TILES is DERIVED
 // from CONSOLIDATOR_SECTION_METRES / TILE_METRES, never a bare literal `4`.
 
-import type { SimState, ZoneKind } from './types.ts';
+import type { SimState, ZoneKind, ConsolidatorSliders } from './types.ts';
 import {
   SPECS,
   canEnterSim,
   capacityAtTier,
-  memoOnState,
   placementCost,
   computeFailedGates,
   isOnline,
   connectedRoadTileSet,
   CONSOLIDATOR_SCRAP_FRACTION,
+  constructionTicks,
+  buildingByIdOf,
 } from './data.ts';
 import type { Spec, Tag } from './data.ts';
 
@@ -173,6 +174,28 @@ export const SECTION_TILES = Math.round(CONSOLIDATOR_SECTION_METRES / TILE_METRE
 export const MAP_W = 440;
 export const MAP_H = 260;
 
+/**
+ * FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): the player-adjustable
+ * reader for SimState.consolidatorSectionMetres. Falls back to the 800m
+ * CONSOLIDATOR_SECTION_METRES default for backward tolerance (an old save,
+ * or a state built before this increment) — mirrors every other optional
+ * consolidator field's fallback convention in this file/types.ts. The
+ * reducer (engine.ts's setConsolidatorSectionMetres case) is the only writer
+ * and already clamps via clampConsolidatorSectionMetres, so a value read
+ * here is expected in-range; this reader does not re-clamp defensively
+ * because a corrupt/out-of-range value should surface as a visibly wrong
+ * grid (caught by the exhaustive-coverage tests) rather than be silently
+ * papered over twice.
+ */
+export function sectionMetresOf(s: SimState): number {
+  return s.consolidatorSectionMetres ?? CONSOLIDATOR_SECTION_METRES;
+}
+
+/** Section size in TILES for the CURRENT state's player-adjustable size — the ONLY thing consolidatorGlide.ts's window width depends on (Aaron's ruling: the glide window IS "one section wide"). Derived, never a bare literal (GR#15), and never below 1 tile regardless of a pathological metres value. */
+export function sectionTilesOf(s: SimState): number {
+  return Math.max(1, Math.round(sectionMetresOf(s) / TILE_METRES));
+}
+
 /** Section grid dimensions, derived from the map size and SECTION_TILES (never hand-computed). Edge sections are partial (clipped to the map boundary). */
 export const SECTIONS_X = Math.ceil(MAP_W / SECTION_TILES);
 export const SECTIONS_Y = Math.ceil(MAP_H / SECTION_TILES);
@@ -295,6 +318,92 @@ export function familyKeyOf(sp: Spec): string {
   return `${sp.kind}|${capacityFieldOf(sp) ?? ''}|${sp.tag ?? ''}|${sp.stage ?? ''}`;
 }
 
+// ---------------------------------------------------------------------------
+// §1b Slider-mix objective (Aaron's ruling, 2026-09-03) — FEAT-2326609761 inc2.
+//
+// "the sliders are a TARGET MIX for the city's non-dwelling employment, so
+// the consolidator's objective becomes closing the gap between the current
+// mix and the target." Deliberately scoped to Office/Mining/Farming/Factory
+// only — services are excluded structurally by nonDwellingSliderCategoryOf
+// returning null for them, matching Aaron's "services consolidate on need
+// regardless" ruling.
+//
+// WIRING NOTE for whichever lane consumes this (the mutation lane, landing
+// separately per the file header's scope discipline): sliderMixWeightOf is
+// the pure ranking primitive findOpportunities/topOpportunities should fold
+// into their existing cost/gain ordering once the mutation half exists —
+// NOT wired in here to avoid destabilising inc1's already-landed, already-
+// tested ranking behaviour from a lane that isn't consuming it yet.
+// ---------------------------------------------------------------------------
+
+/** Which slider category (if any) a spec's non-dwelling employment falls under. Farms and factories share ZoneKind 'industrial' in the catalogue (data.ts) and are distinguished by spec id prefix ('farm_' vs everything else industrial); office/mine map 1:1 to their own ZoneKinds. Returns null for every other kind (dwellings, services, roads, etc.) — the services-untouched ruling's structural gate. */
+export function nonDwellingSliderCategoryOf(sp: Spec): keyof ConsolidatorSliders | null {
+  if (sp.kind === 'office') return 'office';
+  if (sp.kind === 'mine') return 'mining';
+  if (sp.kind === 'industrial') return sp.id.startsWith('farm_') ? 'farming' : 'factory';
+  return null;
+}
+
+export interface SliderMixSnapshot {
+  office: number;
+  mining: number;
+  farming: number;
+  factory: number;
+  /** Sum of the four buckets — 0 if the city has no sliderable non-dwelling stock yet. */
+  total: number;
+}
+
+/** The city's CURRENT non-dwelling employment mix, bucketed by slider category and weighted by job/capacity (buildingCapacityOf) rather than a raw building count, so one 2,000-job Industrial Estate counts for more than one empty-shell hut. Memoised (AC-4 idiom): one O(buildings) fold. */
+// FEAT-2326609761 inc2 (glide-mode perf): keyed on `s.buildings`' ARRAY
+// identity, not the whole state (memoOnState would miss every call — see
+// sectionIndexOf's own doc comment for why that matters once a caller runs
+// once per game DAY instead of once per month). SAFE here — unlike
+// sectionIndexOf there is no s.tick/isOnline dependency at all: every input
+// this fold reads (spec, capacityTier) is immutable per Building object, so
+// "same buildings array" really does mean "same answer", no expiry needed.
+const nonDwellingMixCache = new WeakMap<SimState['buildings'], SliderMixSnapshot>();
+export function currentNonDwellingMixOf(s: SimState): SliderMixSnapshot {
+  const cached = nonDwellingMixCache.get(s.buildings);
+  if (cached) return cached;
+  const snap: SliderMixSnapshot = { office: 0, mining: 0, farming: 0, factory: 0, total: 0 };
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp) continue; // GR#16: unknown spec id skipped.
+    const cat = nonDwellingSliderCategoryOf(sp);
+    if (!cat) continue;
+    const cap = buildingCapacityOf(sp, b.capacityTier ?? 0) || 1; // untiered/no-field specs still count as 1 unit, never 0
+    snap[cat] += cap;
+    snap.total += cap;
+  }
+  nonDwellingMixCache.set(s.buildings, snap);
+  return snap;
+}
+
+/**
+ * Ranking weight for consolidating something TOWARD `toSpec` (Aaron's
+ * objective: "closing the gap between the current mix and the target").
+ * Returns 0 for a spec the sliders don't steer (services, dwellings,
+ * anything nonDwellingSliderCategoryOf can't classify) — callers can treat
+ * 0 as "slider-neutral, rank by the existing density/cost logic alone".
+ * Otherwise returns max(0, targetPct - currentPct): a positive, larger
+ * number the further UNDER-represented toSpec's category is versus the
+ * player's chosen target, and exactly 0 (never negative) once the category
+ * has caught up or overshot — an overshoot must never become a NEGATIVE
+ * weight that would make the opportunity finder actively avoid a category,
+ * only stop preferring it. With no sliderable stock built yet (`total`
+ * ===0), the current mix is read as an even 25% each (CONSOLIDATOR_SLIDERS_DEFAULT's
+ * own neutral split) rather than 0%, so a fresh city doesn't see every
+ * category as maximally under-represented simultaneously.
+ */
+export function sliderMixWeightOf(s: SimState, toSpec: Spec, sliders: ConsolidatorSliders): number {
+  const cat = nonDwellingSliderCategoryOf(toSpec);
+  if (cat == null) return 0;
+  const current = currentNonDwellingMixOf(s);
+  const currentPct = current.total > 0 ? (current[cat] / current.total) * 100 : 25;
+  const targetPct = sliders[cat];
+  return Math.max(0, targetPct - currentPct);
+}
+
 /** PLACEHOLDER-balance (Aaron's R2/AC-8 rule 3): a successor must replace a GROUP, never a pair. */
 export const CONSOLIDATOR_MIN_GROUP = 4;
 
@@ -376,7 +485,19 @@ export interface LadderEntry {
  * deterministically (from id asc, then to id asc) so the output is stable
  * regardless of object key iteration order in SPECS.
  */
+// FEAT-2326609761 inc2 (glide-mode perf): SPECS is a static catalogue (fixed
+// at module load, never mutated at runtime — GR#3 SSOT), so the ladder has
+// no state dependency at all and is safe to compute exactly ONCE and cache
+// forever, unlike every other cache in this file (no invalidation key
+// needed because there is nothing to invalidate against). Was previously
+// recomputed on every consolidationLadder() call (O(specs^2), ~207 specs =
+// ~42,800 isConsolidationSuccessor/groupSizeOf calls) — negligible once a
+// MONTH, real waste once a game DAY (glide mode calls findOpportunities,
+// hence this, every day).
+let _ladderCache: LadderEntry[] | null = null;
+
 export function consolidationLadder(): LadderEntry[] {
+  if (_ladderCache) return _ladderCache;
   const specs = Object.values(SPECS);
   const entries: LadderEntry[] = [];
   for (const a of specs) {
@@ -389,6 +510,7 @@ export function consolidationLadder(): LadderEntry[] {
     }
   }
   entries.sort((x, y) => (x.from < y.from ? -1 : x.from > y.from ? 1 : x.to < y.to ? -1 : x.to > y.to ? 1 : 0));
+  _ladderCache = entries;
   return entries;
 }
 
@@ -511,9 +633,46 @@ interface RawSectionAggregate {
  *
  * Sections with zero buildings are absent from the returned map — the index
  * is O(occupied sections), not O(TOTAL_SECTIONS).
+ *
+ * FEAT-2326609761 inc2 (glide-mode perf): plain `memoOnState` (keyed on the
+ * whole SimState object) was CORRECT but USELESS for a caller that runs once
+ * per game DAY (glide mode) rather than once per MONTH (the legacy cadence)
+ * — `s` is a brand-new object every single tick (funds/tick/etc. always
+ * change), so a state-identity cache would MISS on every call regardless of
+ * whether `s.buildings` itself changed, paying the full O(buildings) fold
+ * every day. This is replaced below by a cache keyed on `s.buildings`'
+ * ARRAY identity (mirrors viewportCull.ts's spatialIndexOf/data.ts's new
+ * buildingByIdOf) — safe ONLY because the audit is re-validated against
+ * `s.tick` too (see `computeSectionIndexRaw`'s `nextFlipTick`): a building's
+ * ONLINE/stranded classification depends on `s.tick` even when `buildings`
+ * itself hasn't changed (the G1 construction-time gate in data.ts's
+ * `computeIsOnline` flips a building from offline to online purely because
+ * time passed), so a bare buildings-identity cache would silently go STALE
+ * for any section holding a still-under-construction building. The cache
+ * entry instead expires itself the moment `s.tick` reaches the EARLIEST tick
+ * any currently-mid-construction building's gate could flip — on a mature
+ * city with nothing currently under construction that is `Infinity` (never
+ * expires until buildings itself changes), which is exactly the steady
+ * state a real dogfood city spends almost all its time in.
  */
-export const sectionIndexOf: (s: SimState) => Map<number, SectionAudit> = memoOnState((s: SimState) => {
+interface SectionIndexCacheEntry {
+  result: Map<number, SectionAudit>;
+  /** Earliest tick at which this cached result could go stale purely from time passing (a construction gate flipping) — Infinity if nothing in `buildings` was mid-construction when this was computed. */
+  nextFlipTick: number;
+}
+const sectionIndexCache = new WeakMap<SimState['buildings'], SectionIndexCacheEntry>();
+
+export function sectionIndexOf(s: SimState): Map<number, SectionAudit> {
+  const cached = sectionIndexCache.get(s.buildings);
+  if (cached && s.tick < cached.nextFlipTick) return cached.result;
+  const entry = computeSectionIndexRaw(s);
+  sectionIndexCache.set(s.buildings, entry);
+  return entry.result;
+}
+
+function computeSectionIndexRaw(s: SimState): SectionIndexCacheEntry {
   const raw = new Map<number, RawSectionAggregate>();
+  let nextFlipTick = Infinity;
   const connectedRoads = connectedRoadTileSet(s); // hoisted once (AC-37) — memoOnState-backed already.
 
   // Pass 1 — single O(buildings) fold, order-independent (a Map keyed by
@@ -541,6 +700,19 @@ export const sectionIndexOf: (s: SimState) => Map<number, SectionAudit> = memoOn
         stranded: emptyStrandedBreakdown(),
       };
       raw.set(key, agg);
+    }
+    // FEAT-2326609761 inc2 cache-validity tracking: if this building is
+    // still mid-construction as of `s.tick`, its ONLINE classification (and
+    // hence this section's stranded/hasResidents-adjacent facts) can change
+    // the moment `s.tick` reaches its gate's flip tick — track the EARLIEST
+    // such tick across every building so the cache above knows exactly when
+    // it must be invalidated even with `buildings` itself unchanged. A
+    // building whose gate has ALREADY resolved (flipAt <= s.tick) never
+    // flips again (G1 is one-way, under-construction -> built), so it is
+    // correctly excluded here.
+    if (b.builtTick != null) {
+      const flipAt = b.builtTick + constructionTicks(sp);
+      if (s.tick < flipAt && flipAt < nextFlipTick) nextFlipTick = flipAt;
     }
     agg.buildingIds.push(b.id);
     agg.countByKind[sp.kind] = (agg.countByKind[sp.kind] ?? 0) + 1;
@@ -645,8 +817,8 @@ export const sectionIndexOf: (s: SimState) => Map<number, SectionAudit> = memoOn
       adjacency,
     });
   }
-  return result;
-});
+  return { result, nextFlipTick };
+}
 
 // ---------------------------------------------------------------------------
 // §4 The monthly rotation (Aaron's ruling 7, BOW FEAT-2326609761 2026-09-03)
@@ -760,25 +932,37 @@ export { CONSOLIDATOR_SCRAP_FRACTION };
  * on once the apply half lands (task brief: "named, sized, costed — never
  * acted upon").
  *
- * Deterministic ordering (GR#21): opportunities are returned sorted by
- * (capacityGain desc, sectionKey asc, fromSpec asc, toSpec asc) — a total
- * order with no remaining ties, so two identical states (or the same state
- * with `s.buildings` reordered) yield a byte-identical list.
+ * Deterministic ordering (GR#21): with no `sliders` argument, opportunities
+ * are returned sorted by (capacityGain desc, sectionKey asc, fromSpec asc,
+ * toSpec asc) — a total order with no remaining ties, so two identical
+ * states (or the same state with `s.buildings` reordered) yield a
+ * byte-identical list. FEAT-2326609761 inc2 (Aaron's slider ruling,
+ * 2026-09-03): when `sliders` IS supplied, `sliderMixWeightOf` is folded in
+ * as the PRIMARY sort key ahead of capacityGain — "a genuinely better
+ * objective function than raw density" in Aaron's own words, so steering
+ * takes priority over pure density once the player has set a direction;
+ * capacityGain remains the tiebreak (and sole key) for the untouched
+ * services/dwellings opportunities sliderMixWeightOf scores 0 for every
+ * candidate, matching "services consolidate on need regardless" — an
+ * all-zero slider-weight column degrades to the EXACT pre-inc2 order.
  */
-export function findOpportunities(s: SimState, sectionKeys: readonly number[]): ConsolidationOpportunity[] {
+export function findOpportunities(
+  s: SimState,
+  sectionKeys: readonly number[],
+  sliders?: ConsolidatorSliders,
+): ConsolidationOpportunity[] {
   const index = sectionIndexOf(s);
   const ladder = consolidationLadder();
   const opportunities: ConsolidationOpportunity[] = [];
 
-  // Hoisted ONCE (AC-37: a single O(buildings) pass, never re-walked per
-  // section/rung) — round-1 destructive finding 1's real fix needs each
-  // candidate's ACTUAL current capacity (capacityAtTier via its
-  // capacityTier), not the spec's flat tier-0 capacityOf, because an
-  // auto-scaled group member's earned capacity is real and must not be
-  // silently understated (AC-18's "must not quietly delete auto-scale
-  // progress", the same principle applied here to the read-only report).
-  const buildingById = new Map<number, SimState['buildings'][number]>();
-  for (const b of s.buildings) buildingById.set(b.id, b);
+  // FEAT-2326609761 inc2 (glide-mode perf): reuse the shared, buildings-
+  // identity-memoised lookup (data.ts's buildingByIdOf) instead of a fresh
+  // O(buildings) fold on every call — the round-1 finding below (ACTUAL
+  // current-tier capacity, not flat tier-0) is unaffected, it just reads the
+  // SAME Map from a cache instead of rebuilding it. On a day the glide pass
+  // finds nothing to commit, `s.buildings` is unchanged from the prior
+  // day's call, so this is an O(1) cache hit instead of a 49k-entry rebuild.
+  const buildingById = buildingByIdOf(s.buildings);
 
   // Deterministic section order (caller may pass an unsorted twelfth bucket).
   const orderedKeys = sectionKeys.slice().sort((a, b) => a - b);
@@ -836,7 +1020,29 @@ export function findOpportunities(s: SimState, sectionKeys: readonly number[]): 
     }
   }
 
+  // FEAT-2326609761 inc2: pre-compute each opportunity's slider-mix weight
+  // ONCE (not per-comparison inside sort) — cheap regardless since
+  // `opportunities.length` is bounded by sections-in-scope x ladder rungs,
+  // never O(buildings). Precomputing also keeps the comparator itself a
+  // pure read of an already-known number, so the sort stays a STABLE total
+  // order (no risk of a comparator recomputing a slightly different value
+  // for the same element across calls, which `Array.prototype.sort` does
+  // not guarantee is safe).
+  const sliderWeightOf = sliders
+    ? new Map(
+        opportunities.map((o) => {
+          const toSpec = SPECS[o.toSpec];
+          return [o, toSpec ? sliderMixWeightOf(s, toSpec, sliders) : 0] as const;
+        }),
+      )
+    : null;
+
   opportunities.sort((a, b) => {
+    if (sliderWeightOf) {
+      const wa = sliderWeightOf.get(a) ?? 0;
+      const wb = sliderWeightOf.get(b) ?? 0;
+      if (wa !== wb) return wb - wa;
+    }
     if (a.capacityGain !== b.capacityGain) return b.capacityGain - a.capacityGain;
     if (a.sectionKey !== b.sectionKey) return a.sectionKey - b.sectionKey;
     if (a.fromSpec !== b.fromSpec) return a.fromSpec < b.fromSpec ? -1 : 1;
@@ -847,9 +1053,9 @@ export function findOpportunities(s: SimState, sectionKeys: readonly number[]): 
 }
 
 /** Convenience wrapper: opportunities for the CURRENT month's scope (ruling 7's rotation), read only. */
-export function currentMonthOpportunities(s: SimState): ConsolidationOpportunity[] {
+export function currentMonthOpportunities(s: SimState, sliders?: ConsolidatorSliders): ConsolidationOpportunity[] {
   const scope = monthlyScopeOf(s.tick);
-  return findOpportunities(s, scope.sectionKeys);
+  return findOpportunities(s, scope.sectionKeys, sliders);
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,9 +1258,14 @@ export type TopOpportunity =
  * density-consolidation opportunities, each group keeping its own
  * deterministic internal order. Read-only: this never applies anything.
  */
-export function topOpportunities(s: SimState, sectionKeys: readonly number[], limit = 20): TopOpportunity[] {
+export function topOpportunities(
+  s: SimState,
+  sectionKeys: readonly number[],
+  limit = 20,
+  sliders?: ConsolidatorSliders,
+): TopOpportunity[] {
   const reconnect = findReconnectionOpportunities(s, sectionKeys);
-  const consolidate = findOpportunities(s, sectionKeys);
+  const consolidate = findOpportunities(s, sectionKeys, sliders);
   const merged: TopOpportunity[] = [
     ...reconnect.map((o) => ({ ...o, kind: 'reconnect' as const, rank: 0 })),
     ...consolidate.map((o) => ({ ...o, kind: 'consolidate' as const, rank: 0 })),

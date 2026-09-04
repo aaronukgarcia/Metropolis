@@ -38,9 +38,21 @@ import { useEffect, useRef, useState } from 'react';
 import { useSim } from '../../../sim/simContext';
 import { fmtMoney, fmtNum } from '../../../sim/utils';
 import { nextRefreshDue } from '../../../sim/throttle';
-import { CONSOLIDATOR_ENABLED_DEFAULT } from '../../../sim/engine';
+import {
+  CONSOLIDATOR_ENABLED_DEFAULT,
+  CONSOLIDATOR_MODE_DEFAULT,
+  CONSOLIDATOR_SECTION_METRES_DEFAULT,
+  CONSOLIDATOR_SECTION_METRES_MIN,
+  CONSOLIDATOR_SECTION_METRES_MAX,
+  CONSOLIDATOR_SLIDERS_DEFAULT,
+  CONSOLIDATOR_UNLOCK_LEVEL,
+  consolidatorUnlockedAtLevel,
+  validateConsolidatorSliders,
+  levelOf,
+} from '../../../sim/engine';
 import { publishConsolidatorFocus } from '../../../sim/consolidatorFocus';
-import type { SimState } from '../../../sim/types';
+import { isConsolidatorBoxVisible, setConsolidatorBoxVisible } from '../../../sim/consolidatorDisplayFlag';
+import type { SimState, ConsolidatorMode, ConsolidatorSliders } from '../../../sim/types';
 import {
   strandedCapacityReport,
   topOpportunities,
@@ -50,6 +62,15 @@ import {
   type StrandedCapacityReport,
   type TopOpportunity,
 } from '../../../sim/consolidator';
+
+/** SpecialistsTab's own list of the four slider keys, in the display order Aaron gave them ("Office, Mining, Farming, Factory"). */
+const SLIDER_KEYS: (keyof ConsolidatorSliders)[] = ['office', 'mining', 'farming', 'factory'];
+const SLIDER_LABELS: Record<keyof ConsolidatorSliders, string> = {
+  office: 'Office',
+  mining: 'Mining',
+  farming: 'Farming',
+  factory: 'Factory',
+};
 
 const REFRESH_MS = 5000;
 const TOP_LIMIT = 20;
@@ -102,8 +123,25 @@ function buildFrame(state: SimState): Frame {
 export function ConsolidatorTab() {
   const { state, dispatch } = useSim();
   const enabled = state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT;
+  const level = levelOf(state.xp);
+  // FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): "the player can
+  // enable it from say level 10" — SpecialistsTab's own `locked = level <
+  // sp.unlock` idiom (buildZoningTabs.tsx), mirrored exactly. The reducer's
+  // own toggleConsolidator gate (engine.ts) is the STRUCTURAL enforcement;
+  // this is the UI affordance on top of it.
+  const locked = !consolidatorUnlockedAtLevel(level);
+  const mode: ConsolidatorMode = state.consolidatorMode ?? CONSOLIDATOR_MODE_DEFAULT;
+  const sectionMetres = state.consolidatorSectionMetres ?? CONSOLIDATOR_SECTION_METRES_DEFAULT;
+  const sliders: ConsolidatorSliders = state.consolidatorSliders ?? CONSOLIDATOR_SLIDERS_DEFAULT;
+  const sliderSum = SLIDER_KEYS.reduce((sum, k) => sum + sliders[k], 0);
   const [frame, setFrame] = useState<Frame | null>(null);
   const lastRefreshRef = useRef<number | null>(null);
+  // FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-04): the red box's display
+  // toggle is display-only localStorage (consolidatorDisplayFlag.ts's own
+  // doc comment explains why this ONE consolidator flag is allowed to be
+  // localStorage while consolidatorEnabled/Mode/SectionMetres/Sliders are
+  // not) — plain React local state seeded from it, not SimState.
+  const [boxVisible, setBoxVisible] = useState<boolean>(() => isConsolidatorBoxVisible());
 
   useEffect(() => {
     // Off means ZERO cost: no sectionIndexOf/topOpportunities/
@@ -146,18 +184,134 @@ export function ConsolidatorTab() {
 
   const toggleRow = (
     <label
-      className="brand-menu-row consolidator-toggle"
-      title="Consolidator (urban regenerator): while enabled, demolishes and rebuilds parts of the city automatically to reduce clutter and cost. Costs real money when it acts. Mirrors the same toggle in the Config menu."
+      className={`brand-menu-row consolidator-toggle${locked ? ' locked' : ''}`}
+      title={
+        locked
+          ? `Consolidator unlocks at city level ${CONSOLIDATOR_UNLOCK_LEVEL} (currently level ${level}).`
+          : 'Consolidator (urban regenerator): while enabled, demolishes and rebuilds parts of the city automatically to reduce clutter and cost. Costs real money when it acts. Mirrors the same toggle in the Config menu.'
+      }
     >
-      <input type="checkbox" checked={enabled} onChange={() => dispatch({ type: 'toggleConsolidator' })} />
+      <input
+        type="checkbox"
+        checked={enabled}
+        disabled={locked}
+        onChange={() => dispatch({ type: 'toggleConsolidator' })}
+      />
       Consolidator (urban regenerator)
+      {locked && <span className="chip blocked">Lv {CONSOLIDATOR_UNLOCK_LEVEL}</span>}
     </label>
+  );
+
+  if (locked) {
+    return (
+      <div className="consolidator-tab">
+        {toggleRow}
+        <p className="consolidator-empty">
+          Locked until city level {CONSOLIDATOR_UNLOCK_LEVEL} (you are level {level}) — the
+          consolidator is a progression reward, like every other levelled unlock. Early cities are
+          hand-built.
+        </p>
+      </div>
+    );
+  }
+
+  // FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03/04): mode selector,
+  // player-adjustable section size, and the four direction sliders — shown
+  // whenever the tab is unlocked, REGARDLESS of the enabled toggle, so the
+  // player can set everything up before switching it on (mirrors financeTabs
+  // .tsx's TaxSettingsTab, which is likewise always interactable).
+  const controlsSection = (
+    <section className="consolidator-controls">
+      <label className="brand-menu-row" title="Purely a display preference — toggling this changes nothing about the simulation, only whether the red focus box is drawn on the map.">
+        <input
+          type="checkbox"
+          checked={boxVisible}
+          onChange={() => {
+            const next = !boxVisible;
+            setBoxVisible(next);
+            setConsolidatorBoxVisible(next);
+          }}
+        />
+        Show focus box on map
+      </label>
+      <h4>Traversal</h4>
+      <div className="brand-menu-row">
+        <label title="Glide: a continuous scanline that moves one tile-column right per game day, wrapping to the next row at the map edge — the default. Monthly-twelfth: the legacy rotation, a different 1/12 slice of the map each month.">
+          <input
+            type="radio"
+            name="consolidator-mode"
+            checked={mode === 'glide'}
+            onChange={() => dispatch({ type: 'setConsolidatorMode', mode: 'glide' })}
+          />
+          Glide (default)
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="consolidator-mode"
+            checked={mode === 'monthly-twelfth'}
+            onChange={() => dispatch({ type: 'setConsolidatorMode', mode: 'monthly-twelfth' })}
+          />
+          Monthly-twelfth (legacy)
+        </label>
+      </div>
+      <p className="hint">
+        The month-12 whole-tile big-picture pass always runs regardless of mode or section size.
+      </p>
+
+      <div className="slider-row">
+        <label>
+          <span>Section size</span>
+          <b>{sectionMetres}m</b>
+        </label>
+        <input
+          type="range"
+          min={CONSOLIDATOR_SECTION_METRES_MIN}
+          max={CONSOLIDATOR_SECTION_METRES_MAX}
+          step={50}
+          value={sectionMetres}
+          onChange={(e) => dispatch({ type: 'setConsolidatorSectionMetres', metres: Number(e.target.value) })}
+        />
+        <p className="hint">
+          The width of the glide window / audit section, in metres ({CONSOLIDATOR_SECTION_METRES_MIN}
+          –{CONSOLIDATOR_SECTION_METRES_MAX}m).
+        </p>
+      </div>
+
+      <h4>Direction (non-dwelling stock — services always consolidate on need)</h4>
+      {SLIDER_KEYS.map((k) => (
+        <div className="slider-row" key={k}>
+          <label>
+            <span>{SLIDER_LABELS[k]}</span>
+            <b>{sliders[k]}%</b>
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={sliders[k]}
+            onChange={(e) => {
+              const next: ConsolidatorSliders = { ...sliders, [k]: Number(e.target.value) };
+              if (validateConsolidatorSliders(next)) dispatch({ type: 'setConsolidatorSliders', sliders: next });
+              // An out-of-100 drag is simply not dispatched (the reducer would refuse it
+              // anyway — engine.ts's validateConsolidatorSliders) — the slider itself
+              // stays at its last VALID value rather than visibly snapping back, which
+              // would fight the player's own drag gesture.
+            }}
+          />
+        </div>
+      ))}
+      <p className={`hint${sliderSum === 100 ? '' : ' consolidator-slider-warn'}`}>
+        Total: {sliderSum}% {sliderSum === 100 ? '' : '— must equal 100% (adjust another slider to compensate)'}
+      </p>
+    </section>
   );
 
   if (!enabled) {
     return (
       <div className="consolidator-tab">
         {toggleRow}
+        {controlsSection}
         <p className="consolidator-empty">
           Off — no analysis is running and the map's section-focus box is hidden. Turning this on
           costs nothing by itself; it only starts the (currently read-only) discovery/audit pass.
@@ -169,6 +323,7 @@ export function ConsolidatorTab() {
   if (!frame) return (
     <div className="consolidator-tab">
       {toggleRow}
+      {controlsSection}
       <div className="dock-empty">Loading consolidator analysis…</div>
     </div>
   );
@@ -178,6 +333,7 @@ export function ConsolidatorTab() {
   return (
     <div className="consolidator-tab">
       {toggleRow}
+      {controlsSection}
       <p className="consolidator-note">
         Read-only discovery + audit (inc1). No changes are made by this tab — the automatic
         apply/Undo half lands separately.

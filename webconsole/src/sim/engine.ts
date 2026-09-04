@@ -15,6 +15,7 @@ import {
   isRoadAdjacent,
   isRoadConnected,
   memoOnState,
+  buildingByIdOf,
   occupiedSet,
   occupiedSetIncremental,
   roadTileSetOf,
@@ -107,9 +108,16 @@ import {
   capacityOf,
   familyKeyOf,
   sectionOriginOf,
+  sectionKeyOf,
+  sectionTilesOf,
   SECTIONS_X,
   SECTIONS_Y,
 } from './consolidator.ts';
+// FEAT-2326609761 inc2 (Aaron's glide-mode ruling, 2026-09-04): the pure day
+// cursor. consolidatorGlide.ts is a true leaf (see its own header note) so
+// this import creates no cycle even though consolidator.ts already imports
+// FROM this file.
+import { glideWindowForDay } from './consolidatorGlide.ts';
 import type { ConsolidationPass, ConsolidationTransaction, ConsolidationRecord, SectionAudit } from './consolidator.ts';
 import type {
   FlowItem,
@@ -120,6 +128,8 @@ import type {
   SimState,
   TaxRates,
   Tool,
+  ConsolidatorMode,
+  ConsolidatorSliders,
 } from './types.ts';
 
 export const LOAN_PRINCIPAL = 25000;
@@ -419,6 +429,11 @@ function rawState(): SimState {
     // economy to migrate, so stampJobsGrandfather() is immediately a no-op
     // for it (see that function's own epoch-already-current early return).
     economyEpoch: JOBS_GRANDFATHER_ECONOMY_EPOCH,
+    // FEAT-2326609761 inc2: new cities default to glide mode, the 800m
+    // section size, and an even 25/25/25/25 slider split (all defaults above).
+    consolidatorMode: CONSOLIDATOR_MODE_DEFAULT,
+    consolidatorSectionMetres: CONSOLIDATOR_SECTION_METRES_DEFAULT,
+    consolidatorSliders: CONSOLIDATOR_SLIDERS_DEFAULT,
     buildings,
     nextId: nextSafeBuildingId(buildings),
     movingId: null,
@@ -999,6 +1014,83 @@ export const TICKS_PER_YEAR = TICKS_PER_MONTH * 12; // 360
 export const CONSOLIDATOR_ENABLED_DEFAULT = false;
 
 /**
+ * FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-04): "GLIDE IS THE DEFAULT
+ * MODE. When the consolidator is enabled it glides unless the player
+ * switches mode." Lives here rather than consolidator.ts for the same
+ * import-cycle reason as CONSOLIDATOR_ENABLED_DEFAULT immediately above —
+ * consolidator.ts already imports FROM engine.ts, so engine.ts must not
+ * import back.
+ */
+export const CONSOLIDATOR_MODE_DEFAULT: ConsolidatorMode = 'glide';
+
+/**
+ * FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): "let's build a
+ * consolidator tab where the player can enable it from say level 10" — a
+ * progression-gated unlock, same idiom as every catalogue spec's own
+ * `unlock` field (data.ts) and SpecialistsTab's `level < sp.unlock` check
+ * (buildZoningTabs.tsx). A pure predicate so the tab, ConfigMenu, and any
+ * future consumer share ONE gate rather than three copies of `>= 10`.
+ */
+export const CONSOLIDATOR_UNLOCK_LEVEL = 10;
+
+export function consolidatorUnlockedAtLevel(level: number): boolean {
+  return level >= CONSOLIDATOR_UNLOCK_LEVEL;
+}
+
+/**
+ * FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03 addendum): "the
+ * consolidator RUNS with the 800m default; the player can adjust the
+ * section size larger or smaller." Duplicates consolidator.ts's
+ * CONSOLIDATOR_SECTION_METRES VALUE (both must stay 800 — the values are the
+ * single source of truth, not the symbol; mirrors this file's MAP_W/MAP_H
+ * duplication precedent in consolidator.ts's own header) rather than
+ * importing it, for the same import-cycle reason as CONSOLIDATOR_ENABLED_DEFAULT.
+ * MIN/MAX bound the player's slider to the same real-measurement range
+ * consolidator.ts's own doc comment table already reports for
+ * CONSOLIDATOR_SECTION_METRES (200m..3200m, 4x4..64x64 tiles) — every size in
+ * that table was actually measured against Aaron's real savepoint, so these
+ * are not invented round numbers.
+ */
+export const CONSOLIDATOR_SECTION_METRES_DEFAULT = 800;
+export const CONSOLIDATOR_SECTION_METRES_MIN = 200;
+export const CONSOLIDATOR_SECTION_METRES_MAX = 3200;
+
+/** Clamps a player-supplied section size (metres) into the sanctioned range. Never silently accepts an out-of-range value beyond clamping it — the reducer case below applies this to every 'setConsolidatorSectionMetres' dispatch. */
+export function clampConsolidatorSectionMetres(metres: number): number {
+  if (!Number.isFinite(metres)) return CONSOLIDATOR_SECTION_METRES_DEFAULT;
+  return Math.min(CONSOLIDATOR_SECTION_METRES_MAX, Math.max(CONSOLIDATOR_SECTION_METRES_MIN, Math.round(metres)));
+}
+
+/**
+ * FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): "a simple set of
+ * sliders which add up to 100%... a kept mixture" — the neutral default is
+ * an even split across the four non-dwelling employment kinds.
+ */
+export const CONSOLIDATOR_SLIDERS_DEFAULT: ConsolidatorSliders = {
+  office: 25,
+  mining: 25,
+  farming: 25,
+  factory: 25,
+};
+
+/**
+ * SSOT for "the sliders must sum to exactly 100 percent" (Aaron's ruling).
+ * Every component is required to be a finite, non-negative number; the sum
+ * is checked with a small epsilon to tolerate float accumulation from UI
+ * arithmetic while still refusing a genuinely wrong mix (99 or 101). The
+ * reducer (setConsolidatorSliders case, below) calls this and REFUSES the
+ * action (returns state unchanged) rather than clamping/normalising a bad
+ * dispatch — a silently "corrected" mix would misrepresent the player's own
+ * chosen intent (types.ts's doc comment on SimState.consolidatorSliders).
+ */
+export function validateConsolidatorSliders(sliders: ConsolidatorSliders): boolean {
+  const values = [sliders.office, sliders.mining, sliders.farming, sliders.factory];
+  if (values.some((v) => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) return false;
+  const sum = values.reduce((a, b) => a + b, 0);
+  return Math.abs(sum - 100) < 1e-6;
+}
+
+/**
  * Saturation threshold: a monitored segment auto-scales ONE tier when its coarse
  * traffic load reaches this fraction of the tile's current-tier capacity
  * (ROAD_TIER_CAPACITY). ⚠ PLACEHOLDER-balance — directional only, Aaron's pass.
@@ -1490,8 +1582,59 @@ const CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS = 4;
 /** PLACEHOLDER-balance: no single successor may end a transaction carrying more than this share of the city's online capacity in its own family (CEIL-3) — the ceiling that stops "one XXL nuke for the whole city". */
 const CONSOLIDATOR_MAX_FAMILY_SHARE = 0.5;
 
-/** Ring-buffer cap for SimState.consolidatorLog, mirroring LEDGER_CAP's role for the ledger. */
-export const CONSOLIDATOR_LOG_CAP = 20;
+/**
+ * Ring-buffer cap for SimState.consolidatorLog, mirroring LEDGER_CAP's role
+ * for the ledger. WIDENED 20 -> 32 for FEAT-2326609761 inc2 (Aaron's ask:
+ * "either widen the ring or document [that glide-mode undo only covers the
+ * last 20 daily windows]"). JUDGEMENT: widen, for a low cost. Glide mode can
+ * push up to one entry per game DAY (30/month) plus the month-12 whole-map
+ * pass on top (31 possible pushes in that one month) where the legacy
+ * monthly-twelfth cadence pushed at most 1/month — a 20-deep ring would
+ * already be exhausted (and start silently dropping the OLDEST entries,
+ * which is fine for display/audit history but would mean "undo" — which
+ * ALWAYS targets only `consolidatorLog[0]`, the single most recent pass, see
+ * undoLastConsolidatorPass below — stays correct regardless of ring depth;
+ * only the LOG's visible history depth is affected) partway through a single
+ * glide sweep of a busy month. 32 covers a full 30-day month's worth of
+ * daily entries PLUS the month-12 whole-map entry with 1 to spare, so a
+ * player reviewing "what did the consolidator do this month" in the tab
+ * never sees a month-boundary gap. Cost is negligible: each ConsolidationPass
+ * entry holds at most CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS (4) small
+ * transaction records, so 32 entries is a few hundred small objects, not a
+ * memory concern (LEDGER_CAP is 200 for comparison). Single-level undo
+ * itself is UNAFFECTED by this change either way (see the doc comment above)
+ * — this only widens how much PAST history is visible/kept.
+ */
+export const CONSOLIDATOR_LOG_CAP = 32;
+
+/**
+ * FEAT-2326609761 inc2 (Aaron's glide-mode ruling, 2026-09-04): which FIXED
+ * audit-grid sections (consolidator.ts's sectionKeyOf/sectionIndexOf — the
+ * proven, 800m-ruling-derived discovery grain, UNCHANGED by this increment)
+ * today's glide window overlaps. Deliberately does NOT make sectionIndexOf's
+ * own grid player-adjustable — the window's raw pixel/tile position and
+ * on-screen box size scale with the player's chosen section size
+ * (consolidatorSectionMetres), but the underlying discovery/opportunity
+ * grain the consolidator actually reasons about stays the ladder-derived
+ * 800m default; see consolidatorGlide.ts's own file header for why this
+ * split is safe (a continuous SLIDING window is a genuinely different
+ * concept from the fixed section PARTITION, and re-deriving sectionIndexOf's
+ * whole grid dynamically would be a much larger, separately-scoped change).
+ * A window this size (>= 1 fixed section wide/tall) overlaps at most 4 fixed
+ * sections (when straddling both a column and a row boundary simultaneously)
+ * — deduped via a Set, so applyConsolidatorPass never processes the same
+ * fixed section twice in one day.
+ */
+function sectionKeysForGlideWindow(s: SimState, tick: number): number[] {
+  const win = glideWindowForDay(tick, sectionTilesOf(s));
+  const keys = new Set<number>([
+    sectionKeyOf(win.x0, win.y0),
+    sectionKeyOf(win.x0 + win.w - 1, win.y0),
+    sectionKeyOf(win.x0, win.y0 + win.h - 1),
+    sectionKeyOf(win.x0 + win.w - 1, win.y0 + win.h - 1),
+  ]);
+  return Array.from(keys);
+}
 
 function toConsolidationRecord(b: Building, placedByDefault: 'player' | 'auto'): ConsolidationRecord {
   return {
@@ -1553,11 +1696,32 @@ function sectionNeighbourKeysOf(key: number): number[] {
 }
 
 /**
- * One monthly consolidator pass (AC-6/ruling 7's monthly-twelfth rotation,
- * AC-12's one-transaction-per-section, AC-17's atomic validate-then-mutate).
- * Called from advance() at the tick boundary, ONLY when consolidatorEnabled.
- * Pure function of (s, tick) — no Date/Math.random/localStorage (GR#21);
- * every ordering decision reads consolidator.ts's own deterministic sorts.
+ * One consolidator pass — the monthly-twelfth rotation's own monthly
+ * cadence (AC-6/ruling 7, AC-12's one-transaction-per-section, AC-17's
+ * atomic validate-then-mutate) OR, per FEAT-2326609761 inc2's GLIDE MODE
+ * (Aaron's 2026-09-04 ruling, DEFAULT mode), one daily call scoped to the
+ * glide window's fixed-grid sections via `sectionKeysOverride`. Called from
+ * advance() — monthly-twelfth callers omit `sectionKeysOverride` and get the
+ * EXACT pre-inc2 behaviour (monthlyScopeOf(tick).sectionKeys); the glide
+ * caller passes the small (1-4) fixed-section-key set the day's glide window
+ * overlaps (consolidator.ts's sectionKeysForGlideWindow) instead. Pure
+ * function of (s, tick, sectionKeysOverride) — no Date/Math.random/
+ * localStorage (GR#21); every ordering decision reads consolidator.ts's own
+ * deterministic sorts.
+ *
+ * PERF (FEAT-2326609761 inc2, the whole reason glide mode exists): the
+ * legacy monthly cadence's own disclosed ~1.5-2.1s stall came overwhelmingly
+ * from sectionIndexOf's full O(buildings) audit fold running fresh on every
+ * call — `memoOnState`, keyed on the whole SimState object, MISSED every
+ * single tick (a new object every tick) even though `s.buildings` itself is
+ * usually unchanged day-to-day. consolidator.ts's sectionIndexOf now caches
+ * on `s.buildings`' own identity (tick-validity-checked against the G1
+ * construction gate — see its doc comment), and findOpportunities' internal
+ * id lookup is the same shared, buildings-identity-cached `buildingByIdOf`
+ * (data.ts) — so a glide day that finds nothing to commit (the common case,
+ * since only 1-4 sections are in scope) pays O(1) for both, not O(buildings)
+ * — see the FEAT-2326609761 inc2 build report for the measured number on
+ * Aaron's real 49k save.
  *
  * Returns the resulting state (buildings/funds/nextId/cumulativeCapexSpent/
  * roadConnectivity already reflect every applied transaction) plus a log
@@ -1571,13 +1735,23 @@ function sectionNeighbourKeysOf(key: number): number[] {
 function applyConsolidatorPass(
   s: SimState,
   tick: number,
+  sectionKeysOverride?: readonly number[],
 ): { state: SimState; passLog: ConsolidationPass | null } {
-  const scope = monthlyScopeOf(tick);
-  const reconnectOpps = findReconnectionOpportunities(s, scope.sectionKeys);
-  const consolidateOpps = findOpportunities(s, scope.sectionKeys);
+  const sectionKeys = sectionKeysOverride ?? monthlyScopeOf(tick).sectionKeys;
+  const sliders = s.consolidatorSliders ?? CONSOLIDATOR_SLIDERS_DEFAULT;
+  const reconnectOpps = findReconnectionOpportunities(s, sectionKeys);
+  const consolidateOpps = findOpportunities(s, sectionKeys, sliders);
 
   let cur = s;
-  const byId = new Map(cur.buildings.map((b) => [b.id, b]));
+  // FEAT-2326609761 inc2 (glide-mode perf): seeded from the shared,
+  // buildings-identity-cached lookup (data.ts's buildingByIdOf) — a fresh,
+  // independently-mutable COPY (this Map is `.set`/`.delete`d as
+  // transactions commit below, so it must never be the SAME object the
+  // cache hands out to other callers), but the copy itself is a cache HIT
+  // when `findOpportunities`/`findReconnectionOpportunities` already built
+  // the same lookup moments earlier in THIS pass (`cur === s` here, before
+  // any commit) rather than a second independent O(buildings) fold.
+  const byId = new Map(buildingByIdOf(cur.buildings));
   const transactions: ConsolidationTransaction[] = [];
   const skipped: Array<{ sectionKey: number; reason: string }> = [];
   const sectionsDone = new Set<number>();
@@ -2357,36 +2531,77 @@ function advance(s: SimState): SimState {
   let consolidatorBuildCost = 0;
   let consolidatorScrapRecovered = 0;
   let consolidatorTransactionCount = 0;
-  let consolidatorPassLog: ConsolidationPass | null = null;
-  if (tick % TICKS_PER_MONTH === 0 && (s.consolidatorEnabled ?? false)) {
-    const preFunds = s.funds;
-    const preLedger = s.ledger;
-    const preLedgerId = s.nextLedgerId;
-    const { state: afterConsolidator, passLog } = applyConsolidatorPass(s, tick);
-    if (passLog) {
-      consolidatorPassLog = passLog;
-      consolidatorTransactionCount = passLog.transactions.length;
-      for (const txn of passLog.transactions) {
-        consolidatorBuildCost += txn.buildCost;
-        consolidatorScrapRecovered += txn.scrapRecovered;
+  // FEAT-2326609761 inc2: a single day can now produce UP TO TWO log
+  // entries (a glide-window pass AND, on the month-12 boundary day only, an
+  // additional whole-map pass) — see the loop below. `consolidatorPassLogs`
+  // replaces the old single-entry `consolidatorPassLog`, applied to
+  // `s.consolidatorLog` in ARRAY order (oldest of the day's entries first,
+  // so consolidatorLog[0] after this tick is always the LATEST of the two,
+  // matching undoLastConsolidatorPass's "reverse consolidatorLog[0]" contract).
+  const consolidatorPassLogs: ConsolidationPass[] = [];
+  // Captured BEFORE any pass runs this tick (applyConsolidatorPass computes
+  // its own `id` as `priorId + 1` from whatever `s.consolidatorLog` it is
+  // handed — see its own `priorId` line — which would hand back the SAME id
+  // twice if called twice in one tick without this: `s.consolidatorLog`
+  // itself is never updated mid-tick, only once at the very end of
+  // advance(), below). Every one of today's passLogs is re-numbered from
+  // this single captured value once the loop finishes, so two passes on the
+  // SAME day (glide window + month-12 whole-map) always get distinct,
+  // correctly-ordered ids.
+  const consolidatorPriorLogId = (s.consolidatorLog ?? [])[0]?.id ?? 0;
+  if (s.consolidatorEnabled ?? false) {
+    const mode = s.consolidatorMode ?? CONSOLIDATOR_MODE_DEFAULT;
+    // AC-6/ruling 7's monthly-twelfth rotation already treats month 12 as a
+    // whole-map scope (monthlyScopeOf's `full` flag) — reused here, on the
+    // SAME single boundary tick the legacy mode would have run its own
+    // whole-map pass on, as the trigger for glide mode's "the month-12
+    // whole-map pass still runs" ADDITIONAL pass (Aaron's 2026-09-03
+    // addendum). Computed once regardless of mode since it's a cheap pure
+    // function of tick, not a scan.
+    const isMonth12Boundary = tick % TICKS_PER_MONTH === 0 && monthlyScopeOf(tick).full;
+
+    // Each entry is a scope to run a pass against THIS tick, in order.
+    // - glide (DEFAULT): one pass every game DAY, scoped to today's glide
+    //   window's overlapping fixed section(s) — the structural perf fix for
+    //   the disclosed ~1.5-2.1s monthly stall (see applyConsolidatorPass's
+    //   own doc comment for the mechanism). PLUS, on the month-12 boundary
+    //   day, a SECOND pass with no override (= the full whole-map scope) —
+    //   "complements (does not replace) the monthly-twelfth cadence".
+    // - monthly-twelfth (legacy): exactly the pre-inc2 behaviour — one pass,
+    //   once a month, using monthlyScopeOf's own scope (which is ALREADY the
+    //   whole map on month 12) — unaffected by this refactor.
+    const passesToRun: (readonly number[] | undefined)[] =
+      mode === 'glide'
+        ? [sectionKeysForGlideWindow(s, tick), ...(isMonth12Boundary ? [undefined] : [])]
+        : tick % TICKS_PER_MONTH === 0
+          ? [undefined]
+          : [];
+
+    for (const sectionKeysOverride of passesToRun) {
+      const preFunds = s.funds;
+      const preLedger = s.ledger;
+      const preLedgerId = s.nextLedgerId;
+      const { state: afterConsolidator, passLog } = applyConsolidatorPass(s, tick, sectionKeysOverride);
+      if (passLog) {
+        consolidatorPassLogs.push(passLog);
+        consolidatorTransactionCount += passLog.transactions.length;
+        for (const txn of passLog.transactions) {
+          consolidatorBuildCost += txn.buildCost;
+          consolidatorScrapRecovered += txn.scrapRecovered;
+        }
       }
+      // AC-24 (the BUG-400 trap): autoConnect (called internally by the pass
+      // for both reconnect transactions and a consolidated successor's own
+      // road hookup) writes its OWN per-connector ledger row exactly like a
+      // player 'place' would. Stripped here and replaced with exactly ONE
+      // aggregate row below, so a background process can never out-populate
+      // the 200-cap ledger the way the old recurring Regional Grant row did.
+      // funds is reverted too — it is re-derived from the SAME income/expense
+      // arithmetic every other monthly aggregate uses (fed via outflows/
+      // inflows just below), not trusted bare off the pass's own state.
+      s = { ...afterConsolidator, ledger: preLedger, nextLedgerId: preLedgerId, funds: preFunds };
+      scaledBuildings = s.buildings;
     }
-    // AC-24 (the BUG-400 trap): autoConnect (called internally by the pass
-    // for both reconnect transactions and a consolidated successor's own
-    // road hookup) writes its OWN per-connector ledger row exactly like a
-    // player 'place' would. Stripped here and replaced with exactly ONE
-    // aggregate row below, so a background process can never out-populate
-    // the 200-cap ledger the way the old recurring Regional Grant row did.
-    // funds is reverted too — it is re-derived from the SAME income/expense
-    // arithmetic every other monthly aggregate uses (fed via outflows/
-    // inflows just below), not trusted bare off the pass's own state.
-    s = { ...afterConsolidator, ledger: preLedger, nextLedgerId: preLedgerId, funds: preFunds };
-    // `next.buildings` below is built from `scaledBuildings`, NOT `s.buildings`
-    // directly (mirrors the orphan-connect sweep's own `scaledBuildings = s.
-    // buildings;` re-bind above) — without this line the consolidator's
-    // demolish/build/reconnect work would be computed correctly but silently
-    // DISCARDED at the end of this function.
-    scaledBuildings = s.buildings;
   }
 
   let { inflows, outflows } = computeFlows(s);
@@ -3046,13 +3261,25 @@ function advance(s: SimState): SimState {
     // FEAT-2326609761 (CONSOLIDATOR, AC-25): newest-first, capped ring —
     // mirrors `ledger`'s own idiom. Unchanged (not even re-referenced) on a
     // tick that ran no pass, or a pass that found nothing to report.
-    consolidatorLog: consolidatorPassLog
-      ? [consolidatorPassLog, ...(s.consolidatorLog ?? [])].slice(0, CONSOLIDATOR_LOG_CAP)
-      : s.consolidatorLog,
+    // FEAT-2326609761 inc2: up to TWO passes can run in one glide-mode day
+    // (the glide window + the month-12 whole-map pass) — re-numbered from
+    // `consolidatorPriorLogId` (captured before either ran) and reversed so
+    // the LAST-run pass (most recent) lands at index 0, exactly like the
+    // single-pass case always did.
+    consolidatorLog:
+      consolidatorPassLogs.length > 0
+        ? [
+            ...consolidatorPassLogs
+              .slice()
+              .reverse()
+              .map((log, i) => ({ ...log, id: consolidatorPriorLogId + (consolidatorPassLogs.length - i) })),
+            ...(s.consolidatorLog ?? []),
+          ].slice(0, CONSOLIDATOR_LOG_CAP)
+        : s.consolidatorLog,
     // F4 FIX: a NEW pass earns a fresh, one-time undo — reset the
     // single-level consumed-flag whenever a pass is actually appended to the
     // log (never touched on a tick that ran no pass).
-    consolidatorUndoConsumed: consolidatorPassLog ? false : s.consolidatorUndoConsumed,
+    consolidatorUndoConsumed: consolidatorPassLogs.length > 0 ? false : s.consolidatorUndoConsumed,
     // BUG-419: record the START-of-tick population that computeFlows() charged
     // population-scaled flows on (s.population, before the growth update above), so
     // consistency checks recompute Wages/Council Tax against the SAME basis the engine
@@ -4268,6 +4495,16 @@ export type Action =
   // journalled sim state, deliberately NOT localStorage (see the field's own
   // doc comment on SimState.consolidatorEnabled, types.ts).
   | { type: 'toggleConsolidator' }
+  // FEAT-2326609761 inc2 (Aaron's glide-mode ruling, 2026-09-04): switches
+  // between glide (default) and monthly-twelfth traversal.
+  | { type: 'setConsolidatorMode'; mode: ConsolidatorMode }
+  // FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): player-adjustable
+  // section/window size in metres — clamped via clampConsolidatorSectionMetres.
+  | { type: 'setConsolidatorSectionMetres'; metres: number }
+  // FEAT-2326609761 inc2 (Aaron's slider ruling, 2026-09-03): the four
+  // non-dwelling direction sliders — refused (no-op) unless they sum to 100
+  // (validateConsolidatorSliders).
+  | { type: 'setConsolidatorSliders'; sliders: ConsolidatorSliders }
   | { type: 'loan' }
   | { type: 'repay' }
   | { type: 'setClipboard'; clipboard: SimState['clipboard'] }
@@ -5499,11 +5736,51 @@ function reduceCore(state: SimState, action: Action): SimState {
     // no discovery/apply work itself when the flag flips; it exists so the
     // separate mutation-lane pass and this module's own map overlay/panel
     // have one shared, deterministic source of truth to gate on.
-    case 'toggleConsolidator':
+    case 'toggleConsolidator': {
+      const turningOn = !(state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT);
+      // FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): TURNING ON is
+      // gated at city level 10 (CONSOLIDATOR_UNLOCK_LEVEL) — a progression
+      // reward, mirroring every other unlock in this codebase. Turning an
+      // already-on consolidator back OFF is never blocked (a level can only
+      // ever go up, so this can't currently strand an enabled consolidator
+      // behind a regressed gate, but refusing the OFF direction would be an
+      // unjustifiable trap regardless). Structural enforcement here, not
+      // just a disabled checkbox in the UI, so a stale/replayed dispatch
+      // from before level 10 can never silently enable it either.
+      if (turningOn && !consolidatorUnlockedAtLevel(levelOf(state.xp))) return state;
       return {
         ...state,
-        consolidatorEnabled: !(state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT),
+        consolidatorEnabled: turningOn,
       };
+    }
+
+    // FEAT-2326609761 inc2 (Aaron's glide-mode ruling, 2026-09-04): plain
+    // sim-state mutation, mirrors toggleConsolidator's shape. An unrecognised
+    // mode string (a corrupt/future-version dispatch) is refused rather than
+    // written, matching GR#16's "never trust an untyped value into state".
+    case 'setConsolidatorMode': {
+      if (action.mode !== 'glide' && action.mode !== 'monthly-twelfth') return state;
+      return { ...state, consolidatorMode: action.mode };
+    }
+
+    // FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): clamps into the
+    // sanctioned range (clampConsolidatorSectionMetres) rather than refusing
+    // an out-of-range dispatch outright — a slider drag naturally produces
+    // in-range values, and clamping a stray out-of-range one (e.g. a stale
+    // action replayed after MIN/MAX retune) is the more forgiving failure
+    // mode for a value with no "wrong mix" semantics (unlike the sliders,
+    // there is no single "correct" size to protect by refusing).
+    case 'setConsolidatorSectionMetres':
+      return { ...state, consolidatorSectionMetres: clampConsolidatorSectionMetres(action.metres) };
+
+    // FEAT-2326609761 inc2 (Aaron's slider ruling, 2026-09-03): REFUSED (no
+    // state change) unless the four sliders sum to exactly 100 — see
+    // validateConsolidatorSliders's doc comment for why this never clamps/
+    // normalises instead.
+    case 'setConsolidatorSliders': {
+      if (!validateConsolidatorSliders(action.sliders)) return state;
+      return { ...state, consolidatorSliders: { ...action.sliders } };
+    }
 
     // FEAT-2326609761 (CONSOLIDATOR mutation lane, AC-26): reverses exactly
     // the last pass, or is a no-op (reference identity) if the log is empty.

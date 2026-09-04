@@ -139,6 +139,16 @@ export function isStateAffecting(action: Action): boolean {
     // identically (mirrors toggleGridImport immediately above it).
     case 'toggleConsolidator':
       return true;
+    // FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03/04): mode/section-size/
+    // slider changes all mutate journalled sim state (consolidatorMode/
+    // consolidatorSectionMetres/consolidatorSliders, types.ts) — state-affecting,
+    // must journal + replay identically (mirrors toggleConsolidator above).
+    case 'setConsolidatorMode':
+      return true;
+    case 'setConsolidatorSectionMetres':
+      return true;
+    case 'setConsolidatorSliders':
+      return true;
 
     // Clone-stamp — state-affecting (places/flattens buildings, deducts cost).
     case 'stampRegion':
