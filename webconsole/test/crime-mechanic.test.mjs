@@ -153,7 +153,7 @@ test('AC-5: low wellbeing increases crime (mutant: wellbeing feedback reversed, 
     fire_post: 3, // 3 x 4,000 served = 12,000 >= pop -> full Fire safety coverage
     wat_clean: 2,
     wat_waste: 2,
-    pow_wind: 2, // pop 10k -> power need ~120MW; 2 x 8MW is enough headroom for THIS city (no jobs added)
+    pow_wind: 2, // pop 10k -> power need ~120MW; partial cover either way (comparative fixture, not full coverage; BUG-648 rebased pow_wind to 6 MW)
   });
   const lowWellbeing = city(pop, {}, {
     // Crushing tax rates tank Approval; zero health/fire/utilities/waste

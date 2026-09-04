@@ -42,7 +42,7 @@ function city(buildings, tick = 20, population = 0) {
   return st;
 }
 
-const WIND = SPECS.pow_wind; // 1×1 service plant, 8 MW, cost 1400 → 3 build ticks
+const WIND = SPECS.pow_wind; // 1×1 service plant, 4 MW (BUG-648), real construction ticks derived below
 const WIND_MW = WIND.mw; // 8, sourced from the catalogue (GR#15) — never inlined
 
 // ─────────────────────────────────────────────────────────────────────────────

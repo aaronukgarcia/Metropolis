@@ -71,9 +71,12 @@ function city(power = {}) {
 
 // Fleet capacities derive from the spec catalogue at runtime, never inline.
 const SURPLUS = () => city({ pow_coal: 3 }); //  3*80 = 240 MW >= 200: no deficit
-const DEFICIT_4PC = () => city({ pow_wind: 24 }); // 24*8 = 192 MW: 4% deficit
+// BUG-648 (2026-09-03): pow_wind's mw was rebalanced 8->6 (realistic modern
+// turbine, see data.ts) — the unit count is bumped 24->32 so the fixture's
+// intended cap (192 MW, still a 4% deficit vs need 200) is UNCHANGED.
+const DEFICIT_4PC = () => city({ pow_wind: 32 }); // 32*6 = 192 MW: 4% deficit
 const DEFICIT_50PC = () => city({ pow_solar: 4 }); //  4*25 = 100 MW: 50% deficit
-const RESTORED = () => city({ pow_wind: 24, pow_coal: 1 }); // 272 MW: recovered
+const RESTORED = () => city({ pow_wind: 32, pow_coal: 1 }); // 32*6 + 80 = 272 MW: recovered
 
 /** The UN-scaled Business Tax the flows formula produces, derived from the
  * same state the sim reads (GR#15) — via the SAME SSOT function computeFlows

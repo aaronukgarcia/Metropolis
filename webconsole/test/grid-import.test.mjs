@@ -38,7 +38,9 @@ function shortageCity(overrides = {}) {
     for (let i = 0; i < n; i++) s.buildings.push({ id: id++, spec, x: (id % 900) + 5, y: 5 });
   };
   put('com_shop', 10); // gives Business Tax a nonzero base to scale (AC-1/AC-3)
-  put('pow_wind', 24); // 24*8 = 192 MW cap
+  // BUG-648 (2026-09-03): pow_wind's mw was rebalanced 8->6 (data.ts) — unit
+  // count bumped 24->32 so the intended 192 MW cap is UNCHANGED.
+  put('pow_wind', 32); // 32*6 = 192 MW cap
   return s; // need = round(16667*0.012) = 200 MW -> 8 MW shortfall
 }
 
@@ -80,7 +82,9 @@ test('AC-1: with a real shortage and import ON, no shortfall — Grid Import out
   const twin = { ...initialState(), gridImportEnabled: true, buildings: [], population: 16667 };
   let tid = 990001;
   for (let i = 0; i < 10; i++) twin.buildings.push({ id: tid++, spec: 'com_shop', x: tid % 900, y: 5 });
-  for (let i = 0; i < 26; i++) twin.buildings.push({ id: tid++, spec: 'pow_wind', x: tid % 900, y: 10 }); // 208 MW >= 200 need
+  // BUG-648 (2026-09-03): pow_wind's mw was rebalanced 8->6 (data.ts) — unit
+  // count bumped 26->34 so the "cap >= 200 need" surplus precondition holds.
+  for (let i = 0; i < 34; i++) twin.buildings.push({ id: tid++, spec: 'pow_wind', x: tid % 900, y: 10 }); // 204 MW >= 200 need
   const twinStats = pw(twin);
   assert.ok(twinStats.cap >= twinStats.need, 'twin precondition: no deficit');
   const unscaledBusinessTax = computeFlows(twin).inflows.find((f) => f.label === 'Business Tax').value;
@@ -172,7 +176,9 @@ test('AC-3: gridImportEnabled=false -> no Grid Import outflow, brownout income p
   const twin = { ...initialState(), gridImportEnabled: false, buildings: [], population: 16667 };
   let id = 990001;
   for (let i = 0; i < 10; i++) twin.buildings.push({ id: id++, spec: 'com_shop', x: id % 900, y: 5 });
-  for (let i = 0; i < 26; i++) twin.buildings.push({ id: id++, spec: 'pow_wind', x: id % 900, y: 10 }); // 208 MW >= 200 need
+  // BUG-648 (2026-09-03): pow_wind's mw was rebalanced 8->6 (data.ts) — unit
+  // count bumped 26->34 so the "cap >= 200 need" surplus precondition holds.
+  for (let i = 0; i < 34; i++) twin.buildings.push({ id: id++, spec: 'pow_wind', x: id % 900, y: 10 }); // 204 MW >= 200 need
   const twinStats = pw(twin);
   assert.ok(twinStats.cap >= twinStats.need, 'twin precondition: no deficit');
   const unscaledBusinessTax = computeFlows(twin).inflows.find((f) => f.label === 'Business Tax').value;

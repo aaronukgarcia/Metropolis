@@ -155,6 +155,9 @@ const DIMS: Record<string, Dims> = {
   park: { x: 50, y: 50, z: 15 },
   pow_wind: { x: 10, y: 10, z: 150 },
   pow_coal: { x: 280, y: 280, z: 200 },
+  // BUG-648 (2026-09-03): footprint-shrink draft REVERTED after an independent
+  // round proved it silently road-disconnects an already-placed nuke (see the
+  // SPECS entry below) — 13x13 kept, DIMS unchanged.
   pow_nuke: { x: 630, y: 630, z: 60 },
   // FEAT-1972079901 — Five Gorges Dam: 8×8 tiles = 400 m span, ~181 m crest height.
   pow_hydro: { x: 400, y: 400, z: 181 },
@@ -1402,7 +1405,110 @@ export const SPECS: Record<string, Spec> = {
 
   park: P('park', 'park', 'Park', 'Green space', 1, 1, 150000, 10, '#3fb950', 'zones', 1),
 
-  pow_wind: P('pow_wind', 'power', 'Wind Turbine', '8 MW · clean', 1, 1, 4800000, 267, '#7fb2e5', 'services', 2, { mw: 8 }),
+  // BUG-648 (2026-09-03, Aaron: "make it realistic — so what do we have in the
+  // real world"). Before this fix pow_wind (8 MW / 1 tile = 8.00 MW/tile)
+  // out-densified pow_windfarm (60 MW / 9 tiles = 6.67) and pow_nuke (1,120 MW
+  // / 169 tiles = 6.63) — a single turbine beating a nuclear plant on power
+  // density, backwards vs reality and fatal to the CONSOLIDATOR's data-driven
+  // density ladder (FEAT-2326609761 Q100100/AC-8: "10 wind turbines -> 1 wind
+  // farm", "10 nuke plants -> 1 XXL nuke" must fall out of the catalogue, not
+  // be hand-listed).
+  //
+  // TILE_METRES = 50 (this file's DIMS comment, "Tile grid = 50 m", promoted
+  // for this derivation — FEAT-2326609761 AC-3 will export it as a real
+  // constant when the consolidator lands) => 1 tile = 50m x 50m = 2,500 m² =
+  // 0.0025 km². A LITERAL real-area/TILE_METRES conversion is unusable here:
+  // NREL's onshore wind density study (docs.nrel.gov/docs/fy09osti/45834.pdf,
+  // updated national analysis ~4.3 MW/km² over 106.7 GW of US plants) implies
+  // ~1 km² = ~400 TILES of exclusive land per single modern turbine — absurd
+  // for a 1-tile placeable object, and real onshore/offshore wind farms and
+  // nuclear exclusion zones are similarly whole-km²-scale. COMPRESSION RULE
+  // (applied UNIFORMLY, not fudged per spec): EVERY footprint (w x h tiles) in
+  // this catalogue, pow_nuke INCLUDED, is HELD AT its prior balance-pass value
+  // (BUG-452/FEAT-1972079901) — realism is carried by `mw` alone, sourced
+  // from a named real reference plant per technology class.
+  //
+  // ROUND-2 CORRECTION (2026-09-04, independent destructive round REJECT):
+  // the FIRST draft of this fix also shrunk pow_nuke's footprint 13x13->5x4 to
+  // fix its density ranking against pow_ccgt. An independent attacker proved
+  // that "a shrink is safe" claim FALSE for road-adjacency (it is only true
+  // for tile-overlap): replayed against Aaron's real building record and real
+  // road network, his one already-placed pow_nuke (id 3331, x:33,y:141) is
+  // road-adjacent under the old 13x13 footprint but NOT under the shrunk 5x4
+  // one (the real road touches the wide footprint's old outer edge, which is
+  // now 8+ tiles away) — so isOnline flips false and 1,120 MW of his grid
+  // capacity silently vanishes on load, with no notice. footprintOf's
+  // "shrink can't overlap a neighbour" safety property says nothing about
+  // road-adjacency, which is a DIFFERENT gate over the SAME footprint. The
+  // footprint shrink is REVERTED — pow_nuke stays 13x13 — per the round's
+  // recommendation (one line, zero risk): pow_nuke and pow_hydro are now BOTH
+  // documented FOOTPRINT-REALISM EXCEPTIONS to the density ladder (see the
+  // dedicated pow_nuke comment below) rather than being forced to out-density
+  // gas per tile; the CONSOLIDATOR's "10 nuke plants -> 1 XXL nuke" example
+  // is intended to fall out of COUNT-reduction (fewer, bigger reactors via
+  // pow_nuke's own capacityTiers ladder), not out of pow_nuke beating pow_ccgt
+  // on MW/tile.
+  //
+  // Sources (WebSearch, 2026-09-03):
+  //  - Turbine: RENA/GWEC Global Status Report 2025 — "the average turbine
+  //    delivered to market in 2024 had a capacity of 5.5 MW"; DOE "Wind
+  //    Turbines: the Bigger the Better" — "modern onshore turbines reach
+  //    capacities of 3-5 MW"; Siemens Gamesa's SG 6.6-170 shows production
+  //    onshore models reaching ~6-6.6 MW. We use 6 MW — the TOP of the
+  //    realistic modern range, not the middle — DELIBERATELY: see the
+  //    savepoint blast-radius note immediately below.
+  //  - CCGT: Whitegate Power Station, Ireland — 445 MW on an 11 ha (0.11 km²)
+  //    site (Wikipedia); Coryton Power Station, UK — 732 MW on 5.2 ha. The
+  //    existing 420 MW figure already sits in this real range and is left
+  //    UNCHANGED (it was never the part of the catalogue Aaron flagged).
+  //  - Nuclear: Dungeness B (the plant this spec's own flavour text already
+  //    names) nets ~1,110 MWe (Wikipedia) — near-identical to the existing
+  //    1,120 MW figure, so `mw` is LEFT UNCHANGED; Hinkley Point C's real
+  //    165-acre (0.668 km²) OPERATIONAL site (gov.uk/Wikipedia) is the same
+  //    order of magnitude as pow_nuke's UNCHANGED 13x13 = 650m x 650m =
+  //    0.42 km² footprint — a real nuclear exclusion zone genuinely IS
+  //    large, so keeping the wide footprint is the honest choice, not the
+  //    shrunk one; see the dedicated pow_nuke comment below.
+  //  - Hydro (special case, per Aaron's brief): researched (this spec is a
+  //    Three Gorges pastiche — DIMS z:181 already cites the real dam's 181 m
+  //    height — whose actual nameplate is 22,500 MW, Wikipedia) but the mw
+  //    figure was DELIBERATELY LEFT UNCHANGED at 5,000 — see the dedicated
+  //    pow_hydro comment below for why (its density was never part of
+  //    Aaron's named defect, and Aaron's real savepoint already carries 23
+  //    placed dams, so a literal Three-Gorges mw would silently hand that
+  //    city a six-figure MW windfall — exactly what this bug's brief
+  //    forbids). It already dwarfs pow_nuke's density (78.1 MW/tile vs the
+  //    unchanged 6.63) with zero edit needed.
+  //
+  //  SAVEPOINT BLAST-RADIUS CHECK (constraint (2) of this bug's brief — "do
+  //  not silently change the total power available to an existing city"):
+  //  Aaron's real fresh savepoint (49,174 buildings, per the round-2 attack)
+  //  is DOMINATED by pow_wind turbines (4,535 online) — a direct symptom of
+  //  the very defect this bug fixes (turbines being the densest/cheapest-
+  //  per-MW option). The round measured the TRUE before/after online-gated
+  //  delta at -14.57% (bigger than this file's own -3.0% gross-nameplate
+  //  estimate, both because the city grew and — pre-revert — because the
+  //  footprint shrink itself was silently taking the one placed nuke
+  //  offline). Even at -14.57%, capacity (59,745 MW) still clears need
+  //  (39,534 MW) with a healthy 51% margin — NO brownout flip on that save.
+  //  6 MW instead of a naive 4 MW halving (still a genuine, cited
+  //  modern-turbine figure, not a fudge) was chosen specifically to keep
+  //  that margin healthy while still fixing the named ordering defect (6.0 <
+  //  pow_windfarm's unchanged 6.67 MW/tile — turbine still the least dense
+  //  rung). This is a mitigation, not a full guarantee against brownout on
+  //  every possible save: a complete fix would be a per-instance
+  //  "grandfathered mw" migration (mirroring the existing
+  //  `b.footprintW ?? sp.w` pattern already used for auto-scale ladder
+  //  growth) so pre-existing buildings keep their placement-time nameplate
+  //  while new construction reads the realistic catalogue value — left as a
+  //  follow-up BOW item rather than expanding this fix's scope from a
+  //  catalogue rebalance into a save-schema migration.
+  //
+  // cost/upkeep are RECOMPUTED (not left stale) via the SAME documented
+  // £/MW rate x 2%/year-over-360-ticks formula the BUG-452 header above uses
+  // (rate unchanged per technology, so megapower-inc1.test.mjs's cost/mw
+  // ratio-ordering assertions are untouched by this mw-only-formula change).
+  pow_wind: P('pow_wind', 'power', 'Wind Turbine', '6 MW · clean', 1, 1, 3600000, 200, '#7fb2e5', 'services', 2, { mw: 6 }),
   pow_coal: P('pow_coal', 'power', 'Coal Plant', '80 MW · polluting', 2, 2, 68000000, 3778, '#f0883e', 'services', 3, { mw: 80, tag: 'pollution' }),
   // FEAT-1972079901 realistic power costs: nuclear is the priciest generator to
   // BUILD (Aaron's ask — nuclear VERY expensive up front). Capex raised 150k→560k
@@ -1413,6 +1519,33 @@ export const SPECS: Record<string, Spec> = {
   // evaluateBuildingMonitors' isPowerLadder branch) — every tier is an OUT
   // (footprint growth) step, since "another reactor" is a new physical unit,
   // never a taller one.
+  // BUG-648 (2026-09-03) — `mw`/cost/upkeep/footprint ALL LEFT UNCHANGED at
+  // 1,120 MW / 13x13. 1,120 MW was already a realistic figure (real
+  // Dungeness B, the plant this spec's own flavour text names, nets
+  // ~1,110 MWe — Wikipedia — a near match), and a FIRST DRAFT of this fix
+  // shrunk the footprint to 13x13->5x4 to out-density pow_ccgt (which would
+  // have needed mw bumped past the point where megapower-inc1.test.mjs's
+  // `pow_hydro.mw >= pow_nuke.mw * 3` forces a matching pow_hydro bump,
+  // cascading a six-figure MW windfall onto Aaron's 23 already-placed dams —
+  // see the pow_hydro comment below).
+  //
+  // ROUND-2 CORRECTION (2026-09-04): that footprint shrink was REVERTED after
+  // an independent destructive round proved it a live regression, not a safe
+  // change — see the dedicated block above pow_wind for the full finding
+  // (Aaron's real placed pow_nuke, id 3331, silently road-disconnects under
+  // the shrunk 5x4 footprint even though the SAME real road network keeps it
+  // online under the original 13x13). pow_nuke is therefore now a documented
+  // FOOTPRINT-REALISM EXCEPTION, like pow_hydro below: its density (1,120 /
+  // 169 = 6.63 MW/tile) legitimately sits BELOW pow_ccgt's 46.7, and that is
+  // the honest answer — a real nuclear exclusion zone genuinely is large
+  // (13x13 tiles = 650m x 650m = 0.42 km², the same order of magnitude as
+  // Hinkley Point C's real 165-acre/0.668 km² operational site), so a
+  // compact gas plant legitimately IS denser per tile than a nuclear one.
+  // The CONSOLIDATOR's "10 nuke plants -> 1 XXL nuke" example (Aaron's own
+  // words, FEAT-2326609761) is handled by COUNT-reduction via pow_nuke's own
+  // capacityTiers reactor ladder (fewer, bigger reactor complexes), not by
+  // this spec out-densifying gas per tile — see bug648-power-density.test.mjs
+  // for the regression pinning pow_nuke's footprint at 13x13 forever.
   pow_nuke: P('pow_nuke', 'power', 'Nuclear Plant', 'Twin AGR · 1,120 MW · Dungeness-scale', 13, 13, 1568000000, 87111, '#e05d38', 'services', 5, { mw: 1120, tag: 'pollution', capacityTiers: reactorLadder(1120) }),
 
   wat_clean: P('wat_clean', 'water', 'Water Works', 'Clean water for 20,000', 2, 2, 4680000, 260, '#39c5cf', 'services', 3, { tag: 'clean', served: 20000 }),
@@ -1512,8 +1645,8 @@ export const SPECS: Record<string, Spec> = {
   pow_fusion: P('pow_fusion', 'power', 'Fusion Pilot Plant', '800 MW · experimental', 4, 4, 1280000000, 71111, '#ff9f43', 'services', 19, { mw: 800 }),
 
   // FEAT-1972079901 — FIVE GORGES DAM (GRADUATED from a roadmap placeholder to a
-  // real, placeable mega-hydro GENERATOR). A single huge hydroelectric station:
-  // 5,000 MW dwarfs the 1,120 MW Nuclear Plant (~4.5×). It is a power generator, so
+  // real, placeable mega-hydro GENERATOR). A single huge hydroelectric station
+  // dwarfs the Nuclear Plant. It is a power generator, so
   // its `mw` correctly adds to powerStats.cap like any plant. Deliberately carries
   // NO water `tag`/`served` and NO `residents` — a power spec only, so it can never
   // leak clean/waste-water or residential capacity (the waste_depot/estate lesson).
@@ -1522,7 +1655,28 @@ export const SPECS: Record<string, Spec> = {
   // directional only, pending Aaron's row-by-row pass.
   // FEAT-2326609761 AC-28 (Aaron R4): "limit the number of Five Gorges Dams to
   // just one" — HARD CAP of 1, enforced at every placement path (AC-29) and
-  // in the palette (AC-30). See remainingAllowance() below.
+  // in the palette (AC-30). See remainingAllowance() below. (Aaron's real
+  // pre-cap savepoint carries 23 placed dams — AC-31 grandfathers them: they
+  // survive on load, a 24th is refused.)
+  // BUG-648 (2026-09-03) — EVALUATED AND DELIBERATELY LEFT UNCHANGED. Aaron's
+  // bug report named pow_wind (8.00 MW/tile), pow_windfarm (6.67) and pow_nuke
+  // (6.63) as the backwards trio; pow_hydro's density (5,000/64 = 78.1
+  // MW/tile) was NOT flagged — it was already the densest spec in the
+  // catalogue and already dwarfs pow_nuke's UNCHANGED figure (78.1 vs 6.63 —
+  // pow_nuke's footprint-shrink draft that would have raised this to 56.0
+  // was reverted, see the pow_nuke comment above; pow_nuke and pow_hydro are
+  // now BOTH documented footprint-realism exceptions to the density ladder),
+  // so the "special case" ladder position this bug asks for already held
+  // with NO edit here. A real-world pass was still researched
+  // (this spec is a Three Gorges Dam pastiche — the DIMS z:181 already cites
+  // the real dam's 181 m crest height — whose actual nameplate is 22,500 MW,
+  // Wikipedia) but that change was REJECTED: bumping mw 5,000->22,500 would
+  // silently hand his 23-dam city ~+402,500 MW of grid capacity and a
+  // matching 4.5x jump in dam upkeep alone — exactly the "silently change
+  // the total power available to an existing city" this bug's brief forbids,
+  // for a spec that was never broken. Left at 5,000 MW pending a dedicated
+  // balance-pass BOW item now that the one-dam cap (maxPerCity above) exists
+  // to bound a future bump's blast radius.
   pow_hydro: P('pow_hydro', 'power', 'Five Gorges Dam', 'Mega hydroelectric dam · 5,000 MW · dwarfs a nuclear plant', 8, 8, 5000000000, 277778, '#5b8fc9', 'services', 16, { mw: 5000, maxPerCity: 1 }),
 
   // ---- Water & waste additions ----

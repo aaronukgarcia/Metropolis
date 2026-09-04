@@ -135,7 +135,7 @@ test('AC-9: Spec properties used in card are ALWAYS read from data.ts SPECS, nev
   assert.equal(hospital.unlock, 4, 'hospital unlock comes from data.ts');
 
   const wind = SPECS.pow_wind;
-  assert.equal(wind.mw, 8, 'wind mw comes from data.ts');
+  assert.equal(wind.mw, 6, 'wind mw comes from data.ts'); // BUG-648: rebalanced 8->6
   assert.equal(wind.unlock, 2, 'wind unlock comes from data.ts');
 
   const hut = SPECS.res_hut;

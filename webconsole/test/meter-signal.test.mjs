@@ -101,13 +101,15 @@ test('BUG-398: a big power SURPLUS reads as a surplus (negative), never a +100 s
 
 test('BUG-398: the power meter sign tracks the deficit/surplus boundary', () => {
   // Genuine deficit → positive shortfall + brownout alert.
-  const deficit = city(314000, { pow_wind: 1, ind_factory: 3371 }); // 8 MW cap vs ~24,000 need
+  const deficit = city(314000, { pow_wind: 1, ind_factory: 3371 }); // 6 MW cap (BUG-648) vs ~24,000 need
   const dm = meter(deficit, 'power');
   assert.ok(dm.value > 0, `a deficit MUST read positive (shortfall), got ${dm.value}`);
   assert.ok(dm.alert, 'a deficit MUST raise the brownout alert');
 
   // Exact balance (cap ≈ need) → no alert, non-positive.
-  const balanced = city(1000, { pow_wind: 2 }); // need = round(12) = 12 MW; cap = 16 MW → slight surplus
+  // BUG-648: pow_wind's mw was rebalanced 8->6 — unit count set to 3 so the
+  // cap (18 MW) is still a "slight surplus" over the 12 MW need.
+  const balanced = city(1000, { pow_wind: 3 }); // need = round(12) = 12 MW; cap = 18 MW → slight surplus
   const bm = meter(balanced, 'power');
   assert.ok(!bm.alert, 'no deficit ⇒ no brownout alert');
   assert.ok(bm.value <= 0, `covered power must not read a shortfall, got ${bm.value}`);

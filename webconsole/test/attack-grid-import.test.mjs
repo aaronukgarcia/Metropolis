@@ -31,7 +31,8 @@ import {
 
 // ---------- fixtures ----------
 
-/** A city with a REAL power shortfall (need 200 MW, cap 192 MW). */
+/** A city with a REAL power shortfall (need 200 MW, cap 144 MW — BUG-648
+ * rebased pow_wind to 6 MW/turbine, still a real shortfall either way). */
 function shortageCity(overrides = {}) {
   const s = { ...initialState(), buildings: [], population: 16667, ...overrides };
   let id = 900001;
@@ -53,7 +54,9 @@ function surplusTwin(overrides = {}) {
   };
   put('com_shop', 10);
   put('wat_clean', 1);
-  put('pow_wind', 26); // 208 MW >= 200 MW need
+  // BUG-648 (2026-09-03): pow_wind's mw was rebalanced 8->6 (data.ts) — unit
+  // count bumped 26->34 so the "no shortfall" precondition still holds.
+  put('pow_wind', 34); // 204 MW >= 200 MW need
   return s;
 }
 
