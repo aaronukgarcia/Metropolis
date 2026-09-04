@@ -34,9 +34,40 @@ import {
   computeFailedGates,
   isOnline,
   connectedRoadTileSet,
+  CONSOLIDATOR_SCRAP_FRACTION,
 } from './data.ts';
 import type { Spec, Tag } from './data.ts';
-import { TICKS_PER_MONTH, CONNECT_EXEMPT_KINDS } from './engine.ts';
+
+/**
+ * MUTATION-LANE NOTE (FEAT-2326609761, 2026-09-04): this module used to
+ * import TICKS_PER_MONTH and CONNECT_EXEMPT_KINDS from './engine.ts'. The
+ * mutation lane (engine.ts's applyConsolidatorPass/undoLastConsolidatorPass)
+ * needs to call this module's pure read functions (sectionIndexOf,
+ * findOpportunities, findReconnectionOpportunities, monthlyScopeOf, ...), so
+ * an engine.ts import of consolidator.ts plus consolidator.ts's own import
+ * of engine.ts would form a genuine ES-module CYCLE. Unlike a cycle where
+ * usage is deferred to function bodies, these two symbols are read at this
+ * module's own TOP LEVEL (`CONSOLIDATION_EXEMPT_KINDS` below), which
+ * executes during module evaluation — whichever file loads first, the cycle
+ * forces the OTHER file's top-level export to still be in its temporal-
+ * dead-zone at that point: a hard `ReferenceError: Cannot access
+ * 'CONNECT_EXEMPT_KINDS' before initialization` crash at import time, not a
+ * subtle bug (confirmed by reproducing it before this fix). Fixed by making
+ * this module a LEAF again: both values are mirrored locally (the same
+ * idiom this file already uses for TILE_METRES/MAP_W/MAP_H above — see
+ * those comments) instead of imported from engine.ts. The VALUES remain
+ * engine.ts's own (TICKS_PER_MONTH = 30, CONNECT_EXEMPT_KINDS = road/
+ * motorway/rail/station/pylon) — SSOT for the CONCEPT stays engine.ts; this
+ * is a value mirror, not a redefinition of the rule.
+ */
+const TICKS_PER_MONTH = 30;
+const CONNECT_EXEMPT_KINDS: ReadonlySet<ZoneKind> = new Set<ZoneKind>([
+  'road',
+  'motorway',
+  'rail',
+  'station',
+  'pylon',
+]);
 
 // ---------------------------------------------------------------------------
 // §1 Vocabulary and derived constants (acceptance doc §3)
@@ -707,8 +738,17 @@ export interface ConsolidationOpportunity {
   buildingCountReduction: number;
 }
 
-/** Aaron's R2 placeholder, mirrored here for read-only costing display — the authoritative constant lives with the (separate) apply/economics lane once it exists; this module only ever REPORTS a cost, never charges one. */
-export const CONSOLIDATOR_SCRAP_FRACTION = 0.5;
+/**
+ * Aaron's R2 ruling: 50%, deliberately DOUBLE the player's own 25% bulldozer
+ * refund. Re-exported here (not redefined) from data.ts's
+ * CONSOLIDATOR_SCRAP_FRACTION — the SAME constant the mutation lane
+ * (engine.ts's applyConsolidatorPass) actually charges through the ledger,
+ * derived there from BULLDOZE_REFUND_FRACTION (GR#15) — so this module's
+ * read-only cost ESTIMATE and the apply lane's real CHARGE can never drift
+ * apart (GR#3). This module only ever REPORTS a cost via this constant,
+ * never charges one.
+ */
+export { CONSOLIDATOR_SCRAP_FRACTION };
 
 /**
  * Read-only opportunity finder: for every section in scope, for every
@@ -1023,4 +1063,72 @@ export function topOpportunities(s: SimState, sectionKeys: readonly number[], li
     o.rank = i + 1;
   });
   return merged.slice(0, limit);
+}
+
+// ---------------------------------------------------------------------------
+// §7 Mutation-lane log shapes (acceptance doc §H, AC-25/AC-26). These are DATA
+// TYPES ONLY — describing what a pass DID, for the log/Undo/persistence — not
+// functions. The functions that actually demolish/build/lay road and produce
+// values of these types (applyConsolidatorPass, undoLastConsolidatorPass) live
+// in engine.ts, where autoConnect/fits/occupiedSet/footprintOf/logEvent/the
+// insolvency gates already live natively. Kept here (not duplicated) because
+// the log shape is part of this module's own domain vocabulary (a
+// ConsolidationOpportunity, once APPLIED, becomes a ConsolidationTransaction —
+// the two are deliberately structurally close) and because SimState.
+// consolidatorLog's type must be importable by both the engine (which writes
+// it) and any future UI panel (which only reads it) without either needing to
+// import engine.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * A single building's identity+state as recorded in a log entry, sufficient
+ * to restore it EXACTLY on Undo (AC-26): original id (so nextId never moves
+ * and buildings.ids-unique still holds), spec, coordinates, capacityTier,
+ * builtTick, and placedBy (AC-21's player-vs-auto provenance).
+ */
+export interface ConsolidationRecord {
+  id: number;
+  spec: string;
+  x: number;
+  y: number;
+  capacityTier?: number;
+  builtTick?: number;
+  placedBy?: 'player' | 'auto';
+}
+
+/**
+ * One atomic transaction actually applied by a pass (AC-17). `reconnect`
+ * demolishes nothing (removed is always []) and lays road tiles as `added`
+ * (Aaron's stranded-capacity ruling, ranked above `consolidate`/`relocate`
+ * in the objective — see engine.ts's applyConsolidatorPass ordering).
+ * `consolidate`/`relocate` demolish the `removed` group and place exactly one
+ * `added` successor. `scoreBefore`/`scoreAfter` are inc2 scope (AC-13..15 ship
+ * a stub `layoutScore` there) — omitted here in inc1 rather than filled with
+ * a meaningless placeholder object (GR#16: never fabricate a value nothing
+ * computed).
+ */
+export interface ConsolidationTransaction {
+  sectionKey: number;
+  kind: 'consolidate' | 'relocate' | 'reconnect';
+  removed: ConsolidationRecord[];
+  added: ConsolidationRecord[];
+  buildCost: number;
+  scrapRecovered: number;
+  netCost: number;
+}
+
+/**
+ * One monthly pass's full record (AC-25). `SimState.consolidatorLog` holds an
+ * array of these, newest-first, capped at CONSOLIDATOR_LOG_CAP (engine.ts).
+ * `skipped` is what makes an inactive-looking consolidator explicable (AC-38)
+ * — a candidate that was FOUND but not applied, with an honest reason string
+ * ('insufficient funds' / 'action budget' / 'no successor' / 'would strand' /
+ * 'auto-scale cooldown' / 'under construction' / 'family share ceiling' /
+ * 'no site' / 'not unlocked' / 'one per city' — never a vague catch-all).
+ */
+export interface ConsolidationPass {
+  id: number;
+  tick: number;
+  transactions: ConsolidationTransaction[];
+  skipped: Array<{ sectionKey: number; reason: string }>;
 }

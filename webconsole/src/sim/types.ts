@@ -1,3 +1,11 @@
+// FEAT-2326609761 (CONSOLIDATOR mutation lane) — type-only import. Erased at
+// compile time (this project type-strips .ts, no runtime import survives),
+// so this does NOT create a runtime cycle even though consolidator.ts itself
+// imports `type { SimState, ZoneKind }` from THIS file. See consolidator.ts's
+// own header note on the engine.ts<->consolidator.ts cycle it had to avoid —
+// a type-only edge here is safe by construction, a value edge would not be.
+import type { ConsolidationPass } from './consolidator.ts';
+
 export type ZoneKind =
   | 'road'
   | 'motorway'
@@ -84,6 +92,16 @@ export interface Building {
    * interim-assumption #4). Absent/undefined == false (GR#16 default).
    */
   scaleLocked?: boolean;
+  /**
+   * FEAT-2326609761 (CONSOLIDATOR, AC-21): provenance — did a PLAYER place
+   * this building, or did the consolidator (`applyConsolidatorPass`,
+   * engine.ts)? GR#16: an OLD save has no field at all, and `undefined` MUST
+   * be read as `'player'` — the conservative default (a background process
+   * must never be free to assume a pre-existing building is fair game just
+   * because a field is missing). Every read site in this build reads
+   * `b.placedBy ?? 'player'`, never `b.placedBy === 'auto'` bare.
+   */
+  placedBy?: 'player' | 'auto';
 }
 
 export type ToolMode = 'select' | 'move' | 'bulldoze' | 'build' | 'clone';
@@ -674,6 +692,35 @@ export interface SimState {
   pendingMilestoneRewards?: Array<{ totalReward: number; milestoneId: string; notice: MilestoneNotice }>;
   /** Active milestone-reward notification banner, or null when dismissed / none pending. */
   milestoneNotice?: MilestoneNotice | null;
+  /**
+   * FEAT-2326609761 (CONSOLIDATOR, AC-25). Newest-first, capped at
+   * CONSOLIDATOR_LOG_CAP (engine.ts) — mirrors `ledger`'s own ring-buffer
+   * idiom. `consolidatorUndo` (AC-26) reverses exactly `consolidatorLog[0]`
+   * and pops it; single-level by design (ASM-1502 — Aaron said "the last
+   * pass", and a multi-level stack would need a full state-history buffer at
+   * ~1.77MB/SimState clone, the BUG-592 memory profile this project already
+   * ruled out). Optional for backward tolerance: an old save predating this
+   * field is read as `[]`.
+   */
+  consolidatorLog?: ConsolidationPass[];
+  /**
+   * FEAT-2326609761 (CONSOLIDATOR, AC-26/ASM-1502) — F4 FIX (independent
+   * round finding, "undo is NOT single-level"): `consolidatorLog[0]` alone
+   * is not enough to enforce "only the last pass is undoable", because
+   * POPping the log after a successful undo makes the PREVIOUS pass the new
+   * `log[0]` — a second `consolidatorUndo` press would then happily reverse
+   * that older pass too, chaining backward through the whole 20-entry ring
+   * one press at a time against a map that has long since moved on. This
+   * flag is the single-level gate: `consolidatorUndo` refuses (reference
+   * identity, never an error) whenever it is `true`; it is set `true` the
+   * moment an undo succeeds, and reset to `false` the moment a NEW pass is
+   * appended to `consolidatorLog` (a fresh pass earns a fresh, one-time
+   * undo). Optional for backward tolerance: an old save predating this field
+   * is read as `false` via `state.consolidatorUndoConsumed ?? false` (safe —
+   * such a save has no consolidatorLog either, so the flag is moot until a
+   * pass actually runs).
+   */
+  consolidatorUndoConsumed?: boolean;
 }
 
 /**

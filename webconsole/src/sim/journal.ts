@@ -169,6 +169,17 @@ export function isStateAffecting(action: Action): boolean {
     case 'enterPlayMode':
       return true;
 
+    // FEAT-2326609761 (CONSOLIDATOR mutation lane, AC-26/AC-32): Undo
+    // mutates buildings/funds/consolidatorLog — state-affecting, must
+    // journal + replay identically (mirrors 'bulldoze'/'relocate' above).
+    // The monthly PASS itself needs no separate action (AC-32: it replays
+    // deterministically from the existing 'tick' stream as a pure function
+    // of state) — only what a human DOES is journalled here. (The toggle
+    // itself, 'toggleConsolidator', is classified once above, mirroring
+    // 'toggleGridImport' — landed by the read-only lane at 893511b.)
+    case 'consolidatorUndo':
+      return true;
+
     // Exhaustiveness check (TypeScript will error if Action gains a new case).
     default: {
       const _exhaustive: never = action;

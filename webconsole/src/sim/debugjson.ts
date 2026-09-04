@@ -75,6 +75,7 @@ import {
   efwPowerOf,
 } from './data.ts';
 import type { PipeTierAgg } from './data.ts';
+import type { ConsolidationPass } from './consolidator.ts';
 import { sanitizeCrimeRate, sanitizeCongestionTicksBySpec, sanitizeClaimedMilestones } from './data.ts';
 import {
   HISTORY_CAP,
@@ -313,6 +314,10 @@ export interface DebugJson {
     pendingMilestoneRewards: Array<{ totalReward: number; milestoneId: string; notice: MilestoneNotice }>;
     /** FEAT-milestone-cash-rewards-2026-09-02 — active milestone-reward notification banner, or null. */
     milestoneNotice: MilestoneNotice | null;
+    /** FEAT-2326609761 (CONSOLIDATOR, AC-25) — newest-first pass log, capped at CONSOLIDATOR_LOG_CAP. */
+    consolidatorLog: ConsolidationPass[];
+    /** FEAT-2326609761 (CONSOLIDATOR, AC-26/ASM-1502, F4 fix) — single-level undo consumed-flag. */
+    consolidatorUndoConsumed: boolean;
   };
   flows: {
     inflows: FlowItem[];
@@ -609,6 +614,9 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   claimedMilestones: 'sim.claimedMilestones',
   pendingMilestoneRewards: 'sim.pendingMilestoneRewards',
   milestoneNotice: 'sim.milestoneNotice',
+  // FEAT-2326609761 (CONSOLIDATOR mutation lane).
+  consolidatorLog: 'sim.consolidatorLog',
+  consolidatorUndoConsumed: 'sim.consolidatorUndoConsumed',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -969,6 +977,12 @@ export function buildDebugJson(
       claimedMilestones: sanitizeClaimedMilestones(s.claimedMilestones),
       pendingMilestoneRewards: s.pendingMilestoneRewards ?? [],
       milestoneNotice: s.milestoneNotice ?? null,
+      // FEAT-2326609761 (CONSOLIDATOR mutation lane, AC-25/AC-34): GR#16
+      // default — an old save predating this feature reads an empty pass
+      // log (consolidatorEnabled's own default is set above,
+      // CONSOLIDATOR_ENABLED_DEFAULT).
+      consolidatorLog: s.consolidatorLog ?? [],
+      consolidatorUndoConsumed: s.consolidatorUndoConsumed ?? false,
     },
     flows: {
       inflows: s.lastFlows.inflows,

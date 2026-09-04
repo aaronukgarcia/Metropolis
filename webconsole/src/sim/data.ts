@@ -293,6 +293,35 @@ export function isFreeZone(sp: Spec): boolean {
 }
 
 /**
+ * FEAT-2326609761 (CONSOLIDATOR, Aaron's R2 ruling + Q100102): the player's
+ * own bulldozer refunds 25% of what was actually paid (engine.ts's `bulldoze`
+ * case, `Math.round(placementCost(def) * BULLDOZE_REFUND_FRACTION)`) — this
+ * is the SSOT constant that fraction now derives from (was three separate
+ * `0.25` literals in engine.ts, a GR#15 violation). Deliberately homed in
+ * data.ts, NOT engine.ts: engine.ts's mutation-lane consolidator pass needs
+ * to import the CONSOLIDATOR_SCRAP_FRACTION derived from this below, and
+ * consolidator.ts (the read-only discovery module) is a LEAF that must never
+ * import engine.ts (doing so would create an engine.ts <-> consolidator.ts
+ * circular import once engine.ts imports consolidator.ts's pure functions —
+ * see consolidator.ts's own header note on the same cycle). data.ts is the
+ * one shared ancestor both already depend on.
+ */
+export const BULLDOZE_REFUND_FRACTION = 0.25;
+
+/**
+ * FEAT-2326609761 R2 (Aaron, 2026-09-03): "50 percent, deliberately DOUBLE
+ * the player's own 25 percent bulldozer refund — the game rewards
+ * consolidating rather than merely permitting it." GR#15: derived from
+ * BULLDOZE_REFUND_FRACTION, never a second hand-typed 0.5. Q100102 in the BA
+ * doc recommended keeping these as separate constants (never unify them,
+ * that would silently double every hand-demolition refund in the game) —
+ * this constant IS that separate constant, just expressed as a multiple of
+ * the bulldozer's own rate so the "double" relationship is provable in code,
+ * not merely asserted in a comment.
+ */
+export const CONSOLIDATOR_SCRAP_FRACTION = 2 * BULLDOZE_REFUND_FRACTION;
+
+/**
  * Density / level tier of a block (FEAT-1972079882), 1..3, drawn as the block's
  * border colour. Deterministic from the spec's footprint + capacity — there is
  * no per-building level in sim state yet, so tier is a stable property of the

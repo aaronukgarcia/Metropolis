@@ -12,9 +12,12 @@ import {
   countByKindOnline,
   fits,
   isOnline,
+  isRoadAdjacent,
+  isRoadConnected,
   memoOnState,
   occupiedSet,
   occupiedSetIncremental,
+  roadTileSetOf,
   roadTileSetIncremental,
   isRoadOrTrunkSpec,
   placementCost,
@@ -69,6 +72,9 @@ import {
   filledJobsBySector,
   countOfSpec,
   remainingAllowance,
+  constructionTicks,
+  BULLDOZE_REFUND_FRACTION,
+  CONSOLIDATOR_SCRAP_FRACTION,
 } from './data.ts';
 import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -85,7 +91,24 @@ import type {
   BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL, INSOLVENCY_WARNING_THRESHOLD } from './fiscal.ts';
+// FEAT-2326609761 (CONSOLIDATOR mutation lane) — read-only discovery/opportunity
+// functions from the PARALLEL read-only lane's module. Safe one-directional
+// import: consolidator.ts is a LEAF (mirrors TICKS_PER_MONTH/CONNECT_EXEMPT_KINDS
+// locally rather than importing them from here — see its own header note) so
+// this does not form a cycle.
+import {
+  sectionIndexOf,
+  monthlyScopeOf,
+  findReconnectionOpportunities,
+  findOpportunities,
+  capacityOf,
+  familyKeyOf,
+  sectionOriginOf,
+  SECTIONS_X,
+  SECTIONS_Y,
+} from './consolidator.ts';
+import type { ConsolidationPass, ConsolidationTransaction, ConsolidationRecord, SectionAudit } from './consolidator.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -451,6 +474,24 @@ function rawState(): SimState {
     // FEAT-dynamic-bailout (Aaron ruling Q100045): the ONE dynamic bailout
     // has not been used at game start.
     dynamicBailoutUsed: false,
+    // FEAT-2326609761 (CONSOLIDATOR, AC-25/AC-34): the enable flag defaults
+    // via CONSOLIDATOR_ENABLED_DEFAULT above (landed by the read-only lane,
+    // 893511b) — a new city never starts with a background actor already
+    // demolishing things. The pass log starts empty.
+    consolidatorLog: [],
+    // F4 FIX: given a REAL default here (not left `undefined`) for the same
+    // reason gridImportEnabled/consolidatorEnabled are — advance() writes
+    // this key on EVERY tick (`consolidatorUndoConsumed: consolidatorPassLog
+    // ? false : s.consolidatorUndoConsumed`), so a genesis state that left it
+    // `undefined` would carry an EXPLICIT `undefined`-valued own-property
+    // forward from tick 1 onward. JSON.stringify (every save/restore path)
+    // silently DROPS undefined-valued properties, so the round-tripped state
+    // would then lack this key entirely while the live in-memory state still
+    // has it (as `undefined`) — a real regression this build introduced and
+    // caught by journal.test.mjs's BUG-603 restore-fidelity deepEqual (an
+    // explicit-undefined key and an absent key are NOT the same object to
+    // Node's assert.deepStrictEqual). A concrete boolean default closes it.
+    consolidatorUndoConsumed: false,
   };
 }
 
@@ -1414,6 +1455,818 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
   return { buildings, monitors, cost, upgraded };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-2326609761 (CONSOLIDATOR) — MUTATION LANE. Consumes the READ-ONLY
+// discovery/opportunity functions from consolidator.ts (a separate, parallel
+// lane's module — see that file's own header for the scope split) and does
+// the part that actually changes Aaron's map: demolish, build, lay a
+// reconnecting road spur, charge/refund through the ledger, log it, and
+// support Undo. Lives in engine.ts (not consolidator.ts) because every
+// primitive it needs to MUTATE state — autoConnect, fits, occupiedSet,
+// footprintOf, logEvent, computeRoadConnectivity, INSOLVENCY_WARNING_THRESHOLD
+// — already lives here natively; consolidator.ts stays a pure read-only leaf.
+//
+// Aaron's rulings this section implements (BOW FEAT-2326609761, 2026-09-03):
+//   R1 fully automatic — applyConsolidatorPass runs unconditionally at the
+//     monthly boundary once consolidatorEnabled; no propose/approve step.
+//   R2 pay-build/get-scrap — CONSOLIDATOR_SCRAP_FRACTION (data.ts, derived
+//     from BULLDOZE_REFUND_FRACTION, GR#15).
+//   Ruling 7 stranded-capacity — reconnection opportunities are always
+//     applied BEFORE density-consolidation opportunities in a pass (see the
+//     ordering in applyConsolidatorPass below): "recovering 20,000 existing
+//     dwellings beats building new ones and costs a fraction".
+// ════════════════════════════════════════════════════════════════════════════
+
+/** PLACEHOLDER-balance (mirrors MAX_AUTO_SCALE_UPGRADES_PER_PASS's role, engine.ts:966): the number of TRANSACTIONS (not sections/candidates) a single pass may apply. Candidates beyond this are recorded in `skipped` with reason 'action budget' (AC-38), never silently dropped. */
+const CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS = 4;
+
+/** PLACEHOLDER-balance: no single successor may end a transaction carrying more than this share of the city's online capacity in its own family (CEIL-3) — the ceiling that stops "one XXL nuke for the whole city". */
+const CONSOLIDATOR_MAX_FAMILY_SHARE = 0.5;
+
+/** Ring-buffer cap for SimState.consolidatorLog, mirroring LEDGER_CAP's role for the ledger. */
+export const CONSOLIDATOR_LOG_CAP = 20;
+
+function toConsolidationRecord(b: Building, placedByDefault: 'player' | 'auto'): ConsolidationRecord {
+  return {
+    id: b.id,
+    spec: b.spec,
+    x: b.x,
+    y: b.y,
+    ...(b.capacityTier != null ? { capacityTier: b.capacityTier } : {}),
+    ...(b.builtTick != null ? { builtTick: b.builtTick } : {}),
+    placedBy: b.placedBy ?? placedByDefault,
+  };
+}
+
+function recordToBuilding(r: ConsolidationRecord): Building {
+  return {
+    id: r.id,
+    spec: r.spec,
+    x: r.x,
+    y: r.y,
+    ...(r.capacityTier != null ? { capacityTier: r.capacityTier } : {}),
+    ...(r.builtTick != null ? { builtTick: r.builtTick } : {}),
+    ...(r.placedBy != null ? { placedBy: r.placedBy } : {}),
+  };
+}
+
+/**
+ * The city-wide online capacity for one consolidation family (CEIL-3's
+ * denominator) — an O(sections) fold over the ALREADY-BUILT sectionIndexOf
+ * index (AC-37: never a fresh O(buildings) walk here; sectionIndexOf's own
+ * single fold already aggregated capacityByFamily per section).
+ */
+function cityFamilyCapacity(index: Map<number, SectionAudit>, familyKey: string): number {
+  let total = 0;
+  for (const audit of index.values()) {
+    total += audit.capacityByFamily[familyKey] ?? 0;
+  }
+  return total;
+}
+
+/**
+ * The 8-neighbour section keys of `key`, bounds-checked against the SAME
+ * SECTIONS_X/SECTIONS_Y grid consolidator.ts's own sectionIndexOf pass-2
+ * neighbour walk uses (imported, not re-derived — GR#3).
+ */
+function sectionNeighbourKeysOf(key: number): number[] {
+  const sx = key % SECTIONS_X;
+  const sy = Math.floor(key / SECTIONS_X);
+  const out: number[] = [];
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = sx + dx;
+      const ny = sy + dy;
+      if (nx < 0 || ny < 0 || nx >= SECTIONS_X || ny >= SECTIONS_Y) continue;
+      out.push(ny * SECTIONS_X + nx);
+    }
+  }
+  return out;
+}
+
+/**
+ * One monthly consolidator pass (AC-6/ruling 7's monthly-twelfth rotation,
+ * AC-12's one-transaction-per-section, AC-17's atomic validate-then-mutate).
+ * Called from advance() at the tick boundary, ONLY when consolidatorEnabled.
+ * Pure function of (s, tick) — no Date/Math.random/localStorage (GR#21);
+ * every ordering decision reads consolidator.ts's own deterministic sorts.
+ *
+ * Returns the resulting state (buildings/funds/nextId/cumulativeCapexSpent/
+ * roadConnectivity already reflect every applied transaction) plus a log
+ * entry (or null if the pass found nothing to do and nothing to report).
+ * The CALLER (advance()) is responsible for re-booking the funds delta
+ * through the normal inflow/outflow + one-ledger-row path (mirrors how
+ * autoScaleCost/orphanConnectCost are handled) rather than trusting this
+ * function's own `funds` field for the tick's conservation bookkeeping —
+ * see advance()'s consolidator block below for why.
+ */
+function applyConsolidatorPass(
+  s: SimState,
+  tick: number,
+): { state: SimState; passLog: ConsolidationPass | null } {
+  const scope = monthlyScopeOf(tick);
+  const reconnectOpps = findReconnectionOpportunities(s, scope.sectionKeys);
+  const consolidateOpps = findOpportunities(s, scope.sectionKeys);
+
+  let cur = s;
+  const byId = new Map(cur.buildings.map((b) => [b.id, b]));
+  const transactions: ConsolidationTransaction[] = [];
+  const skipped: Array<{ sectionKey: number; reason: string }> = [];
+  const sectionsDone = new Set<number>();
+
+  const overBudget = () => transactions.length >= CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS;
+
+  // F5 FIX (independent round finding, perf): hoisted ONCE for the whole
+  // reconnect phase rather than re-derived via sectionIndexOf(cur) inside
+  // the loop below (a full O(buildings) rebuild every time `cur` changes,
+  // i.e. once per committed reconnect transaction) — mirrors the density
+  // phase's `index` below. `cur === s` here (no commits have happened yet),
+  // so this is a cache HIT against findReconnectionOpportunities'/
+  // findOpportunities' own internal sectionIndexOf(s) call, not a fresh
+  // walk. Section membership (`buildingIds`) can go stale only for a LATER
+  // candidate's NEIGHBOUR section after an EARLIER commit in an adjacent
+  // section within the SAME pass (accepted per the round's own "hoist
+  // across transactions" instruction) — the actual "is it online right now"
+  // read is always live against `cur`, never cached.
+  const reconnectIndex = sectionIndexOf(cur);
+
+  // F5 FIX (independent round finding, perf): `occupied`/`roads` hoisted for
+  // the WHOLE reconnect phase, not re-cloned via `new Set(occupiedSet(cur))`
+  // once per OPPORTUNITY. At scale (49,174 buildings) `occupiedSet(cur)` is
+  // a Set proportional to occupied TILES, not buildings — cloning it for
+  // every one of up to a few dozen reconnect candidates (even ones that end
+  // up doing nothing) was the dominant unaccounted cost the round measured
+  // (+2,544ms/pass). Re-seeded only when `cur` actually changes (a
+  // committed transaction), mirroring the density phase's `runningOccupied`.
+  let reconnectOccupied = new Set(occupiedSet(cur));
+  let reconnectRoads = new Set(roadTileSetOf(cur));
+
+  // ---- Ruling 7: reconnection ranks ABOVE density consolidation ----------
+  for (const opp of reconnectOpps) {
+    if (overBudget()) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'action budget' });
+      continue;
+    }
+    if (sectionsDone.has(opp.sectionKey)) continue; // AC-12: one transaction/section/pass
+    if (cur.administrationState) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'administration' });
+      continue;
+    }
+
+    const audit = reconnectIndex.get(opp.sectionKey);
+    if (!audit) continue;
+    // F5 FIX (independent round finding, perf): the candidate residential
+    // ids THIS section holds, bounded to this one section's own
+    // buildingIds (AC-37) — WITHOUT an isOnline(cur, b) pre-filter. isOnline
+    // is backed by onlineByBuilding(cur), a memoOnState fold that computes
+    // EVERY building's status in one O(buildings) pass the first time
+    // anything calls it for `cur` — a completely SEPARATE cache from
+    // sectionIndexOf's own (already-paid-for) classification, so this
+    // filter used to force a SECOND full O(buildings) walk purely to
+    // re-confirm what `reconnectOpps` already proved true for the section
+    // as a whole (findReconnectionOpportunities only returns sections with
+    // actionable stranded capacity > 0). autoConnect() itself is the
+    // correct, CHEAP (O(footprint), via planConnector's own geometry) place
+    // to discover "already connected" — its `if (plan.connected) return
+    // unchanged` branch makes calling it on an already-online building a
+    // safe, near-free no-op, so skipping the pre-filter costs nothing but a
+    // few wasted calls in the rare case another transaction already fixed
+    // this same section's buildings earlier in this pass.
+    const strandedIds = audit.buildingIds.filter((id) => {
+      const b = byId.get(id);
+      return !!b && SPECS[b.spec]?.kind === 'residential';
+    });
+    if (strandedIds.length === 0) continue; // section holds no residential candidate at all
+
+    const preFunds = cur.funds;
+    let attempt = cur;
+    let anyConnected = false;
+    const addedRecords: ConsolidationRecord[] = [];
+    // Rollback list for the SHARED reconnectOccupied/reconnectRoads sets
+    // (see their declaration above): since they are now mutated IN PLACE
+    // across the whole reconnect phase (not cloned fresh per opportunity),
+    // a candidate that ends up REJECTED after partially laying tiles must
+    // undo exactly those additions, or the next opportunity would see
+    // phantom occupied/road tiles that were never actually committed to
+    // `cur`.
+    const tentativeKeys: string[] = [];
+    // BUG-642-class fix: autoConnect(), given no prebuiltBoard, rebuilds its
+    // OWN occupied/road tile Sets from scratch (a full O(buildings) walk) on
+    // EVERY call — and this loop can call it once per stranded building in
+    // the section. The hoisted `reconnectOccupied`/`reconnectRoads` (shared
+    // across the WHOLE reconnect phase, not re-cloned per opportunity — see
+    // their declaration above) are threaded straight through and mutated
+    // in place as tiles are added, mirroring how the 'place' reducer case
+    // and sweepOrphanConnects already avoid this cost.
+    for (const id of strandedIds) {
+      const b = byId.get(id)!;
+      const sp = SPECS[b.spec];
+      if (!sp) continue;
+      const beforeAttemptFunds = attempt.funds;
+      const lengthBefore = attempt.buildings.length;
+      attempt = autoConnect(attempt, b, sp, { notice: false }, { occupied: reconnectOccupied, roads: reconnectRoads });
+      if (attempt.buildings.length > lengthBefore) {
+        // autoConnect only ever APPENDS new tiles at the tail (never
+        // reorders/removes) — the tail slice is exactly what this call
+        // added, with no O(buildings) search needed to find it.
+        for (const nb of attempt.buildings.slice(lengthBefore)) {
+          addedRecords.push(toConsolidationRecord(nb, 'auto'));
+          const nsp = SPECS[nb.spec];
+          if (nsp) {
+            for (let dx = 0; dx < nsp.w; dx++) {
+              for (let dy = 0; dy < nsp.h; dy++) {
+                const key = `${nb.x + dx},${nb.y + dy}`;
+                reconnectOccupied.add(key);
+                reconnectRoads.add(key); // every appended tile here is a road/connector spec
+                tentativeKeys.push(key);
+              }
+            }
+          }
+        }
+      }
+      if (attempt.funds !== beforeAttemptFunds || attempt.buildings.length !== lengthBefore) {
+        anyConnected = true;
+      }
+      // AC-23: never spend a background process through the insolvency floor.
+      if (attempt.funds < INSOLVENCY_WARNING_THRESHOLD) break;
+    }
+
+    const spend = preFunds - attempt.funds;
+    if (!anyConnected || spend <= 0) {
+      // Nothing actually laid (e.g. planConnector found no route) —
+      // tentativeKeys is empty in this path (no tiles were ever added), so
+      // there is nothing to roll back.
+      continue; // not a chargeable transaction.
+    }
+    if (attempt.funds < INSOLVENCY_WARNING_THRESHOLD) {
+      for (const key of tentativeKeys) {
+        reconnectOccupied.delete(key);
+        reconnectRoads.delete(key);
+      }
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'insufficient funds' });
+      continue; // revert — `cur` is untouched since we mutated only the local `attempt`.
+    }
+
+    cur = attempt;
+    // Rebuild byId only with the delta (cheap — bounded to this section's work).
+    for (const rec of addedRecords) byId.set(rec.id, recordToBuilding(rec));
+    sectionsDone.add(opp.sectionKey);
+    transactions.push({
+      sectionKey: opp.sectionKey,
+      kind: 'reconnect',
+      removed: [],
+      added: addedRecords,
+      buildCost: spend,
+      scrapRecovered: 0,
+      netCost: spend,
+    });
+  }
+
+  // BUG-642-class fix: autoConnect (called per stranded building above) can
+  // lay new road tiles WITHOUT this function ever recomputing
+  // cur.roadConnectivity — unlike the reducer's 'place' path, this pass runs
+  // INSIDE advance(), bypassing the reducer() wrapper that normally does that
+  // recompute. Without this, every isOnline/sectionIndexOf call in the
+  // density phase below would read a STALE connectivity graph (missing any
+  // spur just laid), corrupting the AC-19 stranding check and the CEIL-3
+  // family-capacity audit alike. ONE recompute for the whole reconnect
+  // phase, not per-candidate.
+  if (transactions.some((t) => t.kind === 'reconnect')) {
+    cur = { ...cur, roadConnectivity: computeRoadConnectivity(cur) };
+  }
+
+  // ---- Density consolidation (the ladder) --------------------------------
+  // `index`/`occupiedBoard` are HOISTED across candidates and only
+  // refreshed when `cur` actually changes (a transaction committed) — the
+  // BUG-642 idiom applied to this loop. Before this fix, `occupiedSet` was
+  // rebuilt from scratch (`occupiedSet({...cur, buildings: filtered})`, a
+  // FRESH array reference every candidate, guaranteeing a cache miss) once
+  // per candidate opportunity, and `computeRoadConnectivity` — an O(road
+  // tiles) BFS — ran unconditionally per candidate that reached the site
+  // search, together adding ~1.3s to a single boundary tick on Aaron's
+  // 29,831-building save (median 543ms -> 1,849ms, measured). Both are now
+  // O(1) amortised per candidate in the common case.
+  const index = sectionIndexOf(cur);
+  // F5 FIX (independent round finding, perf): both hoisted ONCE for the
+  // whole density phase and maintained INCREMENTALLY as transactions commit,
+  // instead of being re-derived from `cur` (whose reference changes on every
+  // commit, forcing a fresh O(buildings) rebuild each time) after every one
+  // of up to CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS commits. See the
+  // per-commit update sites below.
+  const familyCapacityDelta = new Map<string, number>();
+  const runningOccupied = new Set(occupiedSet(cur));
+  for (const opp of consolidateOpps) {
+    if (overBudget()) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'action budget' });
+      continue;
+    }
+    if (sectionsDone.has(opp.sectionKey)) continue;
+    if (cur.administrationState) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'administration' });
+      continue;
+    }
+
+    const fromSpec = SPECS[opp.fromSpec];
+    const toSpec = SPECS[opp.toSpec];
+    if (!fromSpec || !toSpec) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'no successor' });
+      continue;
+    }
+    // AC-8 rule 6 / Q100105 (Aaron: "obey the unlock ladder" — a background
+    // regenerator must never hand the player something they have not
+    // unlocked). Deliberately re-checked HERE, not trusted from the
+    // read-only opportunity list — consolidator.ts's isConsolidationSuccessor
+    // omits this on purpose (its own doc comment: "unlock/cap gating is
+    // re-applied by the (separate) apply lane before anything is actually
+    // built" — this IS that apply lane).
+    if (!specUnlocked(cur, toSpec)) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'not unlocked' });
+      continue;
+    }
+    // CEIL-4 / FEAT-2326609761 inc1a (maxPerCity, landed on main after this
+    // lane was branched — Aaron: "limit Five Gorges Dams to just one",
+    // "unplaceable... by the consolidator alike"). `fromSpec !== toSpec`
+    // always holds here (AC-8 rule 1: a.id !== b.id in isConsolidationSuccessor),
+    // so demolishing the group never changes toSpec's own count — a plain
+    // remainingAllowance(cur, toSpec) read is correct and sufficient; no
+    // batch-smuggling risk (unlike stampRegion/placeMany) because this loop
+    // applies at most one successor of a given spec per section per pass.
+    if (remainingAllowance(cur, toSpec) <= 0) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'one per city' });
+      continue;
+    }
+
+    const group = opp.buildingIds.map((id) => byId.get(id)).filter((b): b is Building => !!b);
+    if (group.length < opp.groupCount) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'group changed' });
+      continue;
+    }
+
+    // AC-20 protected classes: under construction, or an auto-scale cooldown
+    // in effect (do not fight the auto-scaler).
+    let protectedHit: string | null = null;
+    for (const b of group) {
+      if (cur.tick - (b.builtTick ?? 0) < constructionTicks(fromSpec)) {
+        protectedHit = 'under construction';
+        break;
+      }
+      if (b.lastAutoScaleTick != null && cur.tick - b.lastAutoScaleTick < AUTO_SCALE_COOLDOWN_TICKS) {
+        protectedHit = 'auto-scale cooldown';
+        break;
+      }
+    }
+    if (protectedHit) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: protectedHit });
+      continue;
+    }
+
+    // CEIL-3: family-share ceiling, derived from the CURRENT audited state,
+    // compared AFTER the transaction — family total with the GROUP's own
+    // capacity removed and the successor's added back — not the raw BEFORE
+    // total, which would double-count the group as if it still existed
+    // ALONGSIDE its own successor. A city whose ENTIRE family capacity lives
+    // in the group being replaced correctly still fails this check (the
+    // successor then legitimately holds 100% of the family — exactly the
+    // single-point-of-failure CEIL-3 exists to prevent) — the fix versus the
+    // naive before-total comparison only removes the double count, it does
+    // not exempt the sole-provider case, which is a genuine, intended block.
+    const familyKey = familyKeyOf(toSpec);
+    const familyTotalBefore = cityFamilyCapacity(index, familyKey) + (familyCapacityDelta.get(familyKey) ?? 0);
+    const successorCapacity = capacityOf(toSpec);
+    const groupCapacityApprox = capacityOf(fromSpec) * opp.groupCount;
+    const familyTotalAfter = Math.max(0, familyTotalBefore - groupCapacityApprox) + successorCapacity;
+    if (successorCapacity > CONSOLIDATOR_MAX_FAMILY_SHARE * familyTotalAfter) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'family share ceiling' });
+      continue;
+    }
+
+    // Site the successor on the freed tiles (ASM-1495): the lowest (y, x)
+    // origin inside the section where it fits, after the group is removed.
+    // BUG-642 idiom: derive the after-demolish occupied set INCREMENTALLY
+    // from occupiedSet(cur) (memoOnState-cached and shared across every
+    // candidate sharing this `cur` — a cache HIT here unless a transaction
+    // just committed) by deleting only the group's own footprint tiles
+    // (bounded by group size, typically single digits), instead of
+    // rebuilding the whole board via occupiedSet({...cur, buildings:
+    // filtered}) — a FRESH buildings array reference on every call, which
+    // guarantees a cache MISS and a full O(buildings) rebuild each time.
+    const groupIds = new Set(group.map((b) => b.id));
+    const afterDemolishOccupied = new Set(runningOccupied);
+    for (const b of group) {
+      const bs = SPECS[b.spec];
+      if (!bs) continue;
+      const { w, h } = footprintOf(b, bs);
+      for (let dx = 0; dx < w; dx++) {
+        for (let dy = 0; dy < h; dy++) afterDemolishOccupied.delete(`${b.x + dx},${b.y + dy}`);
+      }
+    }
+    const origin = sectionOriginOf(opp.sectionKey);
+    let site: { x: number; y: number } | null = null;
+    for (let y = origin.y0; y <= origin.y0 + origin.h - toSpec.h && !site; y++) {
+      for (let x = origin.x0; x <= origin.x0 + origin.w - toSpec.w && !site; x++) {
+        if (fits(afterDemolishOccupied, toSpec.w, toSpec.h, x, y)) site = { x, y };
+      }
+    }
+    if (!site) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'no site' });
+      continue;
+    }
+
+    const buildCost = placementCost(toSpec);
+    const scrapRecovered = group.reduce(
+      (sum, b) => sum + Math.round(placementCost(SPECS[b.spec]) * CONSOLIDATOR_SCRAP_FRACTION),
+      0,
+    );
+    const netCost = buildCost - scrapRecovered;
+    if (cur.funds < netCost) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'insufficient funds' });
+      continue;
+    }
+    if (cur.funds - netCost < INSOLVENCY_WARNING_THRESHOLD) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'insufficient funds' });
+      continue;
+    }
+
+    // AC-19 before-snapshot: this section + its 8 neighbours' buildings
+    // (bounded — never the whole city) is the neighbourhood whose online
+    // status must not regress.
+    const neighbourhoodIds: number[] = [];
+    const neighbourAudits = [index.get(opp.sectionKey), ...sectionNeighbourKeysOf(opp.sectionKey).map((k) => index.get(k))];
+    for (const a of neighbourAudits) {
+      if (a) neighbourhoodIds.push(...a.buildingIds);
+    }
+    const onlineBefore = new Map<number, boolean>();
+    for (const id of neighbourhoodIds) {
+      const b = byId.get(id);
+      if (b) onlineBefore.set(id, isOnline(cur, b));
+    }
+
+    const successorBuilding: Building = {
+      id: cur.nextId,
+      spec: toSpec.id,
+      x: site.x,
+      y: site.y,
+      builtTick: cur.tick,
+      placedBy: 'auto',
+    };
+    // The O(buildings) filter is deferred to HERE — only candidates that
+    // survive every cheaper gate (unlock/cap/protection/family-share/site/
+    // funds) above ever pay it, not every candidate the ladder considers.
+    const afterDemolishBuildings = cur.buildings.filter((b) => !groupIds.has(b.id));
+    const beforeConnectLen = afterDemolishBuildings.length; // successorBuilding's own index, below
+    const preAutoConnectFunds = cur.funds;
+    let attempt: SimState = {
+      ...cur,
+      funds: cur.funds - netCost,
+      cumulativeCapexSpent: (cur.cumulativeCapexSpent ?? 0) + buildCost,
+      nextId: cur.nextId + 1,
+      buildings: [...afterDemolishBuildings, successorBuilding],
+    };
+    // Same prebuiltBoard discipline as 'place' (engine.ts) and the reconnect
+    // loop above: `afterDemolishOccupied` already reflects the group's
+    // removal (computed above, incrementally); adding the successor's own
+    // footprint is O(successor tiles), not O(buildings). Roads are
+    // untouched by this transaction's demolish+build (the group is never a
+    // road spec — AC-20), so roadTileSetOf(cur) (memoOnState-cached) is
+    // reused as-is.
+    const occupiedForConnect = new Set(afterDemolishOccupied);
+    for (let dx = 0; dx < toSpec.w; dx++) {
+      for (let dy = 0; dy < toSpec.h; dy++) occupiedForConnect.add(`${site.x + dx},${site.y + dy}`);
+    }
+    // F2 FIX, part A (independent round finding, "the city-breaker" root
+    // cause): autoConnect's OWN affordability gate is `if (s.funds <
+    // totalCost) return unaffordable, state UNCHANGED` — a narrow, purely
+    // LOCAL check with no idea a background pass may still have headroom
+    // down to the city-wide insolvency floor. That gate exists to protect a
+    // PLAYER's direct 'place' action (never spend what you do not have,
+    // full stop); the consolidator's own gates already allow spending DOWN
+    // TO the floor (ASM-1501), so a connector that would have succeeded
+    // within that floor must not be refused by autoConnect's stricter
+    // per-call view. Fix: temporarily grant it the FULL remaining headroom
+    // to the floor (never touching autoConnect's own logic, a shared
+    // function 'place' also calls, whose player-facing non-negative
+    // guarantee stays intact for every OTHER caller), let it plan and lay
+    // the connector against that, then reconcile the REAL spend against the
+    // true funds baseline below — this can never let the transaction commit
+    // for more than the floor allows, because the reconciled total is
+    // provably >= INSOLVENCY_WARNING_THRESHOLD by construction (the boost
+    // itself is capped there).
+    const fundsBeforeConnect = attempt.funds; // cur.funds - netCost, captured before autoConnect touches it
+    const floorHeadroom = fundsBeforeConnect - INSOLVENCY_WARNING_THRESHOLD; // always >= 0: the cheap pre-filter above already proved cur.funds >= netCost
+    attempt = autoConnect(
+      { ...attempt, funds: floorHeadroom },
+      successorBuilding,
+      toSpec,
+      { notice: false },
+      { occupied: occupiedForConnect, roads: roadTileSetOf(cur) },
+    );
+    const connectSpend = floorHeadroom - attempt.funds; // whatever autoConnect actually spent, 0 if it refused/was already connected
+    attempt = { ...attempt, funds: fundsBeforeConnect - connectSpend };
+
+    // F1 FIX (independent round finding): bill the REAL spend, not just
+    // placementCost(successor). autoConnect may have laid a connector (or
+    // upgraded a junction) INSIDE this same transaction, and its cost was
+    // silently written off — advance() reverts funds to preFunds and
+    // re-books only sum(txn.buildCost), so a connector autoConnect paid for
+    // out of `attempt.funds` never survives that revert. Mirror the
+    // reconnect loop's own (already-correct) idiom above: measure the
+    // ACTUAL funds delta across the whole transaction, including autoConnect
+    // — that delta, not the pre-computed estimate, is what actually left the
+    // treasury and what `buildCost`/`netCost` must report.
+    const actualTotalSpend = preAutoConnectFunds - attempt.funds; // netCost + any connector/upgrade cost
+    const realBuildCost = actualTotalSpend + scrapRecovered;
+    const realNetCost = actualTotalSpend;
+
+    // BUG-642 idiom (mirrors case 'place'/roadTopologyMayHaveChanged): the
+    // demolished group can NEVER be a road/trunk spec (AC-20 excludes
+    // CONNECT_EXEMPT_KINDS from the ladder entirely), so the ONLY way this
+    // transaction can have touched the road graph is if autoConnect laid
+    // extra connector/junction tiles beyond the successor itself. Skipping
+    // the O(road tiles) BFS in the (common) already-adjacent case is the
+    // other half of the fix for the 1.3s-per-pass regression measured on
+    // Aaron's real save.
+    const roadTopologyMayHaveChanged = attempt.buildings.length !== beforeConnectLen + 1;
+    const attemptConn: SimState = roadTopologyMayHaveChanged
+      ? { ...attempt, roadConnectivity: computeRoadConnectivity(attempt) }
+      : { ...attempt, roadConnectivity: cur.roadConnectivity };
+
+    // F2 FIX, part B — THE CITY-BREAKER (independent round finding): the
+    // successor's OWN online status was never checked on EITHER branch.
+    // `neighbourhoodIds` is built from the PRE-transaction audit, so a
+    // brand-new building (which never existed in that audit) is never in
+    // `onlineBefore` and the `wasOnline`-gated loop below always skips it via
+    // its own `if (!wasOnline) continue`. When the connector was unaffordable
+    // (autoConnect's `if (s.funds < totalCost)` branch returns state
+    // UNCHANGED), `roadTopologyMayHaveChanged` is false too, so the OLD code
+    // suppressed the AC-19 recheck entirely on BOTH paths — a background
+    // process could demolish five working buildings and leave the successor
+    // permanently offline with no skip recorded. Fixed by checking the
+    // successor explicitly and unconditionally (never gated on
+    // roadTopologyMayHaveChanged — a still-unconnected successor is exactly
+    // the case where topology did NOT change): reject the WHOLE transaction,
+    // discarding `attempt`, if it would not come online. The
+    // roadTopologyMayHaveChanged skip-recheck optimisation itself remains
+    // sound for SURVIVING buildings (a group can never contain a road/
+    // trunk/landmark spec, so their own online status cannot be disturbed by
+    // this demolish+build) — this check is what was missing to cover the
+    // NEW building the optimisation never accounted for.
+    //
+    // isRoadAdjacent/isRoadConnected, NOT bare isOnline: computeIsOnline's G1
+    // (construction-time) gate ALWAYS fails for a building whose builtTick
+    // equals the current tick (0 ticks elapsed < any constructionTicks > 0),
+    // so a bare isOnline() check would reject EVERY successor unconditionally
+    // regardless of road status — this is normal ("just built, not finished
+    // yet"), not the defect F2 describes. The road gates (G2/G3) are exactly
+    // what F2's own attack test checks directly, and neither depends on
+    // elapsed time, so checking them alone correctly answers "will this
+    // building ever come online once construction completes".
+    if (!isRoadAdjacent(attemptConn, successorBuilding) || !isRoadConnected(attemptConn, successorBuilding)) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'successor would be offline' });
+      continue; // discard `attempt` — `cur` is untouched, nothing was ever committed.
+    }
+
+    // THE dominant cost in the original 1.3s-per-pass regression (measured,
+    // not guessed): isOnline() is backed by onlineByBuilding() (data.ts), a
+    // memoOnState fold that computes EVERY building's online status in ONE
+    // O(buildings) pass the FIRST time any isOnline() call sees a given
+    // state object, then answers O(1) from a Map for that SAME object
+    // afterward. `attemptConn` is a brand-new object on every candidate
+    // (`{...attempt, roadConnectivity: ...}` always allocates), so the first
+    // isOnline(attemptConn, ...) call on this object (the successor check
+    // above, or this neighbourhood check) ALWAYS cache-misses and re-walks
+    // every building — bounded here to candidates that reach this point
+    // (not every candidate the ladder considers). Fix: isOnline's answer for
+    // a SURVIVING building (not in the demolished group) can only differ
+    // between `cur` and `attemptConn` if roadConnectivity itself changed —
+    // construction time, spec and coordinates are identical for every
+    // surviving building, and isOnline reads nothing else. When
+    // `!roadTopologyMayHaveChanged` (the common case — the successor sits
+    // where the group stood, already road-adjacent), nothing isOnline reads
+    // for a surviving building changed, so the whole neighbourhood provably
+    // cannot have been newly stranded — skip the check entirely (the
+    // successor's OWN status is still checked above, unconditionally).
+    let strands = false;
+    if (roadTopologyMayHaveChanged) {
+      // O(neighbourhoodIds) lookup instead of rebuilding a full id->building
+      // map from attemptConn.buildings (another BUG-642-class O(buildings)
+      // trap) — every id in `neighbourhoodIds` is either unchanged from
+      // `cur` (still in `byId`), the demolished group (excluded above), or
+      // the successor itself; a brand-new connector tile can never appear
+      // in `neighbourhoodIds` (built from the PRE-transaction audit).
+      const lookupInAttempt = (id: number): Building | undefined =>
+        id === successorBuilding.id ? successorBuilding : byId.get(id);
+      for (const id of neighbourhoodIds) {
+        if (groupIds.has(id)) continue; // demolished on purpose, not a stranding regression
+        const wasOnline = onlineBefore.get(id);
+        if (!wasOnline) continue;
+        const nb = lookupInAttempt(id);
+        if (!nb || !isOnline(attemptConn, nb)) {
+          strands = true;
+          break;
+        }
+      }
+    }
+    if (strands) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'would strand' });
+      continue; // discard `attempt` — `cur` is untouched.
+    }
+
+    cur = attemptConn;
+    byId.set(successorBuilding.id, successorBuilding);
+    for (const id of groupIds) byId.delete(id);
+    // F5 FIX (independent round finding): DO NOT recompute sectionIndexOf
+    // after every committed transaction — measured +2,544ms/pass on Aaron's
+    // real 49k-building save (60x the 40ms budget), dominated by exactly
+    // this per-commit O(buildings) rebuild repeated up to
+    // CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS times. `index` stays bound to
+    // its pre-loop snapshot for the rest of the density phase; CEIL-3's
+    // family-capacity read is kept EXACTLY correct (not just "close enough")
+    // via `familyCapacityDelta` below, applied on every read. The one
+    // remaining imprecision — a later candidate's NEIGHBOURHOOD buildingIds
+    // list not reflecting an EARLIER commit in an ADJACENT section — is
+    // accepted deliberately (per the round's own "hoist across transactions"
+    // instruction): each transaction locks its own section via
+    // `sectionsDone`, so this can only affect the rare case of two
+    // transactions in adjacent sections in the SAME pass, and only the
+    // stranding candidate LIST (isOnline itself is still read fresh off
+    // `cur`, never cached), never money or determinism.
+    familyCapacityDelta.set(familyKey, (familyCapacityDelta.get(familyKey) ?? 0) - groupCapacityApprox + successorCapacity);
+    // F5 FIX: maintain the running occupied-tile board incrementally instead
+    // of letting the NEXT candidate's occupiedSet(cur) cache-miss (cur just
+    // changed) and pay a full O(buildings) rebuild — the other repeated
+    // per-commit cost the round measured.
+    for (const b of group) {
+      const bs = SPECS[b.spec];
+      if (!bs) continue;
+      const { w, h } = footprintOf(b, bs);
+      for (let dx = 0; dx < w; dx++) for (let dy = 0; dy < h; dy++) runningOccupied.delete(`${b.x + dx},${b.y + dy}`);
+    }
+    for (const nb of attempt.buildings.slice(beforeConnectLen)) {
+      const nsp = SPECS[nb.spec];
+      if (!nsp) continue;
+      for (let dx = 0; dx < nsp.w; dx++) for (let dy = 0; dy < nsp.h; dy++) runningOccupied.add(`${nb.x + dx},${nb.y + dy}`);
+    }
+    sectionsDone.add(opp.sectionKey);
+    // F3 FIX (independent round finding, "undo corrupts"): record EVERY
+    // building this transaction added — the successor AND any connector/
+    // junction-upgrade tiles autoConnect laid — not just the successor.
+    // `attempt.buildings.slice(beforeConnectLen)` is exactly that set:
+    // autoConnect only ever APPENDS new tiles at the tail (never reorders),
+    // so the successor (at index `beforeConnectLen`, unmoved) plus every
+    // tile appended after it is precisely what this transaction created.
+    // Without this, Undo restored the demolished group by ORIGINAL
+    // coordinate while leaving the connector's road tiles in place — two
+    // buildings on the same tile, an invariant `fits`/occupiedSet/bulldoze
+    // all assume can never happen.
+    const addedThisTxn = attempt.buildings.slice(beforeConnectLen).map((b) => toConsolidationRecord(b, 'auto'));
+    transactions.push({
+      sectionKey: opp.sectionKey,
+      kind: 'consolidate',
+      removed: group.map((b) => toConsolidationRecord(b, 'player')),
+      added: addedThisTxn,
+      buildCost: realBuildCost,
+      scrapRecovered,
+      netCost: realNetCost,
+    });
+  }
+
+  if (transactions.length === 0 && skipped.length === 0) {
+    return { state: cur, passLog: null };
+  }
+  const priorId = (s.consolidatorLog ?? [])[0]?.id ?? 0;
+  return {
+    state: cur,
+    passLog: { id: priorId + 1, tick, transactions, skipped },
+  };
+}
+
+/**
+ * AC-26: reverses exactly `consolidatorLog[0]` and pops it. Idempotent on an
+ * empty log (returns `state` by reference identity — never an error).
+ *
+ * UNDO MODEL (task brief's "specify and be explicit about what Undo can NOT
+ * restore"): this is the "store the pre-pass building set" strategy, in the
+ * specific form of storing each transaction's `removed`/`added` records
+ * (equivalent to storing the whole pre-pass set for the sections touched,
+ * but far smaller — O(transactions × group size) instead of O(all buildings
+ * in the affected sections)). What it CAN restore exactly: every demolished
+ * building's original id/spec/x/y/capacityTier/builtTick/placedBy (so
+ * `nextId` never moves and `buildings.ids-unique` still holds), and every
+ * pound spent/recovered (funds + cumulativeCapexSpent, reversed exactly).
+ * What it CANNOT restore:
+ *   (1) a monitor (buildingMonitors/roadMonitors) that expired or was
+ *       dropped on the demolished/added buildings during the pass — monitors
+ *       are NOT captured in ConsolidationRecord (task scope: this build's
+ *       file surface is consolidator.ts/engine.ts/types.ts, and monitor
+ *       state is a THIRD structure with its own lifecycle the acceptance
+ *       doc never asked Undo to reconstruct). A restored building starts
+ *       with no active monitor, same as a legacy building predating one.
+ *   (2) a reconnect transaction's road spur, if removing it would strand a
+ *       building that came online BECAUSE of it (checked below) — the spur
+ *       is kept and the pass log's undo is honestly partial for that one
+ *       transaction, per the acceptance doc's own instruction ("otherwise
+ *       the connector stays and the log entry says so").
+ *   (3) anything OUTSIDE this one pass — Undo is single-level (ASM-1502,
+ *       "the last pass"); a second Undo without a new pass in between is a
+ *       no-op (the log is already empty of that entry).
+ */
+function undoLastConsolidatorPass(state: SimState): SimState {
+  const log = state.consolidatorLog ?? [];
+  const last = log[0];
+  // F4 FIX (independent round finding): single-level, enforced by the
+  // consolidatorUndoConsumed flag (see its doc comment, types.ts) — popping
+  // the log alone is not single-level, since a SECOND press would then find
+  // the PREVIOUS pass sitting at the new log[0] and cheerfully reverse that
+  // one too.
+  if (!last || (state.consolidatorUndoConsumed ?? false)) return state; // idempotent — AC-26
+
+  const byId = new Map(state.buildings.map((b) => [b.id, b]));
+  const addedIds = new Set<number>();
+  for (const txn of last.transactions) for (const a of txn.added) addedIds.add(a.id);
+
+  const removedRestored: Building[] = [];
+  for (const txn of last.transactions) for (const r of txn.removed) removedRestored.push(recordToBuilding(r));
+
+  const fullyUndoneBuildings = state.buildings.filter((b) => !addedIds.has(b.id)).concat(removedRestored);
+  const fullyUndoneState: SimState = {
+    ...state,
+    buildings: fullyUndoneBuildings,
+    roadConnectivity: computeRoadConnectivity({ ...state, buildings: fullyUndoneBuildings }),
+  };
+  const fullyUndoneById = new Map(fullyUndoneBuildings.map((b) => [b.id, b]));
+
+  // Per-reconnect-transaction partial-undo check (AC-26's last bullet).
+  const keptAddedRecords = new Map<number, ConsolidationRecord>();
+  let anyPartial = false;
+  for (const txn of last.transactions) {
+    if (txn.kind !== 'reconnect' || txn.added.length === 0) continue;
+    const audit = sectionIndexOf(state).get(txn.sectionKey);
+    if (!audit) continue;
+    let strands = false;
+    for (const id of audit.buildingIds) {
+      if (addedIds.has(id)) continue; // the spur's own tiles
+      const before = byId.get(id);
+      const after = fullyUndoneById.get(id);
+      if (!before || !after) continue;
+      if (isOnline(state, before) && !isOnline(fullyUndoneState, after)) {
+        strands = true;
+        break;
+      }
+    }
+    if (strands) {
+      anyPartial = true;
+      for (const a of txn.added) keptAddedRecords.set(a.id, a);
+    }
+  }
+
+  let finalBuildings = fullyUndoneBuildings;
+  if (keptAddedRecords.size > 0) {
+    finalBuildings = finalBuildings.concat(Array.from(keptAddedRecords.values()).map(recordToBuilding));
+  }
+
+  let reversedNetCost = 0;
+  let reversedBuildCost = 0;
+  for (const txn of last.transactions) {
+    const kept = txn.kind === 'reconnect' && txn.added.some((a) => keptAddedRecords.has(a.id));
+    if (kept) continue; // the asset survives — its spend is not refunded.
+    reversedNetCost += txn.netCost;
+    reversedBuildCost += txn.buildCost;
+  }
+
+  const label = `Consolidation Undo (${last.transactions.length} site${last.transactions.length === 1 ? '' : 's'})${anyPartial ? ' — 1+ spur kept (would strand)' : ''}`;
+
+  // AC-26: "ids are preserved in the record, so nextId never moves". Roll
+  // nextId back by exactly the count of FULLY-removed added records (a kept
+  // reconnect spur's ids stay consumed — that asset still exists). Floor-
+  // guarded against the highest id actually surviving in `finalBuildings` so
+  // this can never collide with an id some OTHER action minted in between
+  // the pass and this Undo (the common "undo right after the pass" case
+  // restores nextId exactly; a less common "undo much later" case degrades
+  // safely to "as low as it can go without a collision" rather than ever
+  // creating one).
+  const removedAddedCount = last.transactions.reduce(
+    (sum, t) => sum + (t.kind === 'reconnect' && t.added.some((a) => keptAddedRecords.has(a.id)) ? 0 : t.added.length),
+    0,
+  );
+  const maxSurvivingId = finalBuildings.reduce((m, b) => Math.max(m, b.id), 0);
+  const nextId = Math.max(state.nextId - removedAddedCount, maxSurvivingId + 1);
+
+  return {
+    ...state,
+    buildings: finalBuildings,
+    nextId,
+    roadConnectivity: computeRoadConnectivity({ ...state, buildings: finalBuildings }),
+    funds: state.funds + reversedNetCost,
+    cumulativeCapexSpent: Math.max(0, (state.cumulativeCapexSpent ?? 0) - reversedBuildCost),
+    consolidatorLog: log.slice(1),
+    // F4 FIX: this reversal is now CONSUMED — a second consolidatorUndo
+    // press is a no-op until a new pass runs (see the flag's doc comment).
+    consolidatorUndoConsumed: true,
+    ...(reversedNetCost !== 0 ? logEvent(state, label, reversedNetCost) : {}),
+  };
+}
+
 function advance(s: SimState): SimState {
   // FEAT-1972079923 inc4 (AC-11): the FINAL DECLINE screen is a HARD STOP —
   // once declineState is set, the clock never advances again (no further
@@ -1485,6 +2338,50 @@ function advance(s: SimState): SimState {
   // connectivity graph. Pure/deterministic; no Date/random.
   s = { ...s, roadConnectivity: computeRoadConnectivity(s) };
 
+  // FEAT-2326609761 (CONSOLIDATOR, AC-36): monthly pass, gated on
+  // consolidatorEnabled, running right after the auto-scale block above (this
+  // tick's road/building auto-scale has already landed, so the consolidator
+  // reads the SAME upgraded/connectivity-fresh frame). Deliberately placed
+  // AFTER the roadConnectivity recompute just above (not literally "before
+  // sweepOrphanConnects" as the acceptance doc's now-superseded line numbers
+  // suggested) so the pass's own stranded-capacity detection and AC-19
+  // stranding checks read a connectivity graph that is actually current for
+  // THIS tick, not last tick's.
+  let consolidatorBuildCost = 0;
+  let consolidatorScrapRecovered = 0;
+  let consolidatorTransactionCount = 0;
+  let consolidatorPassLog: ConsolidationPass | null = null;
+  if (tick % TICKS_PER_MONTH === 0 && (s.consolidatorEnabled ?? false)) {
+    const preFunds = s.funds;
+    const preLedger = s.ledger;
+    const preLedgerId = s.nextLedgerId;
+    const { state: afterConsolidator, passLog } = applyConsolidatorPass(s, tick);
+    if (passLog) {
+      consolidatorPassLog = passLog;
+      consolidatorTransactionCount = passLog.transactions.length;
+      for (const txn of passLog.transactions) {
+        consolidatorBuildCost += txn.buildCost;
+        consolidatorScrapRecovered += txn.scrapRecovered;
+      }
+    }
+    // AC-24 (the BUG-400 trap): autoConnect (called internally by the pass
+    // for both reconnect transactions and a consolidated successor's own
+    // road hookup) writes its OWN per-connector ledger row exactly like a
+    // player 'place' would. Stripped here and replaced with exactly ONE
+    // aggregate row below, so a background process can never out-populate
+    // the 200-cap ledger the way the old recurring Regional Grant row did.
+    // funds is reverted too — it is re-derived from the SAME income/expense
+    // arithmetic every other monthly aggregate uses (fed via outflows/
+    // inflows just below), not trusted bare off the pass's own state.
+    s = { ...afterConsolidator, ledger: preLedger, nextLedgerId: preLedgerId, funds: preFunds };
+    // `next.buildings` below is built from `scaledBuildings`, NOT `s.buildings`
+    // directly (mirrors the orphan-connect sweep's own `scaledBuildings = s.
+    // buildings;` re-bind above) — without this line the consolidator's
+    // demolish/build/reconnect work would be computed correctly but silently
+    // DISCARDED at the end of this function.
+    scaledBuildings = s.buildings;
+  }
+
   let { inflows, outflows } = computeFlows(s);
 
   // BUG-400: the Regional Grant is no longer injected here as a monthly lump.
@@ -1500,6 +2397,14 @@ function advance(s: SimState): SimState {
   }
   if (orphanConnectCost > 0) {
     outflows = [...outflows, { label: 'Road Auto-Connect', value: orphanConnectCost }];
+  }
+  // FEAT-2326609761 (CONSOLIDATOR, AC-22): gross build/scrap booked as flow
+  // lines (never netted here) so conservation.funds-vs-flows holds exactly.
+  if (consolidatorBuildCost > 0) {
+    outflows = [...outflows, { label: 'Consolidation', value: consolidatorBuildCost }];
+  }
+  if (consolidatorScrapRecovered > 0) {
+    inflows = [...inflows, { label: 'Consolidation Scrap', value: consolidatorScrapRecovered }];
   }
 
   // Drain pending rewards queue (from debugXp and place actions).
@@ -1559,6 +2464,26 @@ function advance(s: SimState): SimState {
       { id: nextLedger++, tick, label: `Auto-scaled ${buildingAutoScaleCount} building(s)`, amount: -buildingAutoScaleCost },
       ...ledger,
     ].slice(0, LEDGER_CAP);
+  }
+  // FEAT-2326609761 (CONSOLIDATOR, AC-24): AT MOST ONE aggregate ledger row
+  // per pass — the per-building detail lives in consolidatorLog (its own cap,
+  // pushed into `next` below), never the ledger's 200-row ring. Omitted
+  // entirely when netCost is exactly 0 (a pass that only laid a spur with a
+  // planner that found £0 route length, or a pass whose scrap exactly offset
+  // its build cost) — nothing to report as a money event.
+  if (consolidatorTransactionCount > 0) {
+    const consolidatorNetCost = consolidatorBuildCost - consolidatorScrapRecovered;
+    if (consolidatorNetCost !== 0) {
+      ledger = [
+        {
+          id: nextLedger++,
+          tick,
+          label: `Consolidation (${consolidatorTransactionCount} site${consolidatorTransactionCount === 1 ? '' : 's'})`,
+          amount: -consolidatorNetCost,
+        },
+        ...ledger,
+      ].slice(0, LEDGER_CAP);
+    }
   }
   // FEAT-milestone-cash-rewards-2026-09-02: visible ledger row for each
   // milestone reward drained above — a real, positive-amount inflow row
@@ -2111,6 +3036,16 @@ function advance(s: SimState): SimState {
     arrivalsByModeHistory,
     ledger,
     nextLedgerId: nextLedger,
+    // FEAT-2326609761 (CONSOLIDATOR, AC-25): newest-first, capped ring —
+    // mirrors `ledger`'s own idiom. Unchanged (not even re-referenced) on a
+    // tick that ran no pass, or a pass that found nothing to report.
+    consolidatorLog: consolidatorPassLog
+      ? [consolidatorPassLog, ...(s.consolidatorLog ?? [])].slice(0, CONSOLIDATOR_LOG_CAP)
+      : s.consolidatorLog,
+    // F4 FIX: a NEW pass earns a fresh, one-time undo — reset the
+    // single-level consumed-flag whenever a pass is actually appended to the
+    // log (never touched on a tick that ran no pass).
+    consolidatorUndoConsumed: consolidatorPassLog ? false : s.consolidatorUndoConsumed,
     // BUG-419: record the START-of-tick population that computeFlows() charged
     // population-scaled flows on (s.population, before the growth update above), so
     // consistency checks recompute Wages/Council Tax against the SAME basis the engine
@@ -3257,7 +4192,7 @@ function planRoadReplanCascade(
     // in this reducer), then remove it from the WORKING grid so later
     // candidates in this same deterministic scan see the up-to-date graph.
     const refundSpec = SPECS[original.spec];
-    const refund = refundSpec ? Math.round(placementCost(refundSpec) * 0.25) : 0;
+    const refund = refundSpec ? Math.round(placementCost(refundSpec) * BULLDOZE_REFUND_FRACTION) : 0;
     demolitions.set(k, { buildingId: original.buildingId, refund });
     postGrid.delete(k);
   }
@@ -3325,7 +4260,13 @@ export type Action =
   | { type: 'hydrate'; state: SimState }
   // FEAT-2326609723: Play Mode's one-way sandbox escape hatch, reachable from
   // the Decline screen (and idempotent thereafter — see the reducer case).
-  | { type: 'enterPlayMode' };
+  | { type: 'enterPlayMode' }
+  // FEAT-2326609761 (CONSOLIDATOR mutation lane, AC-26): reverses exactly
+  // the last pass (consolidatorLog[0]), or is a no-op (state returned by
+  // reference identity) if the log is empty. Single-level by design
+  // (ASM-1502). (The toggle itself, 'toggleConsolidator', is declared once
+  // above, above 'loan' — landed by the read-only lane at 893511b.)
+  | { type: 'consolidatorUndo' };
 
 // FEAT-1972079891 inc1 (AC-12): the internal reducer. `reducer` (below) wraps it
 // to keep roadConnectivity consistent with buildings after every action.
@@ -4187,9 +5128,9 @@ function reduceCore(state: SimState, action: Action): SimState {
       if (!isRoadOrTrunkSpec(def)) {
         roadTopologyMayHaveChanged = false;
       }
-      // Refund 25% of what was actually PAID — a free zone refunds nothing, so
-      // place-then-bulldoze cannot mint money.
-      const refund = Math.round(placementCost(def) * 0.25);
+      // Refund BULLDOZE_REFUND_FRACTION of what was actually PAID — a free
+      // zone refunds nothing, so place-then-bulldoze cannot mint money.
+      const refund = Math.round(placementCost(def) * BULLDOZE_REFUND_FRACTION);
       return {
         ...state,
         funds: state.funds + refund,
@@ -4389,7 +5330,7 @@ function reduceCore(state: SimState, action: Action): SimState {
       let newBuildings = state.buildings.filter((b) => {
         if (toRemove.has(b.id)) {
           const sp = SPECS[b.spec];
-          if (sp) refundTotal += Math.round(placementCost(sp) * 0.25);
+          if (sp) refundTotal += Math.round(placementCost(sp) * BULLDOZE_REFUND_FRACTION);
           return false;
         }
         return true;
@@ -4537,6 +5478,11 @@ function reduceCore(state: SimState, action: Action): SimState {
         ...state,
         consolidatorEnabled: !(state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT),
       };
+
+    // FEAT-2326609761 (CONSOLIDATOR mutation lane, AC-26): reverses exactly
+    // the last pass, or is a no-op (reference identity) if the log is empty.
+    case 'consolidatorUndo':
+      return undoLastConsolidatorPass(state);
 
     case 'loan': {
       if (state.loanBalance > 0) return state;
