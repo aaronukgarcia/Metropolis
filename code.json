@@ -6952,6 +6952,11 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -11043,6 +11048,10 @@
           {
             "key": "engine.crime",
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
+          },
+          {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
           },
           {
             "key": "engine.defence",
