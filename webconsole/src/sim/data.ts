@@ -438,6 +438,42 @@ export function capacityAtTier(sp: Spec | undefined, tier: number): number {
 }
 
 /**
+ * BUG-662 — tier-aware read of a school building's `children` capacity.
+ * capacityAtTier()'s no-capacityTiers fallback only ever special-cases
+ * residents/jobs (see the comment immediately above) — it has never covered
+ * children or served. A school-kind spec WITH its own capacityTiers ladder
+ * (edu_nursery/edu_primary/edu_city/edu_tech) is correctly scaled by
+ * capacityAtTier(); one WITHOUT a ladder (col_sixth/uni — the "College"
+ * class this bug is named for) would silently read capacityAtTier()'s bare
+ * `residents ?? jobs ?? 0` fallback instead of its own `children` field,
+ * undercounting it to 0 (uni: to its `jobs` field, an unrelated number).
+ * Every children-capacity aggregate in this file (totalChildrenCapacity,
+ * serviceCapacityAggregates) MUST go through this helper, never a bare
+ * capacityAtTier(sp, tier) or sp.children read alone, so a scaled-up
+ * capacityTiers spec is counted at its CURRENT tier while a flat spec keeps
+ * reading its own field.
+ */
+function childrenAtTier(sp: Spec, tier: number): number {
+  return sp.capacityTiers && sp.capacityTiers.length > 0 ? capacityAtTier(sp, tier) : (sp.children ?? 0);
+}
+
+/**
+ * BUG-662-class — the same tier-aware guard as childrenAtTier() above, for
+ * the `served` capacity field (health/police specs). Every current
+ * served-bearing spec (hea_clinic/hea_hospital/hea_teaching/pol_station)
+ * happens to carry its own capacityTiers ladder today, so a bare
+ * capacityAtTier(sp, tier) call has been silently correct for them — but
+ * that is a data-shape coincidence, not a guarantee (fire_post/fire_station/
+ * fire_hq are served-bearing specs with NO ladder, and would fall through
+ * capacityAtTier's bare `residents ?? jobs ?? 0` to 0 if ever routed through
+ * it unguarded). Routing every served-capacity aggregate through this helper
+ * closes that latent gap the same way childrenAtTier() closes it for schools.
+ */
+function servedAtTier(sp: Spec, tier: number): number {
+  return sp.capacityTiers && sp.capacityTiers.length > 0 ? capacityAtTier(sp, tier) : (sp.served ?? 0);
+}
+
+/**
  * FEAT-1972079910 inc3 (AC-7): True when this spec is a rail tile that carries
  * train traffic. Includes both native rail lines ('rail', 'hs1') and rd_railbridge
  * (grade-separated crossing: rail runs through it). Used to identify all tiles
@@ -2993,19 +3029,29 @@ const serviceCapacityAggregates: (s: SimState) => ServiceCapacityAggregates = me
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (!sp) continue;
-    if (sp.stage === 'nursery') nursery += sp.children ?? 0;
-    else if (sp.stage === 'primary' || sp.stage === 'city') primary += sp.children ?? 0;
-    else if (sp.stage === 'tertiary') tertiary += sp.children ?? 0;
-    if (sp.id === 'hea_clinic') gp += sp.served ?? 0;
-    else if (sp.id === 'hea_hospital' || sp.id === 'hea_teaching') hosp += sp.served ?? 0;
-    if (sp.kind === 'police') police += sp.served ?? 0;
-    else if (sp.kind === 'fire') fire += sp.served ?? 0;
+    const tier = b.capacityTier ?? 0;
+    // BUG-662: was a bare `sp.children ?? 0` / `sp.served ?? 0` read, which
+    // ignores building.capacityTier entirely — an auto-scaled tiered building
+    // (e.g. a scaled-up edu_tech Technical College, stage 'tertiary') stayed
+    // pinned at its tier-0 base capacity in this aggregate forever, even
+    // though capacityAtTier() (and the per-building BuildingMonitor that
+    // charged the player for the upgrade) already knows the real, larger
+    // number. childrenAtTier/servedAtTier (defined above capacityAtTier)
+    // route every read through the same tier-aware guard totalChildrenCapacity
+    // already used for the `tertiary` figure's counterpart aggregate.
+    if (sp.stage === 'nursery') nursery += childrenAtTier(sp, tier);
+    else if (sp.stage === 'primary' || sp.stage === 'city') primary += childrenAtTier(sp, tier);
+    else if (sp.stage === 'tertiary') tertiary += childrenAtTier(sp, tier);
+    if (sp.id === 'hea_clinic') gp += servedAtTier(sp, tier);
+    else if (sp.id === 'hea_hospital' || sp.id === 'hea_teaching') hosp += servedAtTier(sp, tier);
+    if (sp.kind === 'police') police += servedAtTier(sp, tier);
+    else if (sp.kind === 'fire') fire += servedAtTier(sp, tier);
     else if (sp.kind === 'water') {
       const eff = plantEffServed(s, b);
       if (sp.tag === 'clean') clean += eff;
       if (sp.tag === 'waste') waste += eff;
     }
-    if (sp.children) schoolPlaces += sp.children;
+    if (sp.children) schoolPlaces += childrenAtTier(sp, tier);
   }
   return { nursery, primary, tertiary, gp, hosp, police, fire, clean, waste, schoolPlaces };
 });
@@ -3401,7 +3447,7 @@ export const totalChildrenCapacity: (s: SimState) => number = memoOnState((s) =>
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (sp?.kind !== 'school') continue;
-    cap += sp.capacityTiers ? capacityAtTier(sp, b.capacityTier ?? 0) : (sp.children ?? 0);
+    cap += childrenAtTier(sp, b.capacityTier ?? 0);
   }
   return cap;
 });
@@ -3418,7 +3464,7 @@ export const totalServedCapacity: (s: SimState) => number = memoOnState((s) => {
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
-    if (sp?.kind === 'health' || sp?.kind === 'police') cap += capacityAtTier(sp, b.capacityTier ?? 0);
+    if (sp?.kind === 'health' || sp?.kind === 'police') cap += servedAtTier(sp, b.capacityTier ?? 0);
   }
   return cap;
 });
