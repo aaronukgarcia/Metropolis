@@ -9,6 +9,8 @@ import { initialState, reducer } from '../src/sim/engine.ts';
 import {
   runConsistencyChecks,
   GRACE_ELIGIBLE_LINE_IDS,
+  foldGraceHistory,
+  GRACE_WINDOW_SIZE,
 } from '../src/sim/consistency.ts';
 
 function seedCity() {
@@ -30,10 +32,14 @@ function seedCity() {
   return s;
 }
 
-// ATTACK 1: LAUNDERING MATRIX — alternating tamper (wages +777 on even ticks
-// only). Does the 2-consecutive rule grace a flicker-every-other-tick defect
-// FOREVER?
-test('ATTACK 1: alternating (every-other-tick) wages tamper — does grace launder it forever?', () => {
+// ATTACK 1 / BUG-640: LAUNDERING MATRIX — alternating tamper (wages +777 on
+// even ticks only). The ORIGINAL BUG-624 single-look-back rule (legacy Set
+// contract, exercised below for the historical record) graced this forever;
+// BUG-640's fix is the bounded window (foldGraceHistory / GRACE_WINDOW_SIZE /
+// GRACE_MAX_FAILURES_IN_WINDOW) that DebugTab now threads. This test proves
+// the fix actually detects the pattern within the window, closing the blind
+// spot the attack round found.
+test('ATTACK 1 (legacy Set contract, historical record): the single-look-back rule launders alternating tamper forever', () => {
   let s = seedCity();
   for (let i = 0; i < 10; i++) s = reducer(s, { type: 'tick' });
 
@@ -61,14 +67,72 @@ test('ATTACK 1: alternating (every-other-tick) wages tamper — does grace laund
     prior = new Set(report.rawFailedLineIds);
   }
 
-  // Because the tamper only raw-fails on EVEN ticks, and the grace rule keys
-  // off "did the SAME id raw-fail on the immediately preceding call", an
-  // odd-tick call in between always clears `prior` back to empty (no raw
-  // failure that call). So every even-tick raw failure sees prior={} and gets
-  // graced — the alternation defeats the 2-consecutive rule structurally.
-  console.log(`ATTACK 1 result: redCount=${redCount} gracedCount=${gracedCount} over 40 ticks (20 tampered)`);
-  assert.equal(gracedCount, 20, 'every one of the 20 tampered (even) ticks was graced — flicker-every-other-tick is INVISIBLE forever');
-  assert.equal(redCount, 0, 'the panel NEVER reds despite a real, persistent (if intermittent) +777 wages corruption');
+  // Because the tamper only raw-fails on EVEN ticks, and the LEGACY grace
+  // rule keys off "did the SAME id raw-fail on the immediately preceding
+  // call", an odd-tick call in between always clears `prior` back to empty
+  // (no raw failure that call). So every even-tick raw failure sees
+  // prior={} and gets graced — this is the BUG-640 finding, preserved here
+  // as a regression proof that the LEGACY (Set) contract still behaves this
+  // way (documented, intentional backward compat — see the windowed Map
+  // contract test below for the actual fix).
+  console.log(`ATTACK 1 (legacy) result: redCount=${redCount} gracedCount=${gracedCount} over 40 ticks (20 tampered)`);
+  assert.equal(gracedCount, 20, 'legacy Set contract: every one of the 20 tampered (even) ticks was graced — flicker-every-other-tick is INVISIBLE under the single-look-back rule');
+  assert.equal(redCount, 0, 'legacy Set contract: the panel NEVER reds despite a real, persistent (if intermittent) +777 wages corruption');
+});
+
+// BUG-640 FIX PROOF: the same alternating attack, this time threading the
+// NEW windowed Map contract (foldGraceHistory over a rolling queue of past
+// raw-failure snapshots) exactly as DebugTab now does. This must DETECT the
+// pattern — the blind spot must close.
+test('BUG-640 fix: the windowed Map contract detects alternating (every-other-tick) wages tamper', () => {
+  let s = seedCity();
+  for (let i = 0; i < 10; i++) s = reducer(s, { type: 'tick' });
+
+  const tamperEven = (state) => ({
+    ...state,
+    lastFlows: {
+      ...state.lastFlows,
+      outflows: state.lastFlows.outflows.map((f) =>
+        f.label === 'Wages' ? { ...f, value: f.value + 777 } : f,
+      ),
+    },
+  });
+
+  const history = []; // rolling queue of past raw-failure SIGNATURE snapshots, mirrors DebugTab
+  let redCount = 0;
+  let gracedCount = 0;
+  let firstRedTick = -1;
+  for (let tick = 0; tick < 40; tick++) {
+    s = reducer(s, { type: 'tick' });
+    const applyTamper = tick % 2 === 0; // fails on even, "healthy" on odd
+    const state = applyTamper ? tamperEven(s) : s;
+    const report = runConsistencyChecks(state, undefined, foldGraceHistory(history));
+    const check = report.checks.find((c) => c.id === 'flows.wages-matches');
+    if (!check.ok) {
+      redCount++;
+      if (firstRedTick === -1) firstRedTick = tick;
+    }
+    if (check.detail.includes('BUG-640 grace')) gracedCount++;
+    // ROUND-2: push the SIGNATURE snapshot (id -> delta) — this +777 tamper
+    // is a constant, so its delta is identical every time it fires, which is
+    // exactly the "recurring defect" signature-matching is meant to catch.
+    history.push(report.rawFailedSignatures);
+    if (history.length > GRACE_WINDOW_SIZE - 1) history.shift();
+  }
+
+  console.log(`BUG-640 fix result: redCount=${redCount} gracedCount=${gracedCount} firstRedTick=${firstRedTick} over 40 ticks (20 tampered)`);
+  assert.ok(
+    redCount > 0,
+    'the windowed contract must detect the alternating defect at least once — the blind spot from ATTACK 1 must be closed',
+  );
+  assert.ok(
+    firstRedTick >= 0 && firstRedTick <= 8,
+    `the defect must surface within a small multiple of GRACE_WINDOW_SIZE (${GRACE_WINDOW_SIZE}) tampered ticks, not forever (firstRedTick=${firstRedTick})`,
+  );
+  assert.ok(
+    gracedCount < 20,
+    'not every tampered tick may be graced once the window accumulates enough occurrences (some early ticks may still be graced legitimately)',
+  );
 });
 
 // ATTACK 2: GRACE SCOPE CREEP — only the two eligible ids can ever be graced.

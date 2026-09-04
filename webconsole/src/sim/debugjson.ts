@@ -201,8 +201,23 @@ export interface ConsistencyReportJson {
    * buildDebugJson stays a pure function of its arguments. A one-shot caller
    * that never threads this (capture-before-wipe, every existing test) simply
    * never sees grace applied — see buildDebugJson's doc comment.
+   *
+   * BUG-640: this array itself is unchanged — it's still the current
+   * refresh's raw fails. A caller wanting the windowed tolerance (closing
+   * the alternating-parity blind spot) keeps a rolling queue of these arrays
+   * across refreshes and folds them via consistency.ts's `foldGraceHistory`
+   * into the `priorFailedLineIds` Map for the NEXT call — see DebugTab.
    */
   rawFailedLineIds: string[];
+  /**
+   * BUG-640 round-2: id -> delta (actual - computed) for every id in
+   * `rawFailedLineIds`, on THIS build's RAW evaluation — see
+   * consistency.ts's `ConsistencyReport.rawFailedSignatures` doc. A caller
+   * wanting the windowed + signature-matched tolerance keeps a rolling
+   * queue of THESE objects (not `rawFailedLineIds`) across refreshes and
+   * folds them via `foldGraceHistory` — see DebugTab.
+   */
+  rawFailedSignatures: Record<string, number>;
 }
 
 export interface DebugJson {
@@ -612,11 +627,20 @@ function share(value: number, total: number): number | null {
  * repeatedly-refreshed panel (DebugTab) holds the PREVIOUS refresh's
  * `consistency.rawFailedLineIds` itself (a component ref, not SimState) and
  * passes it back in here as `priorFailedLineIds` on the NEXT refresh.
+ *
+ * BUG-640: `priorFailedLineIds` accepts either shape consistency.ts's
+ * `runConsistencyChecks` does — a legacy `ReadonlySet<string>` (single
+ * look-back) or the round-2 windowed + signature-matched
+ * `ReadonlyMap<string, number[]>` produced by `foldGraceHistory` (fed the
+ * caller's rolling queue of past `rawFailedSignatures`, NOT
+ * `rawFailedLineIds`). This function is a pure pass-through either way, and
+ * degrades safely (never throws) on any other shape — see consistency.ts's
+ * GR#16 doc comment.
  */
 export function buildDebugJson(
   s: SimState,
   ui: DebugUiInput,
-  priorFailedLineIds?: ReadonlySet<string>
+  priorFailedLineIds?: ReadonlySet<string> | ReadonlyMap<string, number[]>
 ): DebugJson {
   const income = s.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
   const expense = s.lastFlows.outflows.reduce((a, b) => a + b.value, 0);

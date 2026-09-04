@@ -13,6 +13,7 @@ import { useBusy } from '../../Busy';
 import { commitDebug, errorListModel, pendingCommits, recentErrors } from '../../../sim/backend';
 import { debugActions } from '../../../sim/debugactions';
 import { buildDebugJson, debugJsonText } from '../../../sim/debugjson';
+import { foldGraceHistory, GRACE_RATE_WINDOW_SIZE } from '../../../sim/consistency';
 import { currentMapUi } from '../../../sim/uistate';
 import { versionRaw } from '../../../sim/version';
 import { nextRefreshDue } from '../../../sim/throttle';
@@ -34,25 +35,58 @@ export function DebugTab() {
   const [status, setStatus] = useState<string | null>(null);
   const [pending, setPending] = useState(pendingCommits());
 
-  // BUG-624: the PREVIOUS refresh's raw (ungraced) flows-check failures,
-  // held in a component ref — NOT SimState, so determinism is untouched and
-  // buildDebugJson stays a pure function of its explicit arguments. This is
-  // the two-consecutive-failures history for the two grace-eligible per-line
-  // checks (consistency.ts's GRACE_ELIGIBLE_LINE_IDS): a building whose
-  // construction completes exactly on a tick boundary makes the recompute
-  // see one more online building than the actual flow charged for — a
-  // transient, self-healing divergence, not a real defect (BUG-624).
+  // BUG-624/BUG-640: a rolling queue of PAST refreshes' raw (ungraced)
+  // flows-check failure snapshots, held in a component ref — NOT SimState,
+  // so determinism is untouched and buildDebugJson stays a pure function of
+  // its explicit arguments. This is the windowed history for the two
+  // grace-eligible per-line checks (consistency.ts's GRACE_ELIGIBLE_LINE_IDS):
+  // a building whose construction completes exactly on a tick boundary makes
+  // the recompute see one more online building than the actual flow charged
+  // for — a transient, self-healing divergence, not a real defect (BUG-624).
   //
-  // Starts as an EMPTY Set, not undefined — per consistency.ts's documented
-  // contract, a Set (even empty) OPTS IN to grace ("no prior failures known
-  // yet" is exactly the state of a freshly-mounted panel), whereas `undefined`
+  // BUG-640 round 1 (independent round, 2026-09-03): the ORIGINAL
+  // single-look-back ("did it fail on the immediately preceding refresh")
+  // rule had a structural blind spot — a defect that raw-fails on every
+  // OTHER refresh (alternating parity) always saw an empty history, because
+  // the intervening healthy refresh reset it, and was graced FOREVER (20/20
+  // tampered ticks graced in the attack round). The round-1 fix kept the
+  // last `GRACE_WINDOW_SIZE - 1` raw-failure snapshots and folded them into
+  // a per-id occurrence count.
+  //
+  // BUG-640 round 2 (independent REJECT round, same day): the round-1
+  // bare-occurrence count had ITS OWN false-positive blind spot — a
+  // steady, realistic every-3-tick build cadence reds 10%+ of refreshes,
+  // because TWO INDEPENDENT genuine online-flip transients (different
+  // buildings, different ticks) landing inside one window of each other
+  // were miscounted as "the same defect recurring". The fix: track the
+  // per-id DELTA (`rawFailedSignatures`, not just the bare id set) and only
+  // count a repeat toward the threshold when it carries the SAME signature
+  // (identical delta, sign and magnitude) — a persisting/recurring defect
+  // reproduces the identical divergence every time, while unrelated
+  // transients generically diverge by different amounts.
+  //
+  // BUG-640 round 4 (independent REJECT re-round, same day — "the gap-free
+  // hole"): the round-3 sustained-divergence backstop only ever looked at
+  // the last GRACE_WINDOW_SIZE (6) snapshots and required them to be
+  // GAP-FREE — a drifting defect with a healthy check every 4th/5th/6th
+  // check (duty cycle up to ~83%) never satisfies that and was graced
+  // FOREVER. The fix adds a second, gap-TOLERANT "K of N raw-failure-rate"
+  // backstop (GRACE_RATE_WINDOW_SIZE / GRACE_RATE_THRESHOLD — see
+  // consistency.ts's doc comment for the measured tuning) that needs a much
+  // LONGER trailing history than the fast tier to have enough data to ever
+  // fire, so the rolling queue below now holds up to
+  // `GRACE_RATE_WINDOW_SIZE - 1` (not `GRACE_WINDOW_SIZE - 1`) past
+  // snapshots — foldGraceHistory derives BOTH the fast (gap-free-run) and
+  // slow (rate) signals from however much history it is actually handed.
+  //
+  // Starts as an EMPTY array, not undefined — an empty history still folds
+  // to an empty Map, which OPTS IN to grace ("no prior failures known yet"
+  // is exactly the state of a freshly-mounted panel), whereas `undefined`
   // means "never grace" (that's what every one-shot caller — captureBeforeWipe,
   // every existing test — correctly wants). DebugTab is the continuously-
   // refreshing caller this mechanism exists for, so it opts in from the very
-  // first frame: a genuinely pre-existing persistent defect just takes one
-  // extra 15 s refresh to surface as red, which is an acceptable cost on a
-  // dev-only panel for eliminating the far more common transient noise.
-  const priorFailedLineIdsRef = useRef<Set<string>>(new Set());
+  // first frame.
+  const graceHistoryRef = useRef<Array<Readonly<Record<string, number>>>>([]);
 
   // FEAT-1972079886: the frame is now the FULL-STATE debug.json — every UI
   // tab's status, raw numbers — built by the pure serializer in debugjson.ts.
@@ -69,10 +103,19 @@ export function DebugTab() {
         map: currentMapUi(),
         errors: recentErrors(),
       },
-      priorFailedLineIdsRef.current,
+      foldGraceHistory(graceHistoryRef.current),
     );
-    // Carry THIS frame's raw failures forward as the next refresh's history.
-    priorFailedLineIdsRef.current = new Set(dj.consistency.rawFailedLineIds);
+    // Carry THIS frame's raw failure SIGNATURES (id -> delta, BUG-640
+    // round-2 — not the bare rawFailedLineIds ids, which lost the round-1
+    // fix to the every-3-tick false-positive finding) forward into the
+    // rolling window, trimmed to the last GRACE_RATE_WINDOW_SIZE - 1
+    // snapshots (round-4 — long enough for the slow rate tier to ever have
+    // data; foldGraceHistory derives the fast tier's shorter tail-run signal
+    // from the same array).
+    graceHistoryRef.current = [
+      ...graceHistoryRef.current,
+      dj.consistency.rawFailedSignatures,
+    ].slice(-(GRACE_RATE_WINDOW_SIZE - 1));
     return { at, dj, text: debugJsonText(dj) };
   };
   const [frame, setFrame] = useState(() => takeFrame(state));

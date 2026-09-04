@@ -66,6 +66,9 @@ export function compactDebugForArchive(dj: DebugJson): DebugJson {
     // unfiltered so the archived snapshot keeps the full RAW picture even
     // when the compact `checks` array above is trimmed to empty on success.
     rawFailedLineIds: dj.consistency?.rawFailedLineIds ?? [],
+    // BUG-640 round-2: same rationale — the RAW delta signatures survive
+    // the compaction unfiltered, alongside the ids.
+    rawFailedSignatures: dj.consistency?.rawFailedSignatures ?? {},
   };
   return {
     ...dj,
