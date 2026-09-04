@@ -128,7 +128,8 @@
       "V853-V853": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "P040-P049": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
       "V856-V856": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V858-V863": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V858-V863": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "G5440-G5479": "reserved for engine.deathservices (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 40-wide block found after scanning existing codes and reservations on layer \"G\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5371,6 +5372,78 @@
       "module": "ui.webconsole",
       "message": "Import City rejected the selected file ({reason})",
       "remedy": "Confirm the file was produced by File > Export City or File > Save, and was not edited"
+    },
+    "MET-G5440": {
+      "severity": "fatal",
+      "module": "engine.deathservices",
+      "message": "deathservices method called on a struct copy (method={method})",
+      "remedy": "obtain the API via Load/NewDeathServicesAPI, never copy the struct value"
+    },
+    "MET-G5441": {
+      "severity": "fatal",
+      "module": "engine.deathservices",
+      "message": "data/deathservices.json failed to load or validate: {cause}",
+      "remedy": "check data/deathservices.json against the documented schema"
+    },
+    "MET-G5442": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "cemetery {cemeteryId} is not registered",
+      "remedy": "register the cemetery via engine.build's catalogue before burying against it"
+    },
+    "MET-G5443": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "crematorium {crematoriumId} is not registered",
+      "remedy": "register the crematorium via engine.build's catalogue before cremating against it"
+    },
+    "MET-G5444": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "cemetery {cemeteryId} has no allocatable plot (capacity={capacity}, occupied={occupied})",
+      "remedy": "route the body to cremation or emergency dispensation, or await plot-reuse eligibility"
+    },
+    "MET-G5445": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "body {bodyId} is not known to this module's intake",
+      "remedy": "only reference a bodyId that intake has produced from a RealisedDeath"
+    },
+    "MET-G5446": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "body {bodyId} has already been disposed of (terminal state={state})",
+      "remedy": "a body is handled exactly once; do not re-dispose an already-terminal body"
+    },
+    "MET-G5447": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "citizen {citizenId} already produced a body record this run",
+      "remedy": "intake must not double-process one RealisedDeath"
+    },
+    "MET-G5448": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "a multi-body trip ({bodies} bodies) was attempted while dispensation is not active",
+      "remedy": "multi-body transport is only permitted while emergency dispensation is active"
+    },
+    "MET-G5449": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "building type {buildingType} is not a recognised death-services building",
+      "remedy": "register the building as a cemetery or crematorium before use"
+    },
+    "MET-G5450": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "plot {plotId} in cemetery {cemeteryId} has not yet reached its reuse horizon (buriedAt={buriedAt}, horizon={horizon})",
+      "remedy": "wait until the configured reuse horizon has elapsed before recovering the plot"
+    },
+    "MET-G5451": {
+      "severity": "warn",
+      "module": "engine.deathservices",
+      "message": "a negative or zero throughput budget was supplied ({budget})",
+      "remedy": "supply a non-negative monthly throughput budget sourced from data/deathservices.json"
     }
   }
 }

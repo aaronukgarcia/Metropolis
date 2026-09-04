@@ -1,0 +1,75 @@
+{
+  "$comment": "MOD-083 (mkey engine.deathservices) increment 1: graveyards (space+reuse), cremation, hearses, emergency dispensation. Consumes FEAT-087 feat.deathwave's RealisedDeath handoff stream (internal/engine/citizens/deathwave.go). Spec refs: Part IV structure catalogue (docs/METROPOLIS-MASTER-v2.1.md lines 1075-1079: Cemetery M2 300k/2k plots 'fills permanently -- land pressure'; Crematorium M5+DP 3M 12/d; Memorial woodland M6+DP 1M 5k, deferred to inc2+); regional-contract table line 543 ('Crematorium/cemetery | £/service'); §5 mortality; §26 Emergency & Care Dispatch; §25 Refuse & waste-health loop (structural analog for collection-round logistics, mirrored in hearse.go's use of engine.logistics.Deliverable exactly as internal/engine/refuse/round.go's deliverToSite does); §9 Seasonality (weather curves drive FEAT-087's emergency flag, read here only via the RealisedDeath.EmergencyFlag field FEAT-087 already stamps -- this module never re-derives weather). Spec-given capacities (2k plots, 12/d) are transcribed with line refs below; every other numeric value is a disclosed PLACEHOLDER pending Aaron's balance pass (docs/planning/acceptance/MOD-083-inc1.md 'Assumptions for Aaron' section) -- ACs check shape/mechanism/direction only, never a pinned figure (GR#15, the standing balance-number regime).",
+  "version": 1,
+  "meta": {
+    "module": "engine.deathservices",
+    "bowCode": "MOD-083",
+    "specRefs": ["Part IV lines 1075-1079", "line 543", "§5", "§25", "§26", "§9"],
+    "upstream": "FEAT-087 feat.deathwave (RealisedDeath{CitizenID,DeathMonth,EmergencyFlag} FIFO handoff, DeathHandoff/DeathHandoffSince on citizens.CitizensAPI)",
+    "balanceRegime": "Every value below marked placeholder:true is a disclosed placeholder pending Aaron's balance pass (Vestige metropolis-balance-number-regime). Spec-given capacities (graveyardPlotCapacity, cremationDailyThroughputPerBody) are transcribed from the master plan's structure catalogue with a spec line reference and are NOT placeholders -- only their downstream consequences (reuse horizon, transport budgets, costs, multipliers, penalties) are undetermined."
+  },
+  "params": {
+    "graveyardPlotCapacity": {
+      "value": 2000,
+      "unit": "plots/cemetery",
+      "placeholder": false,
+      "specRef": "Part IV line 1075 (Cemetery M2, 300k, 2k plots)",
+      "disclosure": "spec-given seed capacity, transcribed verbatim -- not a placeholder."
+    },
+    "plotReuseHorizonMonths": {
+      "value": 240,
+      "unit": "months since burial",
+      "placeholder": true,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (MOD-083-inc1.md assumption 1). AC-3 checks the mechanism (a buried plot becomes reusable at/after buriedMonth+horizon, and the boundary moves when this value moves) -- do not treat 240 as a spec-pinned figure."
+    },
+    "cremationDailyThroughputPerBody": {
+      "value": 12,
+      "unit": "bodies/day",
+      "placeholder": false,
+      "specRef": "Part IV line 1076 (Crematorium M5+DP, 3M, 12/d)",
+      "disclosure": "spec-given seed throughput, transcribed verbatim -- not a placeholder."
+    },
+    "cremationCostPerBodyMicropounds": {
+      "value": 150000000,
+      "unit": "micro-pounds/body (£150 placeholder)",
+      "placeholder": true,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (MOD-083-inc1.md assumption 3; regional-contract table line 543 gives '£/service' with no figure). AC-5/AC-6 check the cost exists, is > 0, and is routed through engine.services -- not this magnitude."
+    },
+    "hearseMonthlyTransportBudget": {
+      "value": 300,
+      "unit": "bodies/month (fleet size x trips/month, coarse aggregate)",
+      "placeholder": true,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (MOD-083-inc1.md assumption 2). AC-7/AC-9 check the monthly-aggregate throughput cap and backlog-on-overflow behaviour -- not this magnitude. Per-vehicle routing is out of scope for inc1 (AC-9)."
+    },
+    "dispensationVanBodyCapacity": {
+      "value": 6,
+      "unit": "bodies/trip (multi-body van/truck)",
+      "placeholder": true,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (MOD-083-inc1.md assumption 4). AC-11 checks a trip can exceed 1 body while dispensation is active, bounded by this data value -- not this magnitude."
+    },
+    "dispensationThroughputMultiplier": {
+      "value": 4.0,
+      "unit": "multiplier vs hearseMonthlyTransportBudget (24x7 operation)",
+      "placeholder": true,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (MOD-083-inc1.md assumption 5). AC-11 checks total dispensation-mode monthly throughput exceeds the normal hearse-only budget, bounded by this multiplier -- not this magnitude."
+    },
+    "dispensationWellbeingPenalty": {
+      "value": -5.0,
+      "unit": "wellbeing points, applied while dispensation is active",
+      "placeholder": true,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass and design ruling on timing (MOD-083-inc1.md assumptions 6 and 8 -- continuous-during vs once-at-end is still open). AC-13 checks a negative penalty is applied while dispensation is active -- not this magnitude or timing."
+    },
+    "dispensationApprovalPenalty": {
+      "value": -3.0,
+      "unit": "approval points, applied while dispensation is active",
+      "placeholder": true,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (MOD-083-inc1.md assumption 6). AC-13 checks a negative penalty exists and is applied -- not this magnitude."
+    },
+    "backlogCapacityCeiling": {
+      "value": 5000,
+      "unit": "bodies (unhandled backlog before a documented crisis threshold)",
+      "placeholder": true,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (MOD-083-inc1.md assumption 7). inc1 exposes the current backlog size as a queryable count; a consumer (UI/wellbeing, deferred to inc2) may compare it against this ceiling. Not enforced as a hard cap in inc1 -- the backlog is documented as unbounded-but-queryable at this increment."
+    }
+  }
+}
