@@ -183,13 +183,27 @@ jobs:
   # real in CI for the first time.
   node-test:
     runs-on: ubuntu-latest
-    # timeout raised 15 -> 30 (2026-09-04): the suite grew past 15 minutes in
-    # one day of landings (the consolidator estate's real-savepoint perf
-    # probes, the chunked-replay family, the worker-offload suites) and the
-    # job hit its ceiling with a "cancelled" step conclusion three runs in a
-    # row — which reads as an external cancel and cost a debugging cycle to
-    # attribute. 30 gives ~2x headroom over the measured ~15m20s; if the
-    # suite approaches THAT, split the job before raising this again.
+    # SPLIT into 3 shards (2026-09-04, the "split before raising again" branch
+    # of the comment below, taken the same day): the suite crossed the raised
+    # 30-minute ceiling too (run 33866623643 killed at 30m17s) after another
+    # day of landings — attack-bug646-round alone now measures ~170s. Node's
+    # own --test-shard partitions the discovered test FILES deterministically
+    # across shards, so each shard runs ~1/3 of the suite under the same
+    # 30-minute ceiling (~2-3x headroom each). The check names become
+    # "node-test (1/3)" etc.; node-test is NOT in the required-status-check
+    # set (verified via the branch-protection API before renaming), so no
+    # branch-protection edit is needed.
+    #
+    # History: timeout raised 15 -> 30 (2026-09-04): the suite grew past 15
+    # minutes in one day of landings (the consolidator estate's real-savepoint
+    # perf probes, the chunked-replay family, the worker-offload suites) and
+    # the job hit its ceiling with a "cancelled" step conclusion three runs in
+    # a row — which reads as an external cancel and cost a debugging cycle to
+    # attribute.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     timeout-minutes: 30
     services:
       mariadb:
@@ -300,7 +314,7 @@ jobs:
         run: node scripts/gen-version.mjs
 
       - name: node --test
-        run: node --test
+        run: node --test --test-shard=${{ matrix.shard }}/3
 
   # --- Perf smoke (H-SYNTH / MOD-016, M0-ENG §6 point 5) -----------------
   # cmd/perfci (internal/harness/synth/cmd/perfci) is the CI-runnable perf
