@@ -66,11 +66,36 @@ test('computeFlows: all kinds with upkeep are bucketed to outflow streams', () =
     if (!spec.upkeep || spec.upkeep === 0) continue; // Skip zero-upkeep buildings.
     if (seenKinds.has(spec.kind)) continue; // One per kind is enough.
     seenKinds.add(spec.kind);
-    state = addBuilding(state, spec.id);
+    if (spec.kind === 'motorway' || spec.kind === 'rail') {
+      // FEAT-2326609782 GENESIS FREE: upkeepChargeableOf() zeroes upkeep for
+      // m20/rail whose (builtTick ?? 0) <= 0 (real genesis map furniture is
+      // placed with no builtTick at all). addBuilding()'s shared
+      // `builtTick: null` idiom ("already online; no construction time") is
+      // indistinguishable from that exemption at the field level — it would
+      // silently zero these two kinds' upkeep here too, which is not what
+      // this fixture is testing (bucket-mapping completeness for a REAL,
+      // chargeable building, not the genesis exemption). Stamp a small
+      // positive builtTick instead; `state.tick` is bumped below so it still
+      // reads fully online (clears construction) for every kind this test
+      // places, motorway/rail included.
+      state = {
+        ...state,
+        buildings: [...state.buildings, { id: state.nextId, spec: spec.id, x: state.nextId, y: 10, builtTick: 1 }],
+        nextId: state.nextId + 1,
+      };
+    } else {
+      state = addBuilding(state, spec.id);
+    }
     buildingUpkeeps.push({ spec: spec.id, kind: spec.kind, upkeep: spec.upkeep });
   }
 
   assert.ok(buildingUpkeeps.length > 0, 'test data: placed at least one building');
+
+  // The motorway/rail buildings above carry a real (positive) builtTick, so
+  // give the state a tick far enough past it to have cleared construction —
+  // every other kind uses `builtTick: null` (always online, tick-independent)
+  // so this bump changes nothing else about the fixture.
+  state = { ...state, tick: 100000 };
 
   // Compute flows.
   const { outflows } = computeFlows(state);

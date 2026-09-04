@@ -340,10 +340,23 @@ test('BUG-629: cashPositiveThisTick tracks this-tick net >= 0, independent of th
 // engine.computeFlows via fiscal.ts's UPKEEP_BUCKET SSOT) filters to
 // isOnline() buildings only and runs through applyOutflowPolicies. The two
 // numbers drifted (Aaron's export: 28,192 vs 28,024, a 0.6% display-only
-// gap). Fix: structuresByFamily now reads the ALREADY-COMPUTED outflow
-// bucket value for any family that is the SOLE owner of its UPKEEP_BUCKET
-// label (road -> 'Roads' is 1:1) instead of re-deriving a second number.
-test('BUG-628: structuresByFamily Roads upkeep equals the fiscal outflows Roads line under policies + a mixed online/offline fixture', () => {
+// gap). Fix (at the time): structuresByFamily reads the ALREADY-COMPUTED
+// outflow bucket value for any family that is the SOLE owner of its
+// UPKEEP_BUCKET label (road -> 'Roads' was 1:1) instead of re-deriving a
+// second number.
+//
+// UPDATED (FEAT-2326609782, 2026-09-04): 'road' is no longer 1:1-owner of
+// 'Roads' — m20/rail gained real upkeep and joined the SAME bucket
+// (fiscal.ts UPKEEP_BUCKET SSOT: motorway -> 'Roads'), exactly the way
+// commercial/office/industrial/mine already share 'Commerce & Industry'
+// below. 'Roads' has graduated into that documented "shared bucket, no
+// split invented, keeps the raw per-family sum" category — this test now
+// asserts THAT (mirroring the Commerce & Industry mutation-prove test
+// immediately below), not exact reconciliation with the outflow line, which
+// is provably impossible without inventing a split the engine itself never
+// computes (a real 'Roads' outflow can now include m20 upkeep this family
+// row cannot attribute back to 'road' alone).
+test('BUG-628-CLASS: structuresByFamily Roads keeps the raw per-family sum now that Roads is a shared bucket (road + motorway)', () => {
   const s0 = initialState();
   // 5 online roads (genesis, builtTick: null -> always online per isOnline())
   // + 5 roads still under construction (builtTick: tick 0, rd_dual's
@@ -368,33 +381,27 @@ test('BUG-628: structuresByFamily Roads upkeep equals the fiscal outflows Roads 
     tick: 0,
     buildings: [...onlineRoads, ...offlineRoads],
     // Both policies stack (recycling's rounded result then austerity-rounded)
-    // per fiscal.ts's applyOutflowPolicies — exercising BOTH multipliers, not
-    // just one, so a fix that only handled the online-filter half (or only
-    // one policy) would still fail this test.
+    // per fiscal.ts's applyOutflowPolicies — included to prove the
+    // shared-bucket family stays genuinely untouched by ANY policy
+    // multiplier, not just missed one of the two.
     policies: { ...s0.policies, recycling: true, austerity: true },
   };
   state.lastFlows = computeFlows(state);
 
   const dj = buildDebugJson(state, testUi());
   const roadFamily = dj.info.status.structuresByFamily.find((f) => f.kind === 'road');
-  const roadsOutflow = dj.fiscal.flowShares.outflows.find((f) => f.label === 'Roads');
 
   assert.ok(roadFamily, 'road family row present (10 rd_dual built)');
   assert.equal(roadFamily.count, 10, 'count still includes the offline/under-construction roads');
-  assert.ok(roadsOutflow, 'Roads outflow line present (5 online roads charged)');
+
+  // The raw, unfiltered, undiscounted sum — online or not, no policy —
+  // exactly like the Commerce & Industry mutation-prove test's contract.
+  const rawSumAllRoads = 10 * 5;
   assert.equal(
     roadFamily.upkeep,
-    roadsOutflow.value,
-    'BUG-628: structuresByFamily Roads upkeep must equal the flows Roads outflow — same SSOT, zero drift'
+    rawSumAllRoads,
+    'shared-bucket family (Roads: road + motorway) keeps the pre-existing raw, unfiltered, undiscounted sum'
   );
-
-  // Prove the equal figure genuinely went through BOTH the online filter and
-  // the policy multipliers, not an accidental match with an unmodified formula.
-  const rawSumAllRoads = 10 * 5; // all 10 roads, raw upkeep, online or not
-  const rawSumOnlineOnly = 5 * 5; // online-only, but no policy discount
-  assert.notEqual(roadFamily.upkeep, rawSumAllRoads, 'must not be the raw unfiltered sum (would ignore isOnline)');
-  assert.notEqual(roadFamily.upkeep, rawSumOnlineOnly, 'must not be the undiscounted online-only sum (would ignore policies)');
-  assert.equal(roadFamily.upkeep, Math.round(Math.round(rawSumOnlineOnly * 0.93) * 0.9), 'exact expected value: online sum, recycling, then austerity, each rounded');
 });
 
 test('BUG-628 MUTATION-PROVE target: a shared-bucket family (commercial, part of Commerce & Industry with office/industrial/mine) keeps its independent raw per-family sum, unaffected by this fix', () => {

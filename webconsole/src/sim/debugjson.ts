@@ -765,6 +765,20 @@ export function buildDebugJson(
   // itself never computes, so those keep the raw per-family sum (unchanged
   // behaviour — a distinct, pre-existing "combined bucket" concern, not this
   // bug's asymmetry).
+  //
+  // FEAT-2326609782 (2026-09-04): motorway/rail joined 'Roads'/'Transport' in
+  // UPKEEP_BUCKET (SSOT, fiscal.ts) now that they carry real upkeep, so
+  // 'Roads' is no longer 1:1-owned by 'road' at the CATALOGUE level — it has
+  // graduated into the same "shared bucket, no split invented" category as
+  // 'Commerce & Industry'/'Power Grid'/'Transport' documented above, and
+  // correctly falls through to the raw per-family sum below (see
+  // debugjson.test.mjs's BUG-628 Roads test for the updated expectation).
+  // Ownership is counted from the STATIC catalogue, not from which kinds a
+  // given city actually has buildings of: the mutation-prove test right
+  // below this function's other half proves a fixture placing ONLY
+  // 'commercial' buildings must still be treated as shared (4 catalogue
+  // owners) — presence-based counting cannot tell that case apart from a
+  // genuine sole-owner fixture, so it is not a safe signal here.
   const bucketOwnerCount: Partial<Record<string, number>> = {};
   for (const label of Object.values(UPKEEP_BUCKET)) {
     bucketOwnerCount[label] = (bucketOwnerCount[label] ?? 0) + 1;

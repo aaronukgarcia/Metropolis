@@ -32,7 +32,7 @@ import { SPECS, countOfSpec, surplusInstancesOf, CONSOLIDATOR_SCRAP_FRACTION, pl
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { emptyJournal, recordAction } from '../src/sim/journal.ts';
 import { replayFromGenesis, replayIsDeterministic } from '../src/sim/genesisReplay.ts';
-import { runConsistencyChecks } from '../src/sim/consistency.ts';
+import { runConsistencyChecks, foldGraceHistory, GRACE_WINDOW_SIZE } from '../src/sim/consistency.ts';
 
 const DAM = 'pow_hydro';
 const DAM_SPEC = SPECS[DAM];
@@ -64,14 +64,35 @@ describe('ATTACK: no re-credit on repeated load of an already-purged state', () 
   });
 
   test('conservation (funds-vs-flows) holds for 400 ticks following the purge', () => {
+    // ROOT-CAUSE NOTE (2026-09-04, CI-red bisect of FEAT-2326609782): with real
+    // m20/rail upkeep landed, this 23-dam fixture's autoConnect/orphan-reconnect
+    // traffic routinely lays a road-family connector whose construction
+    // completes exactly on a tick boundary. That is the PRE-EXISTING,
+    // documented BUG-624/BUG-640 "genuine, benign, self-heals next tick"
+    // online-flip transient (see consistency.ts's own doc comment above
+    // GRACE_ELIGIBLE_LINE_IDS): advance() books actual flows against the
+    // PRE-increment tick (computeFlows call happens before `tick` is stamped
+    // onto the returned state), while an independent recompute against the
+    // FINAL post-tick state can see one more building cross online. Before
+    // this commit motorway/rail upkeep was 0, so the transient was invisible;
+    // now it fires routinely, exactly as BUG-624/640 anticipated for any
+    // upkeep-bearing kind. The fix is NOT to loosen conservation — it is to
+    // use the SAME grace mechanism BUG-624/640 built for exactly this class
+    // (see attack-bug624-grace.test.mjs / attack-bug640-round2.test.mjs),
+    // threaded across the loop precisely like debugjson.ts's own production
+    // caller does. A real, persistent defect still reds: it fails on every
+    // consecutive check and the signature-matched window catches it.
     let s = reducer(initialState(), { type: 'hydrate', state: twentyThreeDamState() });
     let failures = 0;
+    const history = []; // rolling queue of raw-failure signatures, mirrors DebugTab
     for (let i = 0; i < 400; i++) {
       s = reducer(s, { type: 'tick' });
-      const report = runConsistencyChecks(s);
+      const report = runConsistencyChecks(s, undefined, foldGraceHistory(history));
       if (report.failures !== 0) failures++;
+      history.push(report.rawFailedSignatures);
+      if (history.length > GRACE_WINDOW_SIZE - 1) history.shift();
     }
-    assert.equal(failures, 0, 'no consistency-check failures across 400 post-purge ticks');
+    assert.equal(failures, 0, 'no consistency-check failures across 400 post-purge ticks (genuine online-flip transients graced per BUG-624/640, a persistent defect still reds)');
   });
 
   test('the scrap credit line appears EXACTLY ONCE in lastFlows.inflows and EXACTLY ONCE in the ledger, never duplicated', () => {
