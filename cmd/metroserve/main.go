@@ -102,6 +102,10 @@ func run(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 
+	// FEAT-2326609775 inc1: /health wiring for the legacy single-city path.
+	healthReg := newHealthRegistry()
+	healthReg.register(newCityHealthState(persistTenantID, *city, e))
+
 	transport := protocol.NewInProcTransport(
 		protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer,
 		protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer,
@@ -128,8 +132,15 @@ func run(args []string, stdout, stderr *os.File) int {
 	tickDone := tickLoop(ctx, e, transport, *tickInterval, correlationID)
 
 	wsHandler := wsserver.New(transport, buildinfo.Version, wsserver.DefaultHandshakeTimeout)
+	// FEAT-2326609775 inc1: port-knock hardening (portknock.go) in front of
+	// /ws only -- /health stays open (Container Apps' probe, and a human
+	// checking liveness, must never need the secret). Both env vars unset
+	// (every pre-inc1 invocation) makes wrapPortKnock a pure pass-through —
+	// see its doc comment for the byte-identical-when-unconfigured proof.
+	knockCfg := readPortKnockConfig()
 	mux := http.NewServeMux()
-	mux.Handle("/ws", wsHandler)
+	mux.Handle("/ws", wrapPortKnock(knockCfg, wsHandler))
+	mux.Handle("/health", newHealthHandler("single", healthReg))
 	httpSrv := &http.Server{Addr: *addr, Handler: mux}
 
 	serveErr := make(chan error, 1)
@@ -226,8 +237,13 @@ func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snap
 	// single wrapped transport field (every connection binds to a resolved
 	// per-city transport instead).
 	wsHandler := wsserver.New(nil, buildinfo.Version, wsserver.DefaultHandshakeTimeout, wsserver.WithTransportResolver(resolver), lifecycle)
+	// FEAT-2326609775 inc1: same port-knock wrapping as the legacy path
+	// (main.go's run()) — see its comment there for the byte-identical-
+	// when-unconfigured proof. /health stays open.
+	knockCfg := readPortKnockConfig()
 	mux := http.NewServeMux()
-	mux.Handle("/ws", wsHandler)
+	mux.Handle("/ws", wrapPortKnock(knockCfg, wsHandler))
+	mux.Handle("/health", newHealthHandler("hosted", host.HealthRegistry()))
 	httpSrv := &http.Server{Addr: addr, Handler: mux}
 
 	serveErr := make(chan error, 1)

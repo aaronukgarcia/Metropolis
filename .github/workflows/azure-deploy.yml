@@ -1,0 +1,333 @@
+# Azure Deploy (metroserve) — FEAT-2326609775 inc1 deliverable 3.
+#
+# Builds cmd/metroserve's container image (../Dockerfile) and deploys ONE
+# NEW Container App into Aaron's EXISTING `prixsix-env` environment,
+# pushing to his EXISTING `prixsixacr` registry
+# (docs/planning/azure-cloud-engine-design.md §1.5/§7 inc1 item 3).
+#
+# MOD-069 AC-4 is explicit: Metropolis takes its OWN container app — it
+# NEVER touches/updates/redeploys `whatsapp-session`. Every az command
+# below names CONTAINER_APP_NAME explicitly and never enumerates or
+# iterates "every app in the environment".
+#
+# workflow_dispatch ONLY (manual trigger) for inc1 — NOT wired to push/PR.
+# Deploy-on-green-main is deliberately deferred (design doc §7 inc1 vs.
+# Q100026/Q100145: the wsserver handshake refuses any client whose build
+# string differs from the server's, so an automatic deploy on every green
+# main would lock out every open browser tab until Q100145 is ruled on).
+#
+# Auth: GitHub OIDC federated credentials (Q100142 recommendation — the
+# repo is PUBLIC, so no long-lived Azure secret is stored in it at all).
+# Three GitHub Actions VARIABLES (not secrets — an OIDC client ID/tenant/
+# subscription id are not themselves secret; see azure/login's own docs)
+# must exist before this workflow can run:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+# — set via Settings -> Secrets and variables -> Actions -> Variables,
+# pointing at an App Registration with a federated credential scoped to
+# `repo:aaronukgarcia/Metropolis:environment:azure-metroserve` (or
+# `:ref:refs/heads/main`, the lead's call) and RBAC (Contributor or a
+# narrower custom role) on resource group RESOURCE_GROUP below ONLY —
+# never subscription-wide.
+#
+# THIS WORKFLOW HAS NEVER BEEN RUN. It is inc1's build-time deliverable
+# (see cmd/metroserve/health.go's package doc + the accompanying
+# docs/planning/azure-runbook.md): reviewed and run by the lead/Aaron, not
+# executed from a build lane (this session has explicit instructions not
+# to deploy anything to Azure). Treat every az CLI flag below as
+# REVIEW-BEFORE-RUN — CLI flag names for Container Apps volume mounts and
+# sticky sessions have changed across az cli versions; verify against
+# `az containerapp create --help` / `az containerapp update --help` on the
+# CLI version actually installed before the first real dispatch.
+
+name: Azure Deploy (metroserve)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to build and deploy (default: git describe of the checked-out ref)"
+        required: false
+        default: ""
+      city:
+        description: "City id to pass as -city on the deployed container (default: dogfood, per the design doc's inc1 run line)"
+        required: false
+        default: "dogfood"
+
+# Least-privilege token: id-token for OIDC federation, contents:read to
+# check out the repo. Nothing else is granted.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_NAME: prixsixacr
+  ACR_LOGIN_SERVER: prixsixacr.azurecr.io
+  IMAGE_NAME: metropolis-metroserve
+  # Q100140(b) recommendation (design doc §3.3/§7): reuse the EXISTING
+  # prixsixacr/prixsix-env (cheap, no new setup), but land the new app +
+  # its storage in a FRESH resource group so the whole thing is deletable
+  # in one `az group delete` — the real spend-runaway lever (§3.3's Budget
+  # + runbook are the alert/stop; this RG boundary is the blast-radius
+  # bound). Confirm the RG name with Aaron/the lead before the first run —
+  # this is a recommendation baked into the workflow, not yet a ruling.
+  RESOURCE_GROUP: rg-metropolis-dev
+  CONTAINER_APP_ENV: prixsix-env
+  CONTAINER_APP_NAME: metropolis-metroserve
+  AZURE_REGION: uksouth
+  STORAGE_ACCOUNT: garcialtdstorage
+  FILE_SHARE_NAME: metropolis-metroserve-data
+  CONTAINERAPP_STORAGE_NAME: metroserve-data
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: azure-metroserve
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth 0: a shallow checkout's `git describe --tags` falls
+          # back to a bare short hash (no tag reachable), which is exactly
+          # the "silently degrade to buildinfo dev defaults" failure mode
+          # Dockerfile's own doc comment warns about (GR#1).
+          fetch-depth: 0
+
+      - name: Compute build identity (GR#2 — git describe via ldflags, never hand-maintained)
+        id: buildinfo
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.image_tag }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="$(git describe --tags --always --dirty)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "branch=$(git rev-parse --abbrev-ref HEAD)" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login (OIDC — Q100142)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        run: az acr login --name "${{ env.ACR_NAME }}"
+
+      - name: Build and push image
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ steps.buildinfo.outputs.version }}"
+          docker build \
+            --build-arg VERSION="${{ steps.buildinfo.outputs.version }}" \
+            --build-arg COMMIT="${{ steps.buildinfo.outputs.commit }}" \
+            --build-arg BRANCH="${{ steps.buildinfo.outputs.branch }}" \
+            --build-arg BUILD_TIME="${{ steps.buildinfo.outputs.build_time }}" \
+            -t "$IMAGE" \
+            -f Dockerfile .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      # Boot-proof (round r2, 2026-09-04): the crash-loop class the r1 round
+      # found (Dockerfile's runtime stage shipping the binary alone, with no
+      # data/errors.json catalogue reachable — see the Dockerfile's own
+      # "REGRESSION CLASS" comment) was invisible to every gate that ran
+      # BEFORE this one: go build/vet/test, golangci-lint, and even a smoke
+      # test against a locally `go build`-ed binary all pass regardless,
+      # because none of them run the process the way a container does. This
+      # step closes that gap structurally, in the pipeline, forever: it runs
+      # the EXACT image just built (not a rebuild, not a different
+      # artifact), from a cold `docker run`, and proves the three things the
+      # host-side simulation proved by hand during the r1 fix:
+      #   1. the container actually boots and /health answers within a
+      #      bounded number of retries (a hung/crash-looping container never
+      #      reaches 200 and the job times out here, BEFORE any Azure
+      #      resource is touched);
+      #   2. /health's JSON carries a real, non-empty version field (proves
+      #      the process reached the point of successfully constructing and
+      #      encoding a healthResponse, not a half-booted stub);
+      #   3. a request to /ws with the WRONG shared secret gets refused with
+      #      MET-P041's REAL, registry-rendered message text -- not the
+      #      MET-F001 "error registry failed to load" fallback every error
+      #      degrades to when data/errors.json is not resolvable inside the
+      #      container (exactly the r1 defect: a booting-but-registry-blind
+      #      container LOOKS healthy on check #1 alone, which is why check
+      #      #3 exists as a second, independent signal). Grepping for a
+      #      literal phrase from the registered message pins the DISTINCTION
+      #      between "real message" and "fallback message" into the
+      #      pipeline, not just into this round's manual verification.
+      # Dependency-free by design (curl + grep, both already on
+      # ubuntu-latest) -- no jq, no extra Action, nothing else to keep
+      # pinned/updated for a gate this load-bearing.
+      - name: Boot-proof the built image (guards against the r1 data-catalogue crash-loop class)
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          BOOT_SECRET="boot-proof-$(date +%s)"
+          CID="$(docker run -d --rm \
+            -p 18080:8080 \
+            -e METROSERVE_SHARED_SECRET="$BOOT_SECRET" \
+            "$IMAGE")"
+          if [ -z "$CID" ]; then
+            echo "::error::boot-proof FAILED: 'docker run' itself did not return a container id for $IMAGE -- the image likely failed to start at all."
+            exit 1
+          fi
+          echo "started container $CID from $IMAGE"
+
+          cleanup() {
+            docker logs "$CID" || true
+            docker stop "$CID" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          # (1) Poll /health until 200, bounded retries -- a crash-looping or
+          # hung container never satisfies this and the step times out
+          # rather than hanging the job indefinitely.
+          ok=""
+          for i in $(seq 1 30); do
+            if body="$(curl -sf http://localhost:18080/health)"; then
+              ok="$body"
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::boot-proof FAILED: /health never returned 200 within 30s -- the image would crash-loop on Azure exactly like the r1 defect (see Dockerfile's REGRESSION CLASS comment)."
+            exit 1
+          fi
+          echo "GET /health -> $ok"
+
+          # (2) A real, non-empty version field -- proves buildinfo AND the
+          # JSON encoder both actually ran, not a half-booted stub.
+          if ! echo "$ok" | grep -Eq '"version":"[^"]+"'; then
+            echo "::error::boot-proof FAILED: /health body has no non-empty version field: $ok"
+            exit 1
+          fi
+
+          # (3) /ws with the WRONG secret must be refused with MET-P041's
+          # REAL registered message, not the MET-F001 registry-load
+          # fallback (the r1 defect's exact fingerprint).
+          wsBody="$(curl -s http://localhost:18080/ws -H 'X-Metroserve-Secret: definitely-wrong')"
+          echo "GET /ws (wrong secret) -> $wsBody"
+          if ! echo "$wsBody" | grep -q 'MET-P041'; then
+            echo "::error::boot-proof FAILED: expected an MET-P041 refusal, got: $wsBody"
+            exit 1
+          fi
+          if ! echo "$wsBody" | grep -q 'refused before WebSocket upgrade'; then
+            echo "::error::boot-proof FAILED: MET-P041 did not carry its real registered message (got the MET-F001 registry-load fallback text instead, or something else entirely) -- this is exactly the r1 crash-loop/registry-blind defect. Body: $wsBody"
+            exit 1
+          fi
+          if echo "$wsBody" | grep -qi 'registry failed to load'; then
+            echo "::error::boot-proof FAILED: response carries the MET-F001 registry-load-failure fallback text -- data/errors.json is not resolvable inside this image. Body: $wsBody"
+            exit 1
+          fi
+
+          echo "boot-proof PASSED: image boots, /health is real, MET-P041 renders its real message."
+
+      - name: Ensure resource group exists (MOD-069 AC-4 boundary — this app's OWN RG)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! az group show --name "${{ env.RESOURCE_GROUP }}" --output none 2>/dev/null; then
+            az group create --name "${{ env.RESOURCE_GROUP }}" --location "${{ env.AZURE_REGION }}" --output none
+          fi
+
+      - name: Ensure Azure Files share exists (design doc §7 inc1 item 3 — durability with zero Go code)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCOUNT_KEY="$(az storage account keys list \
+            --account-name "${{ env.STORAGE_ACCOUNT }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query '[0].value' -o tsv 2>/dev/null || true)"
+          if [ -z "$ACCOUNT_KEY" ]; then
+            echo "::error::Could not read a key for storage account ${{ env.STORAGE_ACCOUNT }} in resource group ${{ env.RESOURCE_GROUP }}. If the storage account lives in a DIFFERENT resource group (e.g. the shared 'garcia' RG), override --resource-group here before the first real run."
+            exit 1
+          fi
+          az storage share-rm create \
+            --storage-account "${{ env.STORAGE_ACCOUNT }}" \
+            --name "${{ env.FILE_SHARE_NAME }}" \
+            --quota 5 \
+            --output none || true
+
+      - name: Register the Azure Files mount with the Container Apps environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCOUNT_KEY="$(az storage account keys list \
+            --account-name "${{ env.STORAGE_ACCOUNT }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query '[0].value' -o tsv)"
+          az containerapp env storage set \
+            --name "${{ env.CONTAINER_APP_ENV }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --storage-name "${{ env.CONTAINERAPP_STORAGE_NAME }}" \
+            --azure-file-account-name "${{ env.STORAGE_ACCOUNT }}" \
+            --azure-file-account-key "$ACCOUNT_KEY" \
+            --azure-file-share-name "${{ env.FILE_SHARE_NAME }}" \
+            --access-mode ReadWrite \
+            --output none
+
+      - name: Deploy or update the Container App (metroserve ONLY — never whatsapp-session, MOD-069 AC-4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if az containerapp show --name "${{ env.CONTAINER_APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" --output none 2>/dev/null; then
+            echo "Container App exists — updating image + env vars only (no ingress/scale drift on every deploy)."
+            az containerapp update \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --image "$IMAGE" \
+              --args "-addr" "0.0.0.0:8080" "-persist-dir" "/data" "-city" "${{ github.event.inputs.city }}" "-tick-interval" "1s" "-snapshot-every" "360" \
+              --set-env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret"
+          else
+            echo "Container App does not exist — creating it (first inc1 deploy)."
+            # NOTE (review before first run): --azure-file-volume-* flags and
+            # --sticky-sessions are correct as of az cli's containerapp
+            # extension circa 2026-Q1; RE-VERIFY against
+            # `az containerapp create --help` on the actual runner's az cli
+            # version before the first real dispatch (az cli/extension flags
+            # for Container Apps have moved across versions).
+            az containerapp create \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --environment "${{ env.CONTAINER_APP_ENV }}" \
+              --image "$IMAGE" \
+              --cpu 0.5 --memory 1.0Gi \
+              --min-replicas 0 --max-replicas 1 \
+              --ingress external --target-port 8080 --transport auto \
+              --args "-addr" "0.0.0.0:8080" "-persist-dir" "/data" "-city" "${{ github.event.inputs.city }}" "-tick-interval" "1s" "-snapshot-every" "360" \
+              --secrets "metroserve-shared-secret=REPLACE-BEFORE-FIRST-RUN" \
+              --env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret" \
+              --azure-file-volume-name "metroserve-data-volume" \
+              --azure-file-volume-account-name "${{ env.STORAGE_ACCOUNT }}" \
+              --azure-file-volume-share-name "${{ env.FILE_SHARE_NAME }}" \
+              --azure-file-volume-mount-path "/data"
+            # Sticky sessions (design doc §1.5/ASM-1506 — Container Apps
+            # ingress session affinity). Not load-bearing for correctness
+            # (determinism means any replica can rebuild any city by
+            # replay), but matches Aaron's 2026-08-31 sticky-session
+            # topology ruling and costs nothing at max-replicas=1.
+            az containerapp ingress sticky-sessions set \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --affinity sticky || echo "::warning::sticky-sessions set failed or unsupported on this az cli version — non-fatal at max-replicas=1, revisit before inc4's multi-replica work"
+          fi
+
+      - name: Report the deployed FQDN and image
+        shell: bash
+        run: |
+          set -euo pipefail
+          FQDN="$(az containerapp show \
+            --name "${{ env.CONTAINER_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query 'properties.configuration.ingress.fqdn' -o tsv)"
+          echo "## Deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`$IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL: https://$FQDN" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Health: https://$FQDN/health" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Smoke test: \`node tools/azure/smoke.mjs --url wss://$FQDN/ws --health-url https://$FQDN/health\`" >> "$GITHUB_STEP_SUMMARY"

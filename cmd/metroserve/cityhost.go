@@ -94,6 +94,14 @@ type runningCity struct {
 	pumpDone <-chan struct{}
 	loopDone <-chan error
 	tickDone <-chan struct{}
+
+	// unregisterHealth removes this city's cityHealthState from the host's
+	// /health registry (FEAT-2326609775 inc1). Called once, at the end of
+	// stop(), from EVERY teardown path (Shutdown/Close/evictIdle all funnel
+	// through stop()) — so a /health snapshot never lists a city that has
+	// actually been torn down, without each of those three call sites
+	// needing its own unregister call.
+	unregisterHealth func()
 }
 
 // Engine, Composition and Transport expose the bundled handles to callers
@@ -113,6 +121,9 @@ func (rc *runningCity) stop() {
 	<-rc.loopDone
 	<-rc.pumpDone
 	_ = rc.transport.Close()
+	if rc.unregisterHealth != nil {
+		rc.unregisterHealth()
+	}
 }
 
 // cityEntry is the per-key construction barrier. It is published into the map
@@ -220,6 +231,25 @@ type CityHost struct {
 	// (on rootCtx cancellation). Close joins it BEFORE tearing down cities, so
 	// no in-flight eviction races Close's own teardown (AC-5, no double stop).
 	evictorDone chan struct{}
+
+	// health is FEAT-2326609775 inc1's /health registry: one cityHealthState
+	// per currently-live city, registered by buildCity and unregistered by
+	// stop() so a /health snapshot never lists an evicted/shut-down city.
+	// Read-only after construction (health.go's newHealthRegistry allocates
+	// its own internal mutex for the map it guards); this field itself is
+	// never reassigned after NewCityHost, so no CityHost-level lock is
+	// needed to read it.
+	health *healthRegistry
+}
+
+// HealthRegistry exposes the host's /health registry so runHosted (main.go)
+// can wire it into the "/health" mux route. Safe to call any time after
+// construction (the field is fixed at NewCityHost and never nil).
+func (h *CityHost) HealthRegistry() *healthRegistry {
+	if err := h.checkNotCopied(); err != nil {
+		return nil
+	}
+	return h.health
 }
 
 // CityHostOption configures optional CityHost construction knobs
@@ -286,6 +316,7 @@ func newCityHost(persistDir string, tickInterval, idleTimeout, sweepInterval tim
 		idleTimeout:   idleTimeout,
 		sweepInterval: sweepInterval,
 		evictorDone:   make(chan struct{}),
+		health:        newHealthRegistry(),
 	}
 	// self is stamped BEFORE options run (not after, as a pre-inc3b draft of
 	// this function had it) so every CityHostOption closure can call the
@@ -388,7 +419,7 @@ func (h *CityHost) GetOrCreate(ctx context.Context, cityKey persist.CityKey) (*r
 		h.onBuildStart()
 	}
 
-	city, err := buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.snapshotEvery, h.engineOpts, h.logw)
+	city, err := buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.snapshotEvery, h.engineOpts, h.logw, h.health)
 	if err != nil {
 		// Register NOTHING on failure: remove the claim before signalling, so
 		// no half-built city is ever observable in the map, and a later
@@ -612,7 +643,7 @@ func (h *CityHost) evictIdle() {
 // nothing. It is a free function (not a *CityHost method) deliberately: it
 // takes no candidate-typed value, so it carries no SEC-020 copy-guard
 // obligation.
-func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persist.CityKey, tickInterval time.Duration, snapshotEvery int64, engineOpts []core.Option, logw io.Writer) (*runningCity, error) {
+func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persist.CityKey, tickInterval time.Duration, snapshotEvery int64, engineOpts []core.Option, logw io.Writer, healthReg *healthRegistry) (*runningCity, error) {
 	opts := make([]core.Option, 0, 1+len(engineOpts))
 	opts = append(opts, core.WithWorldSeed(seedForCity(key)))
 	opts = append(opts, engineOpts...)
@@ -638,6 +669,17 @@ func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persi
 		}
 	}
 
+	// FEAT-2326609775 inc1: /health wiring for this hosted city -- a plain
+	// (tenantId, cityId, tick) tracker, mirroring main.go's legacy-path
+	// wiring exactly. See health.go's package doc comment for why inc1
+	// deliberately reports only fields that are already-cheap atomic reads
+	// (TicksCompleted) rather than adding new live counters through the
+	// persist.Store write path.
+	health := newCityHealthState(key.TenantID, key.CityID, e)
+	if healthReg != nil {
+		healthReg.register(health)
+	}
+
 	transport := protocol.NewInProcTransport(
 		protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer,
 		protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer,
@@ -649,6 +691,9 @@ func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persi
 	if err != nil {
 		cancel()
 		_ = transport.Close()
+		if healthReg != nil {
+			healthReg.unregister(key.TenantID, key.CityID)
+		}
 		return nil, fmt.Errorf("city %s: StartSubscriptionPump failed: %w", key.CityID, err)
 	}
 
@@ -660,14 +705,20 @@ func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persi
 	loopDone := startCommandLoop(ctx, e, transport, comp, store, key, snapshotEvery, correlationID, logw)
 	tickDone := tickLoop(ctx, e, transport, tickInterval, correlationID)
 
+	unregisterHealth := func() {}
+	if healthReg != nil {
+		unregisterHealth = func() { healthReg.unregister(key.TenantID, key.CityID) }
+	}
+
 	return &runningCity{
-		engine:    e,
-		comp:      comp,
-		transport: transport,
-		cancel:    cancel,
-		pumpDone:  pumpDone,
-		loopDone:  loopDone,
-		tickDone:  tickDone,
+		engine:           e,
+		comp:             comp,
+		transport:        transport,
+		cancel:           cancel,
+		pumpDone:         pumpDone,
+		loopDone:         loopDone,
+		tickDone:         tickDone,
+		unregisterHealth: unregisterHealth,
 	}, nil
 }
 

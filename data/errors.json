@@ -125,7 +125,8 @@
       "V850-V851": "reserved for ui.webconsole (FEAT-2326609714 save robustness: MET-V850 malformed-save rejection + MET-V851 named-save slug-collision block; same owner as the V800-V849 webconsole error framework. Auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V852-V852": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V854-V855": "reserved for ui.webconsole (FEAT-1972079885 debug commit queue byte-budget + compaction: MET-V854 oversize-entry drop + MET-V855 quota-exhausted give-up; same owner as the V800-V853 webconsole error framework. Auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V853-V853": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V853-V853": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "P040-P049": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5296,6 +5297,24 @@
       "module": "ui.webconsole",
       "message": "Consolidator oversight monitoring failed: {detail}",
       "remedy": "Check the metro MariaDB consolidator_audit table and the oversight script's DB connection; the consolidator itself is unaffected (read-only telemetry only)."
+    },
+    "MET-P040": {
+      "severity": "error",
+      "module": "int.protocol",
+      "message": "metroserve: /health response encode failed: {reason}",
+      "remedy": "Non-fatal, diagnostic-only path (GR#1): the response body may be truncated or absent for this one probe; check server stdout for the wrapped error. Retrying the probe is safe."
+    },
+    "MET-P041": {
+      "severity": "warn",
+      "module": "int.protocol",
+      "message": "metroserve: connection to {path} refused before WebSocket upgrade: missing or mismatched shared-secret header ({reason})",
+      "remedy": "Set the X-Metroserve-Secret request header (non-browser clients) or a ?secret= query parameter (browser clients, which cannot set custom WebSocket handshake headers) to the value configured via METROSERVE_SHARED_SECRET on the server. When that env var is unset the server accepts every connection unchanged (local dev is unaffected) -- this refusal only fires once a secret has been configured."
+    },
+    "MET-P042": {
+      "severity": "warn",
+      "module": "int.protocol",
+      "message": "metroserve: connection to {path} refused before WebSocket upgrade: Origin {origin} is not in the configured allow-list",
+      "remedy": "Add the connecting Origin to METROSERVE_ALLOWED_ORIGINS (comma-separated exact-match list) on the server, or omit that env var entirely to accept every origin unchanged (local dev default)."
     }
   }
 }
