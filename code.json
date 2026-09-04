@@ -794,6 +794,10 @@
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.finance",
             "outboundGuid": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6"
           },
@@ -5111,6 +5115,11 @@
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          },
+          {
+            "key": "engine.deathservices",
+            "moduleGuid": "75256c06-b41b-4094-a064-5db1282d4b98",
+            "inboundGuid": "ba1fe880-21b7-46c0-bd56-257c0f6c223d"
           }
         ]
       },
@@ -6912,7 +6921,12 @@
         "name": "DeathServicesAPI",
         "format": "Go package API + deltas",
         "pattern": "body intake keyed off feat.deathwave's released death queue; disposal/triage commands (bury/cremate/dispense), no directly-writable exported fields",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          }
+        ]
       },
       "outbound": {
         "guid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49",
@@ -6966,6 +6980,11 @@
             "key": "engine.market",
             "moduleGuid": "bd0cc5e7-5941-41ee-a944-bd3ddc8d2b2f",
             "inboundGuid": "261a5063-96f3-40eb-a667-af294be7fc16"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },

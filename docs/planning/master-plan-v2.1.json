@@ -1788,7 +1788,8 @@
         "foundation.data",
         "feat.saveux",
         "engine.unlocks",
-        "int.serializer"
+        "int.serializer",
+        "engine.deathservices"
       ],
       "sprint": 6
     },
@@ -2568,7 +2569,8 @@
         "foundation.data",
         "foundation.errors",
         "foundation.num",
-        "engine.market"
+        "engine.market",
+        "int.serializer"
       ],
       "sprint": 9
     },
