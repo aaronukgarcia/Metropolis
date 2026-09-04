@@ -238,7 +238,7 @@ export function indexedDBKVStore(factory?: MiniIDBFactory | null): AsyncKVStore 
 /** Bounded, deduplicated-by-code loud-error reporting so a quota storm doesn't spam the ring. */
 const reportedOnce = new Set<string>();
 function reportOnce(code: string, msg: string): void {
-  const key = code + ' ' + msg;
+  const key = code + '\u0000' + msg;
   if (reportedOnce.has(key)) return;
   reportedOnce.add(key);
   recordError(msg, { type: 'app', action: 'saveStore', code });

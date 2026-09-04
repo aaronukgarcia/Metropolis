@@ -4517,7 +4517,22 @@ export type Action =
   | { type: 'dismissInsolvencyPopup' }
   | { type: 'unlockAll' }
   | { type: 'reset' }
-  | { type: 'hydrate'; state: SimState }
+  | {
+      type: 'hydrate';
+      state: SimState;
+      /**
+       * BUG-677: which kind of state hand-off this is. 'load' (the default,
+       * so every existing call site and journal entry keeps its meaning) is
+       * a savepoint/replay/snapshot restore and runs the once-per-load
+       * ceremonies (AC-31 over-cap notice). 'tick' is the web-worker
+       * delivering ONE advanced tick (store.tsx's worker.onmessage) — it
+       * arrives up to once per second (6.25×/s in turbo), so per-load
+       * ceremonies must NOT run: the AC-31 scan re-stamped placeNotice on
+       * every tick, making the over-cap notice undismissable, and paid an
+       * O(buildings) countOfSpec sweep per capped spec per tick.
+       */
+      source?: 'load' | 'tick';
+    }
   // FEAT-2326609723: Play Mode's one-way sandbox escape hatch, reachable from
   // the Decline screen (and idempotent thereafter — see the reducer case).
   | { type: 'enterPlayMode' }
@@ -5914,6 +5929,15 @@ function reduceCore(state: SimState, action: Action): SimState {
       // is a safe no-op for that path, exactly as intended (hard-reset-replay
       // deliberately re-derives under CURRENT rules by design).
       const hydrated = stampJobsGrandfather(sanitizeTreasury(action.state));
+      // BUG-677: a worker-tick hydrate (source === 'tick') is NOT a load —
+      // skip the once-per-load AC-31 scan below. Without this gate the scan
+      // ran on every applied worker tick (store.tsx delivers each advanced
+      // tick as a hydrate), re-stamping placeNotice every second so the
+      // over-cap notice could never be dismissed, and burning an
+      // O(buildings) countOfSpec sweep per capped spec on the hot path.
+      // stampJobsGrandfather above stays unconditional — it early-returns on
+      // a current economyEpoch, and a worker tick's state is always current.
+      if (action.source === 'tick') return hydrated;
       // FEAT-2326609761 AC-31: an OLD SAVE may already carry MORE than
       // maxPerCity of a now-capped spec (e.g. two Five Gorges Dams placed
       // before this cap existed). Nothing is demolished and no money is

@@ -27,6 +27,7 @@ import { stableStringify } from '../src/sim/genesisReplay.ts';
 import { runTick } from '../src/sim/simWorkerProtocol.ts';
 import { createQueueDepthTracker, getGlobalWorkerQueueTracker } from '../src/sim/workerQueueDepth.ts';
 import { webWorkerOffloadEnabled } from '../src/sim/webWorkerFlag.ts';
+import { createFakeIndexedDBFactory } from './helpers/fakeIndexedDB.mjs';
 import { occupiedSet, computeRoadConnectivity, powerStats, countByKindOnline, serviceCoverageOf, utilisationOf, waterCaps, SPECS } from '../src/sim/data.ts';
 import {
   initialOffloadControllerState,
@@ -1474,6 +1475,16 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
     // in a real browser (where `localStorage` and `window.localStorage` are
     // the same object).
     globalThis.localStorage = window.localStorage;
+    // FEAT-2326609778 (IndexedDB saves): SimProvider's mount now fires the
+    // one-time save migration + savepoint mirroring against `indexedDB`.
+    // jsdom provides none, so without a shim the saveStore degrades to its
+    // in-memory overlay and — by design (GR#1/#17) — records ONE loud
+    // "save not durable" registry error on mount. That stray ring entry
+    // broke this file's exact-count assertion ("exactly one new registry
+    // error must be recorded for the postMessage failure": got 2). Install
+    // the estate's own in-memory fake so the durable layer works and stays
+    // silent, exactly like the estate's own tests do.
+    globalThis.indexedDB = createFakeIndexedDBFactory();
     // Opt into the worker-offload flag store.tsx's webWorkerFlag.ts reads.
     window.localStorage.setItem('metropolis.webworker', '1');
     return dom;

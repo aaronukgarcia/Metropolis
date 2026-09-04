@@ -1097,7 +1097,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // will actually be applied — never at request time (see
         // recordTickInJournalOnly's header comment).
         recordTickInJournalOnly(decision.tickToJournal);
-        dispatch({ type: 'hydrate', state: msg.state });
+        // BUG-677: mark this hydrate as a tick delivery so the reducer skips
+        // its once-per-load ceremonies (AC-31 over-cap notice re-fired every
+        // second without this, undismissably).
+        dispatch({ type: 'hydrate', state: msg.state, source: 'tick' });
         // BUG-618: this IS an applied tick (bypasses wrappedDispatch's own
         // 'tick' branch entirely — raw `dispatch` above — so it must be
         // counted here, the only place a worker-sourced tick actually lands).
