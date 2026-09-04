@@ -48,6 +48,8 @@ import { applyStashedCameraToView } from '../sim/cameraApply';
 import { buildingRef, buildingRefLabel } from '../sim/refs';
 import { useBusy } from './Busy';
 import { HelpOverlay } from './HelpOverlay';
+import { AffordabilityConfirm } from './AffordabilityConfirm';
+import { evaluatePlacementBatch, type PendingBatchPlacement } from './placementGate';
 import { makeKeydownHandler } from '../sim/keyhandler';
 import type { Building, ZoneKind, TaxRates } from '../sim/types';
 import type { Spec } from '../sim/data';
@@ -142,6 +144,14 @@ export function MapView() {
   const [showLines, setShowLines] = useState(false);
   // FEAT-1972079861: Help overlay toggle. UI-only, component-local state.
   const [helpOpen, setHelpOpen] = useState(false);
+  // BUG-652 follow-up, ROUND r3+r4 (2026-09-04): component-local ONLY — never
+  // SimState, never journaled (see AffordabilityConfirm.tsx/placementGate.ts's
+  // own headers for the full round r2/r4 finding this replaces). ONE pending
+  // slot shared by every UI dispatch path in THIS component (single build
+  // click, drag-paint flush, clone-paste stampRegion, the advisor's
+  // resolveDemand prompt) — placementGate.ts's evaluatePlacementBatch() is
+  // the single seam all of them call before dispatching.
+  const [pendingAfford, setPendingAfford] = useState<PendingBatchPlacement | null>(null);
   const [cloneSelection, setCloneSelection] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null);
   // FEAT-1972079910 inc1: road tracker state. Tracks anchor point and current path
   // during a road-placement drag. The preview renders the path; pointerup commits.
@@ -782,6 +792,21 @@ export function MapView() {
         const sp = SPECS[state.tool.spec];
         const ax = Math.min(t.x, MAP_W - sp.w);
         const ay = Math.min(t.y, MAP_H - sp.h);
+        // BUG-652 follow-up, ROUND r3/r4 (2026-09-04): the affordability
+        // check lives HERE, at the dispatch site — never in the reducer
+        // (r2's REJECT findings F1/F2: a reducer-side gate silently drops
+        // every pre-existing journalled 'place' entry on load, and its
+        // notice had no UI reader at all). evaluatePlacementBatch() (the
+        // SAME shared seam drag-paint/stampRegion/resolveDemand below all
+        // use, r4's fix) is pure/read-only; dispatching only happens once
+        // the player has actually confirmed (or never needed to).
+        const gate = evaluatePlacementBatch(state, [state.tool.spec], () => {
+          dispatch({ type: 'place', spec: state.tool.spec!, x: ax, y: ay });
+        });
+        if (gate) {
+          setPendingAfford(gate);
+          break;
+        }
         dispatch({ type: 'place', spec: state.tool.spec, x: ax, y: ay });
         break;
       }
@@ -934,10 +959,19 @@ export function MapView() {
         // Aaron's 2026-09-03 superseding ruling changed the real fraction.
         return {
           text: `Do you want to place ${buildingLabel}? (fixes ${AUTO_BUILD_DEMAND_PERCENT}% of ${label} demand) — ${demandFixMessage(fix)}`,
+          // BUG-652 follow-up, ROUND r4 (2026-09-04): resolveDemand builds
+          // `fix.count` units of `fix.specId` in ONE dispatch — gated as the
+          // WHOLE plan's aggregate wage bill, not per-unit (the finding that
+          // the advisor's own "Fix" button was one of the bypassed batch
+          // paths, "currently unreachable only by pricing accident").
           go: () => {
-            run(() => {
-              dispatch({ type: 'resolveDemand', serviceKey: fix.serviceKey });
-            });
+            const gate = evaluatePlacementBatch(
+              state,
+              Array(fix.count).fill(fix.specId),
+              () => run(() => dispatch({ type: 'resolveDemand', serviceKey: fix.serviceKey }))
+            );
+            if (gate) setPendingAfford(gate);
+            else run(() => dispatch({ type: 'resolveDemand', serviceKey: fix.serviceKey }));
           },
         };
       }
@@ -1145,13 +1179,20 @@ export function MapView() {
               const clipboardRect = { w: maxX - minX + 1, h: maxY - minY + 1, items: capturedItems };
               dispatch({ type: 'setClipboard', clipboard: capturedItems.length > 0 ? clipboardRect : null });
             } else {
-              // Stamp the clipboard at the selection anchor.
-              dispatch({
-                type: 'stampRegion',
-                clipboard: state.clipboard,
-                x: selectionAnchorRef.current.x,
-                y: selectionAnchorRef.current.y,
-              });
+              // Stamp the clipboard at the selection anchor. BUG-652 follow-up,
+              // ROUND r4 (2026-09-04): a multi-item clipboard is a BATCH — the
+              // whole paste is gated as ONE aggregate confirmation (the
+              // finding that a clone-paste bypassed the r3 gate entirely).
+              const clip = state.clipboard;
+              const anchorX = selectionAnchorRef.current.x;
+              const anchorY = selectionAnchorRef.current.y;
+              const gate = evaluatePlacementBatch(
+                state,
+                clip.items.map((it) => it.spec),
+                () => dispatch({ type: 'stampRegion', clipboard: clip, x: anchorX, y: anchorY })
+              );
+              if (gate) setPendingAfford(gate);
+              else dispatch({ type: 'stampRegion', clipboard: clip, x: anchorX, y: anchorY });
             }
             setCloneSelection(null);
             selectionAnchorRef.current = null;
@@ -1160,9 +1201,21 @@ export function MapView() {
           // atomic 'placeMany' (the first tile of the drag already went
           // through 'place' at pointerdown; this covers everything after it).
           // Runs before the paint refs are reset below so it only fires for
-          // an actual build-mode drag that populated the buffer.
+          // an actual build-mode drag that populated the buffer. BUG-652
+          // follow-up, ROUND r4: gated as ONE aggregate batch confirmation —
+          // the finding that N drag-painted tiles bypassed the r3 gate
+          // entirely (proven live: 3 Channel Tunnel Portals for 180% of
+          // gross inflow, zero confirmation).
           if (dragTilesRef.current.length > 0 && dragSpecRef.current) {
-            dispatch({ type: 'placeMany', spec: dragSpecRef.current, tiles: dragTilesRef.current });
+            const tiles = dragTilesRef.current;
+            const spec = dragSpecRef.current;
+            const gate = evaluatePlacementBatch(
+              state,
+              tiles.map(() => spec),
+              () => dispatch({ type: 'placeMany', spec, tiles })
+            );
+            if (gate) setPendingAfford(gate);
+            else dispatch({ type: 'placeMany', spec, tiles });
           }
           dragTilesRef.current = [];
           dragSpecRef.current = null;
@@ -1300,6 +1353,16 @@ export function MapView() {
         />
       )}
       <HelpOverlay isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
+      {pendingAfford && (
+        <AffordabilityConfirm
+          message={pendingAfford.afford.message}
+          onConfirm={() => {
+            pendingAfford.commit();
+            setPendingAfford(null);
+          }}
+          onCancel={() => setPendingAfford(null)}
+        />
+      )}
     </div>
   );
 

@@ -75,6 +75,8 @@ import {
   constructionTicks,
   BULLDOZE_REFUND_FRACTION,
   CONSOLIDATOR_SCRAP_FRACTION,
+  JOBS_GRANDFATHER_ECONOMY_EPOCH,
+  stampJobsGrandfather,
 } from './data.ts';
 import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -412,6 +414,11 @@ function rawState(): SimState {
     // FEAT-2326609761 inc1 (AC-1, ASM-1504): new cities default to the
     // consolidator OFF (CONSOLIDATOR_ENABLED_DEFAULT, above).
     consolidatorEnabled: CONSOLIDATOR_ENABLED_DEFAULT,
+    // BUG-652 GRANDFATHERING (2026-09-04): a brand-new city is always on the
+    // current economy epoch — it has no pre-existing buildings from an older
+    // economy to migrate, so stampJobsGrandfather() is immediately a no-op
+    // for it (see that function's own epoch-already-current early return).
+    economyEpoch: JOBS_GRANDFATHER_ECONOMY_EPOCH,
     buildings,
     nextId: nextSafeBuildingId(buildings),
     movingId: null,
@@ -4211,6 +4218,22 @@ export type Action =
   | { type: 'tick' }
   | { type: 'speed'; speed: SimState['speed'] }
   | { type: 'tool'; tool: Tool }
+  // ROUND r3 FIX (2026-09-04, F1/F2): a 'place' action carries NO
+  // affordability-confirmation field. Round r2 (INDEPENDENT DESTRUCTIVE,
+  // GR#23) REJECTED an earlier design that gated this reducer case on a
+  // `confirmAffordability` flag: every replay path (restoreFromSavepoint's
+  // tail loop, replayTailChunked, replayFromGenesis) drives THIS SAME
+  // reducer case, so a pre-existing journal's 'place' entries — recorded
+  // before the flag existed — silently lost their building on the very next
+  // load (F1, BLOCKING), and the resulting notice had no UI reader at all
+  // (F2, BLOCKING) — a permanent, feedback-free no-op in the live app. THE
+  // FIX: the reducer stays PURE and ALWAYS places once its own funds/unlock/
+  // bounds/fits checks pass — exactly as before BUG-652 ever touched this
+  // case — because a reducer that can refuse a journalled action breaks
+  // replay by construction. The placement-affordability CONFIRMATION now
+  // lives entirely at the DISPATCH site (MapView.tsx's build-tool click
+  // handler calls data.ts's placementAffordability() BEFORE ever
+  // constructing this action) — never in SimState, never journaled.
   | { type: 'place'; spec: string; x: number; y: number }
   // BUG b2d31bc7 FIX 3 — atomic batch placement for drag-painting a run of
   // non-road buildings (mirrors placeRoadPath's atomic-dispatch pattern below
@@ -4478,6 +4501,9 @@ function reduceCore(state: SimState, action: Action): SimState {
       )
         return state;
       if (!fits(occupiedSet(state), sp.w, sp.h, action.x, action.y)) return state;
+      // ROUND r3 FIX (2026-09-04, F1/F2): NO affordability gate here — see
+      // the Action union's 'place' case doc comment above for the full
+      // rationale. The reducer always places once it reaches this point.
       const placedBuilding = { id: state.nextId, spec: action.spec, x: action.x, y: action.y, builtTick: state.tick };
       const placedState = {
         ...state,
@@ -5598,7 +5624,19 @@ function reduceCore(state: SimState, action: Action): SimState {
     }
 
     case 'hydrate': {
-      const hydrated = sanitizeTreasury(action.state);
+      // BUG-652 GRANDFATHERING (2026-09-04): the universal belt-and-braces
+      // catch-all — every path that hands a RESTORED/LOADED snapshot to the
+      // live app funnels through this one reducer case EXCEPT the very first
+      // (synchronous, pre-render) boot state, which replay.ts's
+      // restoreFromSavepoint()/prepareRestoreForChunkedTail() already stamp
+      // directly (see their own comments) because it is set via useState's
+      // lazy initializer, never dispatched through the reducer. Idempotent
+      // (stampJobsGrandfather is a no-op once state.economyEpoch is already
+      // current) — hard-reset-replay's result reaches here already at the
+      // current epoch (replayFromGenesis starts from initialState()), so this
+      // is a safe no-op for that path, exactly as intended (hard-reset-replay
+      // deliberately re-derives under CURRENT rules by design).
+      const hydrated = stampJobsGrandfather(sanitizeTreasury(action.state));
       // FEAT-2326609761 AC-31: an OLD SAVE may already carry MORE than
       // maxPerCity of a now-capped spec (e.g. two Five Gorges Dams placed
       // before this cap existed). Nothing is demolished and no money is

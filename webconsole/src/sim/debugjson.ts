@@ -318,6 +318,8 @@ export interface DebugJson {
     consolidatorLog: ConsolidationPass[];
     /** FEAT-2326609761 (CONSOLIDATOR, AC-26/ASM-1502, F4 fix) — single-level undo consumed-flag. */
     consolidatorUndoConsumed: boolean;
+    /** BUG-652 GRANDFATHERING (2026-09-04) — economy schema-version counter; see SimState.economyEpoch's own doc comment. */
+    economyEpoch: number;
   };
   flows: {
     inflows: FlowItem[];
@@ -617,6 +619,8 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   // FEAT-2326609761 (CONSOLIDATOR mutation lane).
   consolidatorLog: 'sim.consolidatorLog',
   consolidatorUndoConsumed: 'sim.consolidatorUndoConsumed',
+  // BUG-652 GRANDFATHERING (2026-09-04).
+  economyEpoch: 'sim.economyEpoch',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -983,6 +987,9 @@ export function buildDebugJson(
       // CONSOLIDATOR_ENABLED_DEFAULT).
       consolidatorLog: s.consolidatorLog ?? [],
       consolidatorUndoConsumed: s.consolidatorUndoConsumed ?? false,
+      // BUG-652 GRANDFATHERING (2026-09-04, GR#16): legacy state predating the
+      // field reads epoch 0 — see SimState.economyEpoch's own doc comment.
+      economyEpoch: s.economyEpoch ?? 0,
     },
     flows: {
       inflows: s.lastFlows.inflows,

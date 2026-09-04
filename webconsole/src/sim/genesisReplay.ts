@@ -19,7 +19,7 @@
 import type { SimState } from './types.ts';
 import type { Journal } from './journal.ts';
 import { initialState, reducer } from './engine.ts';
-import { computeRoadConnectivity } from './data.ts';
+import { computeRoadConnectivity, stampJobsGrandfather } from './data.ts';
 
 /**
  * Replay a journal from GENESIS: start at initialState() (NOT a snapshot) and
@@ -36,9 +36,45 @@ import { computeRoadConnectivity } from './data.ts';
  * The sparse-action-log optimization from §4.1/§4.2 of the brief (store only
  * sparse player actions, synthesize the ticks between them) is a LATER
  * increment and is intentionally out of scope for inc1.
+ *
+ * BUG-652 GRANDFATHERING (2026-09-04) — `opts.startEconomyEpoch`, a
+ * DELIBERATE, DISCLOSED design decision, not a fudge: a bare `JournalEntry`
+ * (journal.ts) carries only `{ tick, action }` — NO version/provenance
+ * information at all, and never has (this was checked, not assumed). There
+ * is therefore NO way to tell, by inspecting the journal's entries alone,
+ * whether a given 'place' action for e.g. land_airport was originally
+ * recorded before or after BUG-652's jobs fields existed — both are the
+ * byte-identical `{type:'place', spec:'land_airport', x, y}`. This is a
+ * genuine, structural limitation (the task that introduced grandfathering
+ * explicitly asked to "say so and stop rather than fudge" if this were the
+ * case) — solved not by inventing a per-action signal, but by making the
+ * CALLER supply the temporal context it already has (e.g. a GameSave's own
+ * persisted `buildVersion`/`economyEpoch`, which DOES exist at the save
+ * container level — see replay.ts's restoreFromSavepoint for the equivalent
+ * mechanism on the snapshot+tail path).
+ *
+ * DEFAULT BEHAVIOUR (no opts, or omitted startEconomyEpoch): replay starts
+ * at the CURRENT epoch (initialState()'s own default) and therefore never
+ * grandfathers anything — this is the CORRECT, INTENDED behaviour for this
+ * function's documented purpose ("re-derive the city under CURRENT engine
+ * rules", i.e. hard-reset-replay), which store.tsx's live in-session
+ * hard-reset-replay flow relies on: that feature exists specifically so a
+ * player can EXPLICITLY, KNOWINGLY rebuild their city under new rules (its
+ * own before/after report is built to show exactly this kind of change) —
+ * it is not the same "quietly resume my save" flow the round's rejection was
+ * about, so it correctly does NOT grandfather.
+ *
+ * A caller that KNOWS a journal predates the grandfathering epoch (e.g. a
+ * tool re-deriving history from a GameSave whose own `buildVersion` predates
+ * this feature) passes `{ startEconomyEpoch: 0 }` explicitly, making the
+ * grandfather stamp apply to the final state exactly as it would for a
+ * normal snapshot restore.
  */
-export function replayFromGenesis(journal: Journal): SimState {
+export function replayFromGenesis(journal: Journal, opts?: { startEconomyEpoch?: number }): SimState {
   let state = initialState();
+  if (opts?.startEconomyEpoch !== undefined) {
+    state = { ...state, economyEpoch: opts.startEconomyEpoch };
+  }
   // BUG-631 FIX (mirrors replay.ts's replayTailChunked F1 fix, 2026-09-03):
   // this loop USED to wrap itself in `setReplayMode(true)` on the premise that
   // "no UI reads happen between actions during a headless replay" — a premise
@@ -60,7 +96,11 @@ export function replayFromGenesis(journal: Journal): SimState {
   for (const entry of journal.entries) {
     state = reducer(state, entry.action);
   }
-  return { ...state, roadConnectivity: computeRoadConnectivity(state) };
+  // BUG-652 GRANDFATHERING: applied ONCE, after the full replay, exactly
+  // like the trailing roadConnectivity recompute this function already does
+  // — a no-op unless the caller explicitly started this replay at an old
+  // epoch (see this function's own doc comment above).
+  return stampJobsGrandfather({ ...state, roadConnectivity: computeRoadConnectivity(state) });
 }
 
 /**

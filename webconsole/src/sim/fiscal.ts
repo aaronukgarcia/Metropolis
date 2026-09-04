@@ -881,14 +881,24 @@ export type WageSector = 'primary' | 'secondary' | 'tertiary' | 'public';
  * totalJobs() already switches on (`sp.kind === 'commercial'`/`'industrial'`
  * fallback branches, plus every kind that carries an explicit `sp.jobs`
  * count in the live catalogue: commercial, office, industrial, mine,
- * transport). Kinds with NO jobs field in today's catalogue (school, health,
- * police, fire, civic, power, water, pylon, road, station) are still listed
- * here as their real-world employer domain for completeness/documentation —
- * they currently contribute 0 jobs because data.ts's own catalogue has no
- * staff-headcount field for civic-service buildings yet (a catalogue gap, not
- * a fiscal.ts gap; out of this lane's scope to add — data.ts is claimed by
- * another lane). `residential`/`park`/`landmark`/`leisure` are deliberately
- * OMITTED: they are not employers in the catalogue today.
+ * transport). Kinds where MOST specs carry no jobs field today (school,
+ * health, police, fire, civic, power, water, pylon, road, station) are still
+ * listed here as their real-world employer domain for completeness/
+ * documentation — most of their specs contribute 0 jobs because data.ts's
+ * own catalogue has no staff-headcount field for most civic-service
+ * buildings yet (a catalogue gap, not a fiscal.ts gap; out of this lane's
+ * scope to fill wholesale — data.ts is claimed by another lane). BUG-652
+ * (2026-09-03) gave a small, deliberately scoped set of exceptionally
+ * large real-world employers explicit jobs — uni/station_ashford (public
+ * via school/station) and hea_teaching (public via health) — without
+ * attempting the wider civic-service headcount pass; every OTHER school/
+ * health/police/fire/civic/power/water/pylon/road spec still carries no
+ * jobs field and remains a genuine 0. `residential`/`park`/`leisure` are
+ * deliberately OMITTED: they are not employers in the catalogue today.
+ * `landmark` was omitted for the same reason until BUG-652 gave
+ * land_airport/land_stadium/land_tunnel real job counts — see this map's
+ * own `landmark` entry below for the full story (a real near-miss: without
+ * it, those jobs would count toward employment with zero wage outflow).
  *
  * F6 NOTE (independent round, 2026-09-03, flagged for the balance table —
  * NOT a kind remap, do not action now): every `farm_*` spec in today's live
@@ -920,6 +930,24 @@ export const KIND_TO_WAGE_SECTOR: Readonly<Record<string, WageSector>> = Object.
   water: 'public',
   pylon: 'public',
   road: 'public',
+  // BUG-652 (2026-09-03): `landmark` was completely ABSENT from this map even
+  // though the doc comment above lists 'residential'/'park'/'landmark'/
+  // 'leisure' as "deliberately OMITTED: not employers in the catalogue
+  // today" — that was true only because no landmark spec carried a `jobs`
+  // field. BUG-652 gives land_airport/land_stadium/land_tunnel real job
+  // counts (Heathrow ~76,000, a regional stadium's permanent staff, and a
+  // Channel Tunnel portal's operations staff respectively) — WITHOUT this
+  // entry, totalJobsBySector()'s `if (!sector) continue;` guard (data.ts)
+  // would have silently dropped those jobs from the sector bucket entirely:
+  // they would still count toward totalJobs()/employment (reducing the
+  // unemployment rate, the whole point of BUG-652) but contribute ZERO to
+  // filledJobsBySector() and therefore ZERO wage outflow — jobs with no wage
+  // bill, a genuine GR#3 SSOT inconsistency (income/coverage says "employed",
+  // the money side says "free"). Mapped to 'tertiary': airport/stadium/
+  // tunnel operations are overwhelmingly private/commercial-sector
+  // employment in the real world (the same bucket commercial/office jobs
+  // already use), not civil-service 'public' roles.
+  landmark: 'tertiary',
 });
 
 /** Per-sector job counts — the injected decomposition-basis input to

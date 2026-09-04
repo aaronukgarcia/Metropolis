@@ -291,6 +291,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
             tail: prepared.tail,
             camera: prepared.camera ?? null,
             crossBuildAfter: crossBuild ? { savedVersion: most.buildVersion ?? null, currentVersion: running } : null,
+            needsJobsGrandfatherCatchUp: prepared.needsJobsGrandfatherCatchUp ?? false,
           },
         };
       }
@@ -395,6 +396,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
     tail: JournalEntry[];
     camera: MapViewState | null;
     crossBuildAfter: { savedVersion: string | null; currentVersion: string } | null;
+    /** BUG-652 GRANDFATHERING, ROUND r3 FIX (F4) — threaded straight from
+     *  prepareRestoreForChunkedTail() through to replayTailChunked() so a
+     *  tail-created instance of one of the six BUG-652 specs is grandfathered
+     *  too, exactly like the synchronous restoreFromSavepoint() path. */
+    needsJobsGrandfatherCatchUp: boolean;
   } | null>(boot.pendingTailReplay);
   // FEAT-2326609720 inc1: registers RebuildPrompt with the app-wide blocking-
   // overlay resolver (overlayManager.tsx) at BLOCKING_OVERLAY_ID.REBUILD_PROMPT
@@ -1132,7 +1138,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
     setRebuildProgress(null);
     setRebuildInProgress(true);
 
-    const gen = replayTailChunked(stateRefForDispatch.current, pendingTailReplay.tail);
+    const gen = replayTailChunked(stateRefForDispatch.current, pendingTailReplay.tail, pendingTailReplay.needsJobsGrandfatherCatchUp);
 
     const closeGen = () => {
       try {

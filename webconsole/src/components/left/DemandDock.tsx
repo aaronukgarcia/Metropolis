@@ -1,13 +1,23 @@
+import { useState } from 'react';
 import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, isBrownoutActive, demandFixPlan, orderedDemandFixPlan, AUTO_BUILD_DEMAND_PERCENT } from '../../sim/data';
 import { useSim } from '../../sim/simContext';
 import { demandOf, levelOf } from '../../sim/engine';
 import { useBusy } from '../Busy';
 import { Panel } from '../Tabs';
 import { formatBuildingCount, demandFixMessage } from '../demandFixUi';
+import { AffordabilityConfirm } from '../AffordabilityConfirm';
+import { evaluatePlacementBatch, type PendingBatchPlacement } from '../placementGate';
 
 export function DemandDock() {
   const { state, dispatch } = useSim();
   const { run } = useBusy();
+  // BUG-652 follow-up, ROUND r4 (2026-09-04): this dock's OWN Fix/Fix All/
+  // Auto-build buttons are three of the batch dispatch paths the round found
+  // bypassed the r3 gate entirely — resolveDemand/resolveDemandAll each
+  // build a WHOLE demandFixPlan()'s worth of units in one dispatch. Same
+  // shared seam (placementGate.ts) as MapView.tsx, own local pending slot
+  // (a separate component, so a separate useState instance — never SimState).
+  const [pendingAfford, setPendingAfford] = useState<PendingBatchPlacement | null>(null);
   const demand = demandOf(state);
   const services = serviceDemandOf(state);
   const auto = pickAutoSpec(state);
@@ -31,10 +41,20 @@ export function DemandDock() {
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
+  // BUG-652 follow-up, ROUND r4 (2026-09-04): resolveDemand builds a WHOLE
+  // plan item's `count` units of `specId` in ONE dispatch — gate the plan's
+  // AGGREGATE wage bill, not a per-unit figure (the finding: this button was
+  // one of the paths bypassing round r3's single-placement-only gate).
   function runResolveDemand(serviceKey: string) {
-    run(() => {
-      dispatch({ type: 'resolveDemand', serviceKey });
-    });
+    const plan = fixPlanByService.get(serviceKey);
+    const commit = () => run(() => dispatch({ type: 'resolveDemand', serviceKey }));
+    if (!plan) {
+      commit();
+      return;
+    }
+    const gate = evaluatePlacementBatch(state, Array(plan.count).fill(plan.specId), commit);
+    if (gate) setPendingAfford(gate);
+    else commit();
   }
 
   // BUG-606 fix-all (Aaron, 2026-09-03): the SAME priority-ordered plan the
@@ -42,11 +62,16 @@ export function DemandDock() {
   // so the button is enabled/disabled by EXACTLY the condition the dispatch
   // will act on, and the tooltip names the real order.
   const fixAllOrder = orderedDemandFixPlan(state);
+  // BUG-652 follow-up, ROUND r4: 'Fix All' builds EVERY shown shortfall's
+  // whole plan in ONE dispatch — gate the SUM across every plan item as one
+  // aggregate confirmation, never per-service.
   function runFixAll() {
     if (fixAllOrder.length === 0) return;
-    run(() => {
-      dispatch({ type: 'resolveDemandAll' });
-    });
+    const commit = () => run(() => dispatch({ type: 'resolveDemandAll' }));
+    const specIds = fixAllOrder.flatMap((p) => Array(p.count).fill(p.specId));
+    const gate = evaluatePlacementBatch(state, specIds, commit);
+    if (gate) setPendingAfford(gate);
+    else commit();
   }
   // BUG-393: visible brownout signal — banner + power-row highlight while
   // power need exceeds capacity. FEAT-2326609711 inc1 fix: derived from
@@ -57,30 +82,35 @@ export function DemandDock() {
 
   function runAuto() {
     if (!auto) return;
-    run(() => {
-      // BUG-601 (Aaron ruling, 2026-09-02): Auto-build now sizes the SAME way
-      // the Fix (N) button does — ceil(50% of the outstanding shortfall /
-      // unit capacity), funds-capped by the resolveDemand reducer — instead
-      // of always placing exactly one unit regardless of how large the
-      // shortfall is. fixPlanByService is the SAME demandFixPlan(state) map
-      // the Fix buttons read (SSOT, GR#3), keyed by auto.serviceKey.
-      const plan = fixPlanByService.get(auto.serviceKey);
-      if (plan) {
-        dispatch({ type: 'resolveDemand', serviceKey: auto.serviceKey });
-        return;
-      }
-      // Fallback for the pathological case where pickAutoSpec() recommends a
-      // service demandFixPlan() has no entry for (e.g. a single-unit-only
-      // affordability gap the plan's whole-shortfall budget check declines) —
-      // preserves the pre-BUG-601 one-unit placement rather than silently
-      // doing nothing.
-      const spot = findSpot(state, auto.spec);
-      if (!spot) return;
-      dispatch({ type: 'place', spec: auto.spec, x: spot.x, y: spot.y });
-    });
+    // BUG-601 (Aaron ruling, 2026-09-02): Auto-build now sizes the SAME way
+    // the Fix (N) button does — ceil(50% of the outstanding shortfall /
+    // unit capacity), funds-capped by the resolveDemand reducer — instead
+    // of always placing exactly one unit regardless of how large the
+    // shortfall is. fixPlanByService is the SAME demandFixPlan(state) map
+    // the Fix buttons read (SSOT, GR#3), keyed by auto.serviceKey.
+    const plan = fixPlanByService.get(auto.serviceKey);
+    if (plan) {
+      // Same plan, same gate as the "Fix (N)" button itself (runResolveDemand) —
+      // reuse it directly so the two can never disagree.
+      runResolveDemand(auto.serviceKey);
+      return;
+    }
+    // Fallback for the pathological case where pickAutoSpec() recommends a
+    // service demandFixPlan() has no entry for (e.g. a single-unit-only
+    // affordability gap the plan's whole-shortfall budget check declines) —
+    // preserves the pre-BUG-601 one-unit placement rather than silently
+    // doing nothing. BUG-652 follow-up, ROUND r4: still a single placement,
+    // gated exactly like MapView's own single-tile build click.
+    const spot = findSpot(state, auto.spec);
+    if (!spot) return;
+    const commit = () => run(() => dispatch({ type: 'place', spec: auto.spec, x: spot.x, y: spot.y }));
+    const gate = evaluatePlacementBatch(state, [auto.spec], commit);
+    if (gate) setPendingAfford(gate);
+    else commit();
   }
 
   return (
+    <>
     <Panel
       title="Demand"
       headerExtra={
@@ -152,6 +182,17 @@ export function DemandDock() {
         {!auto && <p className="hint">All covered — nothing needed right now.</p>}
       </div>
     </Panel>
+    {pendingAfford && (
+      <AffordabilityConfirm
+        message={pendingAfford.afford.message}
+        onConfirm={() => {
+          pendingAfford.commit();
+          setPendingAfford(null);
+        }}
+        onCancel={() => setPendingAfford(null)}
+      />
+    )}
+    </>
   );
 }
 

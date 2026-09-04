@@ -1,5 +1,5 @@
 import type { Dims, SimState, ZoneKind } from './types.ts';
-import { formatPower } from './utils.ts';
+import { formatPower, fmtMoney } from './utils.ts';
 // FEAT-1972079877: isPlaceable defers real specs to the existing unlock gate.
 // specUnlocked lives in engine.ts, which itself imports from data.ts — this is a
 // function-only (call-time) cyclic import: neither module uses the other at
@@ -32,6 +32,7 @@ import {
   type SectorJobs,
   ZERO_SECTOR_JOBS,
   allocateFilledJobs,
+  sectorWagesPerTick,
 } from './fiscal.ts';
 // BUG-511: registry-sourced (GR#7) fail-loud guard for the residential
 // no-`residents` trap below (assertResidentialSpecsHaveResidents). backend.ts
@@ -1411,7 +1412,15 @@ export const SPECS: Record<string, Spec> = {
   m20: P('m20', 'motorway', 'M20 Motorway', '', 1, 1, 0, 0, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
   rail: P('rail', 'rail', 'Rail Line', '', 1, 1, 0, 0, '#8a6d3b', 'network', 99),
   station_sanderling: P('station_sanderling', 'station', 'Sanderling Station', '', 1, 1, 0, 15, '#d0a83c', 'network', 99),
-  station_ashford: P('station_ashford', 'station', 'Ashford International', 'HS1 international gateway · 60,000 served · x3 commuter weight', 4, 2, 150000000, 8333, '#e0559f', 'network', 5, { served: 60000 }),
+  // BUG-652: real Ashford International directly employs roughly 150-250
+  // people across station operations, retail, and HS1/Southeastern staff — a
+  // major but not huge mainline interchange, well below a full rail-freight
+  // yard or depot's headcount. 200 jobs, kind 'station' (KIND_TO_WAGE_SECTOR
+  // already maps station -> public, no fiscal.ts change needed). Flat, not
+  // capacityTiers-scaled (station_ashford carries no ladder) — see
+  // jobsAtTier()'s doc comment above totalJobs() for why `served`+`jobs`
+  // together on one spec with no capacityTiers must stay flat.
+  station_ashford: P('station_ashford', 'station', 'Ashford International', 'HS1 international gateway · 60,000 served · x3 commuter weight', 4, 2, 150000000, 8333, '#e0559f', 'network', 5, { served: 60000, jobs: 200 }),
   hs1: P('hs1', 'rail', 'HS1 High-Speed Line', '', 1, 1, 0, 0, '#c2477e', 'network', 99),
   pylon: P('pylon', 'pylon', 'HV Pylon', '', 1, 1, 0, 5, '#9aa4ae', 'network', 99),
 
@@ -1590,7 +1599,16 @@ export const SPECS: Record<string, Spec> = {
   edu_primary: P('edu_primary', 'school', 'Primary School', '300 places · ages 5–11', 2, 2, 9360000, 520, '#f2c14e', 'services', 3, { children: 300, stage: 'primary', capacityTiers: tierLadder(300) }),
   edu_city: P('edu_city', 'school', 'City School', '2,000 places · ages 5–15', 3, 2, 57600000, 3200, '#e3a92f', 'services', 4, { children: 2000, stage: 'city', capacityTiers: tierLadder(2000) }),
   col_sixth: P('col_sixth', 'school', 'College', '1,500 places · ages 16–19', 2, 2, 32400000, 1800, '#b58fd8', 'services', 4, { children: 1500, stage: 'tertiary' }),
-  uni: P('uni', 'school', 'University', '6,000 students', 3, 3, 135000000, 7500, '#a371f7', 'services', 5, { children: 6000, stage: 'tertiary' }),
+  // BUG-652: UK higher-education staff-to-student ratios run roughly 1:8-1:10
+  // once academic, admin, estates, and research staff are all counted
+  // (UniversitiesUK sector workforce data) — applying ~1:9 to uni's 6,000
+  // students gives ~650 jobs. kind 'school' -> KIND_TO_WAGE_SECTOR already
+  // maps school -> public, no fiscal.ts change needed. Flat, not
+  // capacityTiers-scaled (uni carries no ladder) — see jobsAtTier()'s doc
+  // comment above totalJobs(); totalChildrenCapacity() was also patched
+  // (above) so this new `jobs` field can never be misread as uni's children
+  // capacity.
+  uni: P('uni', 'school', 'University', '6,000 students', 3, 3, 135000000, 7500, '#a371f7', 'services', 5, { children: 6000, stage: 'tertiary', jobs: 650 }),
 
   off_suite: P('off_suite', 'office', 'Office Suite', '25 office jobs', 1, 1, 900000, 5, '#43aa8b', 'zones', 2, { jobs: 25, capacityTiers: tierLadder(25) }),
   off_tower: P('off_tower', 'office', 'Office Tower', '300 office jobs', 2, 3, 22000000, 120, '#43aa8b', 'zones', 4, { jobs: 300, capacityTiers: tierLadder(300) }),
@@ -1598,8 +1616,35 @@ export const SPECS: Record<string, Spec> = {
   mine_quarry: P('mine_quarry', 'mine', 'Quarry', 'Materials + freight jobs', 2, 2, 3200000, 20, '#b08d55', 'zones', 3, { tag: 'pollution', jobs: 30 }),
   mine_deep: P('mine_deep', 'mine', 'Deep Mine', 'Heavy freight output', 3, 3, 15000000, 80, '#9c6f3f', 'zones', 5, { tag: 'pollution', jobs: 90 }),
 
-  land_stadium: P('land_stadium', 'landmark', 'Regional Stadium', 'Tourism magnet + approval', 3, 2, 43200000, 2400, '#d0a83c', 'services', 5, { tourism: 60 }),
-  land_airport: P('land_airport', 'landmark', 'International Airport', 'Heathrow-scale · 1,227 ha · twin 3.9 km runways', 70, 70, 810000000, 45000, '#5eb3d6', 'services', 6, { tourism: 140 }),
+  // ════════════════════════════════════════════════════════════════════════
+  // BUG-652 — the whole `landmark` kind carried ZERO jobs before this fix,
+  // despite land_airport/land_stadium/land_tunnel all modelling real,
+  // heavily-staffed infrastructure. fiscal.ts's KIND_TO_WAGE_SECTOR had NO
+  // 'landmark' entry at all (a GR#3-class inconsistency in its own right —
+  // documented loudly on that mapping's own comment, fiscal.ts) — a landmark
+  // spec carrying `jobs` with no sector to bucket into would count toward
+  // totalJobs()/employment but contribute ZERO wage outflow, i.e. jobs with
+  // no wage bill. FIXED by adding `landmark: 'tertiary'` to
+  // KIND_TO_WAGE_SECTOR (fiscal.ts) — airports/stadiums/tunnel operations
+  // are overwhelmingly private/commercial-sector employment in the real
+  // world, the same bucket commercial/office jobs already land in.
+  // ════════════════════════════════════════════════════════════════════════
+  // Real Regional Stadium staffing: a mid-size (30-40k capacity) stadium's
+  // permanent (non-matchday-casual) staff — ops, grounds, security,
+  // hospitality management — typically runs 200-300 FTE; matchday casual
+  // staff (often 1,000+) are deliberately excluded, since `jobs` here models
+  // steady employment, not event-day casual labour. 250 jobs.
+  land_stadium: P('land_stadium', 'landmark', 'Regional Stadium', 'Tourism magnet + approval', 3, 2, 43200000, 2400, '#d0a83c', 'services', 5, { tourism: 60, jobs: 250 }),
+  // Real Heathrow directly employs ~76,000 people (Heathrow Airport Ltd
+  // employment reporting) across its ~1,227 ha site — this spec's own blurb
+  // already cites that exact 1,227 ha figure, and 70x70 tiles x 50m/tile
+  // (DIMS convention) = 3,500m x 3,500m = 12,250,000 sqm = 1,225 ha, an
+  // almost exact real-footprint match. Using the literal 76,000 figure
+  // directly (no further scaling needed) gives 76,000 / 4,900 tiles =
+  // 15.5 jobs/tile — comfortably BELOW off_towers_downtown's existing
+  // 80 jobs/tile ceiling, so this does not introduce a new density outlier;
+  // it simply stops a genuinely enormous real employer from counting zero.
+  land_airport: P('land_airport', 'landmark', 'International Airport', 'Heathrow-scale · 1,227 ha · twin 3.9 km runways', 70, 70, 810000000, 45000, '#5eb3d6', 'services', 6, { tourism: 140, jobs: 76000 }),
   land_harbour: P('land_harbour', 'landmark', 'Deep-Water Harbour', 'Freight income x1.4', 3, 3, 68400000, 3800, '#5e8bb0', 'services', 7, {}),
 
   // ════════════════════════════════════════════════════════════════════════
@@ -1726,7 +1771,19 @@ export const SPECS: Record<string, Spec> = {
   // ---- Health additions ----
   hea_ambulance: P('hea_ambulance', 'health', 'Ambulance Station', 'Six-crew emergency cover', 1, 1, 6840000, 380, '#ff7b72', 'services', 5, { served: 15000, capacityTiers: tierLadder(15000) }),
   hea_eldercare: P('hea_eldercare', 'health', 'Elder-care Home', '90 assisted-living places', 2, 2, 15300000, 850, '#d95f57', 'services', 7, { served: 90, capacityTiers: tierLadder(90) }),
-  hea_teaching: P('hea_teaching', 'health', 'Teaching Hospital', 'Serves 120,000 + trains doctors', 3, 3, 153000000, 8500, '#c24f47', 'services', 10, { served: 120000, capacityTiers: tierLadder(120000) }),
+  // BUG-652: real large NHS teaching hospital trusts (e.g. Cambridge
+  // University Hospitals/Addenbrooke's, ~12,000 staff for a ~1M-population
+  // regional catchment — a ~1:83 staff-to-served ratio) employ far more per
+  // capita than a district general hospital, reflecting teaching/research
+  // roles on top of clinical care. Applying ~1:83 to hea_teaching's own
+  // served=120,000 gives ~1,450 jobs. kind 'health' -> KIND_TO_WAGE_SECTOR
+  // already maps health -> public, no fiscal.ts change needed. FLAT, not
+  // scaled by the existing capacityTiers ladder — that ladder is sized for
+  // `served` (tierLadder(120000)), NOT jobs; see jobsAtTier()'s doc comment
+  // above totalJobs() for why a spec with jobs + an unrelated capacityTiers
+  // ladder must keep jobs flat (blindly scaling would have overstated this
+  // spec's job count ~80x, reading its served-tier value as its job count).
+  hea_teaching: P('hea_teaching', 'health', 'Teaching Hospital', 'Serves 120,000 + trains doctors', 3, 3, 153000000, 8500, '#c24f47', 'services', 10, { served: 120000, capacityTiers: tierLadder(120000), jobs: 1450 }),
 
   // ---- Police & justice ----
   pol_hq: P('pol_hq', 'police', 'Divisional HQ', 'Commands 60,000 coverage', 2, 2, 27000000, 1500, '#6e7bd9', 'services', 9, { served: 60000, capacityTiers: tierLadder(60000) }),
@@ -1748,7 +1805,14 @@ export const SPECS: Record<string, Spec> = {
   // ---- Landmark additions ----
   land_cathedral: P('land_cathedral', 'landmark', 'Cathedral', 'Gothic spire · pilgrimage draw', 2, 2, 72000000, 4000, '#d0a83c', 'services', 11, { tourism: 45 }),
   land_eye: P('land_eye', 'landmark', 'The Folkestone Eye', 'Coastal observation wheel', 1, 1, 50400000, 2800, '#5eb3d6', 'services', 13, { tourism: 55 }),
-  land_tunnel: P('land_tunnel', 'landmark', 'Channel Tunnel Portal', 'Continental rail gateway', 3, 3, 450000000, 25000, '#c2477e', 'services', 18, { tourism: 80 }),
+  // BUG-652: Eurotunnel (Getlink) reports ~3,000-4,000 direct staff across
+  // both the UK and French terminals combined — a single portal (this spec
+  // models ONE side of the crossing) is roughly half that: ~1,800 jobs
+  // (rail control, freight terminal operations, security, customs). kind
+  // 'landmark' -> KIND_TO_WAGE_SECTOR 'landmark' entry added above
+  // (land_stadium's comment block) so this now buckets into 'tertiary'
+  // instead of contributing to totalJobs() with no wage bill.
+  land_tunnel: P('land_tunnel', 'landmark', 'Channel Tunnel Portal', 'Continental rail gateway', 3, 3, 450000000, 25000, '#c2477e', 'services', 18, { tourism: 80, jobs: 1800 }),
   land_space: P('land_space', 'landmark', 'Space Launch Complex', 'Kent spaceport · mega-project', 5, 5, 1080000000, 60000, '#ff9f43', 'services', 20, { tourism: 200 }),
   // ═══════════════════ end FEAT-1972079877 placeholder block ═══════════════
 
@@ -1862,16 +1926,9 @@ export const SPECS: Record<string, Spec> = {
   // FEAT-2326609763 — ULTRA-DENSE EMPLOYMENT TOWERS (Aaron's ask, closing the
   // measured 3x jobs-vs-housing density gap: res_tower_sgp houses 247
   // residents/tile while off_towers_downtown, the densest job spec, tops out
-  // at only 80 jobs/tile — a player can house people they can never employ;
-  // a 3M-population city needs ~20% of the entire 440x260 map at that
-  // ceiling just to reach full employment). NOTE (round split, 2026-09-03):
-  // this landed WITHOUT its sibling BUG-652 (giving real job counts to
-  // land_airport/uni/hea_teaching/land_stadium/land_tunnel/station_ashford)
-  // — that half was REJECTED on rollout (retroactively re-prices buildings a
-  // player already owns, insolvent-by-tick-9 on a mid-game city) and is
-  // being re-proposed with a phasing plan; these two towers are brand-new
-  // specs nobody owns yet, so they carry no such retroactive risk and ship
-  // alone. Mirrors res_tower_nyc/res_tower_sgp's
+  // at only 80 jobs/tile — a player can house people they can never employ,
+  // and BUG-652's own numbers show 3M full employment needing 20.3% of the
+  // entire 440x260 map at that ceiling). Mirrors res_tower_nyc/res_tower_sgp's
   // shape EXACTLY: same office `kind` (so KIND_TO_WAGE_SECTOR routes them into
   // 'tertiary' with zero extra wiring, same as every other office spec), same
   // 'zones' category (free to place, catalogue cost shown for build-time only
@@ -3113,9 +3170,151 @@ export function isBrownoutActive(s: SimState): boolean {
 }
 
 /**
+ * BUG-652 — jobs contributed by ONE building at its current tier, safe for a
+ * spec that carries `jobs` ALONGSIDE another capacity field (residents/
+ * children/served). capacityAtTier()'s array/fallback assumes a spec has
+ * exactly ONE scaling capacity metric (the same assumption
+ * evaluateBuildingMonitors' monitorType priority documents — engine.ts,
+ * residents > children > served > jobs, picks the ONE metric a spec's single
+ * capacityTiers ladder belongs to). BUG-652 gives jobs to hea_teaching
+ * (which already carries a capacityTiers ladder sized for its `served`
+ * figure, 120,000) and uni/station_ashford (which carry children/served with
+ * no ladder at all) — blindly reading capacityAtTier(sp, tier) for jobs on
+ * hea_teaching would silently return its SERVED tier value (120,000+) as
+ * the job count, an 80x overstatement, and on uni/station_ashford would
+ * depend on capacityAtTier's bare fallback ordering (residents ?? jobs ??
+ * 0), which happens to work only by accident (see grand_terminus, the one
+ * pre-existing served+jobs+no-capacityTiers spec).
+ *
+ * FIX: a spec with jobs AND any other capacity field keeps jobs FLAT (the
+ * catalogue's bare `sp.jobs`, no auto-scale growth) — never routed through
+ * capacityAtTier(), whether or not a capacityTiers ladder is present. A spec
+ * whose ONLY capacity dimension is jobs (every pre-existing commercial/
+ * office/industrial/mine/transport job spec) is UNCHANGED: same
+ * capacityAtTier() scaling as before this fix (GR#3 — no behaviour change
+ * to the live money path for any spec that isn't part of this bug).
+ */
+/**
+ * BUG-652 GRANDFATHERING (2026-09-04, round-mandated after the combined
+ * FEAT-2326609763+BUG-652 estate was REJECTED for retroactively re-pricing
+ * buildings a player already owns): if `b.jobsOverride` is present (stamped
+ * by stampJobsGrandfather() below, ONLY onto a pre-existing building of one
+ * of the six BUG-652 specs found in a save that predates
+ * JOBS_GRANDFATHER_ECONOMY_EPOCH), it WINS unconditionally over anything
+ * `sp.jobs`/capacityAtTier would otherwise say — mirrors the
+ * `b.footprintW ?? sp.w` per-building-override convention exactly (types.ts,
+ * Building.jobsOverride's own doc comment). A building placed after the
+ * stamp existed never carries this field, so it falls through to the
+ * ordinary jobsAtTier() logic below and reads its spec's real job count.
+ */
+function effectiveJobsOf(sp: Spec, b: { jobsOverride?: number; capacityTier?: number }): number {
+  if (b.jobsOverride != null) return b.jobsOverride;
+  return jobsAtTier(sp, b.capacityTier ?? 0);
+}
+
+function jobsAtTier(sp: Spec, tier: number): number {
+  if (!sp.jobs) return 0;
+  const jobsSharesSpecWithOtherCapacity = sp.residents != null || sp.children != null || sp.served != null;
+  return jobsSharesSpecWithOtherCapacity ? sp.jobs : capacityAtTier(sp, tier);
+}
+
+/**
+ * BUG-652 GRANDFATHERING — the six specs this bug gave real job counts to.
+ * The ONLY specs stampJobsGrandfather() will ever touch. SSOT list so the
+ * migration, its tests, and any future audit read the same six ids.
+ */
+export const JOBS_GRANDFATHERED_SPECS: readonly string[] = Object.freeze([
+  'land_airport',
+  'hea_teaching',
+  'uni',
+  'land_tunnel',
+  'land_stadium',
+  'station_ashford',
+]);
+
+/**
+ * BUG-652 GRANDFATHERING — the economy-schema epoch this migration belongs
+ * to. See SimState.economyEpoch's own doc comment (types.ts) for why this is
+ * a plain incrementing counter, deliberately NOT a comparison against the
+ * app's git-describe buildVersion string (unsound to order).
+ */
+export const JOBS_GRANDFATHER_ECONOMY_EPOCH = 1;
+
+/**
+ * BUG-652 GRANDFATHERING — true when `state` still needs the migration (its
+ * `economyEpoch` predates JOBS_GRANDFATHER_ECONOMY_EPOCH). Exposed so a
+ * two-phase restore (prepareRestoreForChunkedTail + replayTailChunked,
+ * replay.ts) can capture the decision from the RAW pre-tail snapshot and
+ * carry it forward explicitly — re-deriving it from `state.economyEpoch`
+ * AFTER an early partial stamp has already bumped the epoch would silently
+ * read "already current" and skip the tail (round r2 F4's exact failure
+ * mode, reproduced one level up if this check were re-run post-bump instead
+ * of the captured boolean being threaded through).
+ */
+export function needsJobsGrandfather(state: SimState): boolean {
+  return (state.economyEpoch ?? 0) < JOBS_GRANDFATHER_ECONOMY_EPOCH;
+}
+
+/**
+ * BUG-652 GRANDFATHERING — the raw stamping pass: every building in `state`
+ * whose spec is one of JOBS_GRANDFATHERED_SPECS and that does not already
+ * carry `jobsOverride` is stamped `jobsOverride: 0` (the pre-BUG-652 economy
+ * had no jobs field on any of these six specs at all, so zero is the ONLY
+ * historically-accurate figure, never invented). Does NOT touch
+ * `economyEpoch` and does NOT check it either — UNCONDITIONAL, idempotent
+ * (a building that already carries jobsOverride is left alone), and safe to
+ * call more than once on the same or an already-migrated state. This is the
+ * primitive `stampJobsGrandfather()` (below) composes for the common
+ * single-shot case; a caller that must apply the stamp a SECOND time after
+ * `economyEpoch` has already been bumped by an earlier partial pass (the
+ * chunked-tail restore path's tail-replay catch-up, replay.ts's
+ * replayTailChunked) calls this directly instead.
+ */
+export function stampJobsGrandfatherForce(state: SimState): SimState {
+  let changed = false;
+  const buildings = state.buildings.map((b) => {
+    if (b.jobsOverride != null) return b;
+    if (!JOBS_GRANDFATHERED_SPECS.includes(b.spec)) return b;
+    changed = true;
+    return { ...b, jobsOverride: 0 };
+  });
+  return changed ? { ...state, buildings } : state;
+}
+
+/**
+ * BUG-652 GRANDFATHERING — pure, idempotent, single-shot migration: a no-op
+ * (returns `state` BY REFERENCE) once `needsJobsGrandfather(state)` is
+ * false; otherwise applies stampJobsGrandfatherForce() and bumps
+ * `economyEpoch` to current in the SAME step.
+ *
+ * ROUND r3 FIX (F4, coordinator's ruling, 2026-09-04): call sites MUST run
+ * this AFTER a save's full journal (snapshot + tail) has finished replaying,
+ * never before — if the snapshot's epoch was old, the entire snapshot+tail
+ * predates this build's first load by construction (the tail was appended
+ * during old-build play, exactly why BUG-617/LARGE_TAIL_REPLAY_THRESHOLD
+ * exist: a tail is not a same-session guarantee), so a POST-tail stamp
+ * grandfathers a tail-created building of one of the six specs too,
+ * deterministically, with no per-action provenance needed. Stamping BEFORE
+ * the tail (the r2 defect) bumps the epoch first and permanently closes the
+ * fence in front of the tail's own buildings — see replay.ts's
+ * restoreFromSavepoint (moved to run after its synchronous tail loop) and
+ * prepareRestoreForChunkedTail/replayTailChunked (the two-phase chunked
+ * path, which threads needsJobsGrandfather()'s captured boolean through to
+ * a stampJobsGrandfatherForce() catch-up pass after the chunked tail
+ * completes, since its own early snapshot-stamp already bumped the epoch).
+ */
+export function stampJobsGrandfather(state: SimState): SimState {
+  if (!needsJobsGrandfather(state)) return state;
+  return { ...stampJobsGrandfatherForce(state), economyEpoch: JOBS_GRANDFATHER_ECONOMY_EPOCH };
+}
+
+/**
  * FEAT-1972079878 inc1: total jobs capacity, including auto-scaled tiers.
  * For buildings with capacityTiers, uses capacityAtTier(sp, building.capacityTier ?? 0).
  * For others, uses sp.jobs or default commercial/industrial job counts.
+ * BUG-652: routed through jobsAtTier() (above) so a spec that also carries
+ * residents/children/served (hea_teaching, uni, station_ashford) can never
+ * have its job count misread as that OTHER field's tier value.
  */
 // BUG-525 — before this fix totalJobs() summed EVERY job building
 // regardless of activation state, while onlineResidentsCapacity() (data.ts
@@ -3130,20 +3329,20 @@ export function isBrownoutActive(s: SimState): boolean {
 // FEAT-2326609763: off_tower_canary/off_tower_marina need NOTHING extra
 // here — they carry `jobs` as their ONLY capacity field (no residents/
 // children/served alongside it), the exact shape off_businesspark/
-// off_towers_downtown already have, so the existing bare capacityAtTier()
-// scaling below already reads their tier-grown job count correctly
-// (10,000->23,579 / 20,000->47,159 across the ladder). A `jobsAtTier()`-
-// style guard is only needed once a spec carries jobs ALONGSIDE another
-// capacity field (BUG-652's hea_teaching/uni/station_ashford) — held back
-// pending that bug's phasing decision (see BUG-652's own comment trail,
-// held in a separate patch, not this file).
+// off_towers_downtown already have, so effectiveJobsOf()'s ordinary
+// jobsAtTier() path reads their tier-grown job count correctly
+// (10,000->23,579 / 20,000->47,159 across the ladder). BUG-652 (landed with
+// this merge): specs carrying jobs ALONGSIDE another capacity field
+// (hea_teaching/uni/station_ashford) keep jobs FLAT via jobsAtTier(), and a
+// grandfathered pre-epoch building's jobsOverride wins via effectiveJobsOf()
+// — see those functions' own doc comments above.
 export const totalJobs: (s: SimState) => number = memoOnState((s) => {
   let jobs = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (!sp) continue;
-    if (sp.jobs) jobs += capacityAtTier(sp, b.capacityTier ?? 0);
+    if (sp.jobs) jobs += effectiveJobsOf(sp, b);
     else if (sp.kind === 'commercial') jobs += 12;
     else if (sp.kind === 'industrial') jobs += 18;
   }
@@ -3156,13 +3355,27 @@ export const totalJobs: (s: SimState) => number = memoOnState((s) => {
  * capacityAtTier honours a scaled building's current tier, GR#3 one growth
  * rule reused everywhere). Feeds evaluateBuildingMonitors' 'children' monitor
  * utilization denominator.
+ *
+ * BUG-652: uni now carries a `jobs` field alongside `children` with no
+ * capacityTiers ladder of its own — capacityAtTier()'s bare fallback
+ * (`sp.residents ?? sp.jobs ?? 0`) would silently read uni's JOB count as
+ * its CHILDREN capacity the instant `jobs` went truthy. Read `children`
+ * directly when there is no ladder to scale (same guard idiom the power-kind
+ * `mw` read already uses just above, data.ts ~2725 `sp.capacityTiers ?
+ * capacityAtTier(...) : sp.mw ?? 0`); a spec WITH capacityTiers (every
+ * school spec that actually auto-scales — edu_nursery/edu_primary/edu_city/
+ * edu_tech) keeps the exact prior capacityAtTier() behaviour, unchanged.
+ * Byproduct fix: col_sixth/uni were previously silently undercounted at 0
+ * children capacity via the same bare-fallback gap (children was never in
+ * capacityAtTier's no-tiers fallback at all) — now correctly counted.
  */
 export const totalChildrenCapacity: (s: SimState) => number = memoOnState((s) => {
   let cap = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
-    if (sp?.kind === 'school') cap += capacityAtTier(sp, b.capacityTier ?? 0);
+    if (sp?.kind !== 'school') continue;
+    cap += sp.capacityTiers ? capacityAtTier(sp, b.capacityTier ?? 0) : (sp.children ?? 0);
   }
   return cap;
 });
@@ -3228,7 +3441,10 @@ export const totalJobsBySector: (s: SimState) => SectorJobs = memoOnState((s) =>
     const sp = SPECS[b.spec];
     if (!sp) continue;
     let jobs = 0;
-    if (sp.jobs) jobs = capacityAtTier(sp, b.capacityTier ?? 0);
+    // BUG-652: jobsAtTier() (see totalJobs() above) — never capacityAtTier()
+    // directly — so hea_teaching/uni/station_ashford's job count can't be
+    // misread as their served/children tier value.
+    if (sp.jobs) jobs = effectiveJobsOf(sp, b);
     else if (sp.kind === 'commercial') jobs = 12;
     else if (sp.kind === 'industrial') jobs = 18;
     if (jobs <= 0) continue;
@@ -4603,6 +4819,151 @@ export const AUTO_BUILD_DEMAND_FRACTION = 1.5;
  *  hand-typed "50%"/"150%" literal that could silently drift from the real
  *  sizing arithmetic). */
 export const AUTO_BUILD_DEMAND_PERCENT = Math.round(AUTO_BUILD_DEMAND_FRACTION * 100);
+
+/**
+ * BUG-652 follow-up (2026-09-04, round-mandated caveat) — a NEW placement of
+ * a mega-employer spec still hits the exact wage cliff grandfathering
+ * doesn't (and can't) protect against: the round measured a single new
+ * land_airport adding £1,870,000/tick in wages against a mid-game city's
+ * ENTIRE £135,967/tick gross inflow (a 13.7x ratio), insolvent by tick 9.
+ * PLACEMENT_AFFORDABILITY_WAGE_FRACTION is the threshold, expressed as a
+ * FRACTION of the city's own current gross inflow (never an absolute £
+ * figure — GR#15, the threshold scales with the city, not a fixed number
+ * that reads as generous for a megacity and draconian for a hamlet). A
+ * placement whose marginal wage-bill contribution (placementAffordability()
+ * below) exceeds this fraction of current gross inflow triggers a
+ * confirmation notice instead of silently charging (engine.ts's 'place'
+ * reducer case). 0.5 chosen so anything genuinely disproportionate (the
+ * round's 13.7x case, or Aaron's own real-save 53.6% wage-bill jump) trips
+ * it comfortably, while an ordinary shop/office placement in a going
+ * concern (a small fraction of one sector's existing wage bill) does not.
+ * ⚠ PLACEHOLDER-balance — directional only, pending Aaron's row-by-row pass
+ * (house convention, same disclaimer as AUTO_BUILD_DEMAND_FRACTION above).
+ */
+export const PLACEMENT_AFFORDABILITY_WAGE_FRACTION = 0.5;
+
+/** One placement's affordability read-out — see placementAffordability()'s own doc comment. */
+export interface PlacementAffordability {
+  /** This placement's marginal contribution to the city's per-tick wage bill, once online and fully staffed. */
+  marginalWagePerTick: number;
+  /** The city's current gross (pre-outflow) income, £/tick — the basis the threshold is derived from. */
+  grossInflowPerTick: number;
+  /** True when marginalWagePerTick exceeds PLACEMENT_AFFORDABILITY_WAGE_FRACTION of grossInflowPerTick. */
+  exceedsThreshold: boolean;
+  /** Pre-formatted confirmation copy naming the real recurring cost — used verbatim by the UI-side confirm surface (MapView.tsx), never reconstructed there. Empty string when exceedsThreshold is false. */
+  message: string;
+}
+
+/**
+ * ROUND r4 FIX (F5, 2026-09-04, round-mandated): the round proved
+ * placementAffordability()'s single-spec shape was called from exactly ONE
+ * UI dispatch site (the single-tile build click) and BYPASSED by every
+ * batch path — drag-paint (N tiles flush as one 'placeMany'), stampRegion
+ * (clone-paste, potentially several DIFFERENT specs at once), and
+ * resolveDemand/resolveDemandAll (the advisor's own "Fix"/"Fix All",
+ * previously unreachable only by pricing accident). Proven live: 3 Channel
+ * Tunnel Portals drag-painted for 180% of gross inflow with zero
+ * confirmation, because each tile alone (jobs already placed via 'placeMany'
+ * in one shot) was never checked at all.
+ *
+ * batchPlacementAffordability() is the SSOT this bug's fix builds on:
+ * aggregate the marginal wage-bill impact of EVERY spec in a whole batch —
+ * a drag-paint run, a clone-paste, or a demand-fix plan's whole build list —
+ * against the SAME filledJobsBySector/sectorWagesPerTick SSOT the real
+ * 'Wages' outflow line uses (GR#3), never a re-derived formula. Adds every
+ * spec's job capacity into the CURRENT capacity-by-sector snapshot ONCE,
+ * then compares the resulting (workforce-capped) wage bill against today's —
+ * this correctly reflects that every new employer in the SAME batch draws
+ * from the SAME finite workforce (the round's own method: a mid-game city's
+ * 33,000 available workers absorbed entirely into one 76,000-job airport,
+ * filled=33,000 not 76,000 — extended here to N buildings at once).
+ *
+ * ROUND r2 FIX (F3, carried forward unchanged): each spec's job count is
+ * read via jobsAtTier(sp, 0) — the estate's OWN collision-safe SSOT (this
+ * file's totalJobs()/totalJobsBySector() use it too) — never
+ * capacityAtTier(sp, 0) directly. hea_teaching carries `jobs: 1450`
+ * ALONGSIDE a capacityTiers ladder sized for its `served` figure (120,000);
+ * capacityAtTier(sp,0) blindly returns that ladder's tier-0 value (120,000)
+ * regardless of which field it was built for, an 82.8x overstatement.
+ *
+ * IMPORTANT: this function is PURE and UI-facing ONLY (called from a SHARED
+ * UI dispatch seam — see src/components/placementGate.ts — BEFORE any
+ * batch-placing action is ever dispatched) — round r3 moved the gate OUT of
+ * the 'place' reducer case entirely (r2's REJECT F1/F2: a reducer that can
+ * refuse a journalled action breaks replay by construction, and a reducer-
+ * side notice field with no UI reader is a silent, unrecoverable dead end).
+ * Every reducer stays pure and ALWAYS places once its own funds/unlock/
+ * bounds/fits checks pass — round r4 does not touch the reducer layer at
+ * all, only widens the UI-side check to cover every batch path. Nothing
+ * about this function's result is stored in SimState or journaled.
+ *
+ * Bootstrap exemption: a city with zero recorded gross inflow yet (the
+ * opening ticks of a brand-new game, before any tax has accrued) has no
+ * meaningful income baseline to compare against — gating on a £0 threshold
+ * would trip on the player's very first office, which is not what this
+ * check exists to catch. `exceedsThreshold` is unconditionally false when
+ * grossInflowPerTick <= 0.
+ *
+ * Message shape: a single-spec batch (or a batch of N copies of ONE spec —
+ * the drag-paint/demand-fix common case) reads "<name>" or "N x <name>"
+ * exactly like the existing single-placement copy; a MIXED-spec batch
+ * (stampRegion pasting a multi-type clipboard) reads "N buildings".
+ *
+ * Pure, deterministic (GR#21): no Date/Math.random, no mutation, order-
+ * independent (only spec identity + count matters, never array order).
+ */
+export function batchPlacementAffordability(s: SimState, specs: Spec[]): PlacementAffordability {
+  const grossInflowPerTick = s.lastFlows.inflows.reduce((sum, f) => sum + f.value, 0);
+  if (specs.length === 0 || grossInflowPerTick <= 0) {
+    return { marginalWagePerTick: 0, grossInflowPerTick, exceedsThreshold: false, message: '' };
+  }
+
+  const currentCapacity = totalJobsBySector(s);
+  const hypotheticalCapacity: SectorJobs = { ...currentCapacity };
+  let anyJobs = false;
+  for (const sp of specs) {
+    const sector = KIND_TO_WAGE_SECTOR[sp.kind];
+    const newJobs = sp.jobs ? jobsAtTier(sp, 0) : sp.kind === 'commercial' ? 12 : sp.kind === 'industrial' ? 18 : 0;
+    if (newJobs > 0 && sector) {
+      hypotheticalCapacity[sector] += newJobs;
+      anyJobs = true;
+    }
+  }
+  if (!anyJobs) {
+    return { marginalWagePerTick: 0, grossInflowPerTick, exceedsThreshold: false, message: '' };
+  }
+
+  const currentWages = sectorWagesPerTick(filledJobsFromCapacityAndPopulation(currentCapacity, s.population)).totalPerTick;
+  const hypotheticalWages = sectorWagesPerTick(filledJobsFromCapacityAndPopulation(hypotheticalCapacity, s.population)).totalPerTick;
+  const marginalWagePerTick = hypotheticalWages - currentWages;
+  const exceedsThreshold = marginalWagePerTick > grossInflowPerTick * PLACEMENT_AFFORDABILITY_WAGE_FRACTION;
+
+  let subject = 'buildings';
+  if (specs.length > 0) {
+    const firstId = specs[0].id;
+    const uniform = specs.every((sp) => sp.id === firstId);
+    subject = uniform ? (specs.length > 1 ? `${specs.length} x ${specs[0].name}` : specs[0].name) : `${specs.length} buildings`;
+  }
+
+  return {
+    marginalWagePerTick,
+    grossInflowPerTick,
+    exceedsThreshold,
+    message: exceedsThreshold
+      ? `${subject} adds ${fmtMoney(marginalWagePerTick)}/tick in wages once staffed — more than ${Math.round(PLACEMENT_AFFORDABILITY_WAGE_FRACTION * 100)}% of your current income (${fmtMoney(grossInflowPerTick)}/tick). Build anyway?`
+      : '',
+  };
+}
+
+/**
+ * Single-spec convenience wrapper over batchPlacementAffordability() — kept
+ * for callers checking exactly ONE new building (the single-tile build
+ * click). See batchPlacementAffordability()'s own doc comment for the full
+ * design/round history.
+ */
+export function placementAffordability(s: SimState, sp: Spec): PlacementAffordability {
+  return batchPlacementAffordability(s, [sp]);
+}
 
 /**
  * ⚠ BALANCE/PERF-NUMBER (BUG-646, Aaron ruling 2026-09-03: "the autofix looks

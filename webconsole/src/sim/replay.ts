@@ -16,7 +16,7 @@ import { reducer, initialState as getInitialState, nextSafeBuildingId, computeFl
 import { runConsistencyChecks } from './consistency.ts';
 import type { ConsistencyReport, RecomputedFlowsOverride } from './consistency.ts';
 import type { ReplayProgress } from './genesisReplay.ts';
-import { SPECS } from './data.ts';
+import { SPECS, stampJobsGrandfather, stampJobsGrandfatherForce, needsJobsGrandfather } from './data.ts';
 import { emptyJournal } from './journal.ts';
 import { safeSetItem } from './safeStorage.ts';
 import { encode, decode } from './saveCodec.ts';
@@ -431,6 +431,20 @@ export function prepareRestoreForChunkedTail(storage: StorageLike): {
   buildVersion?: string;
   camera?: MapViewState | null;
   reason?: string;
+  /**
+   * BUG-652 GRANDFATHERING, ROUND r3 FIX (F4, 2026-09-04): true when the RAW
+   * snapshot (before the early stamp below ran) predated
+   * JOBS_GRANDFATHER_ECONOMY_EPOCH — captured HERE, from the pre-stamp
+   * state, because the early stamp below immediately bumps `economyEpoch` to
+   * current, so re-deriving this from the (now-current) returned `state`
+   * later would always read false and miss the tail entirely (round r2's
+   * exact F4 failure mode). The caller MUST thread this through to
+   * replayTailChunked() so it can run a stampJobsGrandfatherForce() catch-up
+   * pass AFTER the chunked tail finishes — a tail-created building of one of
+   * the six BUG-652 specs is otherwise never grandfathered, because it did
+   * not exist yet at the point this function's own early stamp ran.
+   */
+  needsJobsGrandfatherCatchUp?: boolean;
 } {
   try {
     const savepoints = readAllSavepoints(storage);
@@ -451,6 +465,15 @@ export function prepareRestoreForChunkedTail(storage: StorageLike): {
     }
     state = { ...state, nextId: nextSafeBuildingId(state.buildings) };
 
+    // BUG-652 GRANDFATHERING: ONE-TIME EARLY migration of this snapshot's
+    // PRE-EXISTING buildings — capture the pre-stamp decision FIRST (see the
+    // `needsJobsGrandfatherCatchUp` field doc above), then stamp so the
+    // snapshot's own buildings are correctly pinned immediately (this half
+    // of the fix is unchanged from r2 and was independently verified sound).
+    // Idempotent + a no-op once the state is already at the current epoch.
+    const needsJobsGrandfatherCatchUp = needsJobsGrandfather(state);
+    state = stampJobsGrandfather(state);
+
     const beforeReport = checkConsistencyRecoveringStaleFlows(state);
     if (beforeReport.failures > 0) {
       return {
@@ -465,6 +488,7 @@ export function prepareRestoreForChunkedTail(storage: StorageLike): {
       tail: most.journalTail,
       buildVersion: most.buildVersion,
       camera: most.camera ?? null,
+      needsJobsGrandfatherCatchUp,
     };
   } catch (e) {
     return { success: false, reason: `Restore error: ${String(e)}` };
@@ -524,7 +548,21 @@ const TAIL_CHUNK_TIME_BUDGET_MS = 40;
  */
 export function* replayTailChunked(
   initialTailState: SimState,
-  tail: JournalEntry[]
+  tail: JournalEntry[],
+  /**
+   * BUG-652 GRANDFATHERING, ROUND r3 FIX (F4): pass
+   * `prepareRestoreForChunkedTail()`'s own `needsJobsGrandfatherCatchUp`
+   * straight through. When true, a stampJobsGrandfatherForce() catch-up pass
+   * runs once the tail is fully replayed, so a tail-created instance of one
+   * of the six BUG-652 specs — which did not exist yet when
+   * prepareRestoreForChunkedTail's own early stamp ran, and therefore could
+   * not have been caught by it — is grandfathered too. Uses the FORCE
+   * (unconditional) variant, not stampJobsGrandfather(), because
+   * `initialTailState.economyEpoch` was ALREADY bumped to current by that
+   * early stamp — the epoch-gated public function would see "already
+   * current" and skip, silently reproducing the exact bug this fixes.
+   */
+  needsJobsGrandfatherCatchUp = false
 ): Generator<ReplayProgress, { state: SimState; replayed: number }, void> {
   let state = initialTailState;
   const total = tail.length;
@@ -544,6 +582,7 @@ export function* replayTailChunked(
       phaseLabel: `Replaying your recent actions... ${i.toLocaleString()}/${total.toLocaleString()} actions`,
     };
   }
+  if (needsJobsGrandfatherCatchUp) state = stampJobsGrandfatherForce(state);
   return { state, replayed: total };
 }
 
@@ -588,6 +627,20 @@ export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
     // The saved nextId may be stale if journal replayed actions added buildings.
     state = { ...state, nextId: nextSafeBuildingId(state.buildings) };
 
+    // BUG-652 GRANDFATHERING, ROUND r3 FIX (F4, 2026-09-04): capture whether
+    // the RAW snapshot predates the migration BEFORE stamping — the stamp
+    // immediately bumps `economyEpoch` to current, so re-deriving this
+    // decision afterward (e.g. from the post-tail state) would always read
+    // "already current" and silently skip a tail-created building of one of
+    // the six BUG-652 specs (round r2's exact F4 finding). Stamp the
+    // snapshot's OWN pre-existing buildings now (proven sound in r2 —
+    // this half was never the defect) so the BEFORE-replay consistency check
+    // below runs against an economically-coherent state; the captured
+    // boolean drives a stampJobsGrandfatherForce() CATCH-UP pass after the
+    // tail has fully replayed (below), which is the part r2 was missing.
+    const needsJobsGrandfatherCatchUp = needsJobsGrandfather(state);
+    state = stampJobsGrandfather(state);
+
     // Verify consistency BEFORE replay (snapshot should already be consistent).
     // BUG-603: a baked-in-snapshot autosave (a policy toggle etc. happened,
     // then autosave fired with no further journal tail) leaves this snapshot's
@@ -607,6 +660,15 @@ export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
       state = reducer(state, entry.action);
       replayed++;
     }
+
+    // BUG-652 GRANDFATHERING CATCH-UP (F4 fix): a tail-created instance of
+    // one of the six BUG-652 specs did not exist yet when the early stamp
+    // above ran, so it could not have been caught by it — this pass catches
+    // it now that the tail is fully replayed. Uses the FORCE (unconditional)
+    // variant, never stampJobsGrandfather() itself, because `state.
+    // economyEpoch` was ALREADY bumped to current by the early stamp; the
+    // epoch-gated public function would see "already current" and no-op.
+    if (needsJobsGrandfatherCatchUp) state = stampJobsGrandfatherForce(state);
 
     // BUG-413 FIX: After replay, recalculate nextId again to ensure it accounts
     // for any buildings added during the replay.

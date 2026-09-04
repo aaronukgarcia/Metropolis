@@ -102,6 +102,25 @@ export interface Building {
    * `b.placedBy ?? 'player'`, never `b.placedBy === 'auto'` bare.
    */
   placedBy?: 'player' | 'auto';
+  /**
+   * BUG-652 GRANDFATHERING (2026-09-04, round-mandated after the combined
+   * FEAT-2326609763+BUG-652 estate was REJECTED on rollout for retroactively
+   * re-pricing buildings a player already owns): when present, this building's
+   * effective job count is PINNED to this value regardless of what its spec's
+   * `jobs` field says today or ever says in the future — mirrors the
+   * `footprintW ?? sp.w` convention exactly (a per-building override that
+   * survives spec changes). Stamped ONLY by stampJobsGrandfather() (data.ts)
+   * at load time onto a pre-existing building of one of the six BUG-652
+   * specs (land_airport/hea_teaching/uni/land_tunnel/land_stadium/
+   * station_ashford) found in a save whose `economyEpoch` predates
+   * JOBS_GRANDFATHER_ECONOMY_EPOCH — always to 0 today (the pre-BUG-652
+   * economy had no jobs field on any of these six specs at all). A building
+   * placed AFTER the stamp existed (a fresh 'place' action, any session)
+   * NEVER carries this field, so it falls through to the spec's real,
+   * researched job count. Read via effectiveJobsOf() (data.ts) — never
+   * `sp.jobs` directly for these six specs.
+   */
+  jobsOverride?: number;
 }
 
 export type ToolMode = 'select' | 'move' | 'bulldoze' | 'build' | 'clone';
@@ -212,6 +231,16 @@ export interface MilestoneNotice {
   cash: number;
 }
 
+// ROUND r3 FIX (2026-09-04, F2): AffordabilityNotice / SimState.
+// affordabilityNotice REMOVED — round r2 (INDEPENDENT DESTRUCTIVE, GR#23)
+// found nothing under src/components ever read this field and nothing ever
+// dispatched a confirmation, so a tripped gate was a permanent, silent,
+// feedback-free no-op, AND the stale notice serialised into every save. The
+// placement-affordability confirmation now lives ENTIRELY at the UI dispatch
+// site (MapView.tsx calls data.ts's placementAffordability() directly,
+// before ever constructing a 'place' action) — no SimState field, nothing
+// journaled, nothing to go stale.
+
 export interface TaxRates {
   residential: number;
   commercial: number;
@@ -265,6 +294,23 @@ export interface SimState {
    * start demolishing the player's city (AC-34).
    */
   consolidatorEnabled?: boolean;
+  /**
+   * BUG-652 GRANDFATHERING (2026-09-04) — a schema-version counter for
+   * economy-affecting migrations, DELIBERATELY SEPARATE from the app's
+   * git-describe `buildVersion` string (which is not reliably ORDERABLE —
+   * a git-describe string's commit-count suffix is not guaranteed
+   * monotonic across branches/dirty flags, so comparing two of them to
+   * decide "is this save older" would be an unsound, undocumented parser,
+   * exactly the kind of fudge this task was told to avoid). A save/state
+   * predating this field's introduction deserializes with it `undefined`;
+   * every read site treats that as epoch 0 (mirrors gridImportEnabled's own
+   * `?? DEFAULT` backward-tolerance convention immediately above).
+   * initialState() always stamps the CURRENT epoch on a brand-new city.
+   * stampJobsGrandfather() (data.ts) is the ONLY function that reads this to
+   * decide whether a loaded snapshot's pre-existing buildings need their
+   * jobs pinned to zero, and bumps it to current once applied.
+   */
+  economyEpoch?: number;
   buildings: Building[];
   nextId: number;
   movingId: number | null;
