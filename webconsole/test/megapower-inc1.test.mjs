@@ -39,8 +39,9 @@ function withBuilding(spec, x = 400, y = 250, extra = {}) {
 // ─────────────────────────────────────────────────────────────────────────────
 test('dam spec is well-formed: real placeable mega-power generator', () => {
   const dam = SPECS.pow_hydro;
-  assert.ok(dam, 'pow_hydro (Five Gorges Dam) must exist in SPECS');
-  assert.equal(dam.name, 'Five Gorges Dam');
+  assert.ok(dam, 'pow_hydro (Three Gorges Dam) must exist in SPECS');
+  // Aaron 2026-09-04: renamed from "Five Gorges Dam" — the id stays pow_hydro.
+  assert.equal(dam.name, 'Three Gorges Dam');
   assert.equal(dam.kind, 'power');
   assert.notEqual(dam.placeholder, true, 'the dam must be a REAL (non-placeholder) spec');
 

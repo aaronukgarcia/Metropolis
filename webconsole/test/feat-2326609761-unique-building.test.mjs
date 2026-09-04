@@ -164,7 +164,13 @@ describe("AC-29 path 2/5: reducer case 'place'", () => {
     const afterFirst = reducer(s, { type: 'place', spec: DAM, x: 300, y: 100 });
     const afterSecond = reducer(afterFirst, { type: 'place', spec: DAM, x: 320, y: 100 });
     assert.match(afterSecond.placeNotice ?? '', /one per city/i);
-    assert.match(afterSecond.placeNotice ?? '', /Five Gorges Dam/);
+    // Rename asserted from SPECS, not a literal (Aaron 2026-09-04 renamed
+    // "Five Gorges Dam" -> "Three Gorges Dam"; the notice is built from
+    // sp.name, so it tracks the catalogue automatically).
+    assert.ok(
+      (afterSecond.placeNotice ?? '').includes(SPECS[DAM].name),
+      'the refusal notice must name the spec from SPECS, not a stale literal',
+    );
   });
 
   test('control: an uncapped real spec still places freely on the SAME reducer path (guard is not over-broad)', () => {
@@ -432,7 +438,15 @@ describe('AC-31: old save with two dams', () => {
     };
   }
 
-  test('loads intact — nothing demolished, no money clawed back', () => {
+  // NOTE (Aaron 2026-09-04 ruling supersedes the old AC-31 "none are
+  // removed" behaviour — see bug677-tick-hydrate-notice.test.mjs and
+  // consistency/fiscal coverage for the new purge-on-load path). This
+  // specific test exercises `restoreFromSavepoint` DIRECTLY, bypassing the
+  // 'hydrate' reducer case entirely (it is the synchronous, pre-render boot
+  // path — see engine.ts's hydrate-case comment) — so it still shows both
+  // dams intact here; the purge itself is proven against the 'hydrate'
+  // reducer case below and in the dedicated purge test file.
+  test('restoreFromSavepoint alone (bypassing "hydrate") does not itself purge — loads intact, no money clawed back', () => {
     const snapshot = twoDamSnapshot();
     const savepoint = {
       savedAt: new Date().toISOString(),
@@ -443,8 +457,8 @@ describe('AC-31: old save with two dams', () => {
     const storage = mockStorage({ [`${SAVEPOINT_KEY_PREFIX}.0`]: JSON.stringify(savepoint) });
     const result = restoreFromSavepoint(storage);
     assert.equal(result.success, true, `restore should succeed; got: ${result.reason}`);
-    assert.equal(countOfSpec(result.state, DAM), 2, 'BOTH dams survive the load — neither is silently removed');
-    assert.equal(result.state.funds, snapshot.funds, 'no money is clawed back on load');
+    assert.equal(countOfSpec(result.state, DAM), 2, 'the raw restore path itself does not purge');
+    assert.equal(result.state.funds, snapshot.funds, 'no money moves on the raw restore path itself');
   });
 
   test('does not corrupt: consistency checks stay clean with two over-cap dams present', () => {
@@ -467,15 +481,22 @@ describe('AC-31: old save with two dams', () => {
     assert.equal(countOfSpec(afterThird, DAM), 2, 'a third dam is refused by any path, even starting from an over-cap save');
   });
 
-  test('AC-31: hydrate fires a one-time honest notice naming the over-cap spec and its count', () => {
+  // SUPERSEDED (Aaron 2026-09-04): the old AC-31 ruling ("None are removed")
+  // is replaced by a purge-on-load — see the dedicated
+  // aaron-purge-surplus-capped-specs.test.mjs for the full RED-proofed suite
+  // (keep-oldest, scrap credit, conservation, idempotency). This test now
+  // proves the 'hydrate' path fires the NEW honest removal notice instead of
+  // the old over-cap-but-untouched one.
+  test('hydrate purges the surplus dam and fires an honest removal notice naming the spec and count', () => {
     const snapshot = twoDamSnapshot();
     const fresh = initialState();
     const hydrated = reducer(fresh, { type: 'hydrate', state: snapshot });
-    assert.match(hydrated.placeNotice ?? '', /Five Gorges Dam/, 'the notice names the offending spec');
-    assert.match(hydrated.placeNotice ?? '', /2/, 'the notice names the over-cap count');
+    assert.equal(countOfSpec(hydrated, DAM), 1, 'surplus dam purged down to the cap');
+    assert.match(hydrated.placeNotice ?? '', new RegExp(SPECS[DAM].name), 'the notice names the offending spec from SPECS');
+    assert.match(hydrated.placeNotice ?? '', /\b1\b/, 'the notice names the removed (surplus) count');
   });
 
-  test('AC-31 control: hydrating a save with only ONE dam raises no over-cap notice', () => {
+  test('AC-31 control: hydrating a save with only ONE dam raises no over-cap/purge notice', () => {
     const genesis = initialState();
     const oneOk = {
       ...genesis,
@@ -484,8 +505,9 @@ describe('AC-31: old save with two dams', () => {
     };
     const fresh = initialState();
     const hydrated = reducer(fresh, { type: 'hydrate', state: oneOk });
+    assert.equal(countOfSpec(hydrated, DAM), 1, 'the lone at-cap dam is untouched');
     assert.ok(
-      !hydrated.placeNotice || !/Five Gorges Dam/.test(hydrated.placeNotice),
+      !hydrated.placeNotice || !hydrated.placeNotice.includes(SPECS[DAM].name),
       'exactly-at-cap (not over) must not raise the over-cap notice'
     );
   });

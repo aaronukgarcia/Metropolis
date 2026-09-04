@@ -1,4 +1,4 @@
-import type { Dims, SimState, ZoneKind } from './types.ts';
+import type { Building, Dims, SimState, ZoneKind } from './types.ts';
 import { formatPower, fmtMoney } from './utils.ts';
 // FEAT-1972079877: isPlaceable defers real specs to the existing unlock gate.
 // specUnlocked lives in engine.ts, which itself imports from data.ts — this is a
@@ -514,11 +514,23 @@ export function fittingTier(sp: Spec): RoadTier {
   let score = area + cap * 0.05 + (heavy ? 6 : 0);
   // Landmarks (airport, stadium, spaceport) are city arterials.
   if (sp.kind === 'landmark') score += 8;
-  if (score >= 24) return 5;
-  if (score >= 14) return 4;
-  if (score >= 7) return 3;
-  if (score >= 3) return 2;
-  return 1;
+  let tier: RoadTier;
+  if (score >= 24) tier = 5;
+  else if (score >= 14) tier = 4;
+  else if (score >= 7) tier = 3;
+  else if (score >= 3) tier = 2;
+  else tier = 1;
+  // Aaron ruling 2026-09-04 ("when i lay housing down why is an auto
+  // motorway laid down to support it?", filed P1): a dense residential
+  // tower's `residents` count feeds the SAME `cap` throughput proxy as a
+  // factory's jobs/freight, so a 400+ resident tower crossed the >=24
+  // tier-5 (m20 motorway) threshold on `residents` alone. ⚠ PLACEHOLDER-
+  // balance regime (directional only, pending Aaron's row-by-row pass):
+  // residential never needs more than an A-road (tier 3) frontage,
+  // whatever its density — clamp AFTER the score ladder above so every
+  // other kind (industrial/landmark/etc.) is completely untouched.
+  if (sp.kind === 'residential') tier = Math.min(tier, 3) as RoadTier;
+  return tier;
 }
 
 /** Border colours for the three density tiers (documented in the map legend). */
@@ -1346,6 +1358,31 @@ export function remainingAllowance(s: SimState, sp: Spec): number {
 }
 
 /**
+ * Aaron ruling 2026-09-04 ("just purge off the extra five gorges dam ...
+ * there is only one permitted just delete the others") SUPERSEDES the old
+ * FEAT-2326609761 AC-31 ruling ("None are removed" on an over-cap load) —
+ * see engine.ts's 'hydrate' reducer case for the load-ceremony call site.
+ *
+ * Pure selector, GR#21 deterministic: for a `maxPerCity`-capped spec that
+ * currently exceeds its cap, returns the SURPLUS instances to purge — i.e.
+ * every instance EXCEPT the `maxPerCity` oldest ones (lowest `builtTick`,
+ * ties broken by lowest `id` so the choice never depends on array/object
+ * iteration order, wall-clock, or Math.random). Returns `[]` (by reference,
+ * cheap to call speculatively) when the spec is not over its cap — this is
+ * also what makes the load-ceremony purge idempotent: after the first purge
+ * the count is exactly `maxPerCity`, so every subsequent call returns [].
+ */
+export function surplusInstancesOf(s: SimState, sp: Spec): Building[] {
+  if (sp.maxPerCity == null) return [];
+  const all = s.buildings.filter((b) => b.spec === sp.id);
+  if (all.length <= sp.maxPerCity) return [];
+  const oldestFirst = [...all].sort(
+    (a, b) => (a.builtTick ?? 0) - (b.builtTick ?? 0) || a.id - b.id,
+  );
+  return oldestFirst.slice(sp.maxPerCity);
+}
+
+/**
  * Placement gate (FEAT-1972079877): the SINGLE predicate for "can the player place
  * this spec right now" in the UI. A placeholder is NEVER placeable — regardless of
  * city level, unlock, or the god-mode unlockedAll flag (via canEnterSim). Any real
@@ -1787,7 +1824,11 @@ export const SPECS: Record<string, Spec> = {
   // for a spec that was never broken. Left at 5,000 MW pending a dedicated
   // balance-pass BOW item now that the one-dam cap (maxPerCity above) exists
   // to bound a future bump's blast radius.
-  pow_hydro: P('pow_hydro', 'power', 'Five Gorges Dam', 'Mega hydroelectric dam · 5,000 MW · dwarfs a nuclear plant', 8, 8, 5000000000, 277778, '#5b8fc9', 'services', 16, { mw: 5000, maxPerCity: 1 }),
+  // Aaron ruling 2026-09-04: "rename it to the three gorges dam there is
+  // only one permitted" — display NAME ONLY. The spec id stays `pow_hydro`
+  // (save/journal compatibility, GR#3 — nothing keys off the display string)
+  // and every real-world balance figure below is unchanged.
+  pow_hydro: P('pow_hydro', 'power', 'Three Gorges Dam', 'Mega hydroelectric dam · 5,000 MW · dwarfs a nuclear plant', 8, 8, 5000000000, 277778, '#5b8fc9', 'services', 16, { mw: 5000, maxPerCity: 1 }),
 
   // ---- Water & waste additions ----
   wat_tower: P('wat_tower', 'water', 'Water Tower', 'Pressure head for 4,000', 1, 1, 2700000, 150, '#39c5cf', 'services', 2, { tag: 'clean', served: 4000 }),
@@ -1848,7 +1889,20 @@ export const SPECS: Record<string, Spec> = {
   // 'landmark' -> KIND_TO_WAGE_SECTOR 'landmark' entry added above
   // (land_stadium's comment block) so this now buckets into 'tertiary'
   // instead of contributing to totalJobs() with no wage bill.
-  land_tunnel: P('land_tunnel', 'landmark', 'Channel Tunnel Portal', 'Continental rail gateway', 3, 3, 450000000, 25000, '#c2477e', 'services', 18, { tourism: 80, jobs: 1800 }),
+  // Aaron ruling 2026-09-04: "the channel tunnel location needs to be
+  // bigger too" — grown from 3x3 (9 tiles) to 6x4 (24 tiles, ~2.7x area).
+  // ⚠ PLACEHOLDER-tier (GR#15): the real Cheriton terminal is a genuinely
+  // huge site (~150 ha of portal/marshalling yard), so 3x3 was always a
+  // gross understatement; picked the next sensible step up alongside this
+  // catalogue's other big landmarks (land_space is 5x5 at a higher cost/
+  // tier) rather than jumping to land_airport's 70x70 real-world scale,
+  // which would dwarf everything else on the palette. Directional only,
+  // pending Aaron's row-by-row balance pass. EXISTING placed tunnels are
+  // grandfathered at their OLD 3x3 footprint via the per-building
+  // footprintW/footprintH override (see the hydrate load ceremony in
+  // engine.ts) so no already-built portal is retroactively made to overlap
+  // a neighbour; only NEW placements use this bigger footprint.
+  land_tunnel: P('land_tunnel', 'landmark', 'Channel Tunnel Portal', 'Continental rail gateway', 6, 4, 450000000, 25000, '#c2477e', 'services', 18, { tourism: 80, jobs: 1800 }),
   land_space: P('land_space', 'landmark', 'Space Launch Complex', 'Kent spaceport · mega-project', 5, 5, 1080000000, 60000, '#ff9f43', 'services', 20, { tourism: 200 }),
   // ═══════════════════ end FEAT-1972079877 placeholder block ═══════════════
 
@@ -3378,6 +3432,41 @@ export function stampJobsGrandfatherForce(state: SimState): SimState {
 export function stampJobsGrandfather(state: SimState): SimState {
   if (!needsJobsGrandfather(state)) return state;
   return { ...stampJobsGrandfatherForce(state), economyEpoch: JOBS_GRANDFATHER_ECONOMY_EPOCH };
+}
+
+/**
+ * Aaron ruling 2026-09-04 ("the channel tunnel location needs to be bigger
+ * too") — land_tunnel's footprint grew from 3x3 to today's (bigger) spec
+ * value. This is the OLD footprint every pre-existing tunnel was actually
+ * placed and road-connected against; see `tunnelFootprintEpoch`'s own doc
+ * comment (types.ts) for why the epoch guard is load-bearing, not optional.
+ */
+export const LAND_TUNNEL_LEGACY_FOOTPRINT: Readonly<{ w: number; h: number }> = { w: 3, h: 3 };
+
+/** Current schema version for the land_tunnel footprint migration — bump this (and add a new legacy-dims constant) the next time land_tunnel's base footprint changes. */
+export const TUNNEL_FOOTPRINT_GRANDFATHER_EPOCH = 1;
+
+/**
+ * Pure, idempotent, single-shot migration (same idiom as
+ * stampJobsGrandfather immediately above, deliberately a SEPARATE epoch —
+ * see tunnelFootprintEpoch's doc comment for why): a no-op (returns `state`
+ * BY REFERENCE) once already at the current epoch; otherwise stamps every
+ * EXISTING land_tunnel that carries no per-building footprint override with
+ * the OLD 3x3 dims (via the SAME footprintW/footprintH override
+ * `footprintOf()` already reads for the auto-scale ladder estates — GR#3,
+ * no parallel mechanism) and bumps the epoch. A NEW tunnel placed after
+ * this fix carries no override either, but is never touched because by the
+ * time it exists the epoch is already current — footprintOf's `?? sp.w/
+ * sp.h` fallback then correctly reads the NEW (bigger) spec dims for it.
+ */
+export function stampTunnelFootprintGrandfather(state: SimState): SimState {
+  if ((state.tunnelFootprintEpoch ?? 0) >= TUNNEL_FOOTPRINT_GRANDFATHER_EPOCH) return state;
+  const buildings = state.buildings.map((b) =>
+    b.spec === 'land_tunnel' && b.footprintW == null && b.footprintH == null
+      ? { ...b, footprintW: LAND_TUNNEL_LEGACY_FOOTPRINT.w, footprintH: LAND_TUNNEL_LEGACY_FOOTPRINT.h }
+      : b,
+  );
+  return { ...state, buildings, tunnelFootprintEpoch: TUNNEL_FOOTPRINT_GRANDFATHER_EPOCH };
 }
 
 /**

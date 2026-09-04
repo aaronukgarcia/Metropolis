@@ -86,10 +86,11 @@ test('every planned placeholder exists in SPECS with placeholder===true', () => 
   }
 });
 
-test('FEAT-1972079901 Five Gorges Dam is a REAL (graduated) mega-power spec', () => {
+test('FEAT-1972079901 Three Gorges Dam is a REAL (graduated) mega-power spec', () => {
   const dam = SPECS.pow_hydro;
-  assert.ok(dam, 'pow_hydro (Five Gorges Dam) missing');
-  assert.equal(dam.name, 'Five Gorges Dam');
+  assert.ok(dam, 'pow_hydro (Three Gorges Dam) missing');
+  // Aaron 2026-09-04: renamed from "Five Gorges Dam" — the id stays pow_hydro.
+  assert.equal(dam.name, 'Three Gorges Dam');
   assert.equal(dam.kind, 'power');
   // GRADUATED: no longer a placeholder — it is a real, placeable generator.
   assert.notEqual(dam.placeholder, true);

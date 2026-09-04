@@ -338,6 +338,25 @@ export interface SimState {
    * jobs pinned to zero, and bumps it to current once applied.
    */
   economyEpoch?: number;
+
+  /**
+   * Aaron ruling 2026-09-04 ("the channel tunnel location needs to be
+   * bigger too") — a schema-version counter for the land_tunnel footprint
+   * grandfather migration, same idiom as `economyEpoch` immediately above
+   * (deliberately a SEPARATE counter — orthogonal migration, no reason to
+   * couple its timing to the unrelated jobs-schema one). A save predating
+   * this field deserializes with it `undefined`, read as epoch 0 by
+   * `stampTunnelFootprintGrandfather` (data.ts), which is the ONLY function
+   * that reads/writes it: it stamps every pre-existing land_tunnel with no
+   * footprintW/footprintH override to the OLD (pre-grow) footprint, then
+   * bumps this to current so the migration never re-fires — critical,
+   * because without that guard a LATER hydrate would misread a genuinely
+   * NEW tunnel (placed after this fix, correctly reading the bigger spec
+   * footprint via footprintOf's `?? sp.w/sp.h` fallback) as "legacy" too,
+   * wrongly shrinking it back down. initialState() always stamps the
+   * CURRENT epoch on a brand-new city (it has no legacy tunnels to migrate).
+   */
+  tunnelFootprintEpoch?: number;
   /**
    * FEAT-2326609761 inc2 (Aaron's glide-mode ruling, 2026-09-04): which
    * traversal mode the consolidator uses to pick its focus window. 'glide'

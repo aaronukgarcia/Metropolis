@@ -775,27 +775,31 @@ export function MapView() {
     // FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03 addendum): the
     // month-12 whole-tile big-picture pass "always still runs regardless of
     // the player's chosen section size" or traversal mode — so the static
-    // scope grid (every section this month's rotation covers) is drawn
-    // unconditionally of consolidatorMode, exactly as inc1 landed it. Only
-    // the SINGLE highlighted box below differs by mode.
+    // scope grid (every section this month's rotation covers) used to be
+    // drawn unconditionally of consolidatorMode, exactly as inc1 landed it.
+    // SUPERSEDED (Aaron ruling, 2026-09-04 — "multiple red boxes", display
+    // confusion in glide mode): the monthly PASS still runs identically in
+    // glide mode regardless (engine behaviour untouched, see
+    // consolidatorGlide.ts/consolidator.ts — this block is display-only),
+    // but the dim static scope-grid outline is now DRAWN only in
+    // monthly-twelfth mode; glide mode (the default) shows ONLY the bright
+    // marching-ants glide cursor box below, so the player never sees a wall
+    // of overlapping dim boxes for sections the glide cursor already swept.
     const consolidatorMode = state.consolidatorMode ?? CONSOLIDATOR_MODE_DEFAULT;
     const consolidatorSectionTilesNow = sectionTilesOf(state);
     const consolidatorBoxOn = (state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT) && geom.s > 0 && isConsolidatorBoxVisible();
-    if (consolidatorBoxOn) {
+    if (consolidatorBoxOn && consolidatorMode === 'monthly-twelfth') {
       const scope = monthlyScopeOf(state.tick);
       const focusKey = currentConsolidatorFocus();
       ctx.save();
       ctx.strokeStyle = 'rgba(255, 40, 40, 0.55)';
       ctx.lineWidth = Math.max(1, geom.s * 0.08);
       for (const key of scope.sectionKeys) {
-        // In monthly-twelfth mode the ranked focus section is drawn
-        // separately (solid+ants, below/via the rAF overlay) so it isn't
-        // double-outlined here; in glide mode there is no "focusKey" concept
-        // (the mailbox is only ever populated by ConsolidatorTab's
-        // monthly-twelfth-oriented ranking today) so this condition is
-        // simply always false and every scoped section draws the same dim
-        // outline.
-        if (consolidatorMode === 'monthly-twelfth' && key === focusKey) continue;
+        // This whole block only runs in monthly-twelfth mode now (2026-09-04
+        // ruling above) — the ranked focus section is drawn separately
+        // (solid+ants, below/via the rAF overlay) so it isn't double-outlined
+        // here.
+        if (key === focusKey) continue;
         const { x0, y0, w, h } = sectionOriginOf(key);
         ctx.strokeRect(geom.ox + x0 * geom.s, geom.oy + y0 * geom.s, w * geom.s, h * geom.s);
       }

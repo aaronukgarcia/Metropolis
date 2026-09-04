@@ -71,13 +71,15 @@ import {
   MILESTONE_REWARDS,
   sanitizeClaimedMilestones,
   filledJobsBySector,
-  countOfSpec,
+  surplusInstancesOf,
   remainingAllowance,
   constructionTicks,
   BULLDOZE_REFUND_FRACTION,
   CONSOLIDATOR_SCRAP_FRACTION,
   JOBS_GRANDFATHER_ECONOMY_EPOCH,
   stampJobsGrandfather,
+  stampTunnelFootprintGrandfather,
+  TUNNEL_FOOTPRINT_GRANDFATHER_EPOCH,
 } from './data.ts';
 import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -429,6 +431,10 @@ function rawState(): SimState {
     // economy to migrate, so stampJobsGrandfather() is immediately a no-op
     // for it (see that function's own epoch-already-current early return).
     economyEpoch: JOBS_GRANDFATHER_ECONOMY_EPOCH,
+    // Aaron ruling 2026-09-04 (land_tunnel footprint grew bigger): a
+    // brand-new city has no pre-existing tunnels to grandfather, so it
+    // starts on the current epoch — mirrors economyEpoch immediately above.
+    tunnelFootprintEpoch: TUNNEL_FOOTPRINT_GRANDFATHER_EPOCH,
     // FEAT-2326609761 inc2: new cities default to glide mode, the 800m
     // section size, and an even 25/25/25/25 slider split (all defaults above).
     consolidatorMode: CONSOLIDATOR_MODE_DEFAULT,
@@ -6053,7 +6059,11 @@ function reduceCore(
       // current epoch (replayFromGenesis starts from initialState()), so this
       // is a safe no-op for that path, exactly as intended (hard-reset-replay
       // deliberately re-derives under CURRENT rules by design).
-      const hydrated = stampJobsGrandfather(sanitizeTreasury(action.state));
+      // Aaron ruling 2026-09-04 (land_tunnel footprint grew bigger):
+      // stampTunnelFootprintGrandfather is unconditional here too (cheap
+      // epoch-compare no-op once current), same idiom/placement as
+      // stampJobsGrandfather immediately below it.
+      const hydrated = stampTunnelFootprintGrandfather(stampJobsGrandfather(sanitizeTreasury(action.state)));
       // BUG-677: a worker-tick hydrate (source === 'tick') is NOT a load —
       // skip the once-per-load AC-31 scan below. Without this gate the scan
       // ran on every applied worker tick (store.tsx delivers each advanced
@@ -6063,25 +6073,78 @@ function reduceCore(
       // stampJobsGrandfather above stays unconditional — it early-returns on
       // a current economyEpoch, and a worker tick's state is always current.
       if (action.source === 'tick') return hydrated;
-      // FEAT-2326609761 AC-31: an OLD SAVE may already carry MORE than
-      // maxPerCity of a now-capped spec (e.g. two Five Gorges Dams placed
-      // before this cap existed). Nothing is demolished and no money is
-      // clawed back — remainingAllowance() already clamps at 0 so no THIRD
-      // can ever be built by any path. The only thing this does is "say so":
-      // a one-time honest notice naming the over-cap spec and its count,
-      // fired once here at load (never repeated on every subsequent action —
-      // sanitizeTreasury runs on EVERY reducer() call and must not be the
-      // home for this, or the notice would never let the player dismiss it).
-      let overCapNotice: string | null = null;
+      // Aaron ruling 2026-09-04 ("just purge off the extra five gorges dam
+      // ... there is only one permitted just delete the others") SUPERSEDES
+      // the old FEAT-2326609761 AC-31 ruling below (previously: "nothing is
+      // demolished, no money is clawed back"). An OLD SAVE may carry MORE
+      // than maxPerCity of a now-capped spec (Aaron's own save carries 23 ×
+      // pow_hydro, placed before the cap existed) — on load, purge every
+      // surplus instance of EVERY maxPerCity-capped spec down to the cap.
+      //
+      // Deterministic (GR#21): surplusInstancesOf (data.ts) is a pure
+      // selector — keeps the maxPerCity OLDEST instances (lowest builtTick,
+      // ties by lowest id) and returns the rest; SPECS iteration is fixed
+      // object insertion order, so which specs are scanned and in what order
+      // never varies run to run.
+      //
+      // Conservation-safe: each removed building credits
+      // CONSOLIDATOR_SCRAP_FRACTION (50%) of its placementCost as a clearly
+      // labelled inflow ('Surplus <name> decommission scrap', one merged
+      // entry per spec) through BOTH the ledger (logEvent) and
+      // lastFlows.inflows — mirrors 'sellAsset' (BUG-503): because this
+      // extends lastFlows, fundsAtTickEnd must move by the exact same
+      // amount in the same transition, or the funds-vs-flows conservation
+      // check would read a false violation until the next tick() resets
+      // both snapshots from scratch.
+      //
+      // Idempotent: surplusInstancesOf returns [] once a spec's count is
+      // already <= its cap, so a second hydrate of an already-purged state
+      // is a pure no-op (no further funds movement, no re-fired notice).
+      //
+      // Gated on source !== 'tick' by the early return above — this scan is
+      // an O(buildings) sweep per capped spec and must never run on the
+      // worker-tick hydrate hot path (BUG-677).
+      let purged = hydrated.buildings;
+      let creditTotal = 0;
+      let inflows = hydrated.lastFlows.inflows;
+      let ledger = hydrated.ledger;
+      let nextLedgerId = hydrated.nextLedgerId;
+      const notices: string[] = [];
       for (const sp of Object.values(SPECS)) {
         if (sp.maxPerCity == null) continue;
-        const n = countOfSpec(hydrated, sp.id);
-        if (n > sp.maxPerCity) {
-          overCapNotice = `This save has ${n} × ${sp.name} — more than the "One per city" cap now allows. None are removed; no further ${sp.name} can be built.`;
-          break; // deterministic: SPECS iteration order is fixed object insertion order (GR#21)
-        }
+        const surplus = surplusInstancesOf({ ...hydrated, buildings: purged }, sp);
+        if (surplus.length === 0) continue;
+        const removeIds = new Set(surplus.map((b) => b.id));
+        purged = purged.filter((b) => !removeIds.has(b.id));
+        const specCredit = surplus.reduce(
+          (sum, b) => sum + Math.round(placementCost(SPECS[b.spec] ?? sp) * CONSOLIDATOR_SCRAP_FRACTION),
+          0,
+        );
+        creditTotal += specCredit;
+        const scrapLabel = `Surplus ${sp.name} decommission scrap`;
+        inflows = [...inflows, { label: scrapLabel, value: specCredit }];
+        // Ledger entry too (mirrors sellAsset/bulldoze) — threaded through
+        // a running {ledger, nextLedgerId, tick} cursor since logEvent()
+        // takes a whole SimState and multiple capped specs can purge in the
+        // same load.
+        const ledgerUpdate = logEvent({ ...hydrated, ledger, nextLedgerId }, scrapLabel, specCredit);
+        ledger = ledgerUpdate.ledger;
+        nextLedgerId = ledgerUpdate.nextLedgerId;
+        notices.push(
+          `Removed ${surplus.length} surplus ${sp.name} — cap is ${sp.maxPerCity} per city; ${fmtMoney(specCredit)} scrap credited`,
+        );
       }
-      return overCapNotice ? { ...hydrated, placeNotice: overCapNotice } : hydrated;
+      if (notices.length === 0) return hydrated;
+      return {
+        ...hydrated,
+        buildings: purged,
+        funds: hydrated.funds + creditTotal,
+        fundsAtTickEnd: hydrated.fundsAtTickEnd + creditTotal,
+        lastFlows: { ...hydrated.lastFlows, inflows },
+        ledger,
+        nextLedgerId,
+        placeNotice: notices.join(' '),
+      };
     }
 
     // FEAT-2326609723 (Play Mode) — the ONE-WAY sandbox escape hatch offered
