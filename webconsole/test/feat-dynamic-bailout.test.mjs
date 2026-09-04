@@ -472,10 +472,18 @@ test('F2b: a building auto-scale event increments cumulativeCapexSpent by EXACTL
   const after = reducer(s, { type: 'tick' });
   const outflow = after.lastFlows.outflows.find((f) => f.label === 'Building Auto-Scale');
   assert.ok(outflow && outflow.value > 0, 'precondition: the building auto-scale event must actually fire on this fixture');
+  // FEAT-2326609781 (2026-09-04): the residential fittingTier clamp means
+  // res_estate's placement lays a tier-3 connector, so this same tick's
+  // growth ALSO fires a legitimate Road Auto-Scale upgrade — pay-as-you-grow
+  // working as ruled (don't pre-build motorways; upgrade when demand proves
+  // it). The capex identity therefore covers BOTH auto-scale events of the
+  // tick, still exactly (no double-count — that's what F2/F2b exist to pin).
+  const roadOutflow = after.lastFlows.outflows.find((f) => f.label === 'Road Auto-Scale');
+  const expectedCapex = capexAfterPlace + outflow.value + (roadOutflow?.value ?? 0);
   assert.equal(
     after.cumulativeCapexSpent,
-    capexAfterPlace + outflow.value,
-    `building auto-scale capex mismatch: cumulativeCapexSpent=${after.cumulativeCapexSpent}, expected ${capexAfterPlace + outflow.value}`,
+    expectedCapex,
+    `building auto-scale capex mismatch: cumulativeCapexSpent=${after.cumulativeCapexSpent}, expected ${expectedCapex} (building=${outflow.value} + road=${roadOutflow?.value ?? 0})`,
   );
 });
 

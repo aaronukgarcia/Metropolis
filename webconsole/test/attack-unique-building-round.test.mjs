@@ -298,6 +298,13 @@ describe('next===cur CONTRACT: mixed decline reasons inside placeMany', () => {
 //    cap by one), never dipping negative and never over-crediting to 1.
 // ---------------------------------------------------------------------------
 
+// FEAT-2326609781 (Aaron, 2026-09-04) SUPERSEDES the original AC-31 "none are
+// removed" semantics this block used to pin: a load-hydrate now PURGES every
+// maxPerCity-capped spec down to its cap (oldest survives; 50% scrap credited
+// via a labelled inflow). The over-cap-group-exists-post-load premise the old
+// bulldoze subtests guarded is therefore structurally unreachable — 'place'
+// refuses past the cap and load purges — so this block now pins the purge
+// semantics end to end instead.
 describe('AC-31 EXTENDED: three-dam old save, and bulldozing one of an over-cap group', () => {
   function threeDamSnapshot() {
     const genesis = initialState();
@@ -308,52 +315,49 @@ describe('AC-31 EXTENDED: three-dam old save, and bulldozing one of an over-cap 
       buildings: [
         ...genesis.buildings,
         { id: 999401, spec: DAM, x: 300, y: 100, builtTick: 0 },
-        { id: 999402, spec: DAM, x: 320, y: 100, builtTick: 0 },
-        { id: 999403, spec: DAM, x: 340, y: 100, builtTick: 0 },
+        { id: 999402, spec: DAM, x: 320, y: 100, builtTick: 5 },
+        { id: 999403, spec: DAM, x: 340, y: 100, builtTick: 9 },
       ],
       nextId: genesis.nextId + 3,
     };
   }
 
-  test('three dams all survive load, a fourth is refused, notice fires exactly once (not per-tick)', () => {
+  test('a three-dam save purges to exactly the cap at load, the OLDEST survives, and a second is refused', () => {
     const fresh = initialState();
     const hydrated = reducer(fresh, { type: 'hydrate', state: threeDamSnapshot() });
-    assert.equal(countOfSpec(hydrated, DAM), 3);
-    assert.match(hydrated.placeNotice ?? '', /3/, 'notice names the count of three');
+    assert.equal(countOfSpec(hydrated, DAM), SPECS[DAM].maxPerCity, 'purged down to the cap');
+    const survivor = hydrated.buildings.find((b) => b.spec === DAM);
+    assert.equal(survivor.id, 999401, 'the oldest (lowest builtTick) survives');
+    assert.match(hydrated.placeNotice ?? '', /Removed 2 surplus/, 'notice names the purge count');
 
     let s = hydrated;
     for (let i = 0; i < 12; i++) s = reducer(s, { type: 'tick' });
-    assert.equal(countOfSpec(s, DAM), 3, 'still three after 12 ticks — the tick loop never touches them');
+    assert.equal(countOfSpec(s, DAM), SPECS[DAM].maxPerCity, 'still at cap after 12 ticks — the tick loop never re-purges or re-places');
 
-    const fourthAttempt = reducer(s, { type: 'place', spec: DAM, x: 360, y: 100 });
-    assert.equal(countOfSpec(fourthAttempt, DAM), 3, 'a fourth is refused just as a third would be from a two-dam save');
+    const secondAttempt = reducer(s, { type: 'place', spec: DAM, x: 360, y: 100 });
+    assert.equal(countOfSpec(secondAttempt, DAM), SPECS[DAM].maxPerCity, 'a second is refused while one stands');
   });
 
-  test('bulldozing ONE of three over-cap dams leaves the group still over cap (allowance clamps at 0, not 1)', () => {
+  test('the purge credits 50% scrap per removed dam via the labelled inflow, exactly once', () => {
     const fresh = initialState();
-    const hydrated = reducer(fresh, { type: 'hydrate', state: threeDamSnapshot() });
-    const oneDam = hydrated.buildings.find((b) => b.spec === DAM);
-    const bulldozed = reducer(hydrated, { type: 'bulldoze', x: oneDam.x, y: oneDam.y });
-
-    assert.equal(countOfSpec(bulldozed, DAM), 2, 'two dams remain');
-    assert.equal(
-      remainingAllowance(bulldozed, SPECS[DAM]),
-      0,
-      'still clamped at 0 — two dams is still over the cap of one, bulldozing one does NOT free a slot yet'
-    );
-    const stillRefused = reducer(bulldozed, { type: 'place', spec: DAM, x: 400, y: 100 });
-    assert.equal(countOfSpec(stillRefused, DAM), 2, 'a new dam is still refused while two remain');
+    const snapshot = threeDamSnapshot();
+    const hydrated = reducer(fresh, { type: 'hydrate', state: snapshot });
+    const scrap = hydrated.lastFlows.inflows.find((f) => /decommission scrap/i.test(f.label));
+    assert.ok(scrap, 'the scrap inflow line exists');
+    assert.equal(scrap.value > 0, true, 'a positive credit was booked');
+    // Idempotency: hydrating the already-purged state again credits nothing new.
+    const again = reducer(initialState(), { type: 'hydrate', state: hydrated });
+    assert.equal(countOfSpec(again, DAM), SPECS[DAM].maxPerCity, 'second load is a no-op purge');
   });
 
-  test('bulldozing back down to exactly one finally frees the slot to zero-remaining (not negative, not positive)', () => {
+  test('bulldozing the surviving dam frees the slot (allowance 1, placeable again) — never negative, never over-credited', () => {
     const fresh = initialState();
     let s = reducer(fresh, { type: 'hydrate', state: threeDamSnapshot() });
-    const dams = () => s.buildings.filter((b) => b.spec === DAM);
-    s = reducer(s, { type: 'bulldoze', x: dams()[0].x, y: dams()[0].y });
-    s = reducer(s, { type: 'bulldoze', x: dams()[0].x, y: dams()[0].y });
-    assert.equal(countOfSpec(s, DAM), 1);
-    assert.equal(remainingAllowance(s, SPECS[DAM]), 0, 'exactly at cap now — 1 built, cap is 1, allowance is 0, not negative');
-    assert.equal(isPlaceable(s, SPECS[DAM]), false);
+    const dam = s.buildings.find((b) => b.spec === DAM);
+    s = reducer(s, { type: 'bulldoze', x: dam.x, y: dam.y });
+    assert.equal(countOfSpec(s, DAM), 0);
+    assert.equal(remainingAllowance(s, SPECS[DAM]), SPECS[DAM].maxPerCity, 'the full allowance returns once the survivor goes');
+    assert.equal(isPlaceable(s, SPECS[DAM]), true);
   });
 });
 

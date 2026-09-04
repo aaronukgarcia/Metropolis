@@ -329,6 +329,8 @@ export interface DebugJson {
     consolidatorUndoConsumed: boolean;
     /** BUG-652 GRANDFATHERING (2026-09-04) — economy schema-version counter; see SimState.economyEpoch's own doc comment. */
     economyEpoch: number;
+    /** FEAT-2326609781 (2026-09-04) — Channel Tunnel footprint schema counter; see SimState.tunnelFootprintEpoch's own doc comment. */
+    tunnelFootprintEpoch: number;
   };
   flows: {
     inflows: FlowItem[];
@@ -1011,6 +1013,11 @@ export function buildDebugJson(
       // BUG-652 GRANDFATHERING (2026-09-04, GR#16): legacy state predating the
       // field reads epoch 0 — see SimState.economyEpoch's own doc comment.
       economyEpoch: s.economyEpoch ?? 0,
+      // FEAT-2326609781 (2026-09-04, GR#16): the Channel Tunnel footprint
+      // schema counter — the coverage map declared this path but the estate
+      // missed serializing it (caught by debugjson's own COMPLETENESS gate
+      // on CI run 33898194308). Same legacy-reads-0 rule as economyEpoch.
+      tunnelFootprintEpoch: s.tunnelFootprintEpoch ?? 0,
     },
     flows: {
       inflows: s.lastFlows.inflows,

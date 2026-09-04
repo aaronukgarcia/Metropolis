@@ -358,7 +358,12 @@ test('A8: giving these specs `jobs` also raises their auto-connect road tier (fi
   }
   assert.deepEqual(
     changed,
-    { land_stadium: '4->5', land_tunnel: '4->5', hea_teaching: '4->5', station_ashford: '3->4' },
+    // FEAT-2326609781 (2026-09-04): land_tunnel dropped out of this set when
+    // Aaron's ruling grew its footprint 3×3 → 6×4 — area 24 alone now clears
+    // the tier-5 threshold, so `jobs` no longer MOVES its tier (it was
+    // already 5 without them). The re-audit this assert demands was done:
+    // the tunnel still gets a motorway connector, just from footprint.
+    { land_stadium: '4->5', hea_teaching: '4->5', station_ashford: '3->4' },
     'the set of specs whose auto-connect road tier moved as a side-effect of BUG-652 changed — re-audit (a tier-5 connector is a motorway, not a dual carriageway)',
   );
 });
