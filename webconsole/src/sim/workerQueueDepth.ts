@@ -54,11 +54,32 @@ export interface QueueDepthTracker {
    *  the worker offload is disabled/unavailable (nothing ever reports a
    *  nonzero streak) or the sim is genuinely progressing normally. */
   supersedeStreak(): number;
+  /**
+   * FEAT-2326609771 round follow-up (2026-09-04, "HUD honesty during the
+   * handshake window") — report the wall-clock start time (epoch ms) of the
+   * VERY FIRST tick request ever posted to a newly-constructed worker, or
+   * null once that handshake has settled (a reply landed, it timed out, it
+   * errored, or the worker was torn down). Distinct from depth()/
+   * supersedeStreak(): those describe STEADY-STATE backlog/contention on an
+   * already-proven-alive worker, but a fresh worker's first request is a
+   * different situation entirely — the sim clock is FROZEN (no tick has
+   * ever landed from this worker instance) while the derived handshake
+   * timeout runs, which a plain "1 pending" reading does not distinguish
+   * from an ordinary one-tick backlog on a healthy worker. A UI readout
+   * should treat a non-null value here as "still proving the worker is
+   * alive, clock not yet moving" rather than "N pending", regardless of
+   * what depth() reads (depth() is 1 either way, by construction).
+   */
+  reportHandshakeStartAt(atMs: number | null): void;
+  /** The most recently reported handshake start time (epoch ms), or null —
+   *  see reportHandshakeStartAt's header for the full semantics. */
+  handshakeStartAt(): number | null;
 }
 
 export function createQueueDepthTracker(): QueueDepthTracker {
   let count = 0;
   let streak = 0;
+  let handshakeStartedAt: number | null = null;
   return {
     enqueue() {
       count += 1;
@@ -72,12 +93,19 @@ export function createQueueDepthTracker(): QueueDepthTracker {
     reset() {
       count = 0;
       streak = 0;
+      handshakeStartedAt = null;
     },
     reportSupersedeStreak(next) {
       streak = next;
     },
     supersedeStreak() {
       return streak;
+    },
+    reportHandshakeStartAt(atMs) {
+      handshakeStartedAt = atMs;
+    },
+    handshakeStartAt() {
+      return handshakeStartedAt;
     },
   };
 }

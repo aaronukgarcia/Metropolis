@@ -92,6 +92,57 @@ export function initialOffloadControllerState(): OffloadControllerState {
 }
 
 /**
+ * FEAT-2326609771 (2026-09-04, default-ON rollout hardening) — the HANDSHAKE
+ * timeout: how long store.tsx should wait for the worker's FIRST tick reply
+ * ever (proof the worker is genuinely alive, not just constructed without
+ * throwing) before giving up on it for the rest of the session and falling
+ * back to the synchronous main-thread reducer path — the same fallback AC-8
+ * already uses for a construction failure or an onerror.
+ *
+ * DERIVED, not a flat constant, because a flat constant cannot be correct at
+ * both ends of this game's own stated scale (Option B: persistent citizens up
+ * to 100M at adaptive fidelity). A short fixed timeout (say 2s) would be
+ * correct for a fresh city but would misdiagnose a perfectly healthy worker
+ * on a large save as "hung" purely because Landing 2's full-SimState-clone
+ * protocol (see simWorkerProtocol.ts's scope note) takes longer to clone and
+ * fold through the reducer as the building count grows — exactly the
+ * scenario this rollout most needs to get right, since default-ON means
+ * every dogfood session on a large city now depends on this window. A long
+ * fixed timeout (say 30s flat) would be correct at scale but would leave a
+ * genuinely-stuck small city sitting silently on a dead worker for far
+ * longer than necessary before recovering. Deriving the window from the
+ * REQUEST's own building count ties the timeout to the actual payload being
+ * cloned/computed, so neither end of the scale is either falsely tripped or
+ * left waiting needlessly.
+ *
+ * FLOOR covers worker construction + module evaluation + JIT warmup on a
+ * near-empty city, none of which scales with building count. CEILING is a
+ * hard cap (a bound on the bound, matching this codebase's "liveness needs
+ * BOTH a floor and a ceiling" lesson from the Web Worker saga, applied here
+ * to the timeout itself rather than to tick throughput) — even an
+ * astronomically large city must not be allowed to wait indefinitely for a
+ * first reply; something has gone wrong well before 30s regardless of scale,
+ * and the player deserves the fallback rather than a silent hang.
+ */
+export const HANDSHAKE_TIMEOUT_FLOOR_MS = 4000;
+export const HANDSHAKE_TIMEOUT_PER_BUILDING_MS = 0.4;
+export const HANDSHAKE_TIMEOUT_CEILING_MS = 30_000;
+
+/**
+ * Derive the handshake timeout (ms) for a request built against a city with
+ * `buildingCount` buildings. Pure function of one number so it is trivially
+ * unit-testable without a real Worker/timer (test/simworker-offload.test.mjs
+ * covers the floor, the per-building slope, the ceiling clamp, and hostile
+ * inputs — NaN/negative/non-finite counts — all of which fall back to the
+ * floor rather than producing NaN/negative/Infinity timeouts).
+ */
+export function deriveHandshakeTimeoutMs(buildingCount: number): number {
+  const safeCount = Number.isFinite(buildingCount) && buildingCount > 0 ? buildingCount : 0;
+  const derived = HANDSHAKE_TIMEOUT_FLOOR_MS + safeCount * HANDSHAKE_TIMEOUT_PER_BUILDING_MS;
+  return Math.min(HANDSHAKE_TIMEOUT_CEILING_MS, derived);
+}
+
+/**
  * N1/N2 fix — the forced-synchronous-tick threshold. After this many
  * CONSECUTIVE supersedes with no tick applied in between, the caller
  * (store.tsx's guardedDispatch) must force the next tick through the

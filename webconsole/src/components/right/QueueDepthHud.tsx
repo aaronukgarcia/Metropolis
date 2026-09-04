@@ -56,6 +56,10 @@ import { queueDepthTracker, type QueueDepthSnapshot } from '../../sim/queueDepth
 import { webWorkerOffloadEnabled } from '../../sim/webWorkerFlag';
 import { getGlobalWorkerQueueTracker } from '../../sim/workerQueueDepth';
 import { getGlobalTickTracker, tickMetrics } from '../../sim/perfhud';
+// FEAT-2326609771 (2026-09-04, default-ON rollout): the flag alone can no
+// longer tell "worker actually running" apart from "worker allowed but it
+// failed this session and store.tsx fell back" — see the tracker's header.
+import { getGlobalWorkerFallbackTracker, describeFallbackReason, type WorkerFallbackReason } from '../../sim/webWorkerFallbackStatus';
 
 const HUD_LABEL = 'Queue depth HUD — asks currently waiting per backend engine (diagnostic only)';
 
@@ -70,6 +74,11 @@ export function QueueDepthHud() {
   const [workerDepth, setWorkerDepth] = useState(0);
   const [workerStreak, setWorkerStreak] = useState(0);
   const [tickAvgMs, setTickAvgMs] = useState<number | null>(null);
+  // FEAT-2326609771 round follow-up ("HUD honesty during the handshake
+  // window"): epoch ms the CURRENT worker instance's first-ever tick
+  // request was posted, or null once that handshake has settled one way or
+  // another — see workerQueueDepth.ts's reportHandshakeStartAt header.
+  const [handshakeStartAt, setHandshakeStartAt] = useState<number | null>(null);
 
   useEffect(() => queueDepthTracker.subscribe(setSnapshot), []);
 
@@ -82,16 +91,27 @@ export function QueueDepthHud() {
   // thing to avoid is reading localStorage on every RENDER, not once a
   // second on a timer).
   const [workerOn, setWorkerOn] = useState(() => webWorkerOffloadEnabled());
+  // FEAT-2326609771: null = never fell back this session (worker live, or
+  // the kill switch was explicitly off from the start and nothing was ever
+  // attempted) — see webWorkerFallbackStatus.ts's header.
+  const [fallbackReason, setFallbackReason] = useState<WorkerFallbackReason | null>(() => getGlobalWorkerFallbackTracker().reason());
 
   useEffect(() => {
     const readOnce = () => {
       const on = webWorkerOffloadEnabled();
       setWorkerOn(on);
-      if (on) {
+      const reason = getGlobalWorkerFallbackTracker().reason();
+      setFallbackReason(reason);
+      // BUG-605: a fallback reason means there is no real worker to read a
+      // backlog from any more, regardless of what the flag says — read the
+      // main-thread tick tracker instead, exactly like the flag-off case.
+      if (on && reason === null) {
         const tracker = getGlobalWorkerQueueTracker();
         setWorkerDepth(tracker.depth());
         setWorkerStreak(tracker.supersedeStreak());
+        setHandshakeStartAt(tracker.handshakeStartAt());
       } else {
+        setHandshakeStartAt(null);
         const tickTracker = getGlobalTickTracker();
         setTickAvgMs(tickTracker ? tickMetrics(tickTracker).avgMs : null);
       }
@@ -105,14 +125,34 @@ export function QueueDepthHud() {
   // renders a defined placeholder row, never a blank/crashed panel.
   const rows = snapshot.entries.length > 0 ? snapshot.entries : [{ engine: 'protocol', depth: 0, highWaterMark: 0 }];
 
-  // BUG-605: the tick-queue line is ALWAYS meaningful, never a dim 0/0 —
-  // three honest states depending on what is actually measurable right now.
+  // BUG-605 / FEAT-2326609771: the tick-queue line is ALWAYS meaningful,
+  // never a dim 0/0 — now THREE distinct honest states rather than two,
+  // since default-ON means "flag says on" no longer implies "a real worker
+  // is actually running" (see webWorkerFallbackStatus.ts's header).
   let workerLine: string;
-  if (workerOn) {
+  if (workerOn && fallbackReason === null && handshakeStartAt !== null) {
+    // FEAT-2326609771 round follow-up: this worker instance has NEVER had a
+    // reply land yet — the sim clock is FROZEN on this first request, not
+    // merely "1 behind" the way an ordinary steady-state backlog reads. The
+    // round called the old "worker: 1 pending" reading dishonest here: it
+    // reads identically to a healthy worker one tick behind, when in fact
+    // nothing has ever been proven alive and the clock has not moved at
+    // all yet. Elapsed seconds (not ms) — this window is measured in
+    // multiple seconds by construction (deriveHandshakeTimeoutMs's floor).
+    const elapsedS = Math.max(0, (Date.now() - handshakeStartAt) / 1000);
+    workerLine = `worker starting (${elapsedS.toFixed(1)}s)`;
+  } else if (workerOn && fallbackReason === null) {
+    // Worker genuinely live and past its handshake: no fallback has ever
+    // been reported this session.
     workerLine =
       workerStreak > 0
         ? `worker: ${workerStreak} tick(s) superseded — catching up`
         : `worker: ${workerDepth} pending`;
+  } else if (fallbackReason !== null) {
+    // Worker was allowed to run but failed — falling back, visibly, per
+    // FEAT-2326609771's hardening requirement (never a silent degrade).
+    const avg = tickAvgMs !== null ? `, last tick ${tickAvgMs.toFixed(2)}ms avg` : '';
+    workerLine = `worker failed (${describeFallbackReason(fallbackReason)}) — sync fallback${avg} (main thread)`;
   } else if (tickAvgMs !== null) {
     workerLine = `worker off — sync mode, last tick ${tickAvgMs.toFixed(2)}ms avg (main thread)`;
   } else {

@@ -126,7 +126,8 @@
       "V852-V852": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V854-V855": "reserved for ui.webconsole (FEAT-1972079885 debug commit queue byte-budget + compaction: MET-V854 oversize-entry drop + MET-V855 quota-exhausted give-up; same owner as the V800-V853 webconsole error framework. Auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V853-V853": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "P040-P049": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")"
+      "P040-P049": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
+      "V856-V856": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5315,6 +5316,12 @@
       "module": "int.protocol",
       "message": "metroserve: connection to {path} refused before WebSocket upgrade: Origin {origin} is not in the configured allow-list",
       "remedy": "Add the connecting Origin to METROSERVE_ALLOWED_ORIGINS (comma-separated exact-match list) on the server, or omit that env var entirely to accept every origin unchanged (local dev default)."
+    },
+    "MET-V856": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "Web Worker tick offload disabled: {reason} -- falling back to synchronous main-thread ticks",
+      "remedy": "The worker failed to construct, errored during handshake, or its first tick reply did not arrive within the derived timeout. Every tick and action already applied is intact; the sim continues on the main-thread reducer for the rest of this session (same code path as the metropolis.webworker=off default). No action needed unless this repeats every session, which would suggest a persistent Worker-construction failure worth reporting."
     }
   }
 }

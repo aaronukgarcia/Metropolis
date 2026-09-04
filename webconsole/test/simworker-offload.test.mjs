@@ -118,6 +118,52 @@ test('AC-3-style: a single runTick() call matches reducer(state, {type:"tick"}) 
     'runTick() is a thin wrapper around reducer(state, {type:"tick"}) — no forked logic (GR#21)');
 });
 
+// FEAT-2326609771 (2026-09-04, default-ON rollout): extend the AC-3-style
+// parity proof above to test/scale/fixture.mjs's ~13k-building/~1.4M-
+// population dogfood-scale fixture (the SAME fixture BUG-617's webconsole
+// scale gate uses, built directly from SPECS rather than by replaying 13k
+// individual reducer actions — see fixture.mjs's own "fast-path
+// construction" note for why that's what keeps this a fast per-commit-gate
+// test rather than a multi-minute one). Default-ON means every dogfood
+// session at real city scale now depends on worker-path/main-thread-only
+// parity, not just a fresh small city — this is the scale where a
+// forked/divergent tick implementation (or a subtle memoisation bug keyed on
+// building count) would actually have somewhere to hide.
+test('AC-3-style: worker-tick-path replay is byte-identical to main-thread-only replay at the ~13k-building dogfood scale (FEAT-2326609771)', async () => {
+  const { buildScaleFixture, DEFAULT_BUILDING_COUNT } = await import('./scale/fixture.mjs');
+  const base = buildScaleFixture(); // ~13k buildings, ~1.4M population, 3 settle ticks.
+  assert.ok(base.buildings.length >= 10_000, `precondition: the scale fixture actually built a large city (got ${base.buildings.length} buildings, expected ~${DEFAULT_BUILDING_COUNT})`);
+
+  // A modest, deterministic interleaving of ticks and placements ON TOP of
+  // the already-at-scale fixture — every 'tick' here walks ~13k buildings,
+  // not a handful, without paying the cost of building the fixture via 13k
+  // individual reducer actions.
+  const actions = [];
+  for (let i = 0; i < 12; i++) {
+    if (i % 4 === 0) {
+      actions.push({ type: 'place', spec: 'res_hut', x: 3 + (i % 5), y: 3 });
+    } else {
+      actions.push({ type: 'tick' });
+    }
+  }
+
+  let mainState = base;
+  for (const action of actions) {
+    mainState = reducer(mainState, action);
+  }
+
+  let workerPathState = base;
+  for (const action of actions) {
+    workerPathState = action.type === 'tick' ? runTick(workerPathState) : reducer(workerPathState, action);
+  }
+
+  assert.equal(
+    stableStringify(workerPathState),
+    stableStringify(mainState),
+    'a tick computed via runTick() at ~13k-building dogfood scale must produce byte-identical state to the same tick computed by the plain reducer'
+  );
+});
+
 // RED PROOF for the determinism test itself: prove it CAN fail. A "worker"
 // that forked its own tick logic (e.g. skipped the road-connectivity
 // recompute wrapper) would diverge from the main path — simulate exactly

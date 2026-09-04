@@ -71,8 +71,13 @@ import {
   shouldForceSyncTick,
   afterForcedSyncTick,
   clearWorkerBusy,
+  deriveHandshakeTimeoutMs,
   type OffloadControllerState,
 } from './simWorkerOffloadController';
+// FEAT-2326609771 (2026-09-04, default-ON rollout hardening): the fallback-
+// reason tracker QueueDepthHud.tsx reads to tell "worker live" apart from
+// "worker failed this session, now running sync" — see the module's header.
+import { getGlobalWorkerFallbackTracker } from './webWorkerFallbackStatus';
 import {
   buildGameSave,
   parseGameSave,
@@ -554,6 +559,23 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // current state across renders. store.tsx below is thin glue: call a
   // controller transition, apply its returned state, act on its decision.
   const offloadControllerRef = useRef<OffloadControllerState>(initialOffloadControllerState());
+  // FEAT-2326609771 (2026-09-04, default-ON rollout hardening): true from the
+  // instant the worker's FIRST EVER reply (of any message type) is observed —
+  // i.e. "the handshake is proven, this worker is genuinely alive" — never
+  // reset back to false for the life of this worker instance (a LATER
+  // runtime crash is `runtime-error`, not `handshake-error`; see
+  // worker.onerror below). Read by issueTickRequest to decide whether THIS
+  // request still needs a handshake watchdog armed, and by the watchdog
+  // itself (belt-and-braces) to no-op if the reply actually won the race.
+  const workerHandshakeCompleteRef = useRef(false);
+  // The pending handshake-watchdog timer id, or null when none is armed
+  // (already handshaked, no request currently in flight, or the worker has
+  // already been torn down). At most one is ever armed at a time — Landing
+  // 2's "at most one request in flight" design (workerBusy) guarantees
+  // issueTickRequest is never called again before this one either resolves
+  // (cleared in worker.onmessage) or fires (which itself tears the worker
+  // down, so no second request — and therefore no second timer — can follow).
+  const workerHandshakeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * B1/B2/"lesser" fix, superseding the FIRST cut's buffer-while-in-flight
@@ -730,6 +752,52 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // engine-vs-UI lag, not something to hide from the gauge.
       workerPostAtRef.current = performance.now();
       worker.postMessage(msg);
+      // FEAT-2326609771 (default-ON hardening): arm the handshake watchdog
+      // ONLY while no reply has EVER landed for this worker instance — once
+      // workerHandshakeCompleteRef is true, a stuck/late reply is ordinary
+      // backlog (the existing engine-lag/queue-depth signals already cover
+      // it), not a "is this worker even alive" question. At most one timer
+      // is ever armed at a time (beginTickRequest's workerBusy gate already
+      // guarantees at most one request in flight), so there is nothing to
+      // clear here before arming — any previous timer was already cleared by
+      // whatever settled the previous request (worker.onmessage/onerror, or
+      // the timeout firing and tearing the worker down itself).
+      if (!workerHandshakeCompleteRef.current) {
+        const timeoutMs = deriveHandshakeTimeoutMs(stateRefForDispatch.current.buildings.length);
+        // FEAT-2326609771 round follow-up ("HUD honesty during the
+        // handshake window"): report the start of this waiting window so
+        // QueueDepthHud can show "worker starting (Xs)" instead of the
+        // misleading steady-state "N pending" reading while the clock is
+        // still frozen on this worker instance's very first reply.
+        getGlobalWorkerQueueTracker().reportHandshakeStartAt(Date.now());
+        workerHandshakeTimeoutRef.current = setTimeout(() => {
+          workerHandshakeTimeoutRef.current = null;
+          if (workerHandshakeCompleteRef.current) return; // belt-and-braces: the reply won the race just before this fired.
+          const stillCurrent = workerRef.current === worker;
+          if (!stillCurrent) return; // this worker was already torn down/replaced by something else.
+          // Same shutdown sequence as worker.onerror: terminate before
+          // clearing workerRef so no last-second message can race the
+          // fallback path, then reset every tracker/controller so nothing
+          // is left thinking a request is still outstanding.
+          worker.onmessage = null;
+          worker.onerror = null;
+          worker.terminate();
+          workerRef.current = null;
+          getGlobalWorkerQueueTracker().reset();
+          offloadControllerRef.current = initialOffloadControllerState();
+          getGlobalWorkerFallbackTracker().report('handshake-timeout');
+          recordError(
+            `Web Worker tick offload: first tick reply did not arrive within ${timeoutMs}ms; falling back to synchronous tick.`,
+            { type: 'app', action: 'worker-handshake-timeout', code: 'MET-V856' }
+          );
+          // The abandoned request's tick was never applied and never will
+          // be — run it NOW via the ordinary fallback reducer rather than
+          // waiting for the next scheduled interval fire, so the timeout
+          // costs at most one extra tick's worth of delay, never a silently
+          // skipped tick (the "never lose a tick" requirement).
+          wrappedDispatch({ type: 'tick' });
+        }, timeoutMs);
+      }
       return true;
     } catch (err) {
       // Unwind EXACTLY what beginTickRequest + enqueue() just committed,
@@ -770,9 +838,22 @@ export function SimProvider({ children }: { children: ReactNode }) {
     let worker: Worker;
     try {
       worker = new Worker(new URL('./simWorker.ts', import.meta.url), { type: 'module' });
-    } catch {
+    } catch (err) {
       // AC-8: construction throwing must never crash the app — leave
       // workerRef null so every call site below falls back to main-thread.
+      // FEAT-2326609771 (default-ON hardening): default-ON means EVERY
+      // browser now exercises this path, not just opt-in testers — a silent
+      // fallback with no trace is no longer good enough, so this now also
+      // reports the reason (QueueDepthHud.tsx's worker line) and records a
+      // registry-sourced error (GR#7), same discipline as the handshake-
+      // error and handshake-timeout branches below.
+      const detail = err instanceof Error ? err.message : String(err);
+      getGlobalWorkerFallbackTracker().report('construct-failed');
+      recordError(`Web Worker tick offload: construction failed (${detail}); falling back to synchronous tick.`, {
+        type: 'app',
+        action: 'worker-construct',
+        code: 'MET-V856',
+      });
       return undefined;
     }
     const tracker = getGlobalWorkerQueueTracker();
@@ -800,6 +881,21 @@ export function SimProvider({ children }: { children: ReactNode }) {
       offloadControllerRef.current = clearWorkerBusy(offloadControllerRef.current);
       tracker.drain();
       tracker.reportSupersedeStreak(offloadControllerRef.current.supersedeStreak);
+      // FEAT-2326609771 (default-ON hardening): ANY message at all — the
+      // worker just replied for the first time — is proof of life. Clear the
+      // handshake watchdog (see issueTickRequest's arm-on-post) and latch
+      // workerHandshakeCompleteRef so no FUTURE request ever arms another
+      // one; a later crash is `runtime-error` (worker.onerror below), not a
+      // handshake failure, precisely because this line already ran.
+      if (workerHandshakeTimeoutRef.current !== null) {
+        clearTimeout(workerHandshakeTimeoutRef.current);
+        workerHandshakeTimeoutRef.current = null;
+      }
+      workerHandshakeCompleteRef.current = true;
+      // HUD honesty: the waiting window this reply just settled is over —
+      // clear it so QueueDepthHud stops reading "worker starting" the
+      // instant the clock actually starts moving.
+      tracker.reportHandshakeStartAt(null);
       // BUG-618: the worker is observed to have finished ITS one outstanding
       // computation right here, unconditionally (same placement rationale as
       // clearWorkerBusy just above) — record the round-trip duration
@@ -869,20 +965,52 @@ export function SimProvider({ children }: { children: ReactNode }) {
         engineLagTracker.recordTickCompleted();
       }
     };
-    worker.onerror = () => {
+    worker.onerror = (ev: ErrorEvent) => {
       // Lesser finding (independent round, 2026-09-02): terminate the
       // worker BEFORE clearing workerRef, so no message this dying worker
       // might still emit can race the fallback path that starts running
       // main-thread ticks the instant workerRef.current reads null.
       worker.terminate();
+      // FEAT-2326609771 (default-ON hardening): distinguish a HANDSHAKE
+      // failure (this worker never once replied — the same class as
+      // construction failing or the reply timing out) from a later
+      // RUNTIME crash of an already-proven-alive worker. Both still fall
+      // back identically (workerRef cleared, tracker/controller reset
+      // below); the distinction is purely for the honest HUD line / error
+      // record, not for behaviour.
+      if (workerHandshakeTimeoutRef.current !== null) {
+        clearTimeout(workerHandshakeTimeoutRef.current);
+        workerHandshakeTimeoutRef.current = null;
+      }
+      const reason = workerHandshakeCompleteRef.current ? 'runtime-error' : 'handshake-error';
+      getGlobalWorkerFallbackTracker().report(reason);
+      const detail = ev && typeof ev.message === 'string' && ev.message.length > 0 ? ev.message : 'unknown worker error';
+      recordError(
+        `Web Worker tick offload: ${reason === 'handshake-error' ? 'handshake' : 'runtime'} error (${detail}); falling back to synchronous tick.`,
+        { type: 'app', action: 'worker-onerror', code: 'MET-V856' }
+      );
+      // FEAT-2326609771 round follow-up (2026-09-04, "the asymmetry" — the
+      // handshake-timeout path already ran the abandoned tick PROACTIVELY,
+      // right here-equivalent, the instant it gave up on the worker;
+      // onerror used to just clear workerRef and wait for the NEXT
+      // scheduled interval fire, silently costing up to one full SPEED_MS
+      // interval of extra lag on top of whatever request was already lost —
+      // worse, during that gap the engine-lag/queue-depth gauges kept
+      // reading the stale in-flight request as outstanding). Capture
+      // whether a request was actually in flight BEFORE resetting the
+      // controller below (tracker.reset()/initialOffloadControllerState()
+      // wipe pendingTick unconditionally) — only THAT case has a genuinely
+      // abandoned tick worth running immediately; a worker that crashes
+      // with nothing outstanding must not be charged a spurious extra tick.
+      const hadPendingTick = offloadControllerRef.current.pendingTick;
       // A worker runtime error disables the offload for the rest of this
       // session (workerRef cleared) — the tick-driver effect's fallback
       // branch then runs the reducer on main exactly as it always has.
       // AC-8: no user-visible error, no loss of save/load/journal function.
       // No journal write for whatever tick was in flight (B3: never
       // journaled until applied, and an errored worker's result is never
-      // applied) — the fallback path's next interval fire will re-derive
-      // that tick correctly from current state via the ordinary reducer.
+      // applied) — recreated fresh, right now, via the forced synchronous
+      // tick below when one was actually owed.
       // No buffer to flush either (the buffering design was removed —
       // see invalidateInFlightWorkerTick's header comment): every non-tick
       // action already applied to main state the instant it was dispatched.
@@ -896,6 +1024,14 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // there is nothing left to selectively drain first.
       tracker.reset(); // also clears the reported supersedeStreak — a torn-down worker has nothing left to be "behind" on.
       offloadControllerRef.current = initialOffloadControllerState();
+      if (hadPendingTick) {
+        // Run the abandoned request's tick NOW, through the ordinary
+        // main-thread fallback reducer — same call, same reasoning as the
+        // handshake-timeout path just above: the crash costs at most one
+        // tick's worth of delay, never a silent extra interval on top of
+        // the reply that was already lost.
+        wrappedDispatch({ type: 'tick' });
+      }
     };
     workerRef.current = worker;
     return () => {
@@ -906,6 +1042,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // outstanding pendingTick/workerBusy, so no selective drain is needed.
       tracker.reset();
       offloadControllerRef.current = initialOffloadControllerState();
+      // FEAT-2326609771: an ordinary unmount/teardown is not a failure — no
+      // fallback reason is reported here — but a still-armed handshake
+      // watchdog must be cancelled regardless, or it would fire against a
+      // torn-down worker (workerRef already null by then) after this
+      // SimProvider instance is gone.
+      if (workerHandshakeTimeoutRef.current !== null) {
+        clearTimeout(workerHandshakeTimeoutRef.current);
+        workerHandshakeTimeoutRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- dispatch is
     // the stable useReducer dispatch; wrappedDispatch's own identity is
