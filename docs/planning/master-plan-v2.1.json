@@ -2567,7 +2567,8 @@
         "engine.logistics",
         "foundation.data",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "engine.market"
       ],
       "sprint": 9
     },

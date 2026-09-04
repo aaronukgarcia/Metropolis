@@ -3874,6 +3874,10 @@
             "outboundGuid": "06f76f29-785a-413c-9b28-9862a326e116"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.farming",
             "outboundGuid": "8dd0b14d-7989-4a7c-92ea-758af8ef3516"
           },
@@ -6957,6 +6961,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "engine.market",
+            "moduleGuid": "bd0cc5e7-5941-41ee-a944-bd3ddc8d2b2f",
+            "inboundGuid": "261a5063-96f3-40eb-a667-af294be7fc16"
           }
         ]
       },
