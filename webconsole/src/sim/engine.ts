@@ -386,6 +386,9 @@ function rawState(): SimState {
     // FEAT-2326609711 inc1 (AC-1): new cities default to external power cover
     // ON (GRID_IMPORT_ENABLED_DEFAULT, fiscal.ts — Aaron's Design Ruling).
     gridImportEnabled: GRID_IMPORT_ENABLED_DEFAULT,
+    // FEAT-2326609761 inc1 (AC-1, ASM-1504): new cities default to the
+    // consolidator OFF (CONSOLIDATOR_ENABLED_DEFAULT, above).
+    consolidatorEnabled: CONSOLIDATOR_ENABLED_DEFAULT,
     buildings,
     nextId: nextSafeBuildingId(buildings),
     movingId: null,
@@ -933,6 +936,19 @@ export function grantLevelRewards(s: SimState): SimState {
  */
 export const TICKS_PER_MONTH = 30;
 export const TICKS_PER_YEAR = TICKS_PER_MONTH * 12; // 360
+
+/**
+ * FEAT-2326609761 inc1 (AC-1/AC-34, ASM-1504): new cities (and every old
+ * save with no `consolidatorEnabled` field) start with the consolidator OFF.
+ * SSOT for the default — `SimState.consolidatorEnabled`'s doc comment
+ * (types.ts), `rawState()`'s initializer, and the `toggleConsolidator`
+ * reducer case all reference this ONE named constant rather than a bare
+ * `false` literal repeated across files (GR#15). Lives here (not
+ * consolidator.ts) to avoid a circular import — consolidator.ts already
+ * imports TICKS_PER_MONTH/CONNECT_EXEMPT_KINDS FROM engine.ts, so engine.ts
+ * must not import back from consolidator.ts.
+ */
+export const CONSOLIDATOR_ENABLED_DEFAULT = false;
 
 /**
  * Saturation threshold: a monitored segment auto-scales ONE tier when its coarse
@@ -3290,6 +3306,10 @@ export type Action =
   | { type: 'tax'; which: keyof TaxRates; rate: number }
   | { type: 'policy'; id: PolicyId }
   | { type: 'toggleGridImport' }
+  // FEAT-2326609761 inc1 (AC-1, ASM-1504): the CONSOLIDATOR enable toggle —
+  // journalled sim state, deliberately NOT localStorage (see the field's own
+  // doc comment on SimState.consolidatorEnabled, types.ts).
+  | { type: 'toggleConsolidator' }
   | { type: 'loan' }
   | { type: 'repay' }
   | { type: 'setClipboard'; clipboard: SimState['clipboard'] }
@@ -4503,6 +4523,19 @@ function reduceCore(state: SimState, action: Action): SimState {
       return {
         ...state,
         gridImportEnabled: !(state.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT),
+      };
+
+    // FEAT-2326609761 inc1 (AC-1, AC-2): flips consolidatorEnabled. Mirrors
+    // toggleGridImport's shape exactly — plain sim-state mutation, journals/
+    // replays/serialises like every other reducer action (journal.ts's
+    // isStateAffecting classifies it `true`). This read-only-half build does
+    // no discovery/apply work itself when the flag flips; it exists so the
+    // separate mutation-lane pass and this module's own map overlay/panel
+    // have one shared, deterministic source of truth to gate on.
+    case 'toggleConsolidator':
+      return {
+        ...state,
+        consolidatorEnabled: !(state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT),
       };
 
     case 'loan': {

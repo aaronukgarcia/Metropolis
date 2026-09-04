@@ -30,6 +30,7 @@ import {
 import { MilestonesTab, DemandForecastTab, RevenueForecastTab } from './tabs/projectionsTabs';
 import { AlertsCriticalTab, AlertsWarningTab, AlertsInfoTab } from './tabs/alertsTabs';
 import { DebugTab } from './tabs/debugTab';
+import { ConsolidatorTab } from './tabs/consolidatorTab';
 
 // LeftDock.tsx — FEAT-2326609720 inc2: the six-group tab-tree replan
 // (Aaron Q100059 = A1, plus the 2026-09-02 domain-split amendment for
@@ -129,6 +130,13 @@ const GROUPS: TopGroup[] = [
 ];
 
 const DEBUG_GROUP_ID = 'debug';
+// FEAT-2326609761 inc1 (discovery/audit half only): a separate top-level tab,
+// same idiom as Debug — outside the six approved groups (§1's grouping table
+// doesn't cover this feature yet), unconditional entry, READ-ONLY body (no
+// toggle/Undo — that's the separate mutation-lane half). Kept as its own
+// entry rather than folded into an existing group so it survives that lane
+// landing independently without a LeftDock merge conflict on GROUPS' content.
+const CONSOLIDATOR_GROUP_ID = 'consolidator';
 
 /**
  * BUG-605 (exported so tests can prove the badge logic without needing to
@@ -147,7 +155,10 @@ export function LeftDock() {
     () => Object.fromEntries(GROUPS.map((g) => [g.id, g.children[0].id])),
   );
 
-  const activeGroup = groupId === DEBUG_GROUP_ID ? null : GROUPS.find((g) => g.id === groupId) ?? GROUPS[0];
+  const activeGroup =
+    groupId === DEBUG_GROUP_ID || groupId === CONSOLIDATOR_GROUP_ID
+      ? null
+      : GROUPS.find((g) => g.id === groupId) ?? GROUPS[0];
   // D1 fix (independent round REJECT): the Debug tab ENTRY is unconditional —
   // parity with the old RightDock, which declared its `debug` tab
   // unconditionally in TABS and DEV-gated only the cheat ACTIONS inside
@@ -158,6 +169,7 @@ export function LeftDock() {
   // (production/dogfood `vite build`) run.
   const topTabs = [
     ...GROUPS.map((g) => ({ id: g.id, label: g.label })),
+    { id: CONSOLIDATOR_GROUP_ID, label: 'Consolidator' },
     { id: DEBUG_GROUP_ID, label: 'Debug' },
   ];
 
@@ -172,7 +184,9 @@ export function LeftDock() {
   const activeChildId = activeGroup ? (childByGroup[activeGroup.id] ?? activeGroup.children[0].id) : null;
   const ActiveBody = activeGroup
     ? activeGroup.children.find((c) => c.id === activeChildId)?.Body ?? activeGroup.children[0].Body
-    : DebugTab;
+    : groupId === CONSOLIDATOR_GROUP_ID
+      ? ConsolidatorTab
+      : DebugTab;
 
   return (
     <Panel title="City" tabs={topTabs} active={groupId} onSelect={setGroupId}>

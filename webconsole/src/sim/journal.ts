@@ -134,6 +134,11 @@ export function isStateAffecting(action: Action): boolean {
     // state-affecting, must journal + replay like every other toggle (tax/policy).
     case 'toggleGridImport':
       return true;
+    // FEAT-2326609761 inc1 (AC-1, ASM-1504): the consolidator enable toggle
+    // mutates consolidatorEnabled — state-affecting, must journal + replay
+    // identically (mirrors toggleGridImport immediately above it).
+    case 'toggleConsolidator':
+      return true;
 
     // Clone-stamp — state-affecting (places/flattens buildings, deducts cost).
     case 'stampRegion':

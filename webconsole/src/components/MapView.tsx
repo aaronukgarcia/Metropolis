@@ -34,7 +34,9 @@ import { computePath, type Tile } from '../sim/roadTracker';
 import { viewportTileRect, visibleBuildingsOf } from '../render/viewportCull';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim } from '../sim/simContext';
-import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets, TICKS_PER_YEAR } from '../sim/engine';
+import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets, TICKS_PER_YEAR, CONSOLIDATOR_ENABLED_DEFAULT } from '../sim/engine';
+import { monthlyScopeOf, sectionOriginOf } from '../sim/consolidator';
+import { currentConsolidatorFocus } from '../sim/consolidatorFocus';
 import {
   BAILOUT_DURATION_TICKS,
   ADMINISTRATION_DURATION_TICKS,
@@ -731,7 +733,37 @@ export function MapView() {
       }
       ctx.globalAlpha = 1;
     }
-  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, roadTracker, geom, size]);
+
+    // FEAT-2326609761 inc1 (Aaron: "let's draw a red box on the area"): the
+    // consolidator's current-month section focus. Deliberately PURE ARITHMETIC
+    // from section geometry (sectionOriginOf) — never a scan over
+    // state.buildings. His city blocks 6.1s/tick at 49,174 buildings; a
+    // per-frame O(buildings) overlay here would be an instant regression on
+    // top of that. Cost is O(sections in this month's scope), bounded by
+    // TOTAL_SECTIONS (476 at the ruled 800m size) — negligible even in the
+    // "month 12 = whole map" case. Hidden entirely (draws nothing) while the
+    // consolidator is OFF — same "no cost when off" contract the tab itself
+    // observes (consolidatorTab.tsx).
+    if ((state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT) && geom.s > 0) {
+      const scope = monthlyScopeOf(state.tick);
+      const focusKey = currentConsolidatorFocus();
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 40, 40, 0.55)';
+      ctx.lineWidth = Math.max(1, geom.s * 0.08);
+      for (const key of scope.sectionKeys) {
+        if (key === focusKey) continue; // drawn distinctly below, on top
+        const { x0, y0, w, h } = sectionOriginOf(key);
+        ctx.strokeRect(geom.ox + x0 * geom.s, geom.oy + y0 * geom.s, w * geom.s, h * geom.s);
+      }
+      if (focusKey != null && scope.sectionKeys.includes(focusKey)) {
+        const { x0, y0, w, h } = sectionOriginOf(focusKey);
+        ctx.strokeStyle = '#ff2828';
+        ctx.lineWidth = Math.max(2, geom.s * 0.16);
+        ctx.strokeRect(geom.ox + x0 * geom.s, geom.oy + y0 * geom.s, w * geom.s, h * geom.s);
+      }
+      ctx.restore();
+    }
+  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, state.consolidatorEnabled, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, roadTracker, geom, size]);
 
   function tileFrom(clientX: number, clientY: number): { x: number; y: number } | null {
     const cv = canvasRef.current;

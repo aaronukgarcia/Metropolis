@@ -229,6 +229,24 @@ export interface SimState {
    * by every read site (never a silent `false`/off fallback).
    */
   gridImportEnabled?: boolean;
+  /**
+   * FEAT-2326609761 inc1 (AC-1, ASM-1504): the CONSOLIDATOR enable toggle.
+   * Deliberately SIM STATE, not localStorage — every other feature flag in
+   * this codebase (liveEngineFlag.ts, webWorkerFlag.ts, debugBuildSpeed.ts)
+   * IS localStorage-backed, which is the trap this field exists to avoid: a
+   * localStorage flag does not travel with the journal, so the same journal
+   * would rebuild a DIFFERENT city on a different machine or after a cache
+   * clear — silently breaking replay determinism (GR#21). Flipped ONLY by
+   * the journalled `toggleConsolidator` action (engine.ts), never written
+   * directly. Read-only consumers (this module's audit/discovery half) may
+   * gate their own display on it once the mutation-lane pass exists; today
+   * it also gates whether the map's section-focus overlay is shown.
+   * Optional for backward tolerance (mirrors gridImportEnabled): an old save
+   * predating this field is treated as `false` (CONSOLIDATOR_ENABLED_DEFAULT,
+   * consolidator.ts) by every read site — loading a save must never silently
+   * start demolishing the player's city (AC-34).
+   */
+  consolidatorEnabled?: boolean;
   buildings: Building[];
   nextId: number;
   movingId: number | null;

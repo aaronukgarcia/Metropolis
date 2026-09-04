@@ -85,6 +85,7 @@ import {
   levelOf,
   wellbeingOf,
   xpForLevel,
+  CONSOLIDATOR_ENABLED_DEFAULT,
 } from './engine.ts';
 import { SNAPSHOT_REFRESH_MS } from './throttle.ts';
 import type { MapUiState } from './uistate.ts';
@@ -286,6 +287,8 @@ export interface DebugJson {
     pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
     /** FEAT-2326609711 inc1 (AC-1) — external power cover toggle. */
     gridImportEnabled: boolean;
+    /** FEAT-2326609761 inc1 (AC-1, ASM-1504) — consolidator enable toggle. */
+    consolidatorEnabled: boolean;
     /** BUG-504 Option A — how many FRESH first bailouts used so far (capped). */
     firstBailoutCount: number;
     /** BUG-506 (AC-506-1/2) — consecutive-tick sustained-recovery counter. */
@@ -587,6 +590,8 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   arrivalsByModeHistory: 'arrivalsByMode.monthlyHistory',
   // FEAT-2326609711 inc1 (AC-1).
   gridImportEnabled: 'sim.gridImportEnabled',
+  // FEAT-2326609761 inc1 (AC-1, ASM-1504).
+  consolidatorEnabled: 'sim.consolidatorEnabled',
   // BUG-504 Option A / BUG-506 / FEAT-2326609723 (FEAT-endgame-ladder).
   firstBailoutCount: 'sim.firstBailoutCount',
   recoveryStreak: 'sim.recoveryStreak',
@@ -911,6 +916,9 @@ export function buildDebugJson(
       // FEAT-2326609711 inc1 (AC-1): backward tolerance for a legacy state
       // predating this field, mirrors insolvencyState/bailoutState above.
       gridImportEnabled: s.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT,
+      // FEAT-2326609761 inc1 (AC-1, ASM-1504): backward tolerance for a
+      // legacy state predating this field, mirrors gridImportEnabled above.
+      consolidatorEnabled: s.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT,
       // BUG-504 Option A / BUG-506 / FEAT-2326609723: backward tolerance for a
       // legacy state predating these fields, mirrors the fields above.
       firstBailoutCount: s.firstBailoutCount ?? 0,

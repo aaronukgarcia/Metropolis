@@ -13,6 +13,8 @@ import { NAMED_SAVES_INDEX_KEY, NAMED_SAVE_SLOT_PREFIX } from '../sim/namedsaves
 import { SAVEPOINT_KEY_PREFIX, SAVEPOINT_CAP } from '../sim/replay';
 import { JOURNAL_KEY } from '../sim/journal';
 import { encode, decode } from '../sim/saveCodec';
+import { useSim } from '../sim/simContext';
+import { CONSOLIDATOR_ENABLED_DEFAULT } from '../sim/engine';
 
 /**
  * BUG-457: how many journal entries Reclaim keeps (rather than deleting the
@@ -111,6 +113,7 @@ function runReclaim(storage: Storage): number {
 }
 
 export function ConfigMenu() {
+  const { state, dispatch } = useSim();
   const [open, setOpen] = useState(false);
   const [cap, setCap] = useState(() => {
     try {
@@ -261,6 +264,27 @@ export function ConfigMenu() {
                   Fast build (dev): max {FAST_BUILD_MAX_TICKS} ticks per building
                 </label>
               )}
+              {/* FEAT-2326609761 inc1 (AC-1, AC-2, ASM-1504): the CONSOLIDATOR
+                  toggle. Deliberately DISPATCHES the journalled action rather
+                  than writing storage — every OTHER flag on this menu (fast
+                  build above, plus liveEngineFlag/webWorkerFlag elsewhere) is
+                  localStorage-backed, which is exactly the trap ASM-1504
+                  warns against: a localStorage flag would make the same
+                  journal replay into a DIFFERENT city depending on which
+                  machine/cache loaded it. `checked` reads through the same
+                  `?? CONSOLIDATOR_ENABLED_DEFAULT` fallback every other
+                  reader uses (GR#16) so an old save with no field shows OFF. */}
+              <label
+                className="brand-menu-row"
+                title="Consolidator (urban regenerator): while enabled, demolishes and rebuilds parts of the city automatically to reduce clutter and cost. Costs real money when it acts."
+              >
+                <input
+                  type="checkbox"
+                  checked={state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT}
+                  onChange={() => dispatch({ type: 'toggleConsolidator' })}
+                />
+                Consolidator (urban regenerator)
+              </label>
               {reclaimMsg && <div className="mono muted">{reclaimMsg}</div>}
               <div className="brand-menu-form">
                 <button
