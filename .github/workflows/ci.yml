@@ -183,7 +183,14 @@ jobs:
   # real in CI for the first time.
   node-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # timeout raised 15 -> 30 (2026-09-04): the suite grew past 15 minutes in
+    # one day of landings (the consolidator estate's real-savepoint perf
+    # probes, the chunked-replay family, the worker-offload suites) and the
+    # job hit its ceiling with a "cancelled" step conclusion three runs in a
+    # row — which reads as an external cancel and cost a debugging cycle to
+    # attribute. 30 gives ~2x headroom over the measured ~15m20s; if the
+    # suite approaches THAT, split the job before raising this again.
+    timeout-minutes: 30
     services:
       mariadb:
         image: mariadb:11
