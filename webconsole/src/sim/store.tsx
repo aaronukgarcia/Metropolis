@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { reducer, initialState, SPEED_MS, sanitizeTreasury, nextSafeBuildingId, CONSOLIDATOR_ENABLED_DEFAULT } from './engine';
 import type { Action } from './engine';
@@ -37,7 +37,6 @@ import {
   prepareRestoreForChunkedTail,
   replayTailChunked,
   checkConsistencyRecoveringStaleFlows,
-  LARGE_TAIL_REPLAY_THRESHOLD,
   SAVEPOINT_CAP,
 } from './replay';
 import {
@@ -399,7 +398,39 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // (`crossBuildAfter`) so the effect below offers the Rebuild-from-genesis
     // prompt AFTER the chunked tail replay lands the old-engine state — never
     // instead of the instant boot.
-    if (most && most.journalTail.length > LARGE_TAIL_REPLAY_THRESHOLD) {
+    //
+    // BUG-669 (P1, 2026-09-04): the ACTION-COUNT threshold above ignored the
+    // OTHER factor in tail-replay cost — building count. Aaron's real
+    // 49,174-building save had a perfectly healthy 106-action tail (well
+    // under the old cut line of 150), so this branch was skipped and the
+    // ~31-SECOND inline replay below ran synchronously in front of first
+    // paint anyway — the exact wedge this bug exists to eliminate, just
+    // reached through the OTHER branch. A cost-aware cut line (tail actions
+    // times building count, or a wall-clock probe of the first few actions)
+    // was considered and rejected: it adds a second tunable nobody can derive
+    // honestly (BUG-669's own note flags this), and it is UNNECESSARY —
+    // measured directly (scratch harness, this fix): `prepareRestoreForChunkedTail`
+    // (the only part of the chunked path that still runs BEFORE first paint)
+    // costs 7.8ms on a genesis-sized city, 112.7ms at ~6,700 buildings, and
+    // 864ms at the real 49,174-building/106-action save — i.e. the chunked
+    // path's boot-blocking cost is STRICTLY LOWER than the small-tail path's
+    // full synchronous replay at every size measured (57.3ms / 401.0ms /
+    // 38,851.5ms respectively for the SAME three fixtures on the old inline
+    // path), because `prepare` never runs the tail loop at all — the loop
+    // moves into the chunked, yielding, post-mount effect regardless of how
+    // short it is. So per GR#3 (one path beats two, when one is strictly
+    // better): the threshold is DELETED as a live gate. EVERY boot with an
+    // existing savepoint takes the SAME instant-pre-tail-boot + chunked-
+    // replay path now, whether the tail is 0 actions (the overwhelmingly
+    // common case — the chunked generator returns done on its first `next()`
+    // call, and React batches the resulting no-op state churn into the SAME
+    // paint as the mount, so there is nothing to see) or 100,000.
+    // `LARGE_TAIL_REPLAY_THRESHOLD` itself is kept (unused here) purely as a
+    // documented "this many actions is representative of a large tail" sizing
+    // constant for the bug617/scale-gate test suites, which exercise
+    // `prepareRestoreForChunkedTail`/`replayTailChunked` directly and have no
+    // dependency on this branch.
+    if (most) {
       const prepared = prepareRestoreForChunkedTail(window.localStorage);
       if (prepared.success && prepared.state && prepared.tail) {
         const loadedJournal = loadJournal(window.localStorage);
@@ -586,6 +617,39 @@ export function SimProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     stateRefForDispatch.current = state;
   }, [state]);
+
+  // BUG-669 (P1, 2026-09-04, independent round REJECT): the chunked
+  // savepoint-tail replay effect below (`pendingTailReplay`) ends with
+  // `dispatch({type:'hydrate', state: finalState})` — a full state
+  // REPLACEMENT computed from a snapshot taken when the effect started, with
+  // no knowledge of anything dispatched to the live `state` in between.
+  // `guardedDispatch` (the ONLY dispatch exposed via useSim()) applied a
+  // mid-replay action immediately, so the player saw it land — then watched
+  // it silently vanish the instant hydrate landed. Two refs (not state —
+  // guardedDispatch must see the CURRENT value at dispatch time, not one
+  // captured when its useMemo last ran; same reasoning as `stateRefForDispatch`
+  // itself, BUG-434) close this:
+  //   - `tailReplayActiveRef`: true for the exact lifetime of the tail-replay
+  //     effect (set at its start, cleared the instant its own hydrate/finish
+  //     lands or it unmounts) — initialised from `boot.pendingTailReplay`
+  //     rather than `false` so an action fired in the vanishingly-small
+  //     window between the FIRST commit and this effect's first run is still
+  //     caught, not lost to a default of "not replaying yet".
+  //   - `tailReplayBufferRef`: every non-tick action dispatched while active,
+  //     in dispatch order — drained through the reducer ONTO `finalState`
+  //     right before the replay's own hydrate lands (see that effect), so the
+  //     player's live view ends up describing the SAME thing the journal
+  //     already recorded (wrappedDispatch journals unconditionally,
+  //     regardless of replay state) instead of diverging from it (GR#21).
+  //   Deliberately NOT gated by the shared `rebuildInProgress` module flag
+  //   (genesisReplay.ts) — that flag is ALSO true during `onRebuild`'s
+  //   genesis-from-journal replay, which never live-hydrates (it persists to
+  //   storage and reloads the whole page via `onResume`), so there is no
+  //   discard risk there and nothing would ever drain a buffer filled during
+  //   it — buffering on that shared flag would silently strand actions
+  //   forever. This pair tracks ONLY the specific mechanism that discards.
+  const tailReplayActiveRef = useRef<boolean>(boot.pendingTailReplay !== null);
+  const tailReplayBufferRef = useRef<Action[]>([]);
 
   const wrappedDispatch = useMemo(() => {
     // Journal-record + dispatch the action (shared by the normal path and the
@@ -1099,7 +1163,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
         recordTickInJournalOnly(decision.tickToJournal);
         // BUG-677: mark this hydrate as a tick delivery so the reducer skips
         // its once-per-load ceremonies (AC-31 over-cap notice re-fired every
-        // second without this, undismissably).
+        // second without this, undismissably). Re-applied here after the
+        // BUG-669 merge (the estate's store.tsx predated the BUG-677 fix).
         dispatch({ type: 'hydrate', state: msg.state, source: 'tick' });
         // BUG-618: this IS an applied tick (bypasses wrappedDispatch's own
         // 'tick' branch entirely — raw `dispatch` above — so it must be
@@ -1226,8 +1291,44 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // action (never delays it — the whole point of this feature) so a forced
   // catch-up tick reads as "the overdue tick finally landed right after
   // your click", never as added click latency.
+  //
+  // BUG-669 (P1, 2026-09-04, independent round REJECT): "always applied
+  // immediately" above is still true for the LIVE view — but while the
+  // chunked savepoint-tail replay is running (`tailReplayActiveRef`, set by
+  // the effect below) a non-tick action's immediate application is to a
+  // `state` that is about to be wholesale REPLACED by that replay's own
+  // `dispatch({type:'hydrate', ...})`, which would otherwise discard it with
+  // no error and no recovery until a later reload replays the journal (the
+  // journal itself is unaffected — wrappedDispatch journals unconditionally
+  // — only the LIVE state diverged). Two responses, chosen per action type:
+  //   - 'reset': REJECTED outright (no wrappedDispatch call at all, visible
+  //     error instead). GR#27's pre-wipe debug capture is a side-effecting
+  //     ceremony entangled with wrappedDispatch's own reset special-case
+  //     (capture-then-wipe, capture skipped on failure) — replaying a
+  //     captured reset a SECOND time through the buffer-drain's bare
+  //     `reducer()` calls (see the tail-replay effect) would either re-run
+  //     that fail-closed capture side effect twice or skip it on the
+  //     surviving copy, either of which is a GR#27 violation. There is also
+  //     no sane MERGE of "wipe to a fresh city" with "the tail replay's
+  //     landing city" — one must lose, and losing the player's explicit
+  //     Start Over silently is worse than telling them to wait.
+  //   - every other non-tick action: applied immediately exactly as before
+  //     (the player still sees it land with no input lag) AND pushed onto
+  //     `tailReplayBufferRef`, so the tail-replay effect can replay it, in
+  //     order, on top of its own `finalState` right before hydrate lands —
+  //     surviving instead of being discarded.
   const guardedDispatch = useMemo(() => {
     return (action: Action) => {
+      if (action.type !== 'tick' && tailReplayActiveRef.current) {
+        if (action.type === 'reset') {
+          recordError(
+            'Start Over is unavailable while a large save is still loading — wait for the load to finish, then try again.',
+            { type: 'app', action: 'reset-during-replay' },
+          );
+          return;
+        }
+        tailReplayBufferRef.current.push(action);
+      }
       if (workerRef.current && offloadControllerRef.current.pendingTick && action.type !== 'tick') {
         invalidateInFlightWorkerTick();
       }
@@ -1263,8 +1364,25 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // This now shares onRebuild's `rebuildGenRef` counter (mutual exclusion:
   // the two chunked chains — tail-replay and genesis-rebuild — never race
   // state ownership) and calls `gen.return()` on every exit path.
-  useEffect(() => {
+  //
+  // BUG-669 (P1, 2026-09-04, independent round REJECT, fix (c)): this was a
+  // plain `useEffect`, which React runs AFTER the browser paints — so the
+  // FIRST frame ever painted showed the fully-interactive, overlay-free app
+  // (rebuildDecision starts null on this boot path; see boot's own comment),
+  // and only a later frame added the "Loading your city…" overlay once this
+  // effect got to run. That gap is exactly the window guardedDispatch's
+  // buffering above exists to cover, but "cover it" is strictly worse than
+  // "close it" — `useLayoutEffect` runs synchronously after DOM mutations
+  // but BEFORE the browser paints, so the `setRebuildDecision` call two
+  // lines below lands in the SAME commit as the initial pre-tail state,
+  // and the overlay is present in the very first painted frame.
+  useLayoutEffect(() => {
     if (!pendingTailReplay) return;
+    // BUG-669: mark the discard-risk window OPEN for guardedDispatch, for
+    // the exact lifetime of this effect (cleared in `finish()` below and in
+    // this effect's own cleanup, whichever fires — both are "this replay
+    // attempt is over, live `state` is no longer about to be replaced").
+    tailReplayActiveRef.current = true;
     let cancelled = false;
     rebuildGenRef.current += 1;
     const myGen = rebuildGenRef.current;
@@ -1292,6 +1410,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // player's pending rebuild decision just because a large tail also
     // needed chunking.
     const finish = (msg?: string) => {
+      // BUG-669: the discard-risk window is closed the instant this replay
+      // attempt ends, success or failure alike — a failure never hydrated
+      // (live `state` was never replaced, so anything buffered is already
+      // sitting safely in it via guardedDispatch's own immediate apply), and
+      // a success drains the buffer itself just above where `finish()` is
+      // called. Either way nothing must remain buffered for a NEXT replay
+      // attempt (a fresh `pendingTailReplay`) to inherit by accident.
+      tailReplayActiveRef.current = false;
+      tailReplayBufferRef.current = [];
       setRebuildInProgress(false);
       setRebuildProgress(null);
       setPendingTailReplay(null);
@@ -1350,8 +1477,58 @@ export function SimProvider({ children }: { children: ReactNode }) {
           );
           return;
         }
+
+        // BUG-669 (P1, 2026-09-04, independent round REJECT): `finalState`
+        // above was computed purely from the pre-replay snapshot + the
+        // savepoint's own tail — it knows nothing about any action
+        // guardedDispatch applied to the LIVE `state` while this replay was
+        // running. Drain `tailReplayBufferRef` (in dispatch order) through
+        // the SAME reducer right here, on top of `finalState`, BEFORE the
+        // hydrate below lands — this is what makes the player's live view
+        // (about to become `reconciledState`) agree with the journal, which
+        // already recorded every one of these actions unconditionally via
+        // wrappedDispatch at the moment each was dispatched (GR#21: no
+        // divergence between journal and state). Close the window and take
+        // sole ownership of the buffer FIRST (read-then-clear, both
+        // synchronous, no `await` between them) so nothing dispatched in the
+        // remainder of this same synchronous block could be silently lost
+        // between the read and the clear.
+        tailReplayActiveRef.current = false;
+        const buffered = tailReplayBufferRef.current;
+        tailReplayBufferRef.current = [];
+        let reconciledState = finalState;
+        if (buffered.length > 0) {
+          for (const bufferedAction of buffered) {
+            reconciledState = reducer(reconciledState, bufferedAction);
+          }
+          reconciledState = { ...reconciledState, nextId: nextSafeBuildingId(reconciledState.buildings) };
+          reconciledState = sanitizeTreasury(reconciledState);
+          // Safety net, not a gate the common (empty-buffer) path pays for:
+          // reconcileState replays ORDINARY, already-validated player
+          // actions (the reducer is fail-closed-as-no-op for a rejected
+          // action — engine.ts carries zero `throw` statements — so this is
+          // not expected to fail), but two independently-valid deltas (the
+          // tail's and the player's) merging into one state is exactly the
+          // kind of interaction this project's own consistency gate exists
+          // to catch. If it somehow does not check out, fall back to the
+          // tail-only `finalState` with a LOUD, non-silent error rather than
+          // either landing a state this project's own gate does not trust,
+          // or crashing the load entirely over an edge case in actions that
+          // already applied safely once.
+          const reconciledReport = checkConsistencyRecoveringStaleFlows(reconciledState);
+          if (reconciledReport.failures > 0) {
+            recordError(
+              `${buffered.length} action(s) dispatched while your city was loading could not be safely merged in ` +
+                `(${reconciledReport.failures} consistency failures) and were dropped from the loaded city. They remain ` +
+                'in the journal, so a Rebuild from Genesis (Config) will recover them.',
+              { type: 'app', action: 'load' },
+            );
+            reconciledState = finalState;
+          }
+        }
+
         invalidateInFlightWorkerTick();
-        dispatch({ type: 'hydrate', state: finalState });
+        dispatch({ type: 'hydrate', state: reconciledState });
         // Self-healing (BUG-617): persist a FRESH savepoint with an EMPTY
         // tail now that the replay succeeded — the NEXT boot then has
         // nothing large left to replay, rescuing this city permanently
@@ -1383,7 +1560,12 @@ export function SimProvider({ children }: { children: ReactNode }) {
           const healedVersion = pendingTailReplay.crossBuildAfter
             ? pendingTailReplay.crossBuildAfter.savedVersion ?? running
             : running;
-          const healed = createSavepoint(finalState, [], new Date(), healedVersion, pendingTailReplay.camera);
+          // BUG-669: heal from `reconciledState`, not `finalState` — the
+          // self-heal savepoint must describe the SAME city the player is
+          // now looking at (finalState plus anything reconciled in above),
+          // or the very next boot's "instant" restore would silently regress
+          // behind the buffered actions this fix just finished preserving.
+          const healed = createSavepoint(reconciledState, [], new Date(), healedVersion, pendingTailReplay.camera);
           const healedOk = persistSavepoint(window.localStorage, healed);
           if (!healedOk) {
             recordError(
@@ -1416,6 +1598,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
       closeGen();
+      // BUG-669: defensive mirror of `finish()`'s own reset — this effect's
+      // deps array (`[pendingTailReplay]`) means `pendingTailReplay` only
+      // ever transitions non-null -> null via `finish()` itself (never to a
+      // second non-null value), so in practice this only runs on unmount,
+      // after which no further guardedDispatch call is possible anyway. Left
+      // in for the same reason `finish()` clears them: nothing should ever
+      // be left buffered against a stale `tailReplayActiveRef === true`.
+      tailReplayActiveRef.current = false;
+      tailReplayBufferRef.current = [];
       // F4: only clear the shared busy flag / bump the generation if this
       // chain still owns it — if something newer (onRebuild, or a fresh
       // pendingTailReplay) already superseded it, that chain owns cleanup.
