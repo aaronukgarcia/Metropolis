@@ -3285,6 +3285,11 @@
             "inboundGuid": "62889f18-fa2a-4ae9-a48c-22de5f632c28"
           },
           {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
             "key": "feat.compositionroot",
             "moduleGuid": "fae40226-71d0-4836-be99-854c7b41eb4a",
             "inboundGuid": "542d181a-9253-4392-9cdb-be59f10d8913"
@@ -3675,6 +3680,10 @@
           {
             "key": "feat.faith",
             "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
+          },
+          {
+            "key": "harness.headless",
+            "outboundGuid": "776ca38b-aaa6-4665-a1be-18a54c05bbd3"
           },
           {
             "key": "ui.screen.demo",

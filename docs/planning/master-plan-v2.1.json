@@ -1203,6 +1203,7 @@
       ],
       "calls": [
         "engine.core",
+        "engine.citizens",
         "feat.compositionroot",
         "int.serializer",
         "int.protocol",

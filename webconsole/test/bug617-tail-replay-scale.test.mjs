@@ -100,7 +100,13 @@ describe('BUG-617: chunked savepoint-tail replay (large-tail boot path)', () => 
     assert.equal(prepared.success, true, prepared.reason);
     assert.equal(prepared.state.buildings.length, start.buildings.length, 'pre-tail state must NOT have replayed the tail');
     assert.equal(prepared.tail.length, journal.entries.length);
-    assert.ok(prepMs < 50, `prepare must stay fast (no tail loop): ${prepMs.toFixed(1)}ms`);
+    // Bound derived from the machine that enforces it (verification standard):
+    // CI ubuntu runner measured 62.4ms on 2026-09-04 (run 33862913624) — the old
+    // 50ms bound was dev-box-derived and flaked there. 62.4 × ~4 headroom = 250ms.
+    // The REAL no-tail-loop proof is the functional assert above (buildings.length
+    // unchanged); this timing bound is only a coarse backstop against prepare
+    // regaining O(tail·state) work.
+    assert.ok(prepMs < 250, `prepare must stay fast (no tail loop): ${prepMs.toFixed(1)}ms`);
   });
 
   test('replayTailChunked is byte-identical to the plain unchunked reducer loop', () => {
