@@ -2,6 +2,7 @@ package citizens
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"runtime/debug"
 	"testing"
@@ -166,6 +167,73 @@ func TestAdvanceDayTickCurve(t *testing.T) {
 			steadyPerTick := steadyState / (steadyTo - steadyFrom + 1)
 			t.Logf("N=%d: fullMonthMsPerTick=%.3f steadyStateMsPerTick=%.3f (total %v for %d ticks)",
 				n, msOf(fullPerTick), msOf(steadyPerTick), fullMonth, DaysPerMonth)
+		})
+	}
+}
+
+// TestAdvanceDayTickCurveParallel (BUG-663) is TestAdvanceDayTickCurve's
+// multi-worker twin: identical fixture and timing methodology, but with
+// api.workers raised to runtime.NumCPU() instead of NewCitizensAPI's
+// single-worker default.
+//
+// This is the ONLY way to actually observe BUG-663's fix in this harness.
+// coldpass.go's applyMonthly used to call dq.IsQueued (DeathQueue's single
+// global mutex) once per citizen; at workers=1 (TestAdvanceDayTickCurve's
+// setting, matching BUG-666's own single-threaded convention, ASM-E of the
+// 100M proving plan) that mutex is never CONTENDED — Lock/Unlock on an
+// uncontended sync.Mutex is a cheap atomic CAS, so the fix's single-worker
+// improvement is real but small. The bug §3.4 actually describes is
+// runShardsParallel's workers racing over that SAME mutex concurrently,
+// which only manifests with workers>1 — this test's whole purpose is to
+// isolate that contention effect, not to replace
+// TestAdvanceDayTickCurve's single-threaded baseline.
+// BUG-663 round finding (F2): this test duplicates TestAdvanceDayTickCurve's
+// own 100k/300k/1M/3M scales and cost 124s under `go test ./... -race`
+// (CI's build-test-vet job, .github/workflows/ci.yml, runs the FULL
+// `go test ./... -race -count=1` with no -short flag -- confirmed by
+// reading that job's own invocation before adding this gate) -- so a plain
+// testing.Short() guard would be dead code in CI and this test would run at
+// full scale on every push regardless. Gated behind an explicit opt-in env
+// var instead: unset (the CI default) skips entirely, exactly like the
+// worker-scaling and pending-queue-cost measurements elsewhere in this
+// package that are also measurement-only and not gates (verification
+// standards: no wall-clock bounds in CI). Run locally with
+// `METRO_PERF_CURVES=1 go test -run TestAdvanceDayTickCurveParallel -v ./internal/engine/citizens`.
+func TestAdvanceDayTickCurveParallel(t *testing.T) {
+	if os.Getenv("METRO_PERF_CURVES") == "" {
+		t.Skip("opt-in perf curve: set METRO_PERF_CURVES=1 to run (CI's go test ./... -race carries no -short flag, so testing.Short() cannot gate this — see doc comment)")
+	}
+	workers := runtime.NumCPU()
+	for _, n := range []int{100_000, 300_000, 1_000_000, 3_000_000} {
+		n := n
+		t.Run(scaleName(n), func(t *testing.T) {
+			api := seedPaired(t.Fatalf, n)
+			api.workers = workers
+			if _, _, err := api.AdvanceDayTick("curve-warmup"); err != nil {
+				t.Fatalf("warm-up AdvanceDayTick: %v", err)
+			}
+			prevGC := debug.SetGCPercent(-1)
+			defer debug.SetGCPercent(prevGC)
+			runtime.GC()
+
+			var fullMonth time.Duration
+			var steadyState time.Duration
+			const steadyFrom, steadyTo = 6, 25 // inclusive tick range, 20 ticks
+			for i := 0; i < DaysPerMonth; i++ {
+				start := time.Now()
+				if _, _, err := api.AdvanceDayTick("curve"); err != nil {
+					t.Fatalf("AdvanceDayTick: %v", err)
+				}
+				d := time.Since(start)
+				fullMonth += d
+				if i >= steadyFrom && i <= steadyTo {
+					steadyState += d
+				}
+			}
+			fullPerTick := fullMonth / DaysPerMonth
+			steadyPerTick := steadyState / (steadyTo - steadyFrom + 1)
+			t.Logf("N=%d workers=%d: fullMonthMsPerTick=%.3f steadyStateMsPerTick=%.3f (total %v for %d ticks)",
+				n, workers, msOf(fullPerTick), msOf(steadyPerTick), fullMonth, DaysPerMonth)
 		})
 	}
 }

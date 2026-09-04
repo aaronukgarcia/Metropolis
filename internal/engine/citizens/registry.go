@@ -226,6 +226,20 @@ func (c *CitizensAPI) DeathHandoffSince(cursor int, correlationID string) ([]Rea
 // SeedColdRecords bulk-loads cold citizen records (the harness.synth path)
 // into their id-hash shards. It is a command-path mutation, not an
 // exported field-set on ColdShard.
+//
+// BUG-666's round (TestBUG666DuplicateIDDivergence, F1 follow-up) found
+// that, unlike ApplyLifeEventCommand's LifeEventBirth path, this method
+// accepted a duplicate id outright: two rows landed in the same shard
+// under the same id, and BUG-666's id->row index — being one entry per id
+// by construction — can then only ever resolve ONE of them, so removing
+// that row leaves the other permanently unreachable (invisible to
+// fertility, money, and the death-realisation loop). Rejected here for the
+// same reason LifeEventBirth already rejects it (ErrDuplicateCitizenID,
+// AC-13/GR#16): a second row under an id already present in this batch OR
+// already resident in the cold store would silently alias two logically
+// distinct citizens. Checked against the shard's O(1) id->row index
+// (BUG-666), so this guard costs nothing beyond the append it protects —
+// no reintroduction of a per-record linear scan.
 func (c *CitizensAPI) SeedColdRecords(records []ColdRecord, correlationID string) error {
 	if err := c.checkNotCopied(correlationID, "SeedColdRecords"); err != nil {
 		return err
@@ -242,6 +256,13 @@ func (c *CitizensAPI) SeedColdRecords(records []ColdRecord, correlationID string
 		shard := det.ShardForEntity(r.ID)
 		if err := validateShardIndex(shard, numColdShards, correlationID); err != nil {
 			return err
+		}
+		// Duplicate-id guard (BUG-666 F1): a row already resident under
+		// this id -- whether from an earlier record in THIS batch or a
+		// prior SeedColdRecords call -- is rejected rather than silently
+		// admitted as a second, unreachable-after-removal row.
+		if c.cold[shard].rowOf(r.ID) >= 0 {
+			return errs.New(ErrDuplicateCitizenID, correlationID, map[string]any{"id": r.ID, "fidelity": "cold", "path": "SeedColdRecords"})
 		}
 		c.cold[shard].append(r)
 	}
@@ -546,10 +567,10 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 		// row count stays right; only per-id lookups silently start
 		// returning the wrong citizen from then on).
 		if _, ok := c.hot[cmd.Citizen.ID]; ok {
-			return errs.New(ErrDuplicateCitizenID, cmd.CorrelationID, map[string]any{"id": cmd.Citizen.ID, "fidelity": "hot"})
+			return errs.New(ErrDuplicateCitizenID, cmd.CorrelationID, map[string]any{"id": cmd.Citizen.ID, "fidelity": "hot", "path": "LifeEventBirth"})
 		}
 		if _, ok := c.coldRecord(cmd.Citizen.ID); ok {
-			return errs.New(ErrDuplicateCitizenID, cmd.CorrelationID, map[string]any{"id": cmd.Citizen.ID, "fidelity": "cold"})
+			return errs.New(ErrDuplicateCitizenID, cmd.CorrelationID, map[string]any{"id": cmd.Citizen.ID, "fidelity": "cold", "path": "LifeEventBirth"})
 		}
 		r := hotToColdRecord(cmd.Citizen, districtOf(cmd.Citizen.Home))
 		c.cold[det.ShardForEntity(cmd.Citizen.ID)].append(r)
@@ -744,14 +765,29 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 	month := c.month
 	seed := c.seed
 
-	// FEAT-087 (mkey feat.deathwave) inc1.5: applyMonthly now ENQUEUES a
+	// BUG-663 REWORK (destructive-round REJECT on the original
+	// QueuedSnapshot fix -- 127.9ms/day-tick at 1M pending, 70x worse than
+	// pre-fix): NO per-day-tick snapshot is taken any more. Each shard's
+	// applyMonthly now queries c.deathQueue's per-shard O(1) index directly
+	// ([DeathQueue.IsQueuedInShard]) instead of a whole-queue map copy or a
+	// single global-mutex dq.IsQueued call -- see deathwave.go's shardIndex
+	// doc comment for why this costs neither an allocation nor cross-shard
+	// lock contention: each of runShardsParallel's goroutines below is
+	// pinned to exactly one shard index for the whole call, and
+	// IsQueuedInShard locks only that same shard's own DeathQueue mutex.
+	//
+	// FEAT-087 (mkey feat.deathwave) inc1.5: applyMonthly ENQUEUES a
 	// hazard-selected death into c.deathQueue rather than removing it
 	// immediately -- deathQueue is safe for concurrent Enqueue from every
-	// shard goroutine (it holds its own mutex).
+	// shard goroutine (it holds its own mutex plus a per-shard index);
+	// Enqueue is called only for the (small) number of citizens actually
+	// hazard-selected this month, not once per citizen, so this is no
+	// longer the parallelism-killing bottleneck the pre-BUG-663 dq.IsQueued
+	// call was.
 	results := runShardsParallel(c.workers, shards, func(shard int) passTotals {
 		return c.cold[shard].applyMonthly(seed, month, params, func(id uint64) bool {
 			return hotSet[id]
-		}, c.deathQueue, correlationID)
+		}, c.deathQueue, shard, correlationID)
 	})
 
 	// Sum in ascending shard order (deterministic merge), ignoring slots for
@@ -1208,9 +1244,32 @@ func refreshDerivedLeisure(cit *Citizen) {
 	cit.Leisure = DeriveLeisureWeights(cit.Personality, cit.Education.Attainment, cit.Age())
 }
 
+// coldParamsLocked measures this month's ColdPassParams from the A7
+// stratified sample WITHOUT first materialising the whole population into
+// one []ColdRecord slice (BUG-663 §3.5 of the 100M proving plan: the old
+// allColdRecordsLocked()-then-BuildStratifiedSample shape allocated a
+// >12GB transient slice, once per month, at 100M). Instead it streams the
+// population through stratifiedSampleBuilder ONE SHARD AT A TIME, reusing
+// a single per-shard scratch buffer across all 256 shards — peak transient
+// allocation drops from O(N) to O(N/numColdShards), ~256x smaller, with
+// byte-identical output (stratifiedSampleBuilder's grouping is
+// order-independent and build() fully re-sorts, exactly as
+// BuildStratifiedSample always has — see that type's doc comment).
 func (c *CitizensAPI) coldParamsLocked(correlationID string) ColdPassParams {
-	records := c.allColdRecordsLocked()
-	return DeriveColdPassParams(BuildStratifiedSample(records, c.month, c.seed, 1))
+	b := newStratifiedSampleBuilder(c.month, c.seed, 1)
+	var buf []ColdRecord
+	for _, s := range c.cold {
+		n := s.count()
+		if cap(buf) < n {
+			buf = make([]ColdRecord, n)
+		}
+		buf = buf[:n]
+		for i := 0; i < n; i++ {
+			buf[i] = s.recordAt(i)
+		}
+		b.addRecords(buf)
+	}
+	return DeriveColdPassParams(b.build())
 }
 
 // --- conversions ---

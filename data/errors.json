@@ -1919,8 +1919,8 @@
     "MET-G010": {
       "severity": "error",
       "module": "engine.citizens",
-      "message": "life event birth rejected: citizen id {id} already exists ({fidelity})",
-      "remedy": "A LifeEventBirth command's Citizen.ID already exists in this CitizensAPI's cold or hot store. Rejected rather than silently appended as a second row (which would alias two logically-distinct citizens under one id, invisible to TotalPopulation's row-count-based conservation view) -- FEAT-169's cross-module ID-collision finding: engine.attract's migrant ids and this package's fertility-child ids partition the same 2^62-2^63 high-bit range by convention, not by a shared allocator, so this check is the last-resort defense-in-depth catch if that convention is ever violated. The caller must mint a genuinely fresh id."
+      "message": "{path} rejected: citizen id {id} already exists ({fidelity})",
+      "remedy": "A {path} call's citizen id already exists in this CitizensAPI's cold or hot store (LifeEventBirth and SeedColdRecords both mint/admit ids and both hit this same guard). Rejected rather than silently appended as a second row (which would alias two logically-distinct citizens under one id, invisible to TotalPopulation's row-count-based conservation view) -- FEAT-169's cross-module ID-collision finding: engine.attract's migrant ids and this package's fertility-child ids partition the same 2^62-2^63 high-bit range by convention, not by a shared allocator, so this check is the last-resort defense-in-depth catch if that convention is ever violated. The caller must mint a genuinely fresh id."
     },
     "MET-G100": {
       "severity": "error",

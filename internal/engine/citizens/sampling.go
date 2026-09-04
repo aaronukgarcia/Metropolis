@@ -77,39 +77,92 @@ const sampleFraction = 0.01
 // rotating draw, so every non-empty stratum holds at least minPerStratum
 // members regardless of the draw. records may be in any order; the result
 // is sorted and independent of the input order.
+//
+// This is a one-shot convenience wrapper over [newStratifiedSampleBuilder]
+// for a caller that already holds the full population as one slice (tests,
+// and [CitizensAPI.BuildSample]'s general-purpose query surface). The
+// once-per-month TICK PATH ([CitizensAPI] coldParamsLocked) does NOT use
+// this entry point — see stratifiedSampleBuilder's doc comment for why
+// (BUG-663 §3.5/Track-B item 7 of the 100M proving plan).
 func BuildStratifiedSample(records []ColdRecord, month int64, seed uint64, minPerStratum int) *StratifiedSample {
+	b := newStratifiedSampleBuilder(month, seed, minPerStratum)
+	b.addRecords(records)
+	return b.build()
+}
+
+// stratifiedSampleBuilder is BuildStratifiedSample's incremental core
+// (BUG-663 §3.5): grouping records into byStratum can be fed a shard at a
+// time instead of requiring the caller to first materialise every citizen
+// into one giant []ColdRecord slice (registry.go's allColdRecordsLocked,
+// which the 100M proving plan measured as a >12GB transient allocation,
+// once per month, at 100M). The grouping itself is ORDER-INDEPENDENT (a
+// map keyed by stratum, populated by whatever order addRecords is called
+// in) and the final result is fully re-sorted in build() exactly as
+// BuildStratifiedSample always has been — so feeding the same population
+// through in shard order rather than as one flat slice cannot change the
+// output (GR#21: nothing here ranges over a map to decide sim-affecting
+// order without first sorting).
+type stratifiedSampleBuilder struct {
+	byStratum     map[Stratum][]uint64
+	minPerStratum int
+	month         int64
+	seed          uint64
+}
+
+// newStratifiedSampleBuilder constructs an empty incremental sample
+// builder for the given (month, seed, minPerStratum) rotation.
+func newStratifiedSampleBuilder(month int64, seed uint64, minPerStratum int) *stratifiedSampleBuilder {
 	if minPerStratum < 0 {
 		minPerStratum = 0
 	}
-
-	s := &StratifiedSample{
-		counts:        make(map[Stratum]int),
+	return &stratifiedSampleBuilder{
+		byStratum:     make(map[Stratum][]uint64),
 		minPerStratum: minPerStratum,
 		month:         month,
 		seed:          seed,
 	}
+}
 
-	// Group records by stratum.
-	byStratum := make(map[Stratum][]uint64)
+// addRecords folds one batch of records (e.g. one shard's worth) into the
+// builder's running per-stratum id groups. May be called any number of
+// times, with any partition of the population, in any order — the result
+// after build() depends only on the SET of records fed in across all
+// calls, never on how they were batched or ordered (see the builder's own
+// doc comment).
+func (b *stratifiedSampleBuilder) addRecords(records []ColdRecord) {
 	for _, r := range records {
-		st := StratumOf(r, month)
-		byStratum[st] = append(byStratum[st], r.ID)
+		st := StratumOf(r, b.month)
+		b.byStratum[st] = append(b.byStratum[st], r.ID)
+	}
+}
+
+// build finalises the sample: deterministic coverage-floor top-up plus the
+// rotating hash draw, per stratum, then a full sort of the result — byte
+// for byte the same algorithm BuildStratifiedSample has always run, now
+// just fed from the builder's accumulated byStratum map instead of a fresh
+// group-by over one flat slice.
+func (b *stratifiedSampleBuilder) build() *StratifiedSample {
+	s := &StratifiedSample{
+		counts:        make(map[Stratum]int),
+		minPerStratum: b.minPerStratum,
+		month:         b.month,
+		seed:          b.seed,
 	}
 
 	// Deterministic iteration over strata: sort the stratum keys.
-	strata := make([]Stratum, 0, len(byStratum))
-	for st := range byStratum {
+	strata := make([]Stratum, 0, len(b.byStratum))
+	for st := range b.byStratum {
 		strata = append(strata, st)
 	}
 	sort.Slice(strata, func(i, j int) bool {
-		a, b := strata[i], strata[j]
-		if a.District != b.District {
-			return a.District < b.District
+		a, c := strata[i], strata[j]
+		if a.District != c.District {
+			return a.District < c.District
 		}
-		if a.Age != b.Age {
-			return a.Age < b.Age
+		if a.Age != c.Age {
+			return a.Age < c.Age
 		}
-		return a.Income < b.Income
+		return a.Income < c.Income
 	})
 
 	selected := make(map[uint64]bool)
@@ -123,18 +176,18 @@ func BuildStratifiedSample(records []ColdRecord, month int64, seed uint64, minPe
 	}
 
 	for _, st := range strata {
-		ids := byStratum[st]
+		ids := b.byStratum[st]
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
 		// Coverage floor first: the minPerStratum lowest-id members.
 		covered := 0
-		for i := 0; i < len(ids) && covered < minPerStratum; i++ {
+		for i := 0; i < len(ids) && covered < b.minPerStratum; i++ {
 			add(ids[i], st)
 			covered++
 		}
 		// Rotating draw for the rest.
 		for _, id := range ids {
-			stream := det.NewStream(seed, id, month, "sample")
+			stream := det.NewStream(b.seed, id, b.month, "sample")
 			if stream.Float64() < sampleFraction {
 				add(id, st)
 			}

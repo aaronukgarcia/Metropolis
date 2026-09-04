@@ -740,25 +740,22 @@ func TestBUG666RowIndexInt32Bound(t *testing.T) {
 		math.MaxInt32, perShard, float64(math.MaxInt32)/float64(hundredM))
 }
 
-// TestBUG666DuplicateIDDivergence documents a REAL behavioural divergence
-// the fix introduces, found by this round. SeedColdRecords does NOT reject a
-// duplicate id (only ApplyLifeEventCommand's LifeEventBirth does, via
-// ErrDuplicateCitizenID), so two rows can carry the same id.
+// TestBUG666DuplicateIDDivergence documented a REAL behavioural divergence
+// the BUG-666 index fix introduced: SeedColdRecords used to accept a
+// duplicate id (only ApplyLifeEventCommand's LifeEventBirth rejected one,
+// via ErrDuplicateCitizenID), so two rows could carry the same id — pre-fix
+// the linear scan returned the first such row and removing it left the
+// second still reachable, but post-fix the map holds one entry per id (last
+// append wins) and removing that row deletes the id from the index outright,
+// leaving a live row nothing could ever look up again (invisible to
+// fertility, money, and the death-realisation loop).
 //
-//   - Pre-fix, the linear scan returned the FIRST such row; removing it left
-//     the second row still reachable under the same id.
-//   - Post-fix, the map holds ONE entry per id — the LAST append wins — and
-//     removing that row DELETES the id from the index outright, leaving a
-//     live row that nothing can ever look up again: invisible to fertility,
-//     to money, and to the death-realisation loop (whose rowOf<0 branch then
-//     SKIPS the removal it just counted as a death).
-//
-// This test pins the divergence rather than asserting either behaviour is
-// correct: it proves (a) duplicates are still accepted by the seed path, and
-// (b) after removing one of them the surviving row is unreachable. If a
-// follow-up makes append or SeedColdRecords reject duplicates outright, this
-// test must be updated to assert the rejection — which is the point of
-// pinning it.
+// BUG-663's F1 follow-up closed this at the source: SeedColdRecords now
+// rejects a duplicate id outright (ErrDuplicateCitizenID), exactly as this
+// comment's original "if a follow-up makes append or SeedColdRecords reject
+// duplicates outright, this test must be updated to assert the rejection"
+// anticipated. The unreachable-row divergence above can no longer arise
+// through this path because the second row is never admitted.
 func TestBUG666DuplicateIDDivergence(t *testing.T) {
 	api, err := NewCitizensAPI(1, "bug666")
 	if err != nil {
@@ -767,31 +764,24 @@ func TestBUG666DuplicateIDDivergence(t *testing.T) {
 	a := mkRecord(7_000_001, 1)
 	b := mkRecord(7_000_001, 2)
 	b.Home = a.Home + 1 // distinguishable payload
-	if err := api.SeedColdRecords([]ColdRecord{a, b}, "bug666"); err != nil {
-		t.Fatalf("SeedColdRecords accepted-duplicates precondition changed: %v", err)
-	}
+	err = api.SeedColdRecords([]ColdRecord{a, b}, "bug666")
+	assertRegistryCode(t, err, ErrDuplicateCitizenID)
+
 	shard := det.ShardForEntity(a.ID)
 	s := api.cold[shard]
-	if s.count() != 2 {
-		t.Fatalf("expected 2 duplicate rows, got %d", s.count())
-	}
-	if got, want := s.rowOf(a.ID), oracleRowOf(s, a.ID); got == want {
-		t.Logf("NOTE: index and pre-fix oracle agree here (both row %d); the divergence below is the removal case", got)
-	} else {
-		t.Logf("DIVERGENCE (lookup): index says row %d, the pre-fix linear scan said row %d", got, want)
-	}
-	api.removeColdLocked(a.ID)
 	if s.count() != 1 {
-		t.Fatalf("after one removal expected 1 row, got %d", s.count())
+		t.Fatalf("expected exactly 1 row (the duplicate must be rejected, not partially admitted), got %d", s.count())
 	}
-	if row := s.rowOf(a.ID); row >= 0 {
-		t.Logf("no divergence: the surviving duplicate row %d is still reachable", row)
-	} else {
-		t.Logf("DIVERGENCE (removal): a live row (count=%d) is now UNREACHABLE by id %d — pre-fix the linear scan still found it. "+
-			"Bounded by SeedColdRecords being the only duplicate-admitting path; reported as a follow-up, not a merge blocker.", s.count(), a.ID)
-		if len(s.index) != 0 {
-			t.Fatalf("expected the id to be absent from the index, found %d entries", len(s.index))
-		}
+	if row := s.rowOf(a.ID); row < 0 {
+		t.Fatalf("the first record must still be resident after the duplicate is rejected")
+	}
+
+	// A duplicate against an EARLIER SeedColdRecords call (not just within
+	// the same batch) must be rejected identically.
+	err = api.SeedColdRecords([]ColdRecord{b}, "bug666")
+	assertRegistryCode(t, err, ErrDuplicateCitizenID)
+	if s.count() != 1 {
+		t.Fatalf("a cross-call duplicate must not be admitted either, got count=%d", s.count())
 	}
 }
 

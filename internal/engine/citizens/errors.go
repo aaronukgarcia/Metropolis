@@ -97,20 +97,24 @@ const (
 	ErrFertilityBirthRejected = "MET-G009"
 
 	// ErrDuplicateCitizenID (FEAT-169 cross-module ID-collision finding,
-	// destructive-review REJECT): a LifeEventBirth command's Citizen.ID
-	// already exists in this CitizensAPI's cold or hot store.
-	// ApplyLifeEventCommand rejects it outright rather than silently
-	// appending a second row under the same id (which would ALIAS two
-	// logically-distinct citizens — invisible to TotalPopulation's
-	// row-count-based conservation view, since the row count would still
-	// balance while one citizen's identity silently overwrote another's on
-	// every subsequent per-id lookup). This is DEFENSE IN DEPTH: the real
-	// fix is the disjoint id-range convention documented in doc.go's "Live
-	// tick wiring" section (compose seeds/migrants [1, 2^62), attract
-	// migrants [2^62, 2^63), fertility children [2^63, ...)) plus the
-	// Wire-time assertion compose runs against it; this check is the
-	// last-resort catch if that convention is ever violated by a future
-	// caller.
+	// destructive-review REJECT): a citizen id already exists in this
+	// CitizensAPI's cold or hot store. Two independent call sites hit this
+	// same guard -- ApplyLifeEventCommand's LifeEventBirth (fidelity "hot"
+	// or "cold") and SeedColdRecords (BUG-666 F1, fidelity "cold") -- so the
+	// registry message carries a {path} token identifying which one
+	// (BUG-663 rework: the message used to hardcode "life event birth
+	// rejected" even when SeedColdRecords was the actual rejecting path).
+	// Both reject outright rather than silently appending a second row
+	// under the same id (which would ALIAS two logically-distinct citizens
+	// — invisible to TotalPopulation's row-count-based conservation view,
+	// since the row count would still balance while one citizen's identity
+	// silently overwrote another's on every subsequent per-id lookup). This
+	// is DEFENSE IN DEPTH: the real fix is the disjoint id-range convention
+	// documented in doc.go's "Live tick wiring" section (compose
+	// seeds/migrants [1, 2^62), attract migrants [2^62, 2^63), fertility
+	// children [2^63, ...)) plus the Wire-time assertion compose runs
+	// against it; this check is the last-resort catch if that convention is
+	// ever violated by a future caller.
 	ErrDuplicateCitizenID = "MET-G010"
 
 	// --- feat.deathwave (FEAT-087) — range G5400-G5409, claimed via

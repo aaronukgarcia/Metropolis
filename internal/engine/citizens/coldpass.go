@@ -177,18 +177,34 @@ type coldDeath struct {
 // # Death-queue wiring (FEAT-087 inc1.5 -- the cohort cliff killed LIVE)
 //
 // dq is the CitizensAPI-wide DeathQueue (deathwave.go), safe to Enqueue
-// into concurrently from every shard's goroutine (it holds its own mutex).
-// A citizen already dq.IsQueued (selected in this or an earlier month, not
-// yet realised) MUST NOT be drawn for mortality again (AC-3(b): the queue
-// entry is the single, terminal selection event) -- it is simply skipped
-// past the mortality draw and falls through to every other monthly effect
-// below exactly as an ordinary living citizen would (ASM-581: queued is
-// alive, ageing, and counted, never a frozen or separately-tracked state).
-// A fresh hazard hit calls dq.Enqueue and keeps going through the rest of
-// this citizen's monthly effects the same way -- selection alone changes
-// nothing observable about the citizen until the caller's Realise step
-// removes them.
-func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams, isHot func(uint64) bool, dq *DeathQueue, correlationID string) passTotals {
+// into concurrently from every shard's goroutine (it holds its own mutex,
+// plus a per-shard index -- see deathwave.go's shardIndex doc comment).
+// shard is THIS ColdShard's own index (det.ShardForEntity's partition,
+// which is also DeathQueue's shardIndex partition -- the two always agree),
+// passed straight through to [DeathQueue.IsQueuedInShard] for an O(1),
+// no-allocation, no-cross-shard-contention membership check per citizen
+// (BUG-663 REWORK: this replaces the old per-day-tick
+// [DeathQueue.QueuedSnapshot] map copy a destructive round REJECTED for
+// costing O(pendingQueue) on every one of a month's 30 day-ticks -- 127.9ms
+// at 1M pending, 70x worse than the pre-fix per-citizen dq.IsQueued call it
+// was meant to improve on. IsQueuedInShard instead locks ONLY
+// dq.shardMu[shard] -- the same shard runShardsParallel already pins this
+// goroutine to for the whole call -- so distinct shards processed
+// concurrently never contend with each other, and there is no snapshot to
+// allocate or go stale).
+//
+// A citizen already queued (selected in this or an earlier month, not yet
+// realised) MUST NOT be drawn for mortality again (AC-3(b): the queue entry
+// is the single, terminal selection event) -- it is simply skipped past the
+// mortality draw and falls through to every other monthly effect below
+// exactly as an ordinary living citizen would (ASM-581: queued is alive,
+// ageing, and counted, never a frozen or separately-tracked state). A fresh
+// hazard hit calls dq.Enqueue (which takes dq.mu plus one shardMu -- but
+// only for the small number of citizens actually selected this month, not
+// every citizen in the shard) and keeps going through the rest of this
+// citizen's monthly effects the same way -- selection alone changes nothing
+// observable about the citizen until the caller's Realise step removes them.
+func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams, isHot func(uint64) bool, dq *DeathQueue, shard int, correlationID string) passTotals {
 	var tot passTotals
 	i := 0
 	for i < s.count() {
@@ -203,7 +219,7 @@ func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams
 		// immediate removal (FEAT-087 inc1.5) — the per-individual
 		// probabilistic event §5.1 specifies feeds the smoothing queue,
 		// which is what bounds it to a non-cliff monthly release (AC-1).
-		if _, queued := dq.IsQueued(id, correlationID); !queued {
+		if !dq.IsQueuedInShard(shard, id, correlationID) {
 			stream := det.NewStream(seed, id, month, "mortality")
 			hazard := MortalityHazard(age, HealthBand(s.healthBands[i]), s.access[i]) * params.MortalityMultiplier
 			if hazard > 1 {
@@ -212,11 +228,12 @@ func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams
 			if stream.Float64() < hazard {
 				// Enqueue, do not remove: the Enqueue error is intentionally
 				// ignored here -- it can only fire for a citizenID already
-				// queued or already realised, and the IsQueued check just
-				// above already excludes both (an id belongs to exactly one
-				// shard via det.ShardForEntity, and a shard is visited at
-				// most once per day-tick, so nothing else can race this same
-				// id into the queue between the check and this call).
+				// queued or already realised, and the IsQueuedInShard check
+				// just above already excludes both (an id belongs to
+				// exactly one shard via det.ShardForEntity, and a shard is
+				// visited at most once per day-tick, so nothing else can
+				// race this same id into the queue between the check and
+				// this call -- see applyMonthly's doc comment).
 				_ = dq.Enqueue(id, month, correlationID)
 				tot.selected++
 			}

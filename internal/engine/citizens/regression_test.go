@@ -136,7 +136,7 @@ func TestSatisfactionDriftNeverNegative(t *testing.T) {
 	rec.SatHousing = 0
 	s.append(rec)
 	params := ColdPassParams{MortalityMultiplier: 0, SatisfactionDrift: -3}
-	s.applyMonthly(1, 0, params, nil, NewDeathQueue(), "corr")
+	s.applyMonthly(1, 0, params, nil, NewDeathQueue(), 0, "corr")
 	if s.satHousing[0] < 0 {
 		t.Fatalf("housing satisfaction drifted below 0: %d", s.satHousing[0])
 	}
@@ -464,7 +464,7 @@ func TestSatisfactionDriftPromotedNoOverflow(t *testing.T) {
 	rec.SatHousing = 50
 	s.append(rec)
 	params := ColdPassParams{MortalityMultiplier: 0, SatisfactionDrift: 200}
-	s.applyMonthly(1, 0, params, nil, NewDeathQueue(), "corr")
+	s.applyMonthly(1, 0, params, nil, NewDeathQueue(), 0, "corr")
 	if s.satHousing[0] != 100 {
 		t.Fatalf("housing satisfaction after +200 drift = %d, want 100 (clamped, no int8 wrap)", s.satHousing[0])
 	}

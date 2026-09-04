@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
@@ -141,6 +142,133 @@ type DeathQueue struct {
 	// DeathQueue rather than flooding the log for as long as the consumer
 	// stays broken. Read/written only under mu (alongside drain/handoff).
 	negativeDrainWarned bool
+
+	// shardIndex/shardMu (BUG-663 REWORK -- the destructive round's REJECT
+	// on QueuedSnapshot's O(pendingQueue) per-day-tick allocation, remedy
+	// (b)): a per-shard mirror of `queued`, sharded by
+	// [det.ShardForEntity](citizenID) -- the SAME partition function
+	// ColdShard's own shard index is drawn from (coldpass.go's numColdShards
+	// shards), so a cold-pass shard's goroutine and this index's
+	// corresponding slot always agree on which shard a citizen belongs to.
+	//
+	// This is what makes [IsQueuedInShard] O(1) with NO per-day-tick
+	// snapshot and NO cross-shard lock contention: each of runShardsParallel's
+	// goroutines is pinned to exactly one shard index for the whole call, so
+	// it only ever locks shardMu[itsOwnShard] -- a different goroutine
+	// processing a different shard locks a DIFFERENT shardMu entry, so two
+	// concurrent shards never contend with each other here, and Enqueue
+	// (called only for the small number of citizens actually hazard-selected
+	// this tick) contends only with the OTHER accesses to that SAME
+	// citizen's shard, never with the whole queue's global mu.
+	//
+	// shardIndex is the authority for [IsQueuedInShard] queries only --
+	// [IsQueued] is UNCHANGED, still reading `queued` under q.mu, since its
+	// callers (departure reconciliation, tests) are not the per-day-tick hot
+	// path this rework targets. `queued`/`pending`/`realisedAt` (the
+	// pre-existing fields, kept
+	// unchanged in shape and locking so every existing accessor/test that
+	// reaches into them under mu keeps working byte-for-byte) remain the
+	// single source of truth for FIFO release order and conservation
+	// counting, which Realise/RealiseDrained/RealiseByID need across ALL
+	// shards at once and which run at most once per completed month (never
+	// per day-tick) -- an O(pending) global sort there is the right cost,
+	// paid 1/30th as often as the old per-day-tick snapshot was.
+	// Enqueue/realiseLocked/RealiseByID keep both representations in
+	// lockstep: shardMu is a LEAF LOCK, always acquired WITH or AFTER q.mu
+	// whenever both are needed for one mutation -- Enqueue takes q.mu,
+	// commits queued/pending, and only THEN (still holding q.mu) takes
+	// shardMu to mirror the insert before releasing q.mu; realiseLocked and
+	// RealiseByID do the identical thing on removal, both already called
+	// with q.mu held. [IsQueuedInShard] is the one caller that takes shardMu
+	// ALONE, with q.mu never touched at all -- that asymmetry (shardMu
+	// sometimes alone, q.mu never alone when shardMu is also needed) is what
+	// keeps a read never blocking on the once-a-month global mutation while
+	// still making every WRITE atomic across both maps.
+	//
+	// CORRECTED (BUG-663 round 2 F1, blocking REJECT): an earlier version of
+	// this comment claimed "q.mu is NEVER held while taking a shardMu",
+	// describing Enqueue releasing q.mu BEFORE calling indexInsert. That was
+	// false and exploitable: TestR2SplitLockWindowStress proved a concurrent
+	// RealiseByID for the SAME citizenID could land inside that exact
+	// released-mu-not-yet-shardMu window (delete from `queued`, indexRemove
+	// a no-op since the insert had not happened yet), after which the
+	// losing Enqueue's now-late indexInsert wrote a REALISED id into
+	// shardIndex -- a permanent false-positive IsQueuedInShard for a dead
+	// citizen. Latent under today's single caller (CitizensAPI.mu
+	// serialises every command), but a live hazard once FEAT-088
+	// deathservices or any other concurrent caller reaches this queue
+	// directly. Fixed by moving indexInsert inside Enqueue's still-held
+	// q.mu, matching realiseLocked/RealiseByID's existing nesting exactly.
+	shardIndex [numColdShards]map[uint64]struct{}
+	shardMu    [numColdShards]sync.Mutex
+}
+
+// indexInsert mirrors citizenID's queued membership into its shard's index
+// (BUG-663 rework). Lazily allocates the shard's map on first use so a
+// DeathQueue that never enqueues anything in a given shard costs nothing
+// beyond one nil map slot for it.
+//
+// checkNotCopied here is REDUNDANT with the caller's own check (Enqueue
+// already checks before touching q at all) -- kept anyway, matching this
+// file's established double-check convention at this call shape (see
+// budgetFor's own doc comment for the identical astgate-syntactic-blind-spot
+// reasoning): astgate's SEC-049 field-access enumeration flags every
+// receiver method on a candidate type (*DeathQueue) that never calls
+// checkNotCopied itself, with no call-graph visibility into an
+// already-guarded caller, so an unexported helper reached only from a
+// guarded entry point still needs its own call to stay off the live-tree
+// violation list rather than requiring a baseline-ratchet exception entry.
+func (q *DeathQueue) indexInsert(citizenID uint64, correlationID string) {
+	_ = q.checkNotCopied(correlationID, "indexInsert")
+	shard := det.ShardForEntity(citizenID)
+	q.shardMu[shard].Lock()
+	if q.shardIndex[shard] == nil {
+		q.shardIndex[shard] = make(map[uint64]struct{})
+	}
+	q.shardIndex[shard][citizenID] = struct{}{}
+	q.shardMu[shard].Unlock()
+}
+
+// indexRemove clears citizenID from its shard's index (BUG-663 rework) --
+// called at realisation (Realise/RealiseDrained/RealiseByID), mirroring the
+// canonical `queued` map's own delete so shardIndex never reports a realised
+// citizen as still pending. See indexInsert's doc comment for why the
+// (redundant) checkNotCopied call is kept here too.
+func (q *DeathQueue) indexRemove(citizenID uint64, correlationID string) {
+	_ = q.checkNotCopied(correlationID, "indexRemove")
+	shard := det.ShardForEntity(citizenID)
+	q.shardMu[shard].Lock()
+	if q.shardIndex[shard] != nil {
+		delete(q.shardIndex[shard], citizenID)
+	}
+	q.shardMu[shard].Unlock()
+}
+
+// IsQueuedInShard is BUG-663's rework of the day-tick membership check
+// (destructive round remedy (b)): reports whether citizenID has a pending,
+// un-realised death, in O(1) under ONLY citizenID's own shard's lock -- no
+// queue-wide snapshot, no global mu, no per-day-tick allocation.
+//
+// shard MUST be [det.ShardForEntity](citizenID) -- callers (coldpass.go's
+// applyMonthly) already know their own shard index, since it is the same
+// partition ColdShard is stored under, so this never re-derives it. Passing
+// a mismatched shard is a caller bug (structurally unreachable through the
+// one real call site, which always passes its own shard index for ids drawn
+// from that exact shard's own columns) and simply looks up the wrong
+// (possibly always-empty) shard rather than panicking -- consistent with
+// every other read accessor in this file degrading rather than crashing.
+func (q *DeathQueue) IsQueuedInShard(shard int, citizenID uint64, correlationID string) bool {
+	_ = q.checkNotCopied(correlationID, "IsQueuedInShard")
+	if shard < 0 || shard >= numColdShards {
+		return false
+	}
+	q.shardMu[shard].Lock()
+	defer q.shardMu[shard].Unlock()
+	if q.shardIndex[shard] == nil {
+		return false
+	}
+	_, ok := q.shardIndex[shard][citizenID]
+	return ok
 }
 
 // NewDeathQueue constructs an empty death queue.
@@ -179,17 +307,33 @@ func (q *DeathQueue) Enqueue(citizenID uint64, selectionMonth int64, correlation
 		return err
 	}
 	q.mu.Lock()
-	defer q.mu.Unlock()
-
 	if _, ok := q.queued[citizenID]; ok {
+		q.mu.Unlock()
 		return errs.New(ErrCitizenAlreadyQueued, correlationID, map[string]any{"citizenId": citizenID})
 	}
 	if _, ok := q.realisedAt[citizenID]; ok {
+		q.mu.Unlock()
 		return errs.New(ErrCitizenAlreadyQueued, correlationID, map[string]any{"citizenId": citizenID, "rule": "already realised"})
 	}
 
 	q.queued[citizenID] = selectionMonth
 	q.pending = append(q.pending, deathQueueEntry{citizenID: citizenID, selectionMonth: selectionMonth})
+
+	// BUG-663 round 2 F1 (BLOCKING REJECT, attacker's
+	// TestR2SplitLockWindowStress): the index mirror MUST land BEFORE q.mu
+	// is released, not after. Releasing q.mu first opened a window where a
+	// concurrent RealiseByID for this SAME citizenID could run to
+	// completion (delete from `queued`, indexRemove a no-op since the
+	// insert had not landed yet) and then this Enqueue's now-late
+	// indexInsert would write a REALISED id into shardIndex --
+	// IsQueuedInShard true forever for a dead citizen. Nesting shardMu
+	// INSIDE the still-held q.mu (uniform mu-then-shardMu order, exactly
+	// like realiseLocked/RealiseByID below) makes the whole
+	// queued/pending/shardIndex update one atomic unit with respect to any
+	// other Enqueue/Realise*/RealiseByID call, which all take q.mu first
+	// too -- see shardIndex's own doc comment for the corrected invariant.
+	q.indexInsert(citizenID, correlationID)
+	q.mu.Unlock()
 	return nil
 }
 
@@ -207,6 +351,43 @@ func (q *DeathQueue) IsQueued(citizenID uint64, correlationID string) (int64, bo
 	defer q.mu.Unlock()
 	m, ok := q.queued[citizenID]
 	return m, ok
+}
+
+// QueuedSnapshot returns a POINT-IN-TIME copy of the set of citizen ids
+// currently pending (Enqueued, not yet Realised).
+//
+// HISTORY (BUG-663): this was briefly the cold pass's per-day-tick
+// membership check, replacing the [IsQueued] global-mutex bottleneck
+// (coldpass.go's applyMonthly used to call IsQueued once per citizen,
+// taking q.mu N/30 times per tick and serialising the shard parallelism
+// runShardsParallel exists to provide). An independent destructive round
+// REJECTED that fix: this method allocates and fills a map of every pending
+// id, so calling it once per day-tick (30x/month) costs O(pendingQueue) —
+// measured at 127.9ms/day-tick at 1M pending, 70x WORSE than the
+// global-mutex approach it replaced (BenchmarkBUG663QueuedSnapshot pins the
+// cost). registry.go's AdvanceDayTick no longer calls this method at all —
+// it queries [DeathQueue.IsQueuedInShard] instead (O(1), no allocation, see
+// that method's own doc and deathwave.go's shardIndex field comment for the
+// per-shard-lock design that replaced this snapshot).
+//
+// QueuedSnapshot itself is UNCHANGED and kept for callers that genuinely
+// want a whole-queue point-in-time copy (e.g. diagnostics, or a future
+// consumer outside the per-day-tick hot path) — it is simply no longer on
+// AdvanceDayTick's critical path. See [DeathQueue] and registry.go's
+// AdvanceDayTick doc comment for the invariant (every citizen id belongs to
+// exactly one shard, a shard is visited by applyMonthly at most once per
+// day-tick, Realise/RealiseDrained runs sequentially after the parallel
+// shard pass) that made a snapshot here observationally identical to a live
+// per-citizen check in the first place.
+func (q *DeathQueue) QueuedSnapshot(correlationID string) map[uint64]struct{} {
+	_ = q.checkNotCopied(correlationID, "QueuedSnapshot")
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make(map[uint64]struct{}, len(q.queued))
+	for id := range q.queued {
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 // Len reports the current pending queue length.
@@ -296,6 +477,19 @@ func (q *DeathQueue) realiseLocked(budget int, month int64, correlationID string
 	copy(remaining, q.pending[n:])
 	q.pending = remaining
 
+	// BUG-663 rework: this loop runs at most once per completed month (never
+	// per day-tick) under q.mu, which is already held by the caller
+	// (Realise/RealiseDrained) -- see shardIndex's doc comment for why
+	// nesting a shardMu acquisition inside an already-held q.mu here is safe
+	// (the reverse order, shardMu-then-mu, never happens anywhere in this
+	// file). Deliberately released AFTER unlocking q.mu below is NOT an
+	// option since realiseLocked itself does not own q.mu's lock/unlock (its
+	// callers do) -- so the mirror happens here, still under mu, which is
+	// fine: shardMu is a leaf lock, never itself the trigger for taking mu.
+	for _, id := range out {
+		q.indexRemove(id, correlationID)
+	}
+
 	return out
 }
 
@@ -336,6 +530,10 @@ func (q *DeathQueue) RealiseByID(citizenID uint64, month int64, correlationID st
 	delete(q.queued, citizenID)
 	q.realisedAt[citizenID] = month
 	q.realisedIDs = append(q.realisedIDs, citizenID)
+	// BUG-663 rework: mirror the removal into the per-shard index, same
+	// nested-lock discipline as realiseLocked (still under the caller's
+	// already-held q.mu; shardMu is always the leaf lock).
+	q.indexRemove(citizenID, correlationID)
 	return nil
 }
 
