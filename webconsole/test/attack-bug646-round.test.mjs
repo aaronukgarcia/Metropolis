@@ -374,6 +374,7 @@ test('BUG-646 ATTACK: exactly RESOLVE_DEMAND_ALL_MAX_UNITS placed when 2001 are 
     .replace(/capacity:\s*250/g, '')
     .replace(/BROWNOUT_INDEX_SLOPE = 250/, '')
     .replace(/2:\s*250,/, '') // ROAD_TIER_CAPACITY[2] — an unrelated road-network constant
+    .replace(/jobs:\s*250\b/g, '') // land_stadium researched employment figure (BUG-652), unrelated to the cap
     .match(/\b250\b/g);
   assert.equal(suspiciousDataTs, null, `data.ts must not hardcode 250 in CODE outside the (removed) constant declaration and known-unrelated spec constants: ${JSON.stringify(suspiciousDataTs)}`);
   const literalCapInEngine = engineTs.match(/\b(250|2000)\b/g);
