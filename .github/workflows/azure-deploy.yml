@@ -60,8 +60,13 @@ permissions:
   contents: read
 
 env:
-  ACR_NAME: prixsixacr
-  ACR_LOGIN_SERVER: prixsixacr.azurecr.io
+  # Aaron ruling 2026-09-05 (option B, after option A's cross-project grant
+  # stalled and the classifier correctly refused the lead touching Prix Six's
+  # resource group): Metropolis runs its OWN registry inside rg-metropolis-dev
+  # (metropolisacr, Basic, ~£4/mo within the £20 cap) — full blast-radius
+  # separation from Prix Six, deletable with the one `az group delete`.
+  ACR_NAME: metropolisacr
+  ACR_LOGIN_SERVER: metropolisacr.azurecr.io
   IMAGE_NAME: metropolis-metroserve
   # Q100140(b) recommendation (design doc §3.3/§7): reuse the EXISTING
   # prixsixacr/prixsix-env (cheap, no new setup), but land the new app +

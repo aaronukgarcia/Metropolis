@@ -115,6 +115,17 @@ const DEFAULT_TIMEOUT_SEC = process.env.SCOPED_TIMEOUT_MS
   ? Math.max(1, Math.ceil(Number(process.env.SCOPED_TIMEOUT_MS) / 1000) || 240)
   : 240;
 
+// AARON WATCHDOG RULING (2026-09-05, verbatim: "watch the tests which run
+// more than 20 mins and kill them they are failing"): 1200 seconds is the
+// ABSOLUTE ceiling for any single invocation of this runner — it clamps the
+// default, every SLOW_TEST_CAPS_SEC entry, --timeout flags and the
+// SCOPED_TIMEOUT_MS env alike. Two agent lanes wait-looped for over an hour
+// on hung runs the same night this was ruled; a test that needs more than 20
+// minutes is either hung or misdesigned, and either way it is FAILING. There
+// is deliberately no override: split the suite or fix the test instead.
+const WATCHDOG_ABSOLUTE_CEILING_SEC = 1200;
+const clampToWatchdog = (sec) => Math.min(sec, WATCHDOG_ABSOLUTE_CEILING_SEC);
+
 // file basename -> cap in seconds. See SLOW_TEST_CAPS_SEC note above.
 const SLOW_TEST_CAPS_SEC = new Map([
   ['chunked-replay.test.mjs', 600],
@@ -182,7 +193,10 @@ function effectiveTimeoutSec(targets, requestedSec) {
     const slow = SLOW_TEST_CAPS_SEC.get(basename(t.replace(/\\/g, '/')));
     if (slow && slow > cap) cap = slow;
   }
-  return cap;
+  // Aaron's 20-minute watchdog clamps EVERYTHING — see
+  // WATCHDOG_ABSOLUTE_CEILING_SEC's own comment. Deliberately last, so no
+  // flag, env or allowlist entry can exceed it.
+  return clampToWatchdog(cap);
 }
 
 // Windows-safe process-tree kill (BUG-599 hardening). A plain
