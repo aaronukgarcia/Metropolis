@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { reducer, initialState, SPEED_MS, sanitizeTreasury, nextSafeBuildingId } from './engine';
+import { reducer, initialState, SPEED_MS, sanitizeTreasury, nextSafeBuildingId, CONSOLIDATOR_ENABLED_DEFAULT } from './engine';
 import type { Action } from './engine';
+// CONSOLIDATOR AUDIT TRAIL (see the store-level effect below for the
+// TAB-MOUNTED-ONLY fix this import supports).
+import {
+  monthlyScopeOf,
+  strandedCapacityReport,
+  topOpportunities,
+  currentMonthOpportunities,
+  TOTAL_SECTIONS,
+} from './consolidator';
+import { postConsolidatorAudit, isAuditDue, AUDIT_POLL_MS, AUDIT_TOP_LIMIT } from './consolidatorAudit';
 import type { SimState } from './types';
 import { getGlobalTickTracker, recordTickDuration } from './perfhud';
 import type { TickTrackerState } from './perfhud';
@@ -1171,6 +1181,88 @@ export function SimProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // CONSOLIDATOR AUDIT TRAIL (Aaron's ruling on FEAT-2326609761 + independent-
+  // round finding 1, 2026-09-04, "TAB-MOUNTED-ONLY"): the audit trail's
+  // 'discovered'/'planned' posting used to live in ConsolidatorTab's own
+  // useEffect — LeftDock renders exactly one ActiveBody at a time, so the
+  // instant Aaron switched to any other tab the trail silently stopped even
+  // though the consolidator itself was still enabled. His ruling is
+  // unambiguous: "the audit runs while the CONSOLIDATOR is enabled", not
+  // "while its tab is visible". Moved HERE, to the sim lifecycle itself —
+  // same shape as the autosave timer above (a wall-clock poll reading the
+  // LATEST state via stateRef, never a stale render-time closure) — so the
+  // trail runs for as long as the toggle is on, independent of what (if
+  // anything) is on screen. ConsolidatorTab keeps its own display refresh
+  // unchanged; this is now the ONLY call site that posts.
+  //
+  // Effect deps are ONLY [state.consolidatorEnabled]: the interval is
+  // armed/disarmed exactly when the toggle flips, never re-created on every
+  // tick — "zero cost when the toggle is off" means no interval exists at
+  // all in that case, matching the map overlay / tab's own off-state
+  // contract. While ON, each poll does the CHEAP check first
+  // (monthlyScopeOf + isAuditDue, both O(1) — no building scan) and only
+  // pays for the real O(buildings) section audit
+  // (strandedCapacityReport/topOpportunities/currentMonthOpportunities) when
+  // a post is actually due this simulated month. A persistently-unreachable
+  // sink therefore costs one O(1) check per poll forever, not a repeated
+  // full-city scan — isAuditDue only clears once a post SUCCEEDS
+  // (postConsolidatorAudit's own contract), so a down sink keeps retrying
+  // the cheap check every poll and only re-pays the expensive analysis once
+  // it actually gets through.
+  useEffect(() => {
+    if (!(state.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT)) return;
+
+    const postAuditIfDue = () => {
+      const s = stateRef.current;
+      const scope = monthlyScopeOf(s.tick);
+      const dueDiscovered = isAuditDue('discovered', scope);
+      const duePlanned = isAuditDue('planned', scope);
+      if (!dueDiscovered && !duePlanned) return; // cheap early-out: no O(buildings) work this poll
+
+      const report = strandedCapacityReport(s);
+      const monthDensityCount = currentMonthOpportunities(s).length;
+      const monthTop = topOpportunities(s, scope.sectionKeys, AUDIT_TOP_LIMIT);
+      const wholeMapKeys = Array.from({ length: TOTAL_SECTIONS }, (_, i) => i);
+      const wholeMapTop = topOpportunities(s, wholeMapKeys, AUDIT_TOP_LIMIT);
+      const atIso = new Date().toISOString(); // sim-lifecycle call site, mirrors backend.ts's commitDebug — not inside consolidator.ts's own pure analysis path.
+
+      if (dueDiscovered) {
+        void postConsolidatorAudit('discovered', scope, s.tick, {
+          tick: s.tick,
+          twelfth: scope.twelfth,
+          full: scope.full,
+          strandedActionableCapacity: report.totalActionableCapacity,
+          strandedClusterCount: report.clusterCount,
+          strandedReconnectCostLowerBound: report.totalEstimatedReconnectCost,
+          strandedUnderConstructionCapacity: report.totalConstructionCapacity,
+          wholeMapOpportunityCount: wholeMapTop.length,
+          monthDensityOpportunityCount: monthDensityCount,
+        }, atIso);
+      }
+
+      if (duePlanned) {
+        void postConsolidatorAudit('planned', scope, s.tick, {
+          tick: s.tick,
+          twelfth: scope.twelfth,
+          full: scope.full,
+          inSquare: {
+            sectionsInScope: scope.sectionKeys.length,
+            densityOpportunityCount: monthDensityCount,
+            top: monthTop,
+          },
+          wholeMap: {
+            totalSections: TOTAL_SECTIONS,
+            top: wholeMapTop,
+          },
+        }, atIso);
+      }
+    };
+
+    postAuditIfDue(); // fire immediately on enable rather than waiting a full poll interval
+    const auditIntervalId = setInterval(postAuditIfDue, AUDIT_POLL_MS);
+    return () => clearInterval(auditIntervalId);
+  }, [state.consolidatorEnabled]);
 
   // GR#27 CAPTURE BEFORE WIPE — RELOAD boundary (BUG-427). BUG-420's attemptWipe
   // only guards the in-app `reset` reducer action; a page RELOAD / version-restart

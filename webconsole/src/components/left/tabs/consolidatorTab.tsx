@@ -22,6 +22,17 @@
 // While OFF (consolidatorEnabled false/absent): the panel does ZERO
 // sectionIndexOf/topOpportunities/strandedCapacityReport work — same "no
 // cost when off" contract the map overlay observes (mapOverlays.ts).
+//
+// NOTE (independent-round finding 1, 2026-09-04 — "TAB-MOUNTED-ONLY"): this
+// tab used to ALSO be the audit trail's only call site (logConsolidatorAudit,
+// fired from the effect below). That meant the trail silently stopped the
+// moment Aaron looked at any other LeftDock tab — his ruling is "the audit
+// runs while the CONSOLIDATOR is enabled", not "while its tab is visible".
+// The posting call site has moved to a store-level subscriber in store.tsx
+// (gated on state.consolidatorEnabled, independent of any tab) — see that
+// effect's comment and consolidatorAudit.ts's file header. This tab keeps
+// its own display refresh exactly as before; it simply no longer generates
+// the trail itself.
 
 import { useEffect, useRef, useState } from 'react';
 import { useSim } from '../../../sim/simContext';

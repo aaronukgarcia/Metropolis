@@ -15,6 +15,30 @@
 // drained entries from that queue (same POST route, upserted on `id` so a
 // drain can never double-insert).
 //
+// CONSOLIDATOR AUDIT TRAIL (Aaron's ruling on FEAT-2326609761, via
+// claude-bow.js show FEAT-2326609761's comments, 2026-09-04): "have the
+// consolidator build its own audit of what it discovers, and then what it's
+// planning — in the square and at the overall big-picture level — and then
+// what it implements. Log it all to Maria, and the lead keeps an eye on its
+// progress to make sure it does not go mad." This adds a SECOND table,
+// `consolidator_audit`, alongside `debug_commits` on the SAME server (same
+// port, same connection helper, same 31-day prune discipline) — one new POST
+// route for the webconsole client (see webconsole/src/sim/consolidatorAudit.ts)
+// and one new GET route for the lead's oversight queries (see
+// tools/consolidator-oversight.mjs). Three stages, one row per audit event:
+//   'discovered' — a section audit summary + opportunity list (what the pass
+//                  SAW on the map, before any planning).
+//   'planned'    — what a pass INTENDS to do: in-square plans plus the
+//                  whole-map big-picture view (still read-only at this stage;
+//                  the mutation half decides separately whether to act).
+//   'implemented' — what a pass ACTUALLY did. Consumed later by the mutation
+//                  half's own ConsolidationPass log (a separate lane); this
+//                  table is the durable, queryable record of it, mirroring
+//                  how debug_commits durably records DebugTab commits.
+// This is TELEMETRY, never a gameplay dependency (mirrors the debug_commits
+// contract exactly): the consolidator's actual behaviour must never change
+// because this sink is up, slow, or down.
+//
 // Start alongside dev: from webconsole/, run `npm run dev:full` (which launches
 // both the Vite dev server and this server concurrently via dev-with-sink.mjs),
 // or start this server standalone: `node tools/debugsink/server.js` (listens on
@@ -98,6 +122,172 @@ async function pruneOld(conn) {
     `DELETE FROM debug_commits WHERE committed_at < (NOW() - INTERVAL ? DAY)`,
     [RETENTION_DAYS]
   );
+}
+
+/**
+ * consolidator_audit — one row per audit event the CONSOLIDATOR pass logs
+ * (Aaron's ruling, see the file header). `stage` is a closed enum (never a
+ * free string) so a malformed/rogue stage value is rejected at the DB layer
+ * as a defence-in-depth backstop behind the handler's own validation below.
+ * The (stage, at) index is what tools/consolidator-oversight.mjs's queries
+ * (GET /api/consolidator/audit?since=...&stage=...) actually run against —
+ * without it every oversight poll would be a full table scan.
+ *
+ * PRIMARY KEY is the COMPOSITE (id, stage) — NOT `id` alone (independent-
+ * round finding 2, 2026-09-04, "CROSS-STAGE ID CLOBBER"): with an id-only
+ * key, `ON DUPLICATE KEY UPDATE id = id` makes posting the SAME id under a
+ * DIFFERENT stage a silent no-op against whichever stage's row landed
+ * FIRST, permanently losing the second payload with a 200 OK. Today's client
+ * (consolidatorAudit.ts) embeds the stage into the id
+ * (`AUD-<STAGE>-<tick>`), which happens to make a real collision
+ * unreachable in practice — but the SCHEMA itself did not enforce that
+ * invariant, so nothing stopped a future caller, a hand-crafted request, or
+ * a future id-format change from losing a real row silently. The composite
+ * key makes (id, stage) the actual identity a duplicate post upserts
+ * against, and a genuinely different stage under the same id is now a
+ * SEPARATE row, never a clobber. See ensureAuditCompositeKey below for how
+ * an already-existing (pre-fix) table migrates.
+ */
+const AUDIT_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS consolidator_audit (
+  id VARCHAR(64) NOT NULL,
+  stage ENUM('discovered', 'planned', 'implemented') NOT NULL,
+  at DATETIME NOT NULL,
+  payload LONGTEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id, stage),
+  KEY idx_stage_at (stage, at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+`;
+
+const AUDIT_STAGES = new Set(['discovered', 'planned', 'implemented']);
+
+/**
+ * Migrate an EXISTING consolidator_audit table (created before the composite-
+ * key fix above) from the old (id)-only PRIMARY KEY to (id, stage).
+ * `CREATE TABLE IF NOT EXISTS` never touches an already-existing table's
+ * constraints, so without this an existing dev/CI database keeps the old,
+ * clobber-prone key forever.
+ *
+ * DROP-AND-RECREATE-IF-SCHEMA-OLD, not an unconditional ALTER: this table's
+ * ensureAuditSchema runs on EVERY request (see createHandler's POST/GET
+ * handlers), so an unconditional `ALTER TABLE ... DROP PRIMARY KEY, ADD
+ * PRIMARY KEY` on every single call would take a metadata lock on every
+ * request — the exact MDL-starvation risk claude-bow.js's BUG-115 comment
+ * documents for its own ensureSchema. Mirrors claude-bow.js's
+ * ensureGitRefCreatedAtFractional/ensureFkOnUpdateCascade idiom exactly:
+ * check information_schema FIRST (never assumed from the CREATE TABLE text
+ * — MariaDB's `information_schema.STATISTICS` is the live source of truth
+ * for which columns actually make up the PRIMARY KEY today), and only issue
+ * the DROP+ADD when the live schema is provably still the old one. An
+ * already-migrated database (including every brand-new one, whose CREATE
+ * TABLE already declares the composite key directly) pays a single cheap
+ * indexed SELECT and takes no metadata lock at all.
+ */
+async function ensureAuditCompositeKey(conn) {
+  const [rows] = await conn.query(
+    `SELECT COLUMN_NAME FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'consolidator_audit' AND INDEX_NAME = 'PRIMARY'
+     ORDER BY SEQ_IN_INDEX`
+  );
+  // The composite key AUDIT_SCHEMA_SQL declares -- compared as a joined
+  // signature so migration status is a single equality against the live
+  // information_schema PK column list, in index order.
+  const EXPECTED_PK_SIGNATURE = ['id', 'stage'].join(',');
+  const pkColumns = rows.map((r) => r.COLUMN_NAME);
+  if (pkColumns.length === 0) return; // table doesn't exist yet (or a fake test connection with no information_schema) -- ensureAuditSchema's own CREATE TABLE already declares the composite key
+  if (pkColumns.join(',') === EXPECTED_PK_SIGNATURE) return; // already migrated, no-op
+  await conn.query('ALTER TABLE consolidator_audit DROP PRIMARY KEY, ADD PRIMARY KEY (id, stage)');
+}
+
+/** Ensure the consolidator_audit table exists AND carries the composite (id, stage) key. Idempotent; safe to call every start/request. */
+async function ensureAuditSchema(conn) {
+  await conn.query(AUDIT_SCHEMA_SQL);
+  await ensureAuditCompositeKey(conn);
+}
+
+/** Delete audit rows older than the retention window — same 31-day discipline as debug_commits. */
+async function pruneOldAudit(conn) {
+  await conn.query(
+    `DELETE FROM consolidator_audit WHERE at < (NOW() - INTERVAL ? DAY)`,
+    [RETENTION_DAYS]
+  );
+}
+
+/**
+ * Upsert one audit row, keyed on the COMPOSITE (id, stage) — see
+ * AUDIT_SCHEMA_SQL's doc for the CROSS-STAGE ID CLOBBER fix this depends on.
+ * `ON DUPLICATE KEY UPDATE id = id` is now a true no-op ONLY for a genuine
+ * retry of the exact same (id, stage) pair (e.g. a client-side retry after a
+ * timed-out-but-actually-succeeded request) — accepted idempotently rather
+ * than double-counted, which matters here because the oversight script
+ * COUNTS rows per pass (runaway-demolition / spend-rate thresholds) and a
+ * duplicate row would silently inflate every one of them. The SAME id under
+ * a DIFFERENT stage no longer collides with the key at all — it inserts as
+ * its own row, exactly as intended.
+ */
+async function upsertAuditEntry(conn, { id, stage, at, payload }) {
+  const atDate = new Date(at);
+  const atSql = Number.isNaN(atDate.getTime()) ? new Date() : atDate; // malformed `at` -> server-observed time, never a rejected write
+  const payloadJson = JSON.stringify(payload === undefined ? null : payload);
+
+  await conn.query(
+    `INSERT INTO consolidator_audit (id, stage, at, payload)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE id = id`,
+    [id, stage, atSql, payloadJson]
+  );
+  await pruneOldAudit(conn);
+}
+
+/**
+ * Query audit rows for the lead's oversight polling (GET /api/consolidator/audit).
+ * `since` (ISO-8601 string, optional) and `stage` (one of AUDIT_STAGES,
+ * optional) both narrow the WHERE clause; omitting both returns the full
+ * (already 31-day-pruned) table. Always ordered oldest-first (`at ASC`) so a
+ * caller building a pass-over-pass trend (oscillation/capacity-down
+ * detection) reads it in chronological order without re-sorting.
+ * Parameterised throughout — no string-built SQL, matching the rest of this
+ * file's discipline.
+ */
+async function queryAuditEntries(conn, { since, stage } = {}) {
+  const clauses = [];
+  const params = [];
+  if (typeof since === 'string' && since.length > 0) {
+    const sinceDate = new Date(since);
+    if (!Number.isNaN(sinceDate.getTime())) {
+      clauses.push('at >= ?');
+      params.push(sinceDate);
+    }
+    // A malformed `since` is silently ignored (not rejected) — an oversight
+    // poll with a bad query param should degrade to "show everything" rather
+    // than 400 and stop monitoring entirely (GR#17: the monitor itself must
+    // stay up even when a caller mis-formats a filter).
+  }
+  if (typeof stage === 'string' && AUDIT_STAGES.has(stage)) {
+    clauses.push('stage = ?');
+    params.push(stage);
+  }
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+  const [rows] = await conn.query(
+    `SELECT id, stage, at, payload FROM consolidator_audit ${where} ORDER BY at ASC`,
+    params
+  );
+  return (Array.isArray(rows) ? rows : []).map((r) => ({
+    id: r.id,
+    stage: r.stage,
+    at: r.at instanceof Date ? r.at.toISOString() : r.at,
+    payload: safeJsonParse(r.payload),
+  }));
+}
+
+/** Best-effort JSON.parse — a corrupt/legacy row degrades to null rather than crashing the oversight query. */
+function safeJsonParse(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -346,6 +536,78 @@ function createHandler(deps = {}) {
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/api/consolidator/audit') {
+        let body;
+        try {
+          body = await readJsonBody(req, maxBodyBytes);
+        } catch (err) {
+          if (err.code === 'debugsink.body_too_large') {
+            errorJson(res, 413, err.code, err.message, {
+              headers: { Connection: 'close' },
+              onFlush: () => {
+                try { req.destroy(); } catch { /* socket already gone */ }
+              },
+            });
+            return;
+          }
+          errorJson(res, 400, err.code || 'debugsink.bad_request', err.message);
+          return;
+        }
+
+        const { id, stage, at, payload } = body || {};
+        if (typeof id !== 'string' || id.length === 0) {
+          errorJson(res, 400, 'debugsink.missing_id', 'audit body must include a non-empty string `id`');
+          return;
+        }
+        if (typeof stage !== 'string' || !AUDIT_STAGES.has(stage)) {
+          errorJson(
+            res,
+            400,
+            'debugsink.bad_stage',
+            `audit body \`stage\` must be one of ${Array.from(AUDIT_STAGES).join(', ')}`
+          );
+          return;
+        }
+        if (typeof at !== 'string' || at.length === 0) {
+          errorJson(res, 400, 'debugsink.missing_at', 'audit body must include a non-empty string `at` (ISO-8601)');
+          return;
+        }
+        if (payload === undefined) {
+          errorJson(res, 400, 'debugsink.missing_payload', 'audit body must include a `payload`');
+          return;
+        }
+
+        let conn;
+        try {
+          conn = await connect();
+          await ensureAuditSchema(conn);
+          await upsertAuditEntry(conn, { id, stage, at, payload });
+          sendJson(res, 200, { ok: true, id });
+        } finally {
+          if (conn && typeof conn.end === 'function') await conn.end().catch(() => {});
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/consolidator/audit') {
+        const since = url.searchParams.get('since') || undefined;
+        const stage = url.searchParams.get('stage') || undefined;
+        if (stage !== undefined && !AUDIT_STAGES.has(stage)) {
+          errorJson(res, 400, 'debugsink.bad_stage', `\`stage\` query param must be one of ${Array.from(AUDIT_STAGES).join(', ')}`);
+          return;
+        }
+        let conn;
+        try {
+          conn = await connect();
+          await ensureAuditSchema(conn);
+          const entries = await queryAuditEntries(conn, { since, stage });
+          sendJson(res, 200, { ok: true, entries });
+        } finally {
+          if (conn && typeof conn.end === 'function') await conn.end().catch(() => {});
+        }
+        return;
+      }
+
       errorJson(res, 404, 'debugsink.not_found', `no route for ${req.method} ${url.pathname}`);
     } catch (err) {
       // GR#1: every failure path returns a JSON error, never an unhandled
@@ -401,6 +663,14 @@ module.exports = {
   DEFAULT_PORT,
   RETENTION_DAYS,
   MAX_BODY_BYTES,
+  // Consolidator audit trail (Aaron's ruling, FEAT-2326609761).
+  ensureAuditSchema,
+  ensureAuditCompositeKey,
+  pruneOldAudit,
+  upsertAuditEntry,
+  queryAuditEntries,
+  AUDIT_SCHEMA_SQL,
+  AUDIT_STAGES,
 };
 
 // Only listen when this file is run directly (`node tools/debugsink/server.js`),
