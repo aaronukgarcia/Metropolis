@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks, isPlaceable, sortPaletteItems, paletteByDomain } from '../../sim/data';
+import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks, isPlaceable, sortPaletteItems, paletteByDomain, remainingAllowance, canEnterSim } from '../../sim/data';
 import type { ToolMode } from '../../sim/types';
 import { useSim } from '../../sim/simContext';
 import { specUnlocked } from '../../sim/engine';
@@ -89,22 +89,36 @@ function BuildTab() {
             // per-spec `locked` flag still drives the real specs' unlock badge.
             const isPh = sp.placeholder === true;
             const locked = !specUnlocked(state, sp);
+            // FEAT-2326609761 AC-30: a THIRD distinct state alongside isPh/
+            // locked — unlocked and real, but the unique-building cap
+            // (maxPerCity) is exhausted. Checked only for real, unlocked
+            // specs (canEnterSim && !locked) so it never fires for a spec
+            // that is already greyed out for another reason.
+            const atCap = !isPh && !locked && canEnterSim(sp) && remainingAllowance(state, sp) <= 0;
             const active = state.tool.mode === 'build' && state.tool.spec === id;
             return (
               <button
                 key={id}
-                className={`pal-item${active ? ' active' : ''}${!isPh && locked ? ' locked' : ''}${isPh ? ' placeholder' : ''}`}
-                disabled={isPh || (!locked && state.funds < placementCost(sp))}
-                aria-disabled={isPh || undefined}
-                aria-label={!isPh && locked ? `Locked — unlocks at city level ${sp.unlock}` : undefined}
+                className={`pal-item${active ? ' active' : ''}${!isPh && locked ? ' locked' : ''}${isPh ? ' placeholder' : ''}${atCap ? ' atcap' : ''}`}
+                disabled={isPh || atCap || (!locked && !atCap && state.funds < placementCost(sp))}
+                aria-disabled={isPh || atCap || undefined}
+                aria-label={
+                  atCap
+                    ? `One per city — ${sp.name} already built`
+                    : !isPh && locked
+                      ? `Locked — unlocks at city level ${sp.unlock}`
+                      : undefined
+                }
                 title={
                   isPh
                     ? `${sp.name} — coming soon (planned): ${sp.blurb}`
-                    : locked
-                      ? `${sp.name} — unlocks at city level ${sp.unlock}. Click for requirements & what it delivers.`
-                      : `${sp.name} — ${sp.blurb}, upkeep ${fmtMoney(sp.upkeep)}/tick${
-                          isFreeZone(sp) ? ` · free to zone · ${constructionTicks(sp)} ticks to build` : ''
-                        }`
+                    : atCap
+                      ? `${sp.name} — one per city, and this city already has one. Bulldoze the existing one to build another.`
+                      : locked
+                        ? `${sp.name} — unlocks at city level ${sp.unlock}. Click for requirements & what it delivers.`
+                        : `${sp.name} — ${sp.blurb}, upkeep ${fmtMoney(sp.upkeep)}/tick${
+                            isFreeZone(sp) ? ` · free to zone · ${constructionTicks(sp)} ticks to build` : ''
+                          }`
                 }
                 onClick={() => {
                   // FEAT-1972079860 AC-4: Click locked spec opens card.
@@ -112,8 +126,10 @@ function BuildTab() {
                     setOpenSpecId(id);
                     return;
                   }
-                  // A placeholder can never be selected/placed (defence in depth
-                  // alongside disabled): clicking is a no-op.
+                  // A placeholder or an at-cap unique building can never be
+                  // selected/placed (defence in depth alongside disabled):
+                  // clicking is a no-op. isPlaceable() already folds atCap in
+                  // (remainingAllowance), so this single call covers both.
                   if (isPh || !isPlaceable(state, sp)) return;
                   dispatch({ type: 'tool', tool: { mode: 'build', spec: id } });
                 }}
@@ -126,6 +142,8 @@ function BuildTab() {
                 <span className="pal-cost">
                   {isPh ? (
                     <span className="chip amber">Soon</span>
+                  ) : atCap ? (
+                    <span className="chip cap">One per city</span>
                   ) : locked ? (
                     `Lv ${sp.unlock}`
                   ) : isFreeZone(sp) ? (

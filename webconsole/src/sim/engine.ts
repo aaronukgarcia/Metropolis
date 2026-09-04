@@ -67,6 +67,8 @@ import {
   MILESTONE_REWARDS,
   sanitizeClaimedMilestones,
   filledJobsBySector,
+  countOfSpec,
+  remainingAllowance,
 } from './data.ts';
 import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -3473,6 +3475,13 @@ function reduceCore(state: SimState, action: Action): SimState {
       // button. Mirrors isPlaceable() in data.ts (UI defence-in-depth).
       if (!canEnterSim(sp)) return state;
       if (!specUnlocked(state, sp)) return state;
+      // FEAT-2326609761 AC-29 (Aaron R4, "unplaceable by hand"): defence in
+      // depth mirroring isPlaceable()'s UI gate — a unique building (e.g. the
+      // Five Gorges Dam, maxPerCity: 1) refuses a placement past its cap
+      // through THIS reducer, not just a disabled palette button.
+      if (remainingAllowance(state, sp) <= 0) {
+        return { ...state, placeNotice: `One per city — ${sp.name} already built` };
+      }
       // Zoning is free (FEAT-1972079882): a zone charges £0, so the funds check
       // and deduction use placementCost, not the catalogue cost.
       const cost = placementCost(sp);
@@ -3649,9 +3658,22 @@ function reduceCore(state: SimState, action: Action): SimState {
       // also flips the shared module flag as a side effect — this explicit
       // final assignment (after the loop) is authoritative and overwrites it.
       let anyRoadTopologyChange = isRoadOrTrunkSpec(sp);
+      let stoppedAtCap = false;
       for (const tile of action.tiles) {
         if (cost > 0 && cur.administrationState) break;
         if (cost > 0 && cur.funds < cost) break;
+        // FEAT-2326609761 AC-29: pre-check the cap BEFORE delegating to 'place'
+        // (mirroring the admin/funds guards immediately above), rather than
+        // relying on 'place' itself to refuse it. 'place' returns a NEW state
+        // object (with a placeNotice) on a cap refusal, not the same
+        // reference — delegating into it here would break this loop's
+        // `next === cur` decline-detection and wrongly count the tile as
+        // placed. Every further tile of the SAME (now-exhausted) spec would
+        // refuse identically, so this is a `break`, not a `continue`.
+        if (remainingAllowance(cur, sp) <= 0) {
+          stoppedAtCap = true;
+          break;
+        }
         const beforeLen = cur.buildings.length;
         const next = reduceCore(cur, { type: 'place', spec: action.spec, x: tile.x, y: tile.y });
         if (next === cur) continue; // this tile declined (occupied/out of bounds/etc.) — try the rest
@@ -3662,7 +3684,11 @@ function reduceCore(state: SimState, action: Action): SimState {
       roadTopologyMayHaveChanged = anyRoadTopologyChange;
 
       if (placed === action.tiles.length) return cur;
-      const shortBy = cost > 0 && cur.funds < cost ? 'insufficient funds' : 'some tiles already occupied';
+      const shortBy = stoppedAtCap
+        ? `One per city — ${sp.name} already built`
+        : cost > 0 && cur.funds < cost
+          ? 'insufficient funds'
+          : 'some tiles already occupied';
       return {
         ...cur,
         placeNotice: `Placed ${placed} of ${formatPlacedCount(action.tiles.length, sp.name)} — ${shortBy}`,
@@ -4349,6 +4375,28 @@ function reduceCore(state: SimState, action: Action): SimState {
         return true;
       });
 
+      // FEAT-2326609761 AC-29 ("stampRegion currently gates on canEnterSim
+      // only — a real hole"): honour maxPerCity for the WHOLE stamp,
+      // all-or-nothing like every other stampRegion gate. Counts start from
+      // POST-FLATTEN buildings (newBuildings — the demolitions above already
+      // freed any cap slot they vacated), then tally each batch item as it is
+      // considered, so a single stamp containing two Five Gorges Dams cannot
+      // sneak the second one past a per-item-only check.
+      const capCountBySpec = new Map<string, number>();
+      for (const b of newBuildings) {
+        const sp = SPECS[b.spec];
+        if (sp?.maxPerCity != null) {
+          capCountBySpec.set(b.spec, (capCountBySpec.get(b.spec) ?? 0) + 1);
+        }
+      }
+      for (const item of action.clipboard.items) {
+        const sp = SPECS[item.spec];
+        if (sp?.maxPerCity == null) continue;
+        const current = capCountBySpec.get(item.spec) ?? 0;
+        if (current >= sp.maxPerCity) return state; // whole stamp refused, no partial application
+        capCountBySpec.set(item.spec, current + 1);
+      }
+
       // Calculate total placement cost for the stamped items.
       let totalCost = 0;
       for (const item of action.clipboard.items) {
@@ -4570,8 +4618,28 @@ function reduceCore(state: SimState, action: Action): SimState {
       return advance(s);
     }
 
-    case 'hydrate':
-      return sanitizeTreasury(action.state);
+    case 'hydrate': {
+      const hydrated = sanitizeTreasury(action.state);
+      // FEAT-2326609761 AC-31: an OLD SAVE may already carry MORE than
+      // maxPerCity of a now-capped spec (e.g. two Five Gorges Dams placed
+      // before this cap existed). Nothing is demolished and no money is
+      // clawed back — remainingAllowance() already clamps at 0 so no THIRD
+      // can ever be built by any path. The only thing this does is "say so":
+      // a one-time honest notice naming the over-cap spec and its count,
+      // fired once here at load (never repeated on every subsequent action —
+      // sanitizeTreasury runs on EVERY reducer() call and must not be the
+      // home for this, or the notice would never let the player dismiss it).
+      let overCapNotice: string | null = null;
+      for (const sp of Object.values(SPECS)) {
+        if (sp.maxPerCity == null) continue;
+        const n = countOfSpec(hydrated, sp.id);
+        if (n > sp.maxPerCity) {
+          overCapNotice = `This save has ${n} × ${sp.name} — more than the "One per city" cap now allows. None are removed; no further ${sp.name} can be built.`;
+          break; // deterministic: SPECS iteration order is fixed object insertion order (GR#21)
+        }
+      }
+      return overCapNotice ? { ...hydrated, placeNotice: overCapNotice } : hydrated;
+    }
 
     // FEAT-2326609723 (Play Mode) — the ONE-WAY sandbox escape hatch offered
     // from the Decline screen. Idempotent once already latched (no re-

@@ -230,6 +230,10 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .chip.open { background: transparent; color: var(--muted); border: 1px solid var(--border-strong); }
 .chip.blocked { background: rgba(255, 123, 114, 0.15); color: var(--danger); }
 .chip.amber { background: rgba(227, 179, 65, 0.18); color: var(--warn); }
+/* FEAT-2326609761 AC-30: "One per city" — visually distinct from both the
+   amber "Soon" (placeholder) chip and the plain-text "Lv N" (locked) label:
+   it is a BUILT, real spec, not a roadmap preview or an unlock gate. */
+.chip.cap { background: rgba(76, 154, 255, 0.18); color: var(--accent); }
 
 .xp-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
 .xp-head p { margin: 2px 0 0; font-size: 11.5px; }
@@ -279,6 +283,7 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .pal-item.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .pal-item.locked { opacity: 0.5; cursor: not-allowed; }
 .pal-item.placeholder { border-color: var(--warn); color: var(--warn); }
+.pal-item.atcap { border-color: var(--accent); opacity: 0.65; cursor: not-allowed; }
 .pal-item:disabled { opacity: 0.55; cursor: not-allowed; }
 .pal-name { font-weight: 600; white-space: nowrap; }
 .pal-cost { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--muted); }

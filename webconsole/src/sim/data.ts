@@ -127,6 +127,16 @@ export interface Spec {
    * sim. Real specs never set this flag.
    */
   placeholder?: boolean;
+  /**
+   * FEAT-2326609761 AC-28 — unique-building HARD CAP (Aaron: "limit the number
+   * of Five Gorges Dams to just one"). When set, at most `maxPerCity` buildings
+   * of this spec may exist in `s.buildings` at once, counting under-construction
+   * instances too (so two cannot be started in the same tick). `undefined`/
+   * absent means unlimited — the overwhelming majority of specs. Derived-from-
+   * state enforcement lives in `remainingAllowance()`; this field itself is the
+   * ONLY thing a unique building needs (GR#15 — no future `if (spec === 'x')`).
+   */
+  maxPerCity?: number;
 }
 
 /** Real-world reference sizes (metres). Tile grid = 50 m. */
@@ -1236,15 +1246,50 @@ export function canEnterSim(sp: Spec | undefined): sp is Spec {
 }
 
 /**
+ * FEAT-2326609761 AC-28 — per-spec building count, memoised ONCE per state as a
+ * single O(buildings) fold (BUG-642: never re-walk buildings[] per spec, e.g.
+ * inside a ~150-spec palette render loop). `countOfSpec` counts buildings
+ * REGARDLESS of construction status — a building under construction still
+ * occupies its slot, so two dams cannot both be "in progress" at once.
+ */
+const countBySpecId: (s: SimState) => Record<string, number> = memoOnState((s) => {
+  const counts: Record<string, number> = {};
+  for (const b of s.buildings) {
+    counts[b.spec] = (counts[b.spec] ?? 0) + 1;
+  }
+  return counts;
+});
+
+export function countOfSpec(s: SimState, specId: string): number {
+  return countBySpecId(s)[specId] ?? 0;
+}
+
+/**
+ * FEAT-2326609761 AC-28 — the unique-building allowance, DERIVED from state,
+ * never stored (so it can never desync, GR#3): a spec with no `maxPerCity`
+ * has infinite allowance; otherwise it is the cap minus how many already
+ * exist (clamped at 0, never negative — AC-31 old-save-over-cap safety).
+ * This is the ONE function every placement path below calls (AC-29).
+ */
+export function remainingAllowance(s: SimState, sp: Spec): number {
+  if (sp.maxPerCity == null) return Infinity;
+  return Math.max(0, sp.maxPerCity - countOfSpec(s, sp.id));
+}
+
+/**
  * Placement gate (FEAT-1972079877): the SINGLE predicate for "can the player place
  * this spec right now" in the UI. A placeholder is NEVER placeable — regardless of
  * city level, unlock, or the god-mode unlockedAll flag (via canEnterSim). Any real
  * (non-placeholder) spec defers to the existing unlock gate (specUnlocked), so
  * real-spec behaviour is unchanged.
+ * FEAT-2326609761 AC-29: also gated on remainingAllowance — an at-cap unique
+ * building (e.g. a second Five Gorges Dam) is never placeable, greying its
+ * palette entry via this single predicate.
  */
 export function isPlaceable(s: SimState, sp: Spec): boolean {
   if (!canEnterSim(sp)) return false;
-  return specUnlocked(s, sp);
+  if (!specUnlocked(s, sp)) return false;
+  return remainingAllowance(s, sp) > 0;
 }
 
 /**
@@ -1253,8 +1298,11 @@ export function isPlaceable(s: SimState, sp: Spec): boolean {
  *
  * Sort order:
  * 1. Available real specs (isPlaceable && !placeholder) — first
- * 2. Locked real specs (!isPlaceable && !placeholder) — by unlock level ascending
- * 3. Placeholder specs (placeholder === true) — last
+ * 2. Locked real specs (!specUnlocked && !placeholder) — by unlock level ascending
+ * 3. At-cap real specs (FEAT-2326609761 AC-30: unlocked, but remainingAllowance
+ *    exhausted — e.g. the Five Gorges Dam once built) — after locked, still
+ *    before placeholders, because it IS built, not merely unavailable-forever.
+ * 4. Placeholder specs (placeholder === true) — last
  *
  * Within each tier, original order is preserved (stable sort).
  */
@@ -1264,16 +1312,21 @@ export function sortPaletteItems(state: SimState, items: string[]): string[] {
     const b = SPECS[bId];
     if (!a || !b) return 0; // Missing specs maintain relative order
 
-    const aPlaceable = isPlaceable(state, a);
-    const bPlaceable = isPlaceable(state, b);
     const aPlaceholder = a.placeholder === true;
     const bPlaceholder = b.placeholder === true;
+    const aUnlocked = !aPlaceholder && canEnterSim(a) && specUnlocked(state, a);
+    const bUnlocked = !bPlaceholder && canEnterSim(b) && specUnlocked(state, b);
+    const aAtCap = aUnlocked && remainingAllowance(state, a) <= 0;
+    const bAtCap = bUnlocked && remainingAllowance(state, b) <= 0;
+    const aPlaceable = aUnlocked && !aAtCap;
+    const bPlaceable = bUnlocked && !bAtCap;
 
-    // Tier 1: available real specs (aPlaceable && !aPlaceholder)
-    // Tier 2: locked real specs (!aPlaceable && !aPlaceholder)
-    // Tier 3: placeholder specs (aPlaceholder)
-    const aTier = aPlaceholder ? 3 : aPlaceable ? 1 : 2;
-    const bTier = bPlaceholder ? 3 : bPlaceable ? 1 : 2;
+    // Tier 1: available real specs
+    // Tier 2: locked real specs (never unlocked)
+    // Tier 3: at-cap real specs (unlocked, but the unique-building cap is hit)
+    // Tier 4: placeholder specs
+    const aTier = aPlaceholder ? 4 : aAtCap ? 3 : aPlaceable ? 1 : 2;
+    const bTier = bPlaceholder ? 4 : bAtCap ? 3 : bPlaceable ? 1 : 2;
 
     // Sort by tier first
     if (aTier !== bTier) return aTier - bTier;
@@ -1283,7 +1336,7 @@ export function sortPaletteItems(state: SimState, items: string[]): string[] {
       return a.unlock - b.unlock;
     }
 
-    // Within tiers 1 and 3, maintain original order (stable sort via slice)
+    // Within tiers 1, 3 and 4, maintain original order (stable sort via slice)
     return 0;
   });
 }
@@ -1467,7 +1520,10 @@ export const SPECS: Record<string, Spec> = {
   // Hydro is clean, so (like pow_wind/pow_solar) it takes no `pollution` tag.
   // Huge 8×8 footprint + late unlock (16). ⚠ every figure PLACEHOLDER-balance —
   // directional only, pending Aaron's row-by-row pass.
-  pow_hydro: P('pow_hydro', 'power', 'Five Gorges Dam', 'Mega hydroelectric dam · 5,000 MW · dwarfs a nuclear plant', 8, 8, 5000000000, 277778, '#5b8fc9', 'services', 16, { mw: 5000 }),
+  // FEAT-2326609761 AC-28 (Aaron R4): "limit the number of Five Gorges Dams to
+  // just one" — HARD CAP of 1, enforced at every placement path (AC-29) and
+  // in the palette (AC-30). See remainingAllowance() below.
+  pow_hydro: P('pow_hydro', 'power', 'Five Gorges Dam', 'Mega hydroelectric dam · 5,000 MW · dwarfs a nuclear plant', 8, 8, 5000000000, 277778, '#5b8fc9', 'services', 16, { mw: 5000, maxPerCity: 1 }),
 
   // ---- Water & waste additions ----
   wat_tower: P('wat_tower', 'water', 'Water Tower', 'Pressure head for 4,000', 1, 1, 2700000, 150, '#39c5cf', 'services', 2, { tag: 'clean', served: 4000 }),
@@ -4154,6 +4210,15 @@ function scanAllCore(specId: string, ctx: SpotScoringContext, winHint: { win: nu
 }
 
 export function findSpot(s: SimState, specId: string): { x: number; y: number } | null {
+  // FEAT-2326609761 AC-29: an at-cap unique building (e.g. a second Five
+  // Gorges Dam) has nowhere to go — never search for a site, so auto-build
+  // (placePlanItem) can never place one via findSpot. Guard sits on BOTH
+  // search entries (this single-call form and the batch context form below):
+  // BUG-646's refactor split the entries after this guard was written, and a
+  // guard on only one would let the batch path place a second dam.
+  const sp = SPECS[specId];
+  if (!sp) return null;
+  if (remainingAllowance(s, sp) <= 0) return null;
   return findSpotCore(specId, buildScoringContext(s));
 }
 
@@ -4602,6 +4667,13 @@ export function rankedProviders(s: SimState, serviceKey: string, budget: number,
   const candidates: (ProviderOption & { unitCost: number })[] = [];
   for (const sp of Object.values(SPECS)) {
     if (!canEnterSim(sp) || !specUnlocked(s, sp)) continue;
+    // FEAT-2326609761 AC-29/CEIL-4: an at-cap unique building (e.g. a second
+    // Five Gorges Dam) is never a candidate the demand-fix planner offers —
+    // recommending a spec the player cannot act on is the BUG-641 "no help"
+    // failure again. Every caller of rankedProviders/optimalProvider
+    // (demandFixPlan, serviceCoverageOf's fire/parks/refuse rows) inherits
+    // this for free.
+    if (remainingAllowance(s, sp) <= 0) continue;
     if (!rule.match(sp)) continue;
     const unitCapacity = rule.unitCapacity(sp);
     if (unitCapacity <= 0) continue;
