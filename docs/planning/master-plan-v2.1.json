@@ -2107,7 +2107,9 @@
       "calls": [
         "engine.finance",
         "feat.saveux",
-        "ui.screen.finance"
+        "ui.screen.finance",
+        "foundation.data",
+        "foundation.errors"
       ],
       "sprint": null
     },

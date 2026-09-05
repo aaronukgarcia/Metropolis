@@ -182,4 +182,17 @@ const (
 	// (LoadOption, options.go) — the explicit opt-in for a deliberate
 	// reseed, e.g. the FEAT-1972079897 rules-change replay case.
 	ErrSaveSeedMismatch = "MET-E819"
+
+	// ErrGameModeMismatch: Load found the bundle's Meta.GameMode does not
+	// match the loading session's own locked initialization mode
+	// (FEAT-143, mkey feat.gameinit, AC-5). A bundle with no recorded
+	// mode at all (a pre-FEAT-143 save, GameMode == "") is treated
+	// exactly like any other mismatch -- never silently accepted, and
+	// never defaulted to "unlimited" as a silent relaxation. Raised by
+	// Load only when the caller opted in via WithExpectedGameMode
+	// (options.go); a zero-option Load performs no game-mode check at
+	// all, mirroring ErrSaveSeedMismatch's own opt-in shape. There is no
+	// AllowGameModeMismatch escape hatch: a deliberate re-mode is a
+	// new-game decision, never a load-time one.
+	ErrGameModeMismatch = "MET-E820"
 )

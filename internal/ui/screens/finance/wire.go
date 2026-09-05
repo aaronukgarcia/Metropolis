@@ -107,6 +107,18 @@ type wirePatch struct {
 	TaxSliders          *[]wireTaxSliderState  `json:"taxSliders,omitempty"`
 	PublicPayroll       *wirePublicPayrollView `json:"publicPayroll,omitempty"`
 	Sankey              *wireFiscalCircuitView `json:"sankey,omitempty"`
+
+	// UnlimitedMoney is FEAT-143 (mkey feat.gameinit)'s AC-7 signal: true
+	// while the session is running in Unlimited Money mode (money is not
+	// a constraint -- render the infinite indicator instead of the
+	// budget-constrained P&L/balance/budget surfaces), false in Real
+	// mode. nil means "no mode signal on this cycle" and clears the
+	// screen's have-flag exactly like every other optional section here
+	// -- the composition root's f2.finance publisher is expected to
+	// publish this on every cycle once wired, mirroring
+	// gameinit.GameInit.Unlimited() (never re-derived locally; this UI
+	// package never imports internal/engine/gameinit, GR#20).
+	UnlimitedMoney *bool `json:"unlimitedMoney,omitempty"`
 }
 
 // decodeWirePatch validates the size and schema-version envelope, then

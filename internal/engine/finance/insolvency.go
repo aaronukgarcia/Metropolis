@@ -33,6 +33,17 @@ func (f *FinanceAPI) RecordMonthResult(obligationsMet, creditAvailable bool) Mon
 		return MonthResult{}
 	}
 
+	// FEAT-143 AC-2: in Unlimited Money mode the insolvency/debt-rating
+	// triggers are inert -- InsolvencyMonths never advances and game-over
+	// never fires. Forcing obligationsMet=true routes through the exact
+	// same "the city is fine this month" branch Real mode would take on
+	// an actually-solvent month (US-4: one finance code, mode as a gate,
+	// never a second divergent implementation), rather than a bypass that
+	// returns early and skips the counter reset semantics entirely.
+	if f.unlimitedLocked() {
+		obligationsMet = true
+	}
+
 	if obligationsMet || creditAvailable {
 		f.insolvencyMonths = 0
 	} else {

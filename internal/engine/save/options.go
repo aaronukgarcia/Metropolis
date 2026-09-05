@@ -26,6 +26,22 @@ type loadOptions struct {
 	// reseed (e.g. FEAT-1972079897's rules-change replay) must ask for
 	// this explicitly on every call it applies to.
 	allowMismatch bool
+
+	// checkGameMode is true once WithExpectedGameMode has been passed
+	// (FEAT-143, AC-5). A Load call with no LoadOption at all leaves this
+	// false, performing NO game-mode check -- the pre-FEAT-143 behaviour
+	// is preserved for every caller that does not opt in.
+	checkGameMode bool
+
+	// expectedGameMode is the loading session's own locked
+	// gameinit.GameInit.Mode() string, only meaningful when
+	// checkGameMode is true. There is deliberately no
+	// AllowGameModeMismatch escape hatch mirroring AllowSeedMismatch:
+	// AC-5 requires a mode mismatch (or an absent mode on a
+	// mode-bearing build) to ALWAYS fail closed, with no re-mode-on-load
+	// path at all -- re-moding a session is a new-game decision, never a
+	// load-time one.
+	expectedGameMode string
 }
 
 // LoadOption customises one Manager.Load or Manager.LoadAt(-layer) call.
@@ -74,6 +90,43 @@ func WithExpectedWorldSeed(seed int64) LoadOption {
 func AllowSeedMismatch() LoadOption {
 	return func(o *loadOptions) {
 		o.allowMismatch = true
+	}
+}
+
+// WithExpectedGameMode instructs Load to refuse the bundle at dir unless
+// its Meta.GameMode equals mode (FEAT-143 AC-5): loading a save whose
+// declared mode differs from the session's own locked mode would silently
+// re-mode the session (letting a Real-mode save resurrect into an
+// Unlimited session, or vice versa) with no error unless something
+// enforces this. Pass the loading session's own gameinit.GameInit.Mode()
+// string (via GameModeWire()) as mode.
+//
+// On mismatch, Load returns ErrGameModeMismatch (carrying both mode
+// strings). A bundle whose Meta predates FEAT-143 (or was otherwise
+// written with no mode recorded) decodes GameMode as the empty string,
+// which this check treats as a mismatch against ANY non-empty expected
+// mode -- there is no default-to-"unlimited" fallback (AC-5's explicit
+// false-pass-risk: silently treating an absent mode as unlimited would
+// let an old save silently unlock money). There is deliberately no
+// AllowGameModeMismatch escape hatch: unlike a world-seed reseed, a
+// deliberate re-mode is a new-game decision, never a load-time opt-in.
+//
+// mode == "" is ALSO always refused (FEAT-143 round finding P2-A) --
+// even against a bundle whose own recorded GameMode is itself "". This
+// package deliberately does not import feat.gameinit (no such reverse
+// edge is registered) so it cannot call gameinit.ParseMode to validate
+// mode against the two known enum values, but an empty expected mode is
+// unconditionally a caller error: it is exactly the value
+// gameinit.GameInit.GameModeWire() returns when its SEC-020 copy-guard
+// trips on a copied *GameInit, so treating "" as "no expectation" (or as
+// matching an equally-empty legacy bundle) would silently turn AC-5's
+// fail-closed check into a no-op precisely when the caller most needed
+// it to fire. Load refuses with ErrGameModeMismatch whenever mode == ""
+// and this option was passed, regardless of the bundle's own GameMode.
+func WithExpectedGameMode(mode string) LoadOption {
+	return func(o *loadOptions) {
+		o.checkGameMode = true
+		o.expectedGameMode = mode
 	}
 }
 

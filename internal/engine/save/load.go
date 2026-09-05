@@ -78,6 +78,35 @@ func (m *Manager) Load(dir string, opts ...LoadOption) (serialize.Header, Meta, 
 		return serialize.Header{}, Meta{}, errs.Wrap(ErrMetaReadFailed, m.correlationID, err, map[string]any{"dir": dir, "cause": err.Error()})
 	}
 
+	// FEAT-143 AC-5: refuse a bundle whose declared game mode does not
+	// match the loading session's own locked mode, BEFORE any participant
+	// Handler runs (the shard-load loop below is the earliest point any
+	// participant state changes) -- so a refused load leaves every
+	// Participant, and therefore the whole composition, untouched. Skipped
+	// entirely unless the caller opted in via WithExpectedGameMode.
+	// meta.GameMode == "" (a pre-FEAT-143 bundle, or a hand-edited one
+	// with no mode) is treated as a mismatch against ANY expected mode --
+	// never silently accepted as a match, and never defaulted to
+	// "unlimited" (the false-pass this AC explicitly rules out).
+	//
+	// The round's finding (P2-A): lo.expectedGameMode == "" must ALSO
+	// always refuse, even against a bundle whose own meta.GameMode is
+	// itself "" (a legacy save) -- otherwise WithExpectedGameMode("")
+	// is an escape hatch that silently performs no real check at all.
+	// This is reachable in production because GameModeWire() (this
+	// package's caller-supplied expected value) returns "" whenever the
+	// SEC-020 copy-guard trips on a copied *GameInit, so an empty
+	// expected mode must never be treated as "matches an empty bundle
+	// mode" -- it is a caller error, not a legitimate expectation, and
+	// AC-5 requires fail-closed here exactly as for a real mismatch.
+	if lo.checkGameMode && (lo.expectedGameMode == "" || meta.GameMode != lo.expectedGameMode) {
+		return serialize.Header{}, Meta{}, errs.New(ErrGameModeMismatch, m.correlationID, map[string]any{
+			"dir":             dir,
+			"bundleGameMode":  meta.GameMode,
+			"sessionGameMode": lo.expectedGameMode,
+		})
+	}
+
 	byKind := make(map[string]Participant, len(m.participants))
 	for _, p := range m.participants {
 		byKind[p.Kind()] = p

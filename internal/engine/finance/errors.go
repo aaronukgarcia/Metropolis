@@ -104,4 +104,16 @@ const (
 	// must be USER-VISIBLE (GR#17) — compose.go surfaces this on the
 	// news/status feed, not just a log line.
 	ErrPrivateWagePayrollShortfall = "MET-G217"
+
+	// ErrModeGateFailed (FEAT-143 round finding P2-B): the injected
+	// ModeGate's Unlimited(correlationID) call returned an error --
+	// typically the SEC-020 copy-guard tripping on a struct-copied
+	// *gameinit.GameInit passed to SetModeGate. unlimitedLocked fails
+	// CLOSED toward the stricter mode (Real) whenever this happens
+	// (GR#17: the failure must be visible, never silently treated as
+	// "Unlimited", which would be the fail-OPEN direction) and records
+	// this error via the registry rather than swallowing it, so a
+	// composition-root wiring mistake leaves a trace instead of quietly
+	// running every session as Unlimited.
+	ErrModeGateFailed = "MET-G218"
 )

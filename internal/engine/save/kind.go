@@ -46,4 +46,15 @@ type Meta struct {
 	// MilestoneTierName is the §4 tier's display name (e.g. "Hamlet"),
 	// empty for non-milestone saves.
 	MilestoneTierName string `json:"milestoneTierName,omitempty"`
+
+	// GameMode is FEAT-143 (mkey feat.gameinit)'s locked initialization
+	// mode ("real" or "unlimited") declared on this bundle (AC-4). Every
+	// caller of SaveManual/Autosave/Milestone is expected to set
+	// [Context.GameMode] to the session's own gameinit.GameInit.Mode()
+	// string before saving, so a session's mode is recoverable from any
+	// bundle. Empty for a bundle written before FEAT-143 landed (a
+	// pre-mode-bearing save) -- see [WithExpectedGameMode]'s doc for how
+	// Load treats an absent value as a fail-closed mismatch rather than
+	// a silent default to "unlimited" (AC-5).
+	GameMode string `json:"gameMode,omitempty"`
 }

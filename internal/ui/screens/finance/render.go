@@ -120,6 +120,24 @@ func RenderBalanceSheet(buf *core.Buffer, rect core.Rect, bs BalanceSheetView, h
 	}
 }
 
+// RenderMoneyMode is FEAT-143's AC-7 finance-UI honesty check: while
+// unlimited is true (the session is running in Unlimited Money mode) it
+// renders an explicit infinite/un-depletable-reserve indicator and
+// nothing else -- money is not a constraint, so no budget figure is drawn
+// alongside it. While unlimited is false (Real mode) it renders nothing,
+// leaving the normal P&L/balance/budget surfaces (RenderPL/
+// RenderBalanceSheet/RenderLoans) as the screen's only money display,
+// exactly as before FEAT-143. have mirrors every other section's
+// have-flag: false means no mode signal has been published yet, and this
+// draws nothing (never assumes Real mode from an absent signal).
+func RenderMoneyMode(buf *core.Buffer, rect core.Rect, unlimited bool, have bool, style tcell.Style) {
+	if buf == nil || rect.W <= 0 || rect.H <= 0 || !have || !unlimited {
+		return
+	}
+	drawText(buf, rect, rect.X, rect.Y, "UNLIMITED MONEY -- SANDBOX MODE", style.Bold(true))
+	drawText(buf, rect, rect.X, rect.Y+1, "money is not a constraint (financial checks bypassed)", style.Italic(true))
+}
+
 func RenderLoans(buf *core.Buffer, rect core.Rect, loans []LoanState, rating int, history []float64, rejected string, have bool, style tcell.Style) {
 	if buf == nil || rect.W <= 0 || rect.H <= 0 {
 		return

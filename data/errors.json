@@ -131,8 +131,8 @@
       "V858-V863": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")",
       "G5440-G5479": "reserved for engine.deathservices (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 40-wide block found after scanning existing codes and reservations on layer \"G\")",
       "V857-V857": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V864-V864": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
-    
+      "V864-V864": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "G5410-G5419": "reserved for feat.gameinit (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -1253,6 +1253,12 @@
       "message": "save bundle world seed {bundleSeed} does not match loading composition seed {compositionSeed}: refusing load (pass AllowSeedMismatch to override for a deliberate reseed)",
       "remedy": "confirm the bundle belongs to this composition's seed, or pass save.AllowSeedMismatch() to Load/LoadAt for a deliberate rules-change reseed (FEAT-1972079897)"
     },
+    "MET-E820": {
+      "severity": "fatal",
+      "module": "feat.saveux",
+      "message": "save: bundle game mode {bundleGameMode} does not match session game mode {sessionGameMode}",
+      "remedy": "Load a save written under the current session's game mode; there is no escape hatch (AC-5, GR#7) -- a mode mismatch, or a save with no recorded mode, always fails closed rather than silently re-moding the session."
+    },
     "MET-E900": {
       "severity": "fatal",
       "module": "feat.skeleton",
@@ -2104,6 +2110,12 @@
       "module": "engine.finance",
       "message": "private-sector payroll shortfall: firms working-capital line rejected {amountMicropounds} of wages for {employedPrivate} employed residents this month, correlation {correlationID}",
       "remedy": "AcctFirms' working-capital credit line (compose.go's firmsWageCreditLineMicropounds) was exhausted or insufficient to cover this month's private-sector wage bill; the monthlyWagesFloor safety net has been topped up from the treasury so households are never fully unpaid, but the shortfall is a real payroll failure that must surface on a monitorable status/news surface (GR#17), not just this log line — check AcctFirms' balance/revenue model (engine.firms P&L, FEAT-1972079929) and consider a credit-line resize."
+    },
+    "MET-G218": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "the injected mode gate failed while checking Unlimited Money mode: {cause}",
+      "remedy": "the session's *gameinit.GameInit was likely called on a struct-copied value (SEC-020); check the composition root's SetModeGate wiring"
     },
     "MET-G300": {
       "severity": "error",
@@ -5518,6 +5530,30 @@
       "module": "engine.deathservices",
       "message": "deathservices handoffCursor decoded to a negative value",
       "remedy": "reject the load or clamp the cursor to 0 at decode time; a hostile or corrupt shard must never install a negative watermark"
+    },
+    "MET-G5410": {
+      "severity": "fatal",
+      "module": "feat.gameinit",
+      "message": "gameinit: method {method} called on a copied GameInit value",
+      "remedy": "Construct via gameinit.New/Load/LoadDefault and never copy the returned pointer's pointee by value; pass the pointer itself."
+    },
+    "MET-G5411": {
+      "severity": "fatal",
+      "module": "feat.gameinit",
+      "message": "gameinit: data/gameinit.json invalid ({rule})",
+      "remedy": "Fix data/gameinit.json to satisfy the named validation rule; every parameter needs a finite value, a unit, and a disclosure string."
+    },
+    "MET-G5412": {
+      "severity": "fatal",
+      "module": "feat.gameinit",
+      "message": "gameinit: unknown game mode {mode}",
+      "remedy": "Pass exactly gameinit.ModeReal or gameinit.ModeUnlimited when constructing a GameInit."
+    },
+    "MET-G5413": {
+      "severity": "error",
+      "module": "feat.gameinit",
+      "message": "gameinit: game mode is locked for the session and cannot be changed",
+      "remedy": "The mode is fixed at new-game start; start a new game to choose a different mode."
     }
   }
 }

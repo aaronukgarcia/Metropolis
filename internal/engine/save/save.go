@@ -48,7 +48,7 @@ func (m *Manager) SaveManual(ctx Context, name string) error {
 	if isReservedSaveName(name) {
 		return errs.New(ErrReservedSaveName, m.correlationID, map[string]any{"name": name})
 	}
-	meta := Meta{SaveKind: KindManual, DisplayName: name}
+	meta := Meta{SaveKind: KindManual, DisplayName: name, GameMode: ctx.GameMode}
 	return m.writeBundle(ctx, manualDir(m.root, name), meta)
 }
 
@@ -90,7 +90,7 @@ func (m *Manager) Autosave(ctx Context) error {
 	if err != nil {
 		return errs.Wrap(ErrListFailed, m.correlationID, err, map[string]any{"root": m.root, "dir": m.root, "cause": "computing next autosave sequence: " + err.Error()})
 	}
-	meta := Meta{SaveKind: KindAutosave, DisplayName: autosaveDisplayName(seq)}
+	meta := Meta{SaveKind: KindAutosave, DisplayName: autosaveDisplayName(seq), GameMode: ctx.GameMode}
 	if err := m.writeBundleLocked(ctx, autosaveDir(m.root, seq), meta); err != nil {
 		return err
 	}
@@ -118,6 +118,7 @@ func (m *Manager) Milestone(ctx Context, tier Tier) error {
 		DisplayName:         tier.Name,
 		MilestoneTierNumber: tier.Number,
 		MilestoneTierName:   tier.Name,
+		GameMode:            ctx.GameMode,
 	}
 	return m.writeBundle(ctx, milestoneDir(m.root, tier), meta)
 }

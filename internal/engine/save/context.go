@@ -33,4 +33,15 @@ type Context struct {
 	// assignment) so a previously debug-touched save can never come
 	// back clean through this package's API either.
 	DebugTouched bool
+
+	// GameMode is FEAT-143 (mkey feat.gameinit)'s locked initialization
+	// mode string ("real" or "unlimited", from gameinit.GameInit.Mode()/
+	// GameModeWire()) — carried straight into this bundle's own Meta
+	// sidecar (AC-4) by SaveManual/Autosave/Milestone. This package does
+	// not import internal/engine/gameinit (no such reverse edge is
+	// registered); GameMode is a plain string exactly like SaveKind's
+	// own typed-in-this-package convention. Left empty, a bundle's Meta
+	// simply carries no game mode — the pre-FEAT-143 shape, unaffected
+	// unless a caller opts into [WithExpectedGameMode] on load.
+	GameMode string
 }

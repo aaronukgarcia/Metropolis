@@ -56,6 +56,16 @@ type Screen struct {
 	sankey              *FiscalCircuitView
 	haveSankey          bool
 
+	// unlimitedMoney/haveUnlimitedMoney are FEAT-143's AC-7 mode signal
+	// (see wire.go's wirePatch.UnlimitedMoney doc): true/false is the
+	// real value once haveUnlimitedMoney is true; haveUnlimitedMoney
+	// false means no mode signal has been published on this cycle
+	// (either never wired, or explicitly cleared), so callers must not
+	// assume Real mode from the false zero value alone -- check the have
+	// flag, exactly like every other optional section on this Screen.
+	unlimitedMoney     bool
+	haveUnlimitedMoney bool
+
 	// engine is the diagrams layout cache, hoisted onto the Screen so it
 	// LIVES ACROSS FRAMES (BUG-316). The former per-frame diagrams.NewEngine()
 	// inside RenderSankey built a fresh empty cache every frame, so the cache
@@ -258,6 +268,13 @@ func (s *Screen) ApplyDelta(delta protocol.Delta) {
 	} else {
 		s.haveSankey = false
 	}
+
+	if p.UnlimitedMoney != nil {
+		s.unlimitedMoney = *p.UnlimitedMoney
+		s.haveUnlimitedMoney = true
+	} else {
+		s.haveUnlimitedMoney = false
+	}
 }
 
 func (s *Screen) HaveData() bool {
@@ -413,6 +430,20 @@ func (s *Screen) Sankey() (FiscalCircuitView, bool) {
 	}
 	copy(res.Bands, s.sankey.Bands)
 	return res, true
+}
+
+// UnlimitedMoney returns FEAT-143's AC-7 mode signal: true while the
+// session is running in Unlimited Money mode, and whether a mode signal
+// has been published at all (the second return, mirroring every other
+// have-flag accessor on this Screen) -- false, false means no signal has
+// arrived yet and callers must not assume Real mode from that.
+func (s *Screen) UnlimitedMoney() (bool, bool) {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "UnlimitedMoney"}); err != nil {
+		return false, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.unlimitedMoney, s.haveUnlimitedMoney
 }
 
 func (s *Screen) BorrowLoan(send SendCommandFunc, amountMicropounds int64, termMonths int) error {

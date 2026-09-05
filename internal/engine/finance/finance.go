@@ -71,6 +71,14 @@ type FinanceAPI struct {
 	insolvencyMonths int
 	gameOver         bool
 
+	// modeGate is FEAT-143 (mkey feat.gameinit)'s injected Real-vs-
+	// Unlimited-Money policy (mode.go) -- nil until SetModeGate is
+	// called, which unlimitedLocked() treats identically to "Real mode,
+	// gate always reports false" (AC-2's documented default), so every
+	// pre-FEAT-143 caller that never calls SetModeGate sees byte-for-byte
+	// unchanged behaviour.
+	modeGate ModeGate
+
 	// lastPayrollShortfall/lastPayrollShortfallMonth (BUG-548, 2026-09-05,
 	// GR#17): the USER-VISIBLE surface for a private-sector payroll
 	// shortfall — set by RecordPayrollShortfall when compose.go's
@@ -82,6 +90,17 @@ type FinanceAPI struct {
 	// see MET-G217's doc comment (errors.go).
 	lastPayrollShortfall      Money
 	lastPayrollShortfallMonth int64
+
+	// lastModeGateErr (FEAT-143 round finding P2-B, GR#17): the
+	// USER-VISIBLE surface for the most recent modeGate.Unlimited failure
+	// -- set by unlimitedLocked (mode.go) every time the injected gate
+	// returns an error (in production, a struct-copied *gameinit.GameInit
+	// tripping SEC-020), cleared the next time the gate succeeds. Mirrors
+	// lastPayrollShortfall's pattern exactly: a monitor polls
+	// ModeGateError() rather than grepping the ErrModeGateFailed log
+	// line, so the fail-closed-to-Real downgrade always leaves a trace
+	// rather than looking identical to an ordinary Real-mode session.
+	lastModeGateErr error
 
 	// v1 registries.
 	firms        map[FirmID]*SimpleFirm
@@ -309,6 +328,17 @@ func (f *FinanceAPI) validateLocked(tx Transaction) error {
 		return errs.New(ErrUnbalancedTransaction, f.correlationID, map[string]any{
 			"txid": 0, "debits": int64(d), "credits": int64(c),
 		})
+	}
+
+	// FEAT-143 AC-2: in Unlimited Money mode, placement/OPEX/payroll
+	// financial checks pass regardless of balance -- the overdraft check
+	// below is the single choke point every Post call (and therefore
+	// every placement/OPEX/payroll debit) funnels through, so gating IT
+	// is what makes the bypass a real gate on the SAME finance code
+	// rather than a second, divergent "sandbox" implementation (US-4).
+	// Skipped entirely in Unlimited mode; unchanged in Real mode.
+	if f.unlimitedLocked() {
+		return nil
 	}
 
 	// Overdraft check: no RoleMoney account may go below zero unless its

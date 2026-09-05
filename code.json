@@ -1228,6 +1228,10 @@
             "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           },
           {
+            "key": "feat.gameinit",
+            "outboundGuid": "6263d83f-7d7b-4705-937b-7561a9d9250d"
+          },
+          {
             "key": "feat.helper",
             "outboundGuid": "c8ea150c-b1d0-4b9a-a087-79390447f78c"
           },
@@ -1968,6 +1972,10 @@
           {
             "key": "feat.faith",
             "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
+          },
+          {
+            "key": "feat.gameinit",
+            "outboundGuid": "6263d83f-7d7b-4705-937b-7561a9d9250d"
           }
         ]
       },
@@ -5939,6 +5947,16 @@
             "key": "ui.screen.finance",
             "moduleGuid": "237d6c7a-77af-405f-a2b7-e6164210ab83",
             "inboundGuid": "d7978dd2-7f40-48cf-97f8-3f6ab17b1b6a"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
           }
         ]
       },

@@ -1,0 +1,19 @@
+{
+  "$comment": "FEAT-143 (mkey feat.gameinit): Game Initialization Modes -- Real vs Unlimited Money. The starting treasury balance for `real` mode is data-sourced (never a hardcoded Go literal, per AC-6/GR#15). Spec refs: FEAT-143's own Desc (Real vs Unlimited Money, lock-in on startup, immutable save metadata); docs/METROPOLIS-MASTER-v2.1.md §7 finance/insolvency (line 212); §13 line 12 ('The player starts with money'); §39. The 5,000,000-micropound figure carried in FEAT-143's Desc is a player-felt balance number and is NOT pinned here -- per the standing balance-number regime (Vestige metropolis-balance-number-regime) this file ships a disclosed placeholder pending Aaron's row-by-row approval; AC-6 checks only that real mode starts with a finite POSITIVE capital and unlimited mode is un-depletable, never this magnitude.",
+  "version": 1,
+  "meta": {
+    "module": "feat.gameinit",
+    "bowCode": "FEAT-143",
+    "specRefs": ["FEAT-143 Desc", "§7 line 212", "§13 line 12", "§39"],
+    "balanceRegime": "startingCapitalMicropounds is a disclosed PLACEHOLDER pending Aaron's balance pass -- AC-6 checks direction/shape (finite, positive) only, never this magnitude (GR#15)."
+  },
+  "params": {
+    "startingCapitalMicropounds": {
+      "value": 5000000000,
+      "unit": "micro-pounds (£5,000,000 placeholder; MicropoundsPerPound=1,000 per foundation/det/money.go)",
+      "placeholder": true,
+      "specRef": "FEAT-143 Desc's 5,000,000-figure proposal",
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (feat.gameinit.md Escalations: 'the 5,000,000 micropounds figure ... is a player-felt number ... AC-6 pins no value'). AC-6 checks only that real mode's starting balance is finite and strictly positive, and that unlimited mode is a genuine bypass, not a huge finite number -- never this magnitude."
+    }
+  }
+}

@@ -1507,21 +1507,40 @@ func financeDrawFunc(fs *financescreen.Screen) core.DrawFunc {
 		// origin is relative to r.X/r.Y, which is what keeps F2's "P&L"
 		// heading on a row the global top bar does not own.
 		r := screenContentRect(back)
-		col, row := r.W/2, r.H/2
+
+		// FEAT-143 AC-7 (round finding P2-C): the Unlimited Money
+		// indicator was built (financescreen.RenderMoneyMode,
+		// Screen.UnlimitedMoney) but had zero callers -- built but not
+		// wired. Drawn as a full-width banner strip ABOVE the 2x2 grid
+		// (never overlapping RenderPL/RenderBalanceSheet's own headings),
+		// only when the screen has actually published unlimited=true —
+		// RenderMoneyMode itself draws nothing otherwise (have=false, or
+		// have=true/unlimited=false), so a Real-mode session's layout is
+		// BYTE-FOR-BYTE unchanged from before this wiring: moneyModeRows
+		// stays 0 and the grid starts at r.Y exactly as it always did.
+		unlimited, haveUnlimited := fs.UnlimitedMoney()
+		moneyModeRows := 0
+		if haveUnlimited && unlimited {
+			moneyModeRows = 2
+		}
+		financescreen.RenderMoneyMode(back, core.Rect{X: r.X, Y: r.Y, W: r.W, H: moneyModeRows}, unlimited, haveUnlimited, style)
+
+		gridY, gridH := r.Y+moneyModeRows, r.H-moneyModeRows
+		col, row := r.W/2, gridH/2
 
 		pl, havePL := fs.PL()
-		financescreen.RenderPL(back, core.Rect{X: r.X, Y: r.Y, W: col, H: row}, pl, havePL, style)
+		financescreen.RenderPL(back, core.Rect{X: r.X, Y: gridY, W: col, H: row}, pl, havePL, style)
 
 		bs, haveBS := fs.BalanceSheet()
-		financescreen.RenderBalanceSheet(back, core.Rect{X: r.X + col, Y: r.Y, W: r.W - col, H: row}, bs, haveBS, style)
+		financescreen.RenderBalanceSheet(back, core.Rect{X: r.X + col, Y: gridY, W: r.W - col, H: row}, bs, haveBS, style)
 
 		loans, haveLoans := fs.Loans()
 		rating, _ := fs.CreditRating()
 		history, _ := fs.CreditRatingHistory()
-		financescreen.RenderLoans(back, core.Rect{X: r.X, Y: r.Y + row, W: col, H: r.H - row}, loans, rating, history, fs.LoanRejectedReason(), haveLoans, style)
+		financescreen.RenderLoans(back, core.Rect{X: r.X, Y: gridY + row, W: col, H: gridH - row}, loans, rating, history, fs.LoanRejectedReason(), haveLoans, style)
 
 		sliders, haveSliders := fs.TaxSliders()
-		financescreen.RenderSliders(back, core.Rect{X: r.X + col, Y: r.Y + row, W: r.W - col, H: r.H - row}, sliders, haveSliders, style)
+		financescreen.RenderSliders(back, core.Rect{X: r.X + col, Y: gridY + row, W: r.W - col, H: gridH - row}, sliders, haveSliders, style)
 	}
 }
 

@@ -73,10 +73,12 @@ func TestFinanceAPIFieldsAllClassified(t *testing.T) {
 		"mu":                        "runtime lock, not state",
 		"correlationID":             "per-instance error correlation, not simulation state",
 		"gate":                      "injected MilestoneGate config, wired by the composition root on load",
+		"modeGate":                  "FEAT-143 injected Real-vs-Unlimited-Money ModeGate config (SetModeGate), wired by the composition root on load like gate -- a session's locked mode itself is feat.gameinit/feat.saveux's own save.Meta.GameMode concern (AC-4), never re-derived from this transient injected policy pointer",
 		"self":                      "SEC-020 copy-guard pointer, re-armed by NewFinanceAPI",
 		"opexCfg":                   "FEAT-094 injected OPEX balance config (SetOpexConfig/LoadOpexConfig), wired by the composition root on load like gate",
 		"lastPayrollShortfall":      "BUG-548 GR#17 status surface, transient this-month observability only (PayrollShortfall()) -- not conservation-relevant ledger state; a reload starting fresh (0, no shortfall) until financeHook next runs is an acceptable, self-correcting gap, unlike the ledger/loan/firm state this test otherwise guards",
 		"lastPayrollShortfallMonth": "BUG-548 GR#17 status surface, transient this-month observability only (PayrollShortfall()) -- see lastPayrollShortfall's exclusion reason",
+		"lastModeGateErr":           "FEAT-143 round P2-B GR#17 status surface, transient observability only (ModeGateError()) -- mirrors lastPayrollShortfall's exclusion reason exactly: a reload starting fresh (nil, no recorded failure) until the next unlimitedLocked() check re-derives it is an acceptable, self-correcting gap, not conservation-relevant ledger state",
 	}
 	// Covered: serialized via financeMetaWire or a per-item record.
 	covered := map[string]bool{
