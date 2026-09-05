@@ -253,11 +253,25 @@ jobs:
             echo "::error::Could not read a key for storage account ${{ env.STORAGE_ACCOUNT }} in resource group ${{ env.RESOURCE_GROUP }}. This account is Metropolis-owned inside rg-metropolis-dev (BUG-715, created 2026-09-05) so a missing key means the account was deleted (e.g. by az group delete) - recreate it: az storage account create --name ${{ env.STORAGE_ACCOUNT }} --resource-group ${{ env.RESOURCE_GROUP }} --location ${{ env.AZURE_REGION }} --sku Standard_LRS --kind StorageV2. The deploy identity has Contributor on the RG so it can read the key once the account exists."
             exit 1
           fi
-          az storage share-rm create \
+          # BUG-716 / GR#17: the old '|| true' SWALLOWED create failures, so this
+          # step reported OK while the share did not exist, and the first durable
+          # mount later died 'VolumeMountFailure: mount error(2): No such file or
+          # directory' with traffic routed to the failed revision. Create only if
+          # missing, then VERIFY - a share that still does not exist FAILS the step.
+          if ! az storage share-rm exists \
             --storage-account "${{ env.STORAGE_ACCOUNT }}" \
             --name "${{ env.FILE_SHARE_NAME }}" \
-            --quota 5 \
-            --output none || true
+            --query exists -o tsv 2>/dev/null | grep -q true; then
+            az storage share-rm create \
+              --storage-account "${{ env.STORAGE_ACCOUNT }}" \
+              --name "${{ env.FILE_SHARE_NAME }}" \
+              --quota 5 \
+              --output none
+          fi
+          az storage share-rm show \
+            --storage-account "${{ env.STORAGE_ACCOUNT }}" \
+            --name "${{ env.FILE_SHARE_NAME }}" \
+            --output none
 
       - name: Register the Azure Files mount with the Container Apps environment
         shell: bash
@@ -335,14 +349,12 @@ jobs:
             # CMD exec-array (a real argv list), because az never splits --args into
             # separate container argv. This create-path update swaps the bootstrap
             # image for the real one; args stay unset so the CMD applies.
-            # DURABLE VOLUME DEFERRED (BUG-716): the --azure-file-volume-* flags are
-            # unrecognized by this runner's az containerapp extension version (the
-            # 'RE-VERIFY before first run' note above, adjudicated by the deploy run).
-            # metroserve runs with ephemeral in-image /data (BUG-693 made it nonroot-
-            # writable), which PROVES the deploy pipeline end-to-end and serves the
-            # app; the durable Azure Files mount (env storage 'metroserve-data' is
-            # already registered on metropolis-env) is re-attached via a container-app
-            # YAML spec as the BUG-716 follow-up.
+            # DURABLE VOLUME (BUG-716): --azure-file-volume-* flags are unrecognized
+            # by this runner's az containerapp extension version, so the mount is
+            # NOT attached here — the "Re-attach the durable Azure Files mount" step
+            # below runs after this step on BOTH the create and update paths and
+            # attaches it via `az containerapp update --yaml` instead (the mechanism
+            # already proven live fixing BUG-718).
             # Sticky sessions (design doc §1.5/ASM-1506 — Container Apps
             # ingress session affinity). Not load-bearing for correctness
             # (determinism means any replica can rebuild any city by
@@ -353,6 +365,57 @@ jobs:
               --resource-group "${{ env.RESOURCE_GROUP }}" \
               --affinity sticky || echo "::warning::sticky-sessions set failed or unsupported on this az cli version — non-fatal at max-replicas=1, revisit before inc4's multi-replica work"
           fi
+
+      # BUG-716: re-attach the DURABLE Azure Files mount. This runner's az
+      # containerapp extension version doesn't recognize the
+      # --azure-file-volume-* create/update flags, so the mount can't be
+      # attached inline with the step above on either the create or update
+      # path. Instead, this step uses the mechanism the lead already proved
+      # live fixing BUG-718's --args defect: capture the app's CURRENT full
+      # spec (`az containerapp show -o json` — JSON is valid YAML, so no
+      # YAML library is needed anywhere in this pipeline, matching
+      # tools/azure/smoke.mjs's dependency-free precedent), inject ONLY
+      # properties.template.volumes + the named container's volumeMounts
+      # via tools/azure/inject-volume-mount.mjs (unit-tested for
+      # idempotency and non-clobbering in
+      # tools/azure/inject-volume-mount.test.mjs), then
+      # `az containerapp update --yaml` the result back.
+      #
+      # Runs unconditionally after BOTH the create and update paths above,
+      # and is idempotent by construction (the injection script
+      # upserts-by-name — a volume/mount that already matches is REPLACED
+      # in place, never duplicated), so re-running this workflow on an
+      # already-mounted app is a safe no-op update.
+      #
+      # storageName here (env.CONTAINERAPP_STORAGE_NAME) is the storage
+      # link already registered on the ENVIRONMENT by the "Register the
+      # Azure Files mount with the Container Apps environment" step above
+      # — this step only wires the APP's template to reference it; it does
+      # not create or modify that environment-level registration.
+      - name: Re-attach the durable Azure Files mount (BUG-716)
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp show \
+            --name "${{ env.CONTAINER_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            -o json > current-app.json
+          node tools/azure/inject-volume-mount.mjs \
+            --in current-app.json \
+            --out mounted-app.yaml \
+            --container-name "${{ env.CONTAINER_APP_NAME }}" \
+            --volume-name metroserve-data-volume \
+            --storage-name "${{ env.CONTAINERAPP_STORAGE_NAME }}" \
+            --mount-path /data
+          az containerapp update \
+            --name "${{ env.CONTAINER_APP_NAME }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --yaml mounted-app.yaml
+          # metroserve's -persist-dir /data (Dockerfile CMD, unchanged by
+          # this workflow) now lands on the durable mount instead of the
+          # in-image filesystem. The BUG-693 in-image /data seed is
+          # SHADOWED by the mount from this point on — expected, matches
+          # production once real storage is attached.
 
       - name: Report the deployed FQDN and image
         shell: bash
