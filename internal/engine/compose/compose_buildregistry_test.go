@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/deathservices"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
@@ -156,5 +158,287 @@ func TestRegisterCompletedServiceBuildings_UnknownKindIsObservableViaErrsRecent(
 	}
 	if found.Ctx["buildingID"] != "graveyard" {
 		t.Errorf("logged entry ctx[buildingID] = %v, want %q", found.Ctx["buildingID"], "graveyard")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BUG-743 — unregisterDemolishedServiceBuildings: the demolition-side
+// mirror of registerCompletedServiceBuildings, closing the gap BUG-734 left
+// open. Driven the same way: direct []build.Demolition literals against a
+// real *deathservices.DeathServicesAPI, no world/season/logistics/build
+// fixture needed.
+// ---------------------------------------------------------------------------
+
+func TestUnregisterDemolishedServiceBuildings_UnregistersCemeteryAndCrematorium(t *testing.T) {
+	ds := newDeathServicesForRegistryTest(t)
+	completions := []build.BuildOrder{
+		{ID: 1, BuildingID: "cemetery", Status: build.OrderComplete},
+		{ID: 2, BuildingID: "crematorium", Status: build.OrderComplete},
+	}
+	if err := registerCompletedServiceBuildings(completions, ds, "corr"); err != nil {
+		t.Fatalf("registerCompletedServiceBuildings: %v", err)
+	}
+
+	demolitions := []build.Demolition{
+		{OrderID: 1, BuildingID: "cemetery", DemolitionSeq: 1},
+		{OrderID: 2, BuildingID: "crematorium", DemolitionSeq: 2},
+	}
+	if err := unregisterDemolishedServiceBuildings(demolitions, ds, "corr"); err != nil {
+		t.Fatalf("unregisterDemolishedServiceBuildings: %v", err)
+	}
+
+	if _, _, err := ds.CemeteryOccupancy(cemeteryInstanceID(1), "corr"); err == nil {
+		t.Fatalf("CemeteryOccupancy(%s) succeeded after demolition, want ErrUnknownCemetery", cemeteryInstanceID(1))
+	}
+	if _, _, err := ds.Cremate(nil, crematoriumInstanceID(2), 1, "corr"); err == nil {
+		t.Fatalf("Cremate against %s succeeded after demolition, want ErrUnknownCrematorium", crematoriumInstanceID(2))
+	}
+}
+
+// TestUnregisterDemolishedServiceBuildings_NilDeathServicesIsNoOp mirrors
+// registerCompletedServiceBuildings' own "not wired yet" degrade.
+func TestUnregisterDemolishedServiceBuildings_NilDeathServicesIsNoOp(t *testing.T) {
+	demolitions := []build.Demolition{{OrderID: 1, BuildingID: "cemetery", DemolitionSeq: 1}}
+	if err := unregisterDemolishedServiceBuildings(demolitions, nil, "corr"); err != nil {
+		t.Fatalf("unregisterDemolishedServiceBuildings(nil ds) = %v, want nil (no-op)", err)
+	}
+}
+
+// TestUnregisterDemolishedServiceBuildings_EmptyIsNoOp is the trivial
+// boundary — an empty/never-yet-advanced demolition cursor window.
+func TestUnregisterDemolishedServiceBuildings_EmptyIsNoOp(t *testing.T) {
+	ds := newDeathServicesForRegistryTest(t)
+	if err := unregisterDemolishedServiceBuildings(nil, ds, "corr"); err != nil {
+		t.Fatalf("unregisterDemolishedServiceBuildings(nil demolitions): %v", err)
+	}
+}
+
+// TestUnregisterDemolishedServiceBuildings_NeverRegisteredIsLoggedNoOp
+// proves the documented idempotency shape: a demolition naming a building
+// this ds instance never actually registered (e.g. a demolition for an id
+// that predates BUG-734/BUG-743, or a re-delivered window) is NOT an error
+// — it is a logged, GR#17-observable no-op via
+// [ErrDemolitionAlreadyDeregistered], the same errs.Recent() observability
+// contract ErrUnknownDeathServiceBuildingKind already relies on.
+func TestUnregisterDemolishedServiceBuildings_NeverRegisteredIsLoggedNoOp(t *testing.T) {
+	ds := newDeathServicesForRegistryTest(t)
+	const probeCorrelationID = "bug743-never-registered-probe"
+	demolitions := []build.Demolition{
+		{OrderID: 99, BuildingID: "cemetery", DemolitionSeq: 1},
+	}
+	if err := unregisterDemolishedServiceBuildings(demolitions, ds, probeCorrelationID); err != nil {
+		t.Fatalf("unregisterDemolishedServiceBuildings: %v", err)
+	}
+
+	var found *errs.Entry
+	for _, e := range errs.Recent() {
+		if e.Code == ErrDemolitionAlreadyDeregistered && e.CorrelationID == probeCorrelationID {
+			e := e
+			found = &e
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("ErrDemolitionAlreadyDeregistered (correlation %q) not found in errs.Recent() — the discarded no-op is genuinely lost, GR#17 violated", probeCorrelationID)
+	}
+	if found.Ctx["orderID"] != uint64(99) {
+		t.Errorf("logged entry ctx[orderID] = %v, want %d", found.Ctx["orderID"], uint64(99))
+	}
+}
+
+// TestUnregisterDemolishedServiceBuildings_RedeliveredDemolitionIsLoggedNoOp
+// proves the SAME redelivery-tolerance for a REAL prior registration: unregister
+// once (succeeds), then unregister the identical demolition record again
+// (the shape a caller re-delivers when its persisted cursor has not
+// advanced past this demolition yet) — the second call must also be a
+// logged no-op, never a hard error.
+func TestUnregisterDemolishedServiceBuildings_RedeliveredDemolitionIsLoggedNoOp(t *testing.T) {
+	ds := newDeathServicesForRegistryTest(t)
+	if err := registerCompletedServiceBuildings([]build.BuildOrder{{ID: 5, BuildingID: "cemetery", Status: build.OrderComplete}}, ds, "corr"); err != nil {
+		t.Fatalf("registerCompletedServiceBuildings: %v", err)
+	}
+	demolitions := []build.Demolition{{OrderID: 5, BuildingID: "cemetery", DemolitionSeq: 1}}
+	if err := unregisterDemolishedServiceBuildings(demolitions, ds, "corr"); err != nil {
+		t.Fatalf("first unregister: %v", err)
+	}
+	// Redeliver the SAME demolition record.
+	if err := unregisterDemolishedServiceBuildings(demolitions, ds, "corr-redelivered"); err != nil {
+		t.Fatalf("redelivered unregister: %v", err)
+	}
+}
+
+// TestUnregisterDemolishedServiceBuildings_UnknownKindLogged mirrors
+// registerCompletedServiceBuildings' own unknown-BuildingID observability
+// (F3), on the demolition side.
+func TestUnregisterDemolishedServiceBuildings_UnknownKindLogged(t *testing.T) {
+	ds := newDeathServicesForRegistryTest(t)
+	const probeCorrelationID = "bug743-unknown-kind-probe"
+	demolitions := []build.Demolition{
+		{OrderID: 7, BuildingID: "graveyard", DemolitionSeq: 1}, // unknown synonym, mirrors the F3 register-side test
+	}
+	if err := unregisterDemolishedServiceBuildings(demolitions, ds, probeCorrelationID); err != nil {
+		t.Fatalf("unregisterDemolishedServiceBuildings: %v", err)
+	}
+	var found bool
+	for _, e := range errs.Recent() {
+		if e.Code == ErrUnknownDeathServiceBuildingKind && e.CorrelationID == probeCorrelationID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("ErrUnknownDeathServiceBuildingKind (correlation %q) not found in errs.Recent()", probeCorrelationID)
+	}
+}
+
+// TestUnregisterDemolishedServiceBuildings_BulldozeMidBacklog is BUG-743's
+// sharpest teeth: registers two cemeteries and two crematoria, runs a real
+// death backlog through Intake/Bury/Cremate (some buried, some cremated,
+// some left AWAITING — a genuine mid-backlog city), then bulldozes ONE
+// cemetery and ONE crematorium mid-backlog and asserts:
+//
+//   - bodies are conserved across the demolition (AC-14's identity —
+//     intake == buried + cremated + dispensed + awaiting(+en-route) — holds
+//     identically before and after, since UnregisterCemetery/
+//     UnregisterCrematorium never touch a Body record, only the
+//     registration bookkeeping);
+//   - disposal capacity ([DeathServicesAPI.MonthlyDrainCapacity]) drops in
+//     THIS SAME call, reflecting one fewer cemetery/crematorium
+//     immediately, not on some later tick;
+//   - the SURVIVING cemetery/crematorium are completely untouched — still
+//     queryable, still live.
+func TestUnregisterDemolishedServiceBuildings_BulldozeMidBacklog(t *testing.T) {
+	ds := newDeathServicesForRegistryTest(t)
+	completions := []build.BuildOrder{
+		{ID: 1, BuildingID: "cemetery", Status: build.OrderComplete},
+		{ID: 2, BuildingID: "cemetery", Status: build.OrderComplete},
+		{ID: 3, BuildingID: "crematorium", Status: build.OrderComplete},
+		{ID: 4, BuildingID: "crematorium", Status: build.OrderComplete},
+	}
+	if err := registerCompletedServiceBuildings(completions, ds, "corr"); err != nil {
+		t.Fatalf("registerCompletedServiceBuildings: %v", err)
+	}
+
+	// A real backlog: 6 deaths intaken, 2 buried, 2 cremated, 2 left
+	// AWAITING (the "mid-backlog" shape).
+	deaths := make([]citizens.RealisedDeath, 6)
+	for i := range deaths {
+		deaths[i] = citizens.RealisedDeath{CitizenID: uint64(i + 1), DeathMonth: 1}
+	}
+	if _, err := ds.Intake(deaths, "corr"); err != nil {
+		t.Fatalf("Intake: %v", err)
+	}
+	if err := ds.Bury(1, cemeteryInstanceID(1), 1, "corr"); err != nil {
+		t.Fatalf("Bury(1): %v", err)
+	}
+	if err := ds.Bury(2, cemeteryInstanceID(2), 1, "corr"); err != nil {
+		t.Fatalf("Bury(2): %v", err)
+	}
+	if _, _, err := ds.Cremate([]uint64{3, 4}, crematoriumInstanceID(3), 1, "corr"); err != nil {
+		t.Fatalf("Cremate: %v", err)
+	}
+	// Citizens 5 and 6 stay AWAITING — the backlog.
+
+	before, err := ds.Snapshot("corr")
+	if err != nil {
+		t.Fatalf("Snapshot (before): %v", err)
+	}
+	if before.Sum() != before.BodiesReleased {
+		t.Fatalf("setup: conservation identity does not hold BEFORE demolition: %+v (sum=%d)", before, before.Sum())
+	}
+	capBefore := ds.MonthlyDrainCapacity(1)
+
+	// Bulldoze cemetery #1 and crematorium #3 mid-backlog.
+	demolitions := []build.Demolition{
+		{OrderID: 1, BuildingID: "cemetery", DemolitionSeq: 1},
+		{OrderID: 3, BuildingID: "crematorium", DemolitionSeq: 2},
+	}
+	if err := unregisterDemolishedServiceBuildings(demolitions, ds, "corr"); err != nil {
+		t.Fatalf("unregisterDemolishedServiceBuildings: %v", err)
+	}
+
+	// Conservation holds IDENTICALLY across the demolition — no body was
+	// touched, only registration bookkeeping.
+	after, err := ds.Snapshot("corr")
+	if err != nil {
+		t.Fatalf("Snapshot (after): %v", err)
+	}
+	if after != before {
+		t.Fatalf("conservation snapshot changed across a demolition that touches no bodies: before=%+v after=%+v", before, after)
+	}
+	if after.Sum() != after.BodiesReleased {
+		t.Fatalf("conservation identity broken after demolition: %+v (sum=%d)", after, after.Sum())
+	}
+
+	// Capacity drops in THIS SAME call (one fewer cemetery/crematorium).
+	capAfter := ds.MonthlyDrainCapacity(1)
+	if capAfter >= capBefore {
+		t.Fatalf("MonthlyDrainCapacity did not drop after bulldozing a cemetery+crematorium: before=%d after=%d", capBefore, capAfter)
+	}
+
+	// The demolished ids are gone.
+	if _, _, err := ds.CemeteryOccupancy(cemeteryInstanceID(1), "corr"); err == nil {
+		t.Fatalf("CemeteryOccupancy(demolished cemetery) succeeded, want ErrUnknownCemetery")
+	}
+	if _, _, err := ds.Cremate(nil, crematoriumInstanceID(3), 1, "corr"); err == nil {
+		t.Fatalf("Cremate(demolished crematorium) succeeded, want ErrUnknownCrematorium")
+	}
+
+	// The SURVIVING cemetery #2 and crematorium #4 are untouched.
+	occ2, cap2, err := ds.CemeteryOccupancy(cemeteryInstanceID(2), "corr")
+	if err != nil {
+		t.Fatalf("CemeteryOccupancy(surviving cemetery): %v", err)
+	}
+	if occ2 != 1 || cap2 <= 0 {
+		t.Fatalf("surviving cemetery occupancy/capacity = (%d, %d), want (1, >0) — its own buried body must still be counted", occ2, cap2)
+	}
+	if _, _, err := ds.Cremate(nil, crematoriumInstanceID(4), 1, "corr"); err != nil {
+		t.Fatalf("Cremate(surviving crematorium) failed: %v", err)
+	}
+}
+
+// TestUnregisterDemolishedServiceBuildings_SharedCrematoriumDeregisteredOnlyOnLast
+// proves the shared CrematoriumServiceID (engine.services registration) is
+// only removed once the LAST crematorium is bulldozed — demolishing the
+// first of two must leave the shared registration alive (mirroring
+// deathservices' own TestUnregisterCrematorium_SharedServiceIDOnlyDeregisteredWhenLastRemoved,
+// exercised here through the compose-level helper this bug wires up).
+func TestUnregisterDemolishedServiceBuildings_SharedCrematoriumDeregisteredOnlyOnLast(t *testing.T) {
+	sv, err := services.LoadDefault("corr")
+	if err != nil {
+		t.Fatalf("services.LoadDefault: %v", err)
+	}
+	ds := newDeathServicesForRegistryTest(t)
+	if err := ds.Wire(sv, nil, "corr"); err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+	if err := registerCompletedServiceBuildings([]build.BuildOrder{
+		{ID: 1, BuildingID: "crematorium", Status: build.OrderComplete},
+		{ID: 2, BuildingID: "crematorium", Status: build.OrderComplete},
+	}, ds, "corr"); err != nil {
+		t.Fatalf("registerCompletedServiceBuildings: %v", err)
+	}
+	if _, err := sv.Capacity(deathservices.CrematoriumServiceID); err != nil {
+		t.Fatalf("setup: shared CrematoriumServiceID not registered: %v", err)
+	}
+
+	// Demolish the FIRST crematorium: the shared registration must survive.
+	if err := unregisterDemolishedServiceBuildings([]build.Demolition{
+		{OrderID: 1, BuildingID: "crematorium", DemolitionSeq: 1},
+	}, ds, "corr"); err != nil {
+		t.Fatalf("unregisterDemolishedServiceBuildings (first): %v", err)
+	}
+	if _, err := sv.Capacity(deathservices.CrematoriumServiceID); err != nil {
+		t.Fatalf("shared CrematoriumServiceID deregistered after only ONE of two crematoria demolished: %v", err)
+	}
+
+	// Demolish the LAST crematorium: the shared registration must now be gone.
+	if err := unregisterDemolishedServiceBuildings([]build.Demolition{
+		{OrderID: 2, BuildingID: "crematorium", DemolitionSeq: 2},
+	}, ds, "corr"); err != nil {
+		t.Fatalf("unregisterDemolishedServiceBuildings (last): %v", err)
+	}
+	if _, err := sv.Capacity(deathservices.CrematoriumServiceID); err == nil {
+		t.Fatalf("shared CrematoriumServiceID still registered after the LAST crematorium was demolished")
 	}
 }

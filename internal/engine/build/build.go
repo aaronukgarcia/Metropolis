@@ -215,6 +215,28 @@ type DemolishResult struct {
 	Compensation int64
 }
 
+// Demolition is one demolished structure's completed, immutable record
+// (BUG-743): the demolition-side counterpart to [BuildOrder]/
+// [BuildAPI.CompletedBuildings]. OrderID is the demolished structure's real
+// submission identity — the SAME value [BuildAPI.Queue]/
+// [BuildAPI.CompletedBuildings] show for that order, never overloaded (the
+// exact identity discipline CompletedBuildings' own doc comment establishes
+// for BuildOrder.ID). BuildingID is the catalogue id the demolished order
+// was completed as (empty for a plain §34 zone order — never returned by
+// [BuildAPI.DemolishedSince], mirroring CompletedBuildings' own "a zone
+// order with no BuildingID is never returned" rule). DemolitionSeq is a
+// SEPARATE monotonic axis from CompletionSeq, stamped at the moment
+// SubmitDemolishCommand removes the standing structure — never at
+// submission or completion — so a consumer's demolition cursor tracks
+// exactly when a structure came DOWN, independent of when it went UP.
+type Demolition struct {
+	OrderID       BuildOrderID
+	BuildingID    string
+	DemolitionSeq uint64
+	Tile          world.TileCoord
+	Local         world.CellLocal
+}
+
 // ZoneInfo is one zone type's read-only catalogue record (AC-2/AC-8).
 type ZoneInfo struct {
 	Zone             ZoneType
@@ -262,7 +284,22 @@ type BuildAPI struct {
 	// (a legacy-saved complete order that never got a completionSeq stamped
 	// before this fix existed). Persisted beside nextOrder in build.meta.
 	nextCompletionSeq BuildOrderID
-	demand            map[ZoneType]DemandInput
+	// nextDemolitionSeq is BUG-743's monotonic demolition-order counter,
+	// distinct from BOTH nextOrder (submission order) and nextCompletionSeq
+	// (completion order): incremented exactly once per structure removed by
+	// SubmitDemolishCommand, stamping the moment it comes DOWN — the third,
+	// independent axis a consumer's DemolishedSince cursor tracks. Persisted
+	// beside nextOrder/nextCompletionSeq in build.meta.
+	nextDemolitionSeq BuildOrderID
+	// demolitions is the append-only, ever-growing log of every demolition
+	// this BuildAPI has ever processed (BUG-743) — mirroring b.queue's own
+	// "never evicted" precedent (registerCompletedServicesLocked's doc):
+	// nothing ever removes an entry, so the slice's own append order IS its
+	// DemolitionSeq order (strictly increasing, GR#21 — no sort ever
+	// needed). [BuildAPI.DemolishedSince] filters this directly, the same
+	// cursor-query shape [BuildAPI.CompletedBuildings] uses over b.queue.
+	demolitions []Demolition
+	demand      map[ZoneType]DemandInput
 	// serviceByOrder tracks which completed orders registered a service
 	// with engine.services, keyed by the completing order's id — the
 	// index SubmitDemolishCommand consults to deregister the matching
@@ -699,7 +736,38 @@ func (b *BuildAPI) SubmitDemolishCommand(cmd DemolishCommand) (DemolishResult, e
 		}
 		delete(b.serviceByOrder, orderID)
 	}
+	// BUG-743: stamp the demolition-order axis and append the immutable
+	// record BEFORE returning — the removal above (zoneState/structures/
+	// serviceByOrder) and this append happen in the SAME locked step, so a
+	// consumer polling DemolishedSince can never observe the structure gone
+	// from b.structures without the matching Demolition record also present
+	// (or vice-versa).
+	b.nextDemolitionSeq++
+	b.demolitions = append(b.demolitions, Demolition{
+		OrderID:       orderID,
+		BuildingID:    b.orderByIDLocked(orderID),
+		DemolitionSeq: uint64(b.nextDemolitionSeq),
+		Tile:          cmd.Tile,
+		Local:         cmd.Local,
+	})
 	return DemolishResult{Compensation: compensation}, nil
+}
+
+// orderByIDLocked resolves a build order's catalogue BuildingID from its
+// submission id — a plain linear scan over b.queue (never a map, GR#21;
+// mirrors registerCompletedServicesLocked's own full-queue walk), called
+// only from SubmitDemolishCommand's already-locked path. Returns the empty
+// string for an id this queue does not hold — defensive only; b.structures
+// (the caller's own lookup source, immediately above) can never name an id
+// b.queue does not also hold, since every id in b.structures is written
+// exactly once, in Tick's completion step, from a b.queue entry.
+func (b *BuildAPI) orderByIDLocked(id BuildOrderID) string {
+	for _, o := range b.queue {
+		if o.id == id {
+			return o.buildingID
+		}
+	}
+	return ""
 }
 
 // PurchasePrice returns a cell's purchase price in micro-pounds, sourced
@@ -1256,6 +1324,51 @@ func (b *BuildAPI) CompletedBuildings(sinceCompletionSeq BuildOrderID) []BuildOr
 		// on. No override here: unlike an earlier version of this method,
 		// .ID is NEVER repurposed.
 		out = append(out, o.snapshot())
+	}
+	return out
+}
+
+// DemolishedSince returns every demolished structure named by a catalogue
+// building (BuildingID != "") whose DemolitionSeq is strictly greater than
+// sinceDemolitionSeq, in ascending DEMOLITION order (BUG-743: the
+// demolition feed a consumer like the composition root needs to discover
+// which named service buildings have come down since it last looked, the
+// exact mirror of [BuildAPI.CompletedBuildings] for the opposite direction
+// of the build/demolish lifecycle).
+//
+// This is a CURSOR query, mirroring CompletedBuildings' own idiom (itself
+// mirroring DeathHandoffSince, BUG-689): the caller persists the highest
+// DemolitionSeq this method has returned and passes it back in as
+// sinceDemolitionSeq next time. Calling it twice with the SAME cursor
+// against unchanged state is idempotent (a pure function of state and
+// cursor, GR#21 — no hidden per-call consumption). Two calls that never
+// advance the cursor between them, or a caller re-delivering an already-
+// consumed window, both return the identical result set — "exactly once"
+// is a property of how a correct caller ADVANCES the cursor (by
+// DemolitionSeq, never by OrderID — see CompletedBuildings' own doc for
+// why a submission-order axis cannot serve as a completion/demolition
+// cursor; the same reasoning applies here), not a mutation this method
+// performs.
+//
+// b.demolitions is already in strictly-ascending DemolitionSeq order (it is
+// an append-only log stamped monotonically at append time — see the field's
+// own doc), so no sort is needed here; the filter below is a single linear
+// pass. A demolished order with an empty BuildingID (a plain §34 zone
+// order) is never returned — mirroring CompletedBuildings' identical rule.
+func (b *BuildAPI) DemolishedSince(sinceDemolitionSeq BuildOrderID) []Demolition {
+	if err := b.checkNotCopied("DemolishedSince"); err != nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	since := uint64(sinceDemolitionSeq)
+	out := make([]Demolition, 0)
+	for _, d := range b.demolitions {
+		if d.BuildingID == "" || d.DemolitionSeq <= since {
+			continue
+		}
+		out = append(out, d)
 	}
 	return out
 }

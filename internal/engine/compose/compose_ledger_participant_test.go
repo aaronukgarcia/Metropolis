@@ -1,8 +1,10 @@
 package compose
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
 
@@ -24,15 +26,19 @@ func TestComposeLedgerParticipant_EveryDurableFieldRoundTrips(t *testing.T) {
 	// Distinct sentinels so a cross-wired field (A copied into B's slot) is
 	// caught as well as a dropped one.
 	src := &simState{
-		moneyFlows:           1_000_001,
-		netMigration:         -222,
-		consumptionDelivered: 333.5,
-		vitalBirths:          444,
-		vitalDeaths:          555,
-		peopleOpening:        666,
-		peopleDelta:          -777,
-		moneyOpening:         8_000_008,
-		moneyDelta:           -99_099,
+		moneyFlows:                       1_000_001,
+		netMigration:                     -222,
+		consumptionDelivered:             333.5,
+		vitalBirths:                      444,
+		vitalDeaths:                      555,
+		peopleOpening:                    666,
+		peopleDelta:                      -777,
+		moneyOpening:                     8_000_008,
+		moneyDelta:                       -99_099,
+		buildRegistryCursor:              build.BuildOrderID(11_011),
+		buildDemolitionCursor:            build.BuildOrderID(22_022),
+		deathServiceBridgeCemeteryIDs:    []string{"build-order-1-cemetery", "build-order-3-cemetery"},
+		deathServiceBridgeCrematoriumIDs: []string{"build-order-2-crematorium"},
 	}
 
 	// Drain the participant Source (one record) and feed it straight into a
@@ -81,6 +87,26 @@ func TestComposeLedgerParticipant_EveryDurableFieldRoundTrips(t *testing.T) {
 	}
 	if src.consumptionDelivered != dst.consumptionDelivered {
 		t.Errorf("durable field consumptionDelivered did NOT round-trip: src=%f dst=%f", src.consumptionDelivered, dst.consumptionDelivered)
+	}
+
+	// BUG-743: the two build->deathservices bridge cursors + roster.
+	if src.buildRegistryCursor != dst.buildRegistryCursor {
+		t.Errorf("durable field buildRegistryCursor did NOT round-trip: src=%d dst=%d", src.buildRegistryCursor, dst.buildRegistryCursor)
+	}
+	if src.buildDemolitionCursor != dst.buildDemolitionCursor {
+		t.Errorf("durable field buildDemolitionCursor did NOT round-trip: src=%d dst=%d", src.buildDemolitionCursor, dst.buildDemolitionCursor)
+	}
+	if !reflect.DeepEqual(src.deathServiceBridgeCemeteryIDs, dst.deathServiceBridgeCemeteryIDs) {
+		t.Errorf("durable field deathServiceBridgeCemeteryIDs did NOT round-trip: src=%v dst=%v", src.deathServiceBridgeCemeteryIDs, dst.deathServiceBridgeCemeteryIDs)
+	}
+	if !reflect.DeepEqual(src.deathServiceBridgeCrematoriumIDs, dst.deathServiceBridgeCrematoriumIDs) {
+		t.Errorf("durable field deathServiceBridgeCrematoriumIDs did NOT round-trip: src=%v dst=%v", src.deathServiceBridgeCrematoriumIDs, dst.deathServiceBridgeCrematoriumIDs)
+	}
+	// The Wire-time stopgap roster is DELIBERATELY untouched by this
+	// participant (compose.go's own field doc) — prove a fresh dst keeps
+	// its zero value, unaffected by whatever src carried.
+	if dst.deathServiceCemeteryIDs != nil || dst.deathServiceCrematoriumIDs != nil {
+		t.Errorf("participant unexpectedly wrote the Wire-time stopgap roster: cemeteryIDs=%v crematoriumIDs=%v (must stay untouched by Load)", dst.deathServiceCemeteryIDs, dst.deathServiceCrematoriumIDs)
 	}
 
 	// treasury/citizenWealth are DERIVED (recomputed from finance in Load), so

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
 
@@ -81,6 +82,33 @@ import (
 //	                          openings are captured at genesis / carried from the
 //	                          previous tick's close; the deltas accumulate within
 //	                          the current tick. Neither is a module observable.
+//	  - buildRegistryCursor/buildDemolitionCursor (BUG-743): this
+//	                          composition's own cursors over engine.build's
+//	                          CompletedBuildings/DemolishedSince feeds — the
+//	                          exact DeathHandoffSince/handoffCursor idiom
+//	                          (BUG-689), mirrored for the build->deathservices
+//	                          registration bridge. No module holds this; it is
+//	                          compose's own record of how much of EACH feed
+//	                          runDeathServiceBuildingRegistry has consumed.
+//	  - deathServiceBridgeCemeteryIDs/deathServiceBridgeCrematoriumIDs
+//	                          (BUG-743): the sorted roster of cemetery/
+//	                          crematorium ids THIS composition has registered
+//	                          via the live build->deathservices bridge
+//	                          (runDeathServiceBuildingRegistry) —
+//	                          deathservices exposes no enumeration accessor of
+//	                          its own (RegisterCemetery/RegisterCrematorium only
+//	                          insert into unexported maps), so this roster is
+//	                          the ONLY record of which build-order-derived ids
+//	                          exist to sweep — dropping it on a Load would
+//	                          silently stop the daily run loop from ever
+//	                          draining a crematorium/cemetery that in fact
+//	                          still stands. Deliberately does NOT cover
+//	                          deathServiceCemeteryIDs/deathServiceCrematoriumIDs
+//	                          (BUG-720's ORIGINAL Wire-time stopgap roster,
+//	                          unchanged) — that roster is constructor-time
+//	                          configuration, not save-restorable state, and
+//	                          must survive a rewind untouched (see its own
+//	                          field doc in compose.go).
 //
 //	NOT SERIALIZED — the BUG-288 once-per-tick ledger-closing trackers
 //	(previousClosingPop, previousClosingMoney, lastClosedTick) are DELIBERATELY
@@ -125,6 +153,25 @@ type composeLedgerWire struct {
 	PeopleDelta          int64   `json:"peopleDelta"`
 	MoneyOpening         int64   `json:"moneyOpening"`
 	MoneyDelta           int64   `json:"moneyDelta"`
+	// BuildRegistryCursor/BuildDemolitionCursor (BUG-743): see this file's
+	// own doc comment's DURABLE list entry. omitempty on both: a save taken
+	// before this fix existed decodes them to zero, which is the CORRECT
+	// starting cursor value (nothing had ever been consumed from either
+	// feed under that save's history) — never a backfill-ambiguous case.
+	BuildRegistryCursor   uint64 `json:"buildRegistryCursor,omitempty"`
+	BuildDemolitionCursor uint64 `json:"buildDemolitionCursor,omitempty"`
+	// DeathServiceBridgeCemeteryIDs/DeathServiceBridgeCrematoriumIDs
+	// (BUG-743): the live build->deathservices bridge roster
+	// runDeathServiceBuildingRegistry maintains — see this file's own
+	// doc comment. Deliberately does NOT cover the SEPARATE Wire-time
+	// stopgap roster (deathServiceCemeteryIDs/deathServiceCrematoriumIDs,
+	// unchanged since BUG-720) — that one is constructor-time
+	// configuration, never touched by a save/load (see its own field doc
+	// in compose.go). Always emitted (no omitempty): an EMPTY roster is
+	// itself a meaningful, real fact (nothing registered yet),
+	// distinguishable on the wire from "field absent, decode zero-value".
+	DeathServiceBridgeCemeteryIDs    []string `json:"deathServiceBridgeCemeteryIDs"`
+	DeathServiceBridgeCrematoriumIDs []string `json:"deathServiceBridgeCrematoriumIDs"`
 }
 
 // composeLedgerToWire projects the durable ledger fields off the live
@@ -132,15 +179,25 @@ type composeLedgerWire struct {
 // recomputed from the finance module on load (see the file doc comment).
 func composeLedgerToWire(st *simState) composeLedgerWire {
 	return composeLedgerWire{
-		MoneyFlows:           st.moneyFlows,
-		NetMigration:         st.netMigration,
-		ConsumptionDelivered: st.consumptionDelivered,
-		VitalBirths:          st.vitalBirths,
-		VitalDeaths:          st.vitalDeaths,
-		PeopleOpening:        st.peopleOpening,
-		PeopleDelta:          st.peopleDelta,
-		MoneyOpening:         st.moneyOpening,
-		MoneyDelta:           st.moneyDelta,
+		MoneyFlows:            st.moneyFlows,
+		NetMigration:          st.netMigration,
+		ConsumptionDelivered:  st.consumptionDelivered,
+		VitalBirths:           st.vitalBirths,
+		VitalDeaths:           st.vitalDeaths,
+		PeopleOpening:         st.peopleOpening,
+		PeopleDelta:           st.peopleDelta,
+		MoneyOpening:          st.moneyOpening,
+		MoneyDelta:            st.moneyDelta,
+		BuildRegistryCursor:   uint64(st.buildRegistryCursor),
+		BuildDemolitionCursor: uint64(st.buildDemolitionCursor),
+		// Copy, never alias the live slice — Source snapshots at a point in
+		// time (this file's own "single-goroutine observation point"
+		// precedent); a later in-place mutation of st.deathServiceBridgeCemeteryIDs
+		// (append growing the backing array, or removeSortedString's
+		// truncation) must never retroactively change bytes already handed
+		// to json.Marshal by the time this function returns.
+		DeathServiceBridgeCemeteryIDs:    append([]string(nil), st.deathServiceBridgeCemeteryIDs...),
+		DeathServiceBridgeCrematoriumIDs: append([]string(nil), st.deathServiceBridgeCrematoriumIDs...),
 	}
 }
 
@@ -158,6 +215,17 @@ func composeLedgerFromWire(st *simState, w composeLedgerWire) {
 	st.peopleDelta = w.PeopleDelta
 	st.moneyOpening = w.MoneyOpening
 	st.moneyDelta = w.MoneyDelta
+	st.buildRegistryCursor = build.BuildOrderID(w.BuildRegistryCursor)
+	st.buildDemolitionCursor = build.BuildOrderID(w.BuildDemolitionCursor)
+	// A load REPLACES the roster (mirroring every per-module participant's
+	// own "resetForLoad clears, Handler rebuilds" contract) — never merges
+	// with whatever the live composition held before Load, so a rewind to
+	// an earlier save correctly drops a roster entry registered AFTER that
+	// save point (the same "no phantom instance survives a rewind" property
+	// TestServicesBridge_RewindDropsPhantomInLiveComposition already proves
+	// for engine.services).
+	st.deathServiceBridgeCemeteryIDs = append([]string(nil), w.DeathServiceBridgeCemeteryIDs...)
+	st.deathServiceBridgeCrematoriumIDs = append([]string(nil), w.DeathServiceBridgeCrematoriumIDs...)
 }
 
 // composeLedgerParticipant adapts the composition root's own simState ledgers

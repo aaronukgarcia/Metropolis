@@ -64,6 +64,7 @@ func TestBuildAPIFieldsAllClassified(t *testing.T) {
 	covered := map[string]bool{
 		"district": true, "nextOrder": true, "nextCompletionSeq": true, "queue": true,
 		"zoneState": true, "structures": true, "demand": true,
+		"nextDemolitionSeq": true, "demolitions": true,
 	}
 	bt := reflect.TypeOf((*BuildAPI)(nil)).Elem()
 	for i := 0; i < bt.NumField(); i++ {
@@ -90,6 +91,7 @@ func TestBuildMetaWireFieldsMatchScalars(t *testing.T) {
 		"district":          {"District", reflect.String},
 		"nextOrder":         {"NextOrder", reflect.Uint64},         // BuildOrderID is uint64
 		"nextCompletionSeq": {"NextCompletionSeq", reflect.Uint64}, // BuildOrderID is uint64
+		"nextDemolitionSeq": {"NextDemolitionSeq", reflect.Uint64}, // BuildOrderID is uint64
 	}
 	mw := reflect.TypeOf((*buildMetaWire)(nil)).Elem()
 	if mw.NumField() != len(want) {
@@ -137,6 +139,33 @@ func TestBuildOrderWireCoversEveryMutableOrderField(t *testing.T) {
 		}
 		if _, ok := wt.FieldByName(wire); !ok {
 			t.Fatalf("buildOrderWire is missing field %q for buildOrder.%s", wire, domain)
+		}
+	}
+}
+
+// TestDemolitionWireCoversEveryDemolitionField asserts the on-wire
+// demolition record carries a counterpart for every field of the exported,
+// immutable Demolition struct (BUG-743) — mirroring
+// TestBuildOrderWireCoversEveryMutableOrderField's guard for the queue.
+func TestDemolitionWireCoversEveryDemolitionField(t *testing.T) {
+	want := map[string]string{
+		"OrderID":       "OrderID",
+		"BuildingID":    "BuildingID",
+		"DemolitionSeq": "DemolitionSeq",
+		"Tile":          "Tile",
+		"Local":         "Local",
+	}
+	dt := reflect.TypeOf((*Demolition)(nil)).Elem()
+	if dt.NumField() != len(want) {
+		t.Fatalf("Demolition has %d fields but %d are mapped to the wire", dt.NumField(), len(want))
+	}
+	wt := reflect.TypeOf((*buildDemolitionWire)(nil)).Elem()
+	for domain, wire := range want {
+		if _, ok := dt.FieldByName(domain); !ok {
+			t.Fatalf("Demolition is missing expected field %q", domain)
+		}
+		if _, ok := wt.FieldByName(wire); !ok {
+			t.Fatalf("buildDemolitionWire is missing field %q for Demolition.%s", wire, domain)
 		}
 	}
 }
@@ -190,6 +219,13 @@ func driveBuild(t *testing.T, b *BuildAPI, w *world.WorldAPI, l *logistics.Logis
 	// A non-default district (must round-trip). Set AFTER the draws so the
 	// completions above still resolved against DefaultDistrict's shelf.
 	ckErr(t, b.SetDistrict("north"))
+
+	// BUG-743: demolish one of the just-completed structures so a
+	// Demolition record (and the advanced nextDemolitionSeq counter) is
+	// part of the driven state this participant must round-trip.
+	if _, err := b.SubmitDemolishCommand(DemolishCommand{Tile: tile00(), Local: world.CellLocal{Row: 0, Col: 0}, OwnerID: testOwner}); err != nil {
+		t.Fatalf("SubmitDemolishCommand: %v", err)
+	}
 }
 
 // continueBuild applies one more deterministic batch that touches ONLY build
@@ -221,6 +257,12 @@ func compareBuild(t *testing.T, a, b *BuildAPI, label string) {
 	}
 	if a.nextCompletionSeq != b.nextCompletionSeq {
 		t.Fatalf("%s: nextCompletionSeq %d != %d", label, a.nextCompletionSeq, b.nextCompletionSeq)
+	}
+	if a.nextDemolitionSeq != b.nextDemolitionSeq {
+		t.Fatalf("%s: nextDemolitionSeq %d != %d", label, a.nextDemolitionSeq, b.nextDemolitionSeq)
+	}
+	if !reflect.DeepEqual(a.demolitions, b.demolitions) {
+		t.Fatalf("%s: demolitions mismatch:\n a=%+v\n b=%+v", label, a.demolitions, b.demolitions)
 	}
 	qa, qb := a.Queue(), b.Queue()
 	if !reflect.DeepEqual(qa, qb) {

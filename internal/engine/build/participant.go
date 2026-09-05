@@ -69,11 +69,12 @@ const (
 	// header's Kind to route the shard back here.
 	KindBuild = "build"
 
-	recBuildMeta      = "build.meta"
-	recBuildOrder     = "build.order"
-	recBuildZone      = "build.zone"
-	recBuildStructure = "build.structure"
-	recBuildDemand    = "build.demand"
+	recBuildMeta       = "build.meta"
+	recBuildOrder      = "build.order"
+	recBuildZone       = "build.zone"
+	recBuildStructure  = "build.structure"
+	recBuildDemand     = "build.demand"
+	recBuildDemolition = "build.demolition"
 )
 
 // buildMetaWire carries the BuildAPI's scalar runtime state — every mutable
@@ -95,6 +96,18 @@ type buildMetaWire struct {
 	// after a load never collides with one minted before it (the exact
 	// NextOrder precedent, mirrored for the second counter).
 	NextCompletionSeq BuildOrderID `json:"nextCompletionSeq,omitempty"`
+	// NextDemolitionSeq is BUG-743's monotonic demolition-order counter
+	// (Demolition.DemolitionSeq's source), persisted beside NextOrder/
+	// NextCompletionSeq — a THIRD distinct counter, same additive-field,
+	// omitempty-on-a-pre-existing-save precedent NextCompletionSeq already
+	// established for itself. A save written before this fix existed
+	// decodes this to zero, which is correct: no demolition had ever
+	// happened yet under that save's history, so zero is the true starting
+	// point for the counter, not a backfill case (unlike
+	// NextCompletionSeq's legacy-completionSeq-zero ambiguity — a
+	// demolition record always carries its own real DemolitionSeq, so there
+	// is no "was this ever demolished" ambiguity to repair on load).
+	NextDemolitionSeq BuildOrderID `json:"nextDemolitionSeq,omitempty"`
 }
 
 // buildOrderWire is one queue entry on the wire — the full mutable
@@ -154,23 +167,37 @@ type buildDemandWire struct {
 	FreightStarved bool     `json:"freightStarved"`
 }
 
+// buildDemolitionWire is one demolitions entry on the wire (BUG-743):
+// emitted in the log's own append (DemolitionSeq) order, so — like
+// buildOrderWire — no separate sort key is carried; the slice order IS the
+// deterministic order.
+type buildDemolitionWire struct {
+	OrderID       BuildOrderID    `json:"orderID"`
+	BuildingID    string          `json:"buildingID,omitempty"`
+	DemolitionSeq uint64          `json:"demolitionSeq"`
+	Tile          world.TileCoord `json:"tile"`
+	Local         world.CellLocal `json:"local"`
+}
+
 // buildSnapshot is a point-in-time, deterministically-ordered copy of the
 // mutable state, taken under the lock in one shot. Both map-backed
 // collections are flattened to slices SORTED by key (GR#21); the queue is
 // captured in its own slice order (already deterministic). The emitted
 // record order — and therefore the saved bytes — is deterministic.
 type buildSnapshot struct {
-	meta       buildMetaWire
-	orders     []buildOrderWire     // slice (insertion) order
-	zones      []buildZoneWire      // sorted by cell key
-	structures []buildStructureWire // sorted by cell key
-	demands    []buildDemandWire    // sorted by ZoneType
+	meta        buildMetaWire
+	orders      []buildOrderWire      // slice (insertion) order
+	zones       []buildZoneWire       // sorted by cell key
+	structures  []buildStructureWire  // sorted by cell key
+	demands     []buildDemandWire     // sorted by ZoneType
+	demolitions []buildDemolitionWire // slice (DemolitionSeq / append) order
 }
 
 // total is the number of records the snapshot emits: one meta record plus
-// one per queue entry, zone entry, structure entry, and demand entry.
+// one per queue entry, zone entry, structure entry, demand entry, and
+// demolition entry.
 func (s *buildSnapshot) total() int {
-	return 1 + len(s.orders) + len(s.zones) + len(s.structures) + len(s.demands)
+	return 1 + len(s.orders) + len(s.zones) + len(s.structures) + len(s.demands) + len(s.demolitions)
 }
 
 // recordAt marshals exactly the i-th record of the deterministic emission
@@ -205,7 +232,11 @@ func (s *buildSnapshot) locate(i int) (string, any) {
 		return recBuildStructure, s.structures[i]
 	}
 	i -= len(s.structures)
-	return recBuildDemand, s.demands[i]
+	if i < len(s.demands) {
+		return recBuildDemand, s.demands[i]
+	}
+	i -= len(s.demands)
+	return recBuildDemolition, s.demolitions[i]
 }
 
 // lessCellKey is the total order over cell keys used to sort the map-backed
@@ -241,6 +272,7 @@ func (b *BuildAPI) snapshotForSave() (buildSnapshot, error) {
 			District:          b.district,
 			NextOrder:         b.nextOrder,
 			NextCompletionSeq: b.nextCompletionSeq,
+			NextDemolitionSeq: b.nextDemolitionSeq,
 		},
 	}
 
@@ -304,6 +336,21 @@ func (b *BuildAPI) snapshotForSave() (buildSnapshot, error) {
 		})
 	}
 
+	// Demolitions — already in strictly-ascending DemolitionSeq (append)
+	// order (BUG-743: an append-only log, never a map — see the field's own
+	// doc), so no sort here, mirroring the queue's own slice-order emission.
+	snap.demolitions = make([]buildDemolitionWire, 0, len(b.demolitions))
+	for _, d := range b.demolitions {
+		// Demolition and buildDemolitionWire share identical field
+		// names/types/order — a direct conversion, not a re-listed struct
+		// literal, mirroring staticcheck's S1016 preference; the "no domain
+		// type marshalled directly" doc rule (participant.go's package doc)
+		// still holds, since buildDemolitionWire is its own distinct type
+		// with its own json tags -- only the field COPY is done via
+		// conversion instead of naming each field twice.
+		snap.demolitions = append(snap.demolitions, buildDemolitionWire(d))
+	}
+
 	return snap, nil
 }
 
@@ -325,10 +372,12 @@ func (b *BuildAPI) resetForLoad() error {
 	b.district = DefaultDistrict
 	b.nextOrder = 0
 	b.nextCompletionSeq = 0
+	b.nextDemolitionSeq = 0
 	b.queue = nil
 	b.zoneState = make(map[cellKey]ZoneType)
 	b.structures = make(map[cellKey]BuildOrderID)
 	b.demand = make(map[ZoneType]DemandInput)
+	b.demolitions = nil
 	// serviceByOrder is NOT part of the save schema (out of scope per
 	// FEAT-build-services-bridge-2026-09-02's "Composition root wiring"
 	// note — engine.services registration is not itself persisted here),
@@ -367,6 +416,7 @@ func (b *BuildAPI) applyLoadRecord(rec serialize.Record) error {
 		b.district = m.District
 		b.nextOrder = m.NextOrder
 		b.nextCompletionSeq = m.NextCompletionSeq
+		b.nextDemolitionSeq = m.NextDemolitionSeq
 
 	case recBuildOrder:
 		var w buildOrderWire
@@ -413,6 +463,17 @@ func (b *BuildAPI) applyLoadRecord(rec serialize.Record) error {
 			PowerStarved:   w.PowerStarved,
 			FreightStarved: w.FreightStarved,
 		}
+
+	case recBuildDemolition:
+		var w buildDemolitionWire
+		if err := json.Unmarshal(rec.Data, &w); err != nil {
+			return fmt.Errorf("build: decoding %s record: %w", rec.Kind, err)
+		}
+		// Direct conversion (staticcheck S1016) — see snapshotForSave's
+		// identical note on why this is not "marshalling the domain type
+		// directly": buildDemolitionWire remains the distinct wire type
+		// with its own json tags, only the field copy uses a conversion.
+		b.demolitions = append(b.demolitions, Demolition(w))
 
 	default:
 		return fmt.Errorf("build: unknown build save record kind %q", rec.Kind)

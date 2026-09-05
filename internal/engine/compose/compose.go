@@ -785,10 +785,14 @@ func (c *Composition) DeathServicesRunStatus() DeathServicesRunStatus {
 	backlog, _ := st.deathServices.AwaitingBacklog(st.cid)
 	active, _ := st.deathServices.DispensationActive(st.cid)
 	return DeathServicesRunStatus{
-		AwaitingBacklog:      backlog,
-		DispensationActive:   active,
-		CemeteriesRegistered: len(st.deathServiceCemeteryIDs),
-		CrematoriaRegistered: len(st.deathServiceCrematoriumIDs),
+		AwaitingBacklog:    backlog,
+		DispensationActive: active,
+		// BUG-743: the roster is now TWO sources — the Wire-time stopgap
+		// plus the live build->deathservices bridge — summed here so this
+		// status figure reflects every actually-registered id, not just
+		// the stopgap half.
+		CemeteriesRegistered: len(st.deathServiceCemeteryIDs) + len(st.deathServiceBridgeCemeteryIDs),
+		CrematoriaRegistered: len(st.deathServiceCrematoriumIDs) + len(st.deathServiceBridgeCrematoriumIDs),
 	}
 }
 
@@ -1670,19 +1674,63 @@ type simState struct {
 	wellbeingSeams  []wellbeingSeamStatus
 	wellbeingStatus WellbeingStatus
 
-	// deathServiceCemeteryIDs / deathServiceCrematoriumIDs (BUG-720) are the
-	// deterministic (sorted, GR#21), Wire-time-populated rosters of every
-	// cemetery/crematorium id this composition registered via
-	// Deps.DeathServiceCemeteries/DeathServiceCrematoria — deathservices
-	// itself exposes no enumeration accessor (RegisterCemetery/
-	// RegisterCrematorium only ever insert into its own unexported maps),
-	// so compose tracks the ids it registered itself in order to drive
-	// deathServicesRunHook's daily RunHearseTransport/Cremate sweep and
-	// DeathServicesRunStatus's roster counts. See Deps.DeathServiceCemeteries'
-	// doc comment for why this is a Wire-time stopgap rather than a live,
-	// build-completion-driven roster.
+	// deathServiceCemeteryIDs / deathServiceCrematoriumIDs (BUG-720) remain
+	// EXACTLY the Wire-time stopgap roster the original doc described:
+	// deterministic (sorted, GR#21) ids registered ONLY from
+	// Deps.DeathServiceCemeteries/DeathServiceCrematoria at Wire time — the
+	// only route to give a cemetery a non-default plot capacity, since
+	// RegisterCemeteryWithCapacity has no build-completion-driven equivalent
+	// (see Deps.DeathServiceCemeteries' own doc comment). Deliberately NEVER
+	// touched by Load/BUG-743's bridge — these ids are constructor-time
+	// configuration, not save-restorable STATE, so a rewind to an earlier
+	// save must not affect them (mirrors how Wire's other one-shot
+	// registrations, e.g. the catalogue itself, are never part of any
+	// save). See deathServiceBridgeCemeteryIDs immediately below for the
+	// LIVE, build-completion-driven counterpart BUG-743 adds.
 	deathServiceCemeteryIDs    []string
 	deathServiceCrematoriumIDs []string
+
+	// deathServiceBridgeCemeteryIDs / deathServiceBridgeCrematoriumIDs
+	// (BUG-743) are the deterministic (sorted, GR#21) roster of every
+	// cemetery/crematorium id THIS composition has registered with
+	// engine.deathservices via the LIVE build->deathservices bridge
+	// (runDeathServiceBuildingRegistry, compose_buildregistry.go, called
+	// from buildHook.ApplyEffect below) — closing BUG-720's own documented
+	// gap #1 ("no ServiceKind-declaring catalogue building... can ever be
+	// registered... via the live player build path") for cemetery/
+	// crematorium specifically. deathservices exposes no enumeration
+	// accessor of its own (RegisterCemetery/RegisterCrematorium only ever
+	// insert into unexported maps), so this roster — kept SEPARATE from the
+	// Wire-time stopgap roster above — is the only record of which
+	// build-order-derived ids exist. deathServicesRunHook's daily
+	// RunHearseTransport/Cremate sweep (runDeathServices) iterates BOTH
+	// rosters; DeathServicesRunStatus's counts sum both too.
+	//
+	// UNLIKE the Wire-time roster, this one IS genuinely save-restorable
+	// state: it is added to the moment engine.build's completion feed
+	// reports a landing and removed the moment the demolition feed reports
+	// a teardown, so a rewind to an earlier save correctly drops an id
+	// registered after that save point (the SAME "no phantom instance
+	// survives a rewind" property TestServicesBridge_RewindDropsPhantomInLiveComposition
+	// already proves for engine.services). Persisted via
+	// composeLedgerParticipant (compose_ledger_participant.go) alongside
+	// buildRegistryCursor/buildDemolitionCursor.
+	deathServiceBridgeCemeteryIDs    []string
+	deathServiceBridgeCrematoriumIDs []string
+
+	// buildRegistryCursor / buildDemolitionCursor (BUG-743) are this
+	// composition's own persisted cursors over engine.build's completion/
+	// demolition feeds ([build.BuildAPI.CompletedBuildings]/
+	// [build.BuildAPI.DemolishedSince]) — the highest CompletionSeq/
+	// DemolitionSeq runDeathServiceBuildingRegistry has ever consumed.
+	// Exactly the DeathHandoffSince/handoffCursor cursor idiom (BUG-689),
+	// mirrored for the build->deathservices registration bridge instead of
+	// the citizens->deathservices intake bridge. Persisted via
+	// composeLedgerParticipant so a Load resumes EXACTLY where the live
+	// composition left off — never redelivering an already-processed
+	// completion/demolition, never skipping one taken between two saves.
+	buildRegistryCursor   build.BuildOrderID
+	buildDemolitionCursor build.BuildOrderID
 
 	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): the composed
 	// engine.traffic dependency (traffic_wire.go). trafficTickHook calls
@@ -2476,6 +2524,14 @@ func (h *buildHook) ApplyEffect(eff core.Effect) {
 		return
 	}
 	h.st.registerLeisureVenues()
+	// BUG-743/BUG-734: piggyback the build->deathservices registration
+	// bridge on this SAME daily hook, right after Tick, mirroring
+	// registerLeisureVenues' own build->leisure bridge immediately above —
+	// deliberately NOT a new core.PhaseHook (which would change
+	// PhaseHookCount and invalidate the CI perf baseline). See
+	// compose_buildregistry.go's package doc for the two-cursor recipe this
+	// call implements.
+	h.st.runDeathServiceBuildingRegistry()
 
 	// FEAT-1972079927 inc2: accrue this tick's newly-drawn construction
 	// materials cost (split local-merchant vs imported) and settle the
@@ -2920,6 +2976,18 @@ func (st *simState) runDeathServices(day, month int64) error {
 		return nil
 	}
 
+	// BUG-743: the roster this sweep drives is now TWO sources,
+	// concatenated (never merged into one globally-resorted slice — each
+	// half is independently sorted, and a fixed concatenation order is
+	// itself a deterministic order, GR#21's actual requirement): the
+	// Wire-time stopgap roster (deathServiceCemeteryIDs/CrematoriumIDs,
+	// unchanged from BUG-720) and the live build->deathservices bridge
+	// roster (deathServiceBridgeCemeteryIDs/CrematoriumIDs, added by
+	// runDeathServiceBuildingRegistry) — see simState's own field docs for
+	// why these stay two separate fields rather than one persisted union.
+	cemeteryIDs := append(append([]string{}, st.deathServiceCemeteryIDs...), st.deathServiceBridgeCemeteryIDs...)
+	crematoriumIDs := append(append([]string{}, st.deathServiceCrematoriumIDs...), st.deathServiceBridgeCrematoriumIDs...)
+
 	// Hearse transport + burial: one cemetery at a time, deterministic
 	// order, refetching the backlog between cemeteries (see doc above).
 	//
@@ -2932,7 +3000,7 @@ func (st *simState) runDeathServices(day, month int64) error {
 	// WHOLE submitted slice first; truncating here keeps that walk (and
 	// every allocation sized off it) bounded by the budget too, not the
 	// backlog.
-	for _, cemeteryID := range st.deathServiceCemeteryIDs {
+	for _, cemeteryID := range cemeteryIDs {
 		remaining, err := st.deathServices.RemainingHearseBudget(month, st.cid)
 		if err != nil {
 			return err
@@ -2979,7 +3047,7 @@ func (st *simState) runDeathServices(day, month int64) error {
 	// bounds it to O(throughput x totalBodies), independent of backlog
 	// size — see TestBUG720_DailySweepBoundedByThroughputNotBacklog for
 	// the count-based (never wall-clock) regression proof.
-	for _, crematoriumID := range st.deathServiceCrematoriumIDs {
+	for _, crematoriumID := range crematoriumIDs {
 		remaining, err := st.deathServices.RemainingDailyThroughput(crematoriumID, day, st.cid)
 		if err != nil {
 			return err

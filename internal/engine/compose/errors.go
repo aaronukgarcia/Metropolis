@@ -173,4 +173,19 @@ const (
 	// this with ZERO observable trace at all, no error, no counter, no skip
 	// list).
 	ErrUnknownDeathServiceBuildingKind = "MET-G815"
+
+	// ErrDemolitionAlreadyDeregistered (BUG-743): unregisterDemolishedServiceBuildings
+	// called UnregisterCemetery/UnregisterCrematorium against an id that
+	// engine.deathservices reports as unknown (ErrUnknownCemetery/
+	// ErrUnknownCrematorium) — either a re-delivered demolition window (the
+	// SAME demolition seen twice because the caller's persisted cursor has
+	// not advanced past it yet) or a demolition naming a building this
+	// helper's own caller never actually registered in the first place.
+	// NEVER returned to the caller — the whole point is that a replay-safe
+	// demolition feed must not hard-fail on its own documented idempotency
+	// shape (see unregisterDemolishedServiceBuildings' own doc) — recorded
+	// via `_ = errs.New(...)` at the skip site instead (GR#17), mirroring
+	// ErrUnknownDeathServiceBuildingKind's own discarded-but-observable
+	// treatment.
+	ErrDemolitionAlreadyDeregistered = "MET-G816"
 )
