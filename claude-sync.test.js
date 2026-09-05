@@ -149,6 +149,17 @@ function readCmd(sessionId) {
   return run(['read'], sessionId);
 }
 
+/** BUG-486: the ACTUAL shape of the PostToolUse ping hook's `renew --auto`
+ *  invocation (see claude-ping-check.js's execSync call) — CLAUDE_CODE_SESSION_ID
+ *  set in env and NOTHING ELSE, no --session flag at all. `renewAuto()` above
+ *  (pre-existing, used by AC-12) always appended --session from the key file
+ *  and so never actually exercised the hook's real call shape — that gap is
+ *  exactly how BUG-486 (auto-renew silently never renewing) shipped unnoticed
+ *  behind a green AC-12. This helper is the one BUG-486's regression tests use. */
+function renewAutoHookShape(sessionId) {
+  return run(['renew', '--auto'], sessionId);
+}
+
 test.before(async () => {
   // Snapshot the shared identity fallback file so this suite's synthetic
   // acquire() calls (unavoidable side effect of exercising `checkin` as a
@@ -512,6 +523,101 @@ test('AC-12: renew --auto never surfaces or consumes unread messages; a genuine 
   assert.match(genuineRead.stdout, /mid-session arrival/);
   const [rows3] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
   assert.ok(Number(rows3[0].last_read_id) > 0, 'read must advance the cursor');
+});
+
+// ── BUG-486: renew --auto never renewed from the real ping-hook call shape ──
+// Root cause: cmdRenew resolves the caller's own permit ONLY via
+// findMineBySessionSecret, which requires an explicit --session flag.
+// claude-ping-check.js's `renew --auto` call passed CLAUDE_CODE_SESSION_ID in
+// env and NOTHING ELSE — no --session — so it silently renewed nothing, ever
+// (renewAuto() above, used by AC-12, always appended --session from the key
+// file itself and so never actually exercised the hook's real broken call
+// shape — that gap is exactly how this shipped unnoticed behind a green
+// AC-12).
+//
+// FIX: NOT in cmdRenew (see the long comment at the top of cmdRenew in
+// claude-sync.js for why defaulting flags.session there from
+// readSessionKey(WINDOW_ID) is a security regression — proven by the
+// existing 'BUG-354 r4 W-3' / 'BUG-354 r5 F4' tests going RED under that
+// approach). The fix is in claude-ping-check.js: it now reads its OWN
+// session-key file (readOwnSessionSecret) and passes the secret as an
+// explicit `--session` flag on the `renew --auto` call, exactly like an
+// operator or renewAuto() already does. cmdRenew's trust boundary is
+// unchanged — still secret-only.
+
+/** Run the REAL PostToolUse hook (claude-ping-check.js) end-to-end against
+ *  the scratch DB, exactly as it runs in production: stdin carries the hook
+ *  payload, CLAUDE_PING_SYNC_SCRIPT defaults to the real (fixed)
+ *  claude-sync.js sitting next to it, and a fresh CLAUDE_PING_DIR guarantees
+ *  the 2-minute throttle never suppresses this call. */
+function runRealPingHook(sessionId) {
+  const throttleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bug486-ping-'));
+  try {
+    return spawnSync(process.execPath, [path.join(ROOT, 'claude-ping-check.js')], {
+      cwd: ROOT,
+      input: JSON.stringify({ session_id: sessionId, hook_event_name: 'PostToolUse' }),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT),
+        METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD, METRO_DB_NAME: TEST_DB,
+        CLAUDE_IDENTITY: '',
+        CLAUDE_PING_DIR: throttleDir,
+        CLAUDE_CODE_SESSION_ID: sessionId,
+      },
+    });
+  } finally {
+    try { fs.rmSync(throttleDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+test('BUG-486: the real PostToolUse hook actually renews a near-expiry permit end-to-end (red-before/green-after anchor)', async () => {
+  const sid = 'bug486-real-hook-session';
+  const before = checkin('Bro', sid);
+  assert.equal(before.status, 0, `checkin should succeed: ${before.stderr}`);
+
+  // Force the permit to look like it's about to expire — the exact state
+  // the hook's periodic auto-renew must act on (< RENEW_THRESHOLD_MS left).
+  const nearExpiry = Date.now() + 60 * 1000; // 1 minute remaining, well under 3.5min
+  await db.query('UPDATE sync_permits SET expires_ms=? WHERE name="Bro"', [nearExpiry]);
+
+  const hookRun = runRealPingHook(sid);
+  assert.equal(hookRun.status, 0, `hook must stay fail-open: ${hookRun.stderr}`);
+
+  const [[row]] = await db.query('SELECT expires_ms FROM sync_permits WHERE name="Bro"');
+  assert.ok(Number(row.expires_ms) > nearExpiry + 60 * 1000,
+    `the real hook's renew --auto must have pushed expires_ms out by ~TTL_MS; ` +
+    `before=${nearExpiry} after=${row.expires_ms} (pre-fix this stayed exactly at ${nearExpiry} — the live BUG-486 symptom)`);
+});
+
+test('BUG-486: a fresh window with no permit and no key file yet gets a loud diagnostic from renew --auto, never total silence (GR#17)', async () => {
+  const sid = 'bug486-neverchecked-in-session';
+  // Deliberately never checked in — no row, no window_map entry, no key
+  // file for this session id anywhere, so claude-ping-check.js's
+  // readOwnSessionSecret finds nothing and calls plain `renew --auto`.
+  const autoRenew = renewAutoHookShape(sid);
+  assert.equal(autoRenew.status, 0, 'an unresolved --auto call must still exit 0 (fail-open for the tool call)');
+  assert.notEqual(autoRenew.stdout.trim(), '',
+    'GR#17: a --auto call that resolves no permit at all must print a loud notice, never total silence');
+  assert.match(autoRenew.stdout, /renew --auto/, 'the notice must self-identify so it is greppable from hook output');
+});
+
+test('BUG-486/BUG-360: an env-spoofed WINDOW_ID with no key file of its own still cannot renew or touch the victim\'s permit', async () => {
+  const victimSid = 'bug486-victim-session';
+  assert.equal(checkin('Bill', victimSid).status, 0);
+  const [[before]] = await db.query('SELECT session_id, expires_ms FROM sync_permits WHERE name="Bill"');
+
+  // Attacker: sets CLAUDE_CODE_SESSION_ID to the victim's exact window id
+  // (learned somehow — logs, transcripts) but presents no --session secret
+  // and, on a real attacker's own machine, would have no key file for it
+  // either. Confirms BUG-486's fix (hook-side --session presentation) did
+  // not loosen cmdRenew's existing WINDOW_ID-blind trust model.
+  const attack = renewAutoHookShape(victimSid);
+  assert.equal(attack.status, 0, 'a --auto call fails open (exit 0) even when it resolves nothing');
+
+  const [[after]] = await db.query('SELECT session_id, expires_ms FROM sync_permits WHERE name="Bill"');
+  assert.equal(after.session_id, before.session_id, 'the victim\'s permit secret must be untouched by the spoof attempt');
+  assert.equal(Number(after.expires_ms), Number(before.expires_ms), 'the victim\'s permit must not have been renewed by the spoof attempt');
 });
 
 // ── AC-13: documentation ─────────────────────────────────────────────────────

@@ -48,6 +48,56 @@ const CHECK_INTERVAL_MS = 2 * 60 * 1000;  // Check every 2 minutes
 // the regression test (claude-ping-check.test.js) can drive the failure path
 // end-to-end against a stub that exits nonzero, without a live metro DB.
 const SYNC_SCRIPT = process.env.CLAUDE_PING_SYNC_SCRIPT || path.join(__dirname, 'claude-sync.js');
+
+/**
+ * BUG-486: read this window's own server-issued session secret straight from
+ * its per-user session-key file, so it can be presented as an explicit
+ * `--session` flag on the `renew --auto` call below. THIS is the actual fix
+ * for BUG-486 (root cause: cmdRenew in claude-sync.js resolves the caller's
+ * permit ONLY via a presented --session secret — never via ambient
+ * CLAUDE_CODE_SESSION_ID env — and this hook used to call `renew --auto` with
+ * env only, so it silently renewed nothing, EVER).
+ *
+ * The fix deliberately does NOT live in claude-sync.js's cmdRenew: making
+ * cmdRenew trust WINDOW_ID + key-file possession on its own would reopen the
+ * exact hole BUG-354 r4/r6 closed (claude-sync.test.js's 'BUG-354 r4 W-3' and
+ * 'BUG-354 r5 F4' both model an attacker who merely knows/guesses a victim's
+ * window id and sets it in env with no secret of their own — on the same
+ * machine the key file is addressed purely by that guessable id string, so
+ * "possession" of it proves nothing once the id leaks). This hook, in
+ * contrast, genuinely IS the window it is renewing for — it received this
+ * exact window's session_id from Claude Code's own hook stdin payload two
+ * lines below, not from a value some other process merely claimed — so
+ * reading and presenting ITS OWN key file is the same possession proof an
+ * operator or the test suite's own renewAuto() helper already uses manually;
+ * it changes nothing about cmdRenew's trust boundary, only who is allowed to
+ * self-serve calling it.
+ *
+ * Best-effort/fail-open by design (matches every other read in this file):
+ * a missing key file (fresh window, pre-first-checkin) just means no
+ * --session flag is added and the call behaves exactly as before (falls
+ * through to claude-sync's own "nothing to renew" notice) — never a reason
+ * to crash the hook.
+ *
+ * GR#3 (Single Source of Truth): the key-file path formula (per-user
+ * os.homedir()/.claude/session-keys/.session-key-<windowId>[-<dbTag>]) is
+ * NOT reimplemented here — it is required straight from claude-sync.js's own
+ * `readSessionKey` export, the exact function acquire()/ensureSessionKey()
+ * use to read/write that same file, so the two can never drift apart. This
+ * intentionally requires the REAL claude-sync.js next to this file, NOT the
+ * overridable `SYNC_SCRIPT` (which claude-ping-check.test.js points at a
+ * bare stub for its execSync-failure tests — that stub has no such export
+ * and would throw at require-time if used here).
+ */
+function readOwnSessionSecret(windowId) {
+  if (!windowId) return '';
+  try {
+    const { readSessionKey } = require(path.join(__dirname, 'claude-sync.js'));
+    return readSessionKey(windowId);
+  } catch {
+    return ''; // claude-sync.js missing/broken or no key file yet — never crash the hook over it
+  }
+}
 const DOT_CLAUDE_DIR = process.env.CLAUDE_PING_DIR || path.join(__dirname, '.claude');
 
 /** Read the hook's stdin JSON (Claude Code always provides it and closes the pipe). */
@@ -130,8 +180,22 @@ function main() {
     // Update timestamp FIRST to avoid retry spam on network errors
     fs.writeFileSync(pingFile, String(nowMs), 'utf8');
 
+    // BUG-486: present this window's own server-issued session secret
+    // explicitly, exactly as an operator/the test suite's renewAuto() helper
+    // would — claude-sync's cmdRenew resolves permits ONLY via a presented
+    // --session secret, never via ambient env, so without this the renew
+    // call below has always silently resolved nothing (see
+    // readOwnSessionSecret's doc comment above for why this fix lives here
+    // and not by loosening claude-sync's trust model). Validate the UUID
+    // shape before it ever reaches a shell-interpolated command string —
+    // crypto.randomUUID() (the only thing that ever writes this file) always
+    // produces this shape, so a mismatch means a corrupted/tampered file and
+    // the flag is simply omitted rather than trusted.
+    const ownSecret = readOwnSessionSecret(windowId);
+    const sessionArg = /^[0-9a-f-]{36}$/i.test(ownSecret) ? ` --session "${ownSecret}"` : '';
+
     try {
-      const output = execSync(`node "${SYNC_SCRIPT}" renew --auto`, {
+      const output = execSync(`node "${SYNC_SCRIPT}" renew --auto${sessionArg}`, {
         encoding: 'utf8',
         timeout: 15000,
         cwd: __dirname,
@@ -164,4 +228,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { describeRenewFailure };
+module.exports = { describeRenewFailure, readOwnSessionSecret };

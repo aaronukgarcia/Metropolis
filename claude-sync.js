@@ -1285,6 +1285,36 @@ async function cmdCheckin(db) {
 
 async function cmdRenew(db) {
   const now = Date.now();
+  // BUG-486: the PostToolUse ping hook called `renew --auto` with ONLY
+  // CLAUDE_CODE_SESSION_ID set in env (see claude-ping-check.js) — it never
+  // passed --session, because that secret is printed exactly once, at
+  // checkin, and the hook is a different process invocation entirely. Every
+  // resolution path below (`mine`/`stale`/`hadName`) is gated on flags.session
+  // via findMineBySessionSecret, so a bare `renew --auto` silently no-opped
+  // on EVERY hook call — the live symptom (an active session's permit decays
+  // to RESERVED despite constant tool use, because the hook's "renewal"
+  // never actually renewed).
+  //
+  // FIX LOCATION: claude-ping-check.js, NOT here. The obvious-looking fix —
+  // have cmdRenew itself default flags.session from
+  // readSessionKey(WINDOW_ID) when the caller passed none — was tried and
+  // is a SECURITY REGRESSION: it reintroduces exactly the WINDOW_ID+key-file
+  // trust that BUG-354 r4/r6 deliberately excluded from renew (unlike
+  // findMine(), which read/status/message paths use and BUG-360 tracks as an
+  // accepted residual risk). Proven by the existing suite: 'BUG-354 r4 W-3'
+  // and 'BUG-354 r5 F4' (claude-sync.test.js) both model an attacker who
+  // knows/guesses a victim's WINDOW_ID value and sets it in env with no
+  // secret of their own — on the SAME machine, sessionKeyPath(WINDOW_ID) is
+  // keyed ONLY by that guessable id string, so "possession of the key file"
+  // proves nothing once the id is known; a default-from-key-file here would
+  // let that same attacker wake-recover / re-mint the victim's permit via
+  // bare `renew --auto`. Both tests went RED under that approach and are the
+  // reason it was reverted. The real fix is at the hook: claude-ping-check.js
+  // legitimately IS the window it renews for, so it already has filesystem
+  // access to ITS OWN session-key file — it now reads that file itself and
+  // passes the secret as an explicit --session flag (the same thing an
+  // operator/test would do manually), so cmdRenew's trust boundary here is
+  // completely unchanged: still secret-only, still flags.session-gated.
   await db.beginTransaction();
   const byName = await lockedPermits(db);
 
@@ -1450,7 +1480,19 @@ async function cmdRenew(db) {
   }
 
   await db.commit();
-  if (!flags.auto) console.log('No permit for this window. Run: node claude-sync.js checkin');
+  if (!flags.auto) {
+    console.log('No permit for this window. Run: node claude-sync.js checkin');
+  } else {
+    // GR#17 (silent failure detection): a --auto call that resolves nothing
+    // must never no-op in total silence — the ping hook relays this
+    // process's stdout straight into the session (see claude-ping-check.js),
+    // so this is the ONLY channel a stuck window's user ever gets. This does
+    // NOT change the trust model above: it fires only for whatever secret (or
+    // absence of one) this invocation actually presented via --session.
+    console.log(flags.session
+      ? '[claude-sync] renew --auto: the presented --session secret matched no live/stale permit — it has expired past RESERVE_MS or was reassigned. Checkin explicitly: node claude-sync.js checkin'
+      : '[claude-sync] renew --auto: no --session secret presented — nothing to renew. If this is the ping hook, see claude-ping-check.js (BUG-486: it must read and pass its own session-key file).');
+  }
 }
 
 async function cmdCheckout(db) {
