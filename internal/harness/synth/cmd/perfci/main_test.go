@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,6 +32,32 @@ func TestRun_NoBaselineExitsZeroAndRecordsBaseline(t *testing.T) {
 	}
 	if _, err := os.Stat(results); err != nil {
 		t.Fatalf("results file was not created: %v", err)
+	}
+}
+
+// TestRun_PrintHookCountMatchesSSOT is BUG-735's contract test: the
+// -print-hook-count flag must print EXACTLY synth.PhaseHookCountInHeadlessPath()
+// (the same SSOT the ci.yml workflow now shells out to for its
+// PERF_KEY_SUFFIX cache-key derivation), do nothing else (no measurement
+// run, no results file touched), and exit 0.
+func TestRun_PrintHookCountMatchesSSOT(t *testing.T) {
+	results := filepath.Join(t.TempDir(), "perf-results.ndjson")
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"-print-hook-count", "-results", results}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run(-print-hook-count) = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	want := fmt.Sprintf("%d\n", synth.PhaseHookCountInHeadlessPath())
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q (must match synth.PhaseHookCountInHeadlessPath() exactly, BUG-735)", stdout.String(), want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty -- -print-hook-count must do nothing but print the count", stderr.String())
+	}
+	if _, err := os.Stat(results); err == nil {
+		t.Fatalf("-print-hook-count must not run a measurement or touch -results, but %q was created", results)
 	}
 }
 

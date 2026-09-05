@@ -384,6 +384,25 @@ jobs:
         with:
           go-version: "1.25"
 
+      # BUG-735: derive the cache-key suffix MECHANICALLY from
+      # synth.PhaseHookCountInHeadlessPath() (via cmd/perfci's new
+      # -print-hook-count flag) instead of a hand-bumped vN literal. Every
+      # time a compose phase hook is added/removed, this number changes on
+      # its own, the cache key below changes with it, and the stale
+      # baseline is orphaned automatically — closing the v7->v8->v9->v10->v11
+      # hand-bump churn (three bumps in three days, each one a human
+      # remembering to edit ~8 literal occurrences of the same string in
+      # this file). PERF_KEY_SUFFIX still carries a human-bumpable epoch
+      # (see the "vN-hooks<N>" shape below) so a baseline can still be
+      # invalidated by hand for a reason OTHER than a hook-count change
+      # (e.g. BUG-254's measurement-regime change, BUG-529's money-loop
+      # fix) — bump the literal "v12" segment for that, exactly as v3/v8
+      # were bumped before this fix; do NOT bump it for a hook-count change,
+      # since that case is now handled automatically.
+      - name: Derive perf cache-key suffix from PhaseHookCount (BUG-735)
+        shell: bash
+        run: echo "PERF_KEY_SUFFIX=v12-hooks$(go run ./internal/harness/synth/cmd/perfci -print-hook-count)" >> "$GITHUB_ENV"
+
       # BUG-034 FIX-LANDING REQUIREMENT (2026-08-11): the cache key
       # carries a generation segment (v2) precisely so THIS commit
       # discards the poisoned pre-fix smoke history. Live production
@@ -459,9 +478,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-v11-${{ github.run_id }}
+          key: perf-results-1m-smoke-${{ env.PERF_KEY_SUFFIX }}-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-smoke-v11-
+            perf-results-1m-smoke-${{ env.PERF_KEY_SUFFIX }}-
 
       # BUG-071: cmd/perfci now exits a DISTINCT code (3) when the gate
       # could not evaluate a regression (ScaleMismatch or, live-verified
@@ -515,7 +534,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-v11-${{ github.run_id }}
+          key: perf-results-1m-smoke-${{ env.PERF_KEY_SUFFIX }}-${{ github.run_id }}
 
       # BUG-097: this job's save key above is unique per run (github.run_id)
       # because actions/cache/save cannot overwrite an existing key -- but
@@ -545,7 +564,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prefix = "perf-results-1m-smoke-v11-"
+          $prefix = "perf-results-1m-smoke-$env:PERF_KEY_SUFFIX-"
           $keepNewest = 3
           $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
           if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }
@@ -708,6 +727,14 @@ jobs:
         with:
           go-version: "1.25"
 
+      # BUG-735: same mechanical derivation as perf-smoke's own step above
+      # (see that job's comment block for the full rationale) — this job's
+      # cache key is a SEPARATE key from perf-smoke's, so it needs its own
+      # PERF_KEY_SUFFIX in its own $GITHUB_ENV, but the same SSOT number.
+      - name: Derive perf cache-key suffix from PhaseHookCount (BUG-735)
+        shell: bash
+        run: echo "PERF_KEY_SUFFIX=v12-hooks$(go run ./internal/harness/synth/cmd/perfci -print-hook-count)" >> "$GITHUB_ENV"
+
       # BUG-110/BUG-073 (same generation-bump rationale as perf-smoke's
       # v2 key above): the pre-fix 1m-real cache holds a record written
       # before PerfResult.Measured existed -- it unmarshals with
@@ -758,9 +785,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-v11-${{ github.run_id }}
+          key: perf-results-1m-real-${{ env.PERF_KEY_SUFFIX }}-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-real-v11-
+            perf-results-1m-real-${{ env.PERF_KEY_SUFFIX }}-
 
       - name: Build perfci
         run: go build -o perfci.exe ./internal/harness/synth/cmd/perfci
@@ -846,7 +873,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-v11-${{ github.run_id }}
+          key: perf-results-1m-real-${{ env.PERF_KEY_SUFFIX }}-${{ github.run_id }}
 
       # BUG-097: identical rationale to perf-smoke's own pruning step —
       # this job's cache key is also unique-per-run and would otherwise
@@ -862,7 +889,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prefix = "perf-results-1m-real-v11-"
+          $prefix = "perf-results-1m-real-$env:PERF_KEY_SUFFIX-"
           $keepNewest = 3
           $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
           if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }

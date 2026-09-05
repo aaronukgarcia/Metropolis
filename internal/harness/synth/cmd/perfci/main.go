@@ -178,8 +178,14 @@ func runWith(args []string, stdout, stderr io.Writer, loadAccepted acceptedLoade
 	commit := fs.String("commit", "", "commit hash this run is filed under (defaults to buildinfo.Commit)")
 	citizens := fs.Int64("citizens", 0, "override the preset's citizen count (0 = use the preset's real 1M/10M figure); intended for fast local/CI-smoke and test runs, never for the actual regression gate a merge is judged against")
 	acceptedRegistryPath := fs.String("accepted-regressions", "perf-accepted-regressions.json", "BUG-095: path to the git-committed registry of {preset, commitHash, reason} acceptance entries -- the ONLY way a regression (or a permanently could-not-evaluate baseline) can become the new reference point. Missing file = nothing accepted yet, which is the ordinary state. There is deliberately no CLI flag to accept a regression directly any more; see this file's package doc comment (BUG-095).")
+	printHookCount := fs.Bool("print-hook-count", false, "BUG-735: print synth.PhaseHookCountInHeadlessPath() (the SAME SSOT number the perf gate's ImplausibleReason check compares every PerfRecord against) to stdout and exit 0, doing nothing else -- this is the mechanical hook-count source .github/workflows/ci.yml uses to derive its perf-results cache key suffix (PERF_KEY_SUFFIX), so a compose phase-hook addition invalidates the cached baseline automatically instead of needing a hand-bumped vN cache-key generation (BUG-735; see the v7->v11 hand-bump history in ci.yml's cache-key comment block)")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	if *printHookCount {
+		_, _ = fmt.Fprintln(stdout, synth.PhaseHookCountInHeadlessPath())
+		return 0
 	}
 
 	correlationID := errs.NewCorrelationID()
