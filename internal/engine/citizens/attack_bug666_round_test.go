@@ -529,7 +529,7 @@ func TestBUG666DeathRealisationRemovesTheRightCitizen(t *testing.T) {
 // worse, a later removeAt would panic writing to a nil map).
 func TestBUG666PagingRoundTripRebuildsIndex(t *testing.T) {
 	dir := t.TempDir()
-	ps := NewPageStore(dir, 0) // maxResident 0 => everything evicts immediately
+	ps := NewPageStore(dir, 0, 0) // maxResident 0 => everything evicts immediately; worldSeed 0 = no identity check
 
 	s := newColdShard(7)
 	for i := 1; i <= 200; i++ {
@@ -543,7 +543,10 @@ func TestBUG666PagingRoundTripRebuildsIndex(t *testing.T) {
 	if ps.ResidentCount() != 0 {
 		t.Fatalf("maxResident=0 should have evicted; resident=%d", ps.ResidentCount())
 	}
-	loaded, ok := ps.Load(5)
+	loaded, ok, err := ps.Load(5, "bug666-attack")
+	if err != nil {
+		t.Fatalf("Load(5): %v", err)
+	}
 	if !ok {
 		t.Fatalf("Load(5) missed after Store")
 	}
@@ -618,14 +621,17 @@ func TestBUG666PreFixGobPayloadDecodes(t *testing.T) {
 
 	// Write the pre-fix bytes where a PageStore expects a page, and Load it.
 	dir := t.TempDir()
-	ps := NewPageStore(dir, 4)
+	ps := NewPageStore(dir, 4, 0) // worldSeed 0 = no identity check
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	if err := os.WriteFile(ps.pathFor(9), preBuf.Bytes(), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	loaded, ok := ps.Load(9)
+	loaded, ok, err := ps.Load(9, "bug666-attack")
+	if err != nil {
+		t.Fatalf("Load(9): %v", err)
+	}
 	if !ok {
 		t.Fatalf("Load of a pre-fix page failed — old payloads must still decode")
 	}

@@ -1949,6 +1949,24 @@
       "message": "citizens: EnableDiskPaging maxResident {maxResident} must be >= 1",
       "remedy": "Pass a maxResident of at least 1 (or leave paging disabled) so every shardAt call always has at least one resident shard to work with."
     },
+    "MET-G012": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizens: page file for shard {shard} was written by a different world (stamped seed {stamped}, this registry's seed {want}) -- refusing to load a foreign city's page into this one",
+      "remedy": "Never point EnableDiskPaging at a page directory from a different city/world seed; use a fresh or matching directory. If this is a genuine cross-load scenario, clear the stale .page files first."
+    },
+    "MET-G013": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizens: page file for shard {shard} failed to decode ({cause}) -- refusing to substitute an empty shard for possibly-real citizen data",
+      "remedy": "Investigate disk/filesystem corruption for this page directory; do not delete the .page file until the citizens it held are confirmed unrecoverable elsewhere (e.g. an earlier save)."
+    },
+    "MET-G014": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizens: page file at shard {shard}'s path is stamped with shard index {stamped}, not {shard} -- refusing to adopt a page file copied/renamed to another shard's path",
+      "remedy": "Never copy or rename a .page file to a different shard-numbered path; if a page directory was reorganised by hand, regenerate it from a save instead."
+    },
     "MET-G100": {
       "severity": "error",
       "module": "engine.projections",

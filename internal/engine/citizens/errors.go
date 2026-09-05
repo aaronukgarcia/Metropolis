@@ -125,6 +125,42 @@ const (
 	// it is rejected outright rather than silently clamped to 1.
 	ErrInvalidPagingBudget = "MET-G011"
 
+	// ErrPageWorldMismatch (BUG-713 P3): PageStore.Load found an on-disk
+	// page file whose stamped world seed disagrees with this PageStore's
+	// own worldSeed — a page directory was reused across two different
+	// cities/worlds under a matching shard index. Refused outright rather
+	// than silently resurrecting a foreign city's data into this one
+	// (GR#1/GR#3): the caller falls back to a fresh empty shard for that
+	// index exactly as it would for a genuinely never-persisted shard.
+	ErrPageWorldMismatch = "MET-G012"
+
+	// ErrPageDecodeCorrupt (round ACCEPT on BUG-712/BUG-713, F1): PageStore.
+	// Load found a page file on disk but gob decode failed -- a corrupt or
+	// truncated .page file. Previously (BUG-687 class defect) this was
+	// INDISTINGUISHABLE from "shard never persisted": loadShardLocked
+	// substituted a fresh empty shard either way, silently deleting every
+	// citizen that shard held (population 200 -> 199, PopulationHash
+	// changed) with no registry error at all. Now Load returns this
+	// distinct, registry-sourced, logged error instead of (nil, false,
+	// nil) so the corruption is never confused with an ordinary cache
+	// miss again -- see loadShardLocked's own doc comment for how the
+	// fault is now surfaced (a poisoned c.pageFault, checked at every
+	// already-error-returning public entrypoint) rather than silently
+	// swallowed.
+	ErrPageDecodeCorrupt = "MET-G013"
+
+	// ErrPageShardIndexMismatch (round ACCEPT on BUG-712/BUG-713, F2):
+	// PageStore.Load found a page file whose OWN stamped shard index
+	// disagrees with the shard index its path was read from -- e.g. an
+	// attacker (or a hand-edited page directory) copied shard-005.page to
+	// shard-009.page: pre-fix, coldShardWire carried no shard identity of
+	// its own, so the copy was adopted WHOLESALE as shard 9's real data.
+	// Refused outright, exactly like ErrPageWorldMismatch, rather than
+	// silently resurrecting one shard's citizens under a different shard's
+	// index (which would corrupt det.ShardForEntity's own invariant that a
+	// citizen ID always resolves to exactly one shard).
+	ErrPageShardIndexMismatch = "MET-G014"
+
 	// --- feat.deathwave (FEAT-087) — range G5400-G5409, claimed via
 	// tools/plan/add-error.js claim-range (BUG-273's allocator). A
 	// separate range from engine.citizens' own G000-G099 block because the

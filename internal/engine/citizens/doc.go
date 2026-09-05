@@ -254,4 +254,56 @@
 // (a scaled-down analogue proving the paging code path runs without
 // needing a >8GB synthetic in a unit test); binary serialization of cold
 // shards via int.serializer is out of scope for this item.
+//
+// Known limitation (BUG-713 P3, documented rather than fixed — "enable
+// stall"): [CitizensAPI.EnableDiskPaging] itself is O(1) (it only seeds
+// bookkeeping over the CURRENTLY resident set), but the FIRST shardAt/
+// acquireShard call after enabling paging against an already-large,
+// already-fully-resident city runs evictOverBudgetLocked's loop
+// synchronously until residentCount drops to maxResidentShards — i.e. a
+// single call can trigger (residentBeforeEnable - maxResidentShards)
+// synchronous PageStore.Store disk writes back-to-back, before returning
+// to its caller. For a city that already holds most of numColdShards
+// (256) resident and a small maxResidentShards budget, that first
+// post-enable call can visibly stall (hundreds of synchronous shard
+// writes) rather than the steady-state O(1)-per-call cost every
+// subsequent call has. This is a one-time transient at the moment paging
+// is turned on mid-run — never in the steady state, never during city
+// construction/load (which never had extra residents to shed) — and
+// paging is expected to normally be enabled once, early, exactly as
+// EnableDiskPaging's own doc comment already describes ("Optional and
+// idempotent-to-call-once"). A throttled/amortised version of
+// evictOverBudgetLocked (evict at most N shards per call, converging over
+// several calls instead of one) would remove the stall but was judged out
+// of scope for this pass — it changes the eviction discipline's own
+// timing/ordering guarantees (see evictOverBudgetLocked's POLICY comment)
+// and deserves its own round rather than riding in on a P2 double-cache
+// fix.
+//
+// Known limitation (round ACCEPT/RE-VERIFY on BUG-712/BUG-713, F1: the
+// pageFault poison flag is LOUD but NON-HALTING at the compose boundary).
+// [CitizensAPI.pageFault] latches the first unrecoverable PageStore.Load
+// failure (a corrupt page, a foreign world/shard-index stamp) and every
+// already-error-returning entrypoint on this package's OWN API surface
+// refuses once it is set (see failIfPageFault's doc comment) — but nothing
+// upstream of this package is currently wired to STOP the game loop on
+// that refusal. The composition root's per-tick module hook (coldPassHook
+// and its siblings) has no error channel of its own today: a returned
+// error is recorded as an ErrModuleFailed entry and the tick otherwise
+// continues, exactly like any other module's tick-level failure. So the
+// practical effect once a page is corrupted is: AdvanceDayTick/AdvanceMonth/
+// SeedColdRecords/SeedHouseholds/ApplyFidelityCommand/ApplyLifeEventCommand
+// and SaveParticipant.Source() all refuse loudly (a registry-sourced,
+// logged, GR#1-compliant error every single call) — but the compose loop
+// itself does not halt the process or force a "game over" state; it is the
+// operator/UI's job to notice a run of ErrModuleFailed entries against
+// this module and intervene (e.g. loading a known-good save, which clears
+// pageFault via resetForLoad — see that method's own doc comment for why
+// clearing on load is the only recovery path a player has). Whether the
+// compose loop SHOULD hard-halt on a poisoned CitizensAPI (rather than
+// degrading to "every citizens-touching action refuses forever until a
+// reload") is a compose-level policy decision the round explicitly left
+// for the Architect to file separately, not something this package can
+// decide unilaterally by picking an error-channel design on compose's
+// behalf.
 package citizens

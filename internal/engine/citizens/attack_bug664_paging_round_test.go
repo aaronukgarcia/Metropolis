@@ -358,7 +358,8 @@ func TestAttackBug664EvictionPersistsInPlaceMutations(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestAttackBug664LoadIntoPagingTargetOverStalePages checks the one path
-// resetForLoad's pageOrder reseed exists to protect: a load target that
+// resetForLoad's page-bookkeeping reseed (seedPageBookkeepingLocked) exists
+// to protect: a load target that
 // already has paging enabled over a directory full of a DIFFERENT city's
 // .page files. If any shard is ever Loaded from disk without having been
 // re-Stored after the reset, the OLD city's citizens are resurrected into

@@ -403,14 +403,11 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 		"maxResidentShards": "BUG-664 paging config paired with pages -- meaningless " +
 			"while pages is nil, re-supplied via EnableDiskPaging's own argument on " +
 			"load, never serialized state.",
-		"pageOrder": "BUG-664 shardAt's in-memory LRU touch history over cold -- " +
-			"pure runtime bookkeeping derived from access pattern, not from any " +
-			"citizen's data; reseeded by EnableDiskPaging/resetForLoad, never " +
-			"serialized state.",
-		"pageList": "BUG-664 round-2 P2 -- the O(1)-amortised replacement for " +
-			"pageOrder's linear-scan LRU (same runtime bookkeeping, same " +
-			"reseed-on-EnableDiskPaging/resetForLoad lifecycle), not " +
-			"simulation state.",
+		"pageList": "BUG-664 round-2 P2 -- shardAt's O(1)-amortised LRU touch " +
+			"history over cold (BUG-712 deleted the earlier write-only " +
+			"pageOrder slice this superseded), pure runtime bookkeeping " +
+			"derived from access pattern, not from any citizen's data; " +
+			"reseeded by EnableDiskPaging/resetForLoad, never serialized state.",
 		"pageElem": "BUG-664 round-2 P2 -- pageList's O(1) node-lookup index " +
 			"(shard -> *list.Element), pure runtime bookkeeping paired with " +
 			"pageList, never serialized state.",
@@ -423,7 +420,7 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 			"concurrent workers; always zero outside the span of a live " +
 			"AdvanceDayTick call and reseeded by EnableDiskPaging/resetForLoad, " +
 			"never serialized state.",
-		"pagingMu": "runtime lock guarding pages/pageOrder/pageList/shardPins transitions, not state",
+		"pagingMu": "runtime lock guarding pages/pageList/shardPins transitions, not state",
 		"mortalityModifier": "MOD-034 injected wellbeing seam (SetMortalityModifier) -- a " +
 			"plain func() float64 closure over the composition root's own state " +
 			"(compose_wellbeing.go), re-wired post-load exactly like SetSeason/ " +
@@ -433,6 +430,17 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 			"seam every load, before the next coldParamsLocked recompute, so a " +
 			"stale/missing post-load value is always overwritten before it can " +
 			"influence a mortality draw.",
+		"pageFault": "round ACCEPT on BUG-712/BUG-713, F1 (2026-09-05) -- an " +
+			"atomic.Pointer[errs.E] poison flag latched by loadShardLocked the " +
+			"first time PageStore.Load ever hits an unrecoverable failure " +
+			"(ErrPageDecodeCorrupt/ErrPageWorldMismatch/ErrPageShardIndexMismatch), " +
+			"checked by failIfPageFault at every already-error-returning mutation/ " +
+			"tick entrypoint. Deliberately NOT serialized: it is a live, " +
+			"in-memory-only fault record about disk I/O encountered THIS process " +
+			"run, not simulation state -- a fresh load must always start " +
+			"unpoisoned and re-discover any still-corrupt page for itself on its " +
+			"own first read, exactly like shardPins/residentCount above are " +
+			"reseeded rather than restored.",
 	}
 	covered := map[string]bool{
 		"month": true, "dayTick": true, "cold": true, "hot": true,

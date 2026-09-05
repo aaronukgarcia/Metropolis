@@ -10,7 +10,7 @@ import (
 // evicts the least-recently-used resident shard to disk once the resident
 // ceiling is exceeded, and reloads it intact on demand.
 func TestPageStoreEvictsAndReloads(t *testing.T) {
-	ps := NewPageStore(t.TempDir(), 2) // max 2 resident shards
+	ps := NewPageStore(t.TempDir(), 2, 0) // max 2 resident shards, worldSeed 0 = no identity check
 
 	s0 := newColdShard(0)
 	s0.append(mkRecord(1, 0))
@@ -33,7 +33,10 @@ func TestPageStoreEvictsAndReloads(t *testing.T) {
 	}
 
 	// Shard 0 was evicted; reload it from disk and verify round-trip integrity.
-	loaded, ok := ps.Load(0)
+	loaded, ok, err := ps.Load(0, "paging-test")
+	if err != nil {
+		t.Fatalf("Load(0): %v", err)
+	}
 	if !ok {
 		t.Fatal("evicted shard 0 was not reloaded from disk")
 	}
@@ -45,7 +48,7 @@ func TestPageStoreEvictsAndReloads(t *testing.T) {
 	}
 
 	// A never-stored shard is simply absent (ok-idiom, never a panic).
-	if _, ok := ps.Load(99); ok {
-		t.Fatal("Load(99) should report absent")
+	if _, ok, err := ps.Load(99, "paging-test"); ok || err != nil {
+		t.Fatalf("Load(99) should report absent, got ok=%v err=%v", ok, err)
 	}
 }

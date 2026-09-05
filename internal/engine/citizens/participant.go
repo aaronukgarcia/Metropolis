@@ -526,15 +526,28 @@ func (c *CitizensAPI) resetForLoad() error {
 	// target is rebuilt from scratch, so shardAt's LRU touch history AND
 	// any lingering shardPins from before the reset are meaningless --
 	// reseed everything exactly like EnableDiskPaging's own initial seed
-	// does (round-2: also zeroes shardPins/residentCount/pageList/
-	// pageElem now, not just pageOrder), otherwise a stale pageOrder
-	// referencing pre-reset shard identities could drive
-	// evictOverBudgetLocked to evict a shard it thinks is resident, or a
-	// leaked pin from the PREVIOUS city could permanently block eviction
-	// in the loaded one.
+	// does (round-2: zeroes shardPins/residentCount/pageList/pageElem),
+	// otherwise a stale pageList entry referencing pre-reset shard
+	// identities could drive evictOverBudgetLocked to evict a shard it
+	// thinks is resident, or a leaked pin from the PREVIOUS city could
+	// permanently block eviction in the loaded one.
 	if c.pages != nil {
 		c.seedPageBookkeepingLocked()
 	}
+	// round RE-VERIFY on BUG-712/BUG-713, Finding B (P1): pageFault latches
+	// a fault about the PREVIOUS cold store's on-disk pages, which this
+	// reset just discarded wholesale (every c.cold[i] above is a fresh
+	// empty shard). A fault about data that no longer exists is stale by
+	// construction -- leaving it latched here would mean a player who
+	// loads a known-good save after hitting a corrupt page gets a city
+	// that can NEVER tick again (every AdvanceDayTick refuses forever, with
+	// no recovery short of restarting the process), which is a strictly
+	// worse failure mode than the one being fixed. Cleared unconditionally
+	// so a freshly loaded save always starts unpoisoned; if that NEW
+	// save's own pages are themselves corrupt, the very first read through
+	// them re-latches the flag from scratch, exactly as it would for any
+	// other newly-constructed CitizensAPI.
+	c.pageFault.Store(nil)
 	c.hot = make(map[uint64]*Citizen)
 	c.households = make(map[uint64]*Household)
 	c.month = 0
@@ -721,6 +734,16 @@ func (p *SaveParticipant) Kind() string {
 // guard failure (SEC-020) surfaces on the first pull.
 func (p *SaveParticipant) Source() serialize.RecordSource {
 	if err := p.c.checkNotCopied(errs.NewCorrelationID(), "Source"); err != nil {
+		return func() (serialize.Record, bool, error) { return serialize.Record{}, false, err }
+	}
+	// round RE-VERIFY on BUG-712/BUG-713, Finding A (P2, the BUG-687
+	// shape): without this check, a save taken after a corrupt-page fault
+	// latched streams the REDUCED population happily -- the in-memory
+	// data loss becomes DURABLE, overwriting a good on-disk save with a
+	// city that has silently lost citizens, forever. Refuse the whole save
+	// with the SAME latched registry error instead, exactly like every
+	// other already-error-returning mutation/tick entrypoint.
+	if err := p.c.failIfPageFault(errs.NewCorrelationID(), "Source"); err != nil {
 		return func() (serialize.Record, bool, error) { return serialize.Record{}, false, err }
 	}
 	head, headErr := p.c.snapshotHead()

@@ -118,29 +118,29 @@ type CitizensAPI struct {
 	// non-nil in cold at once once paging is enabled. Meaningless while
 	// pages == nil.
 	maxResidentShards int
-	// pageOrder is shardAt's LEGACY LRU order of shard indices, kept ONLY
-	// for resetForLoad/EnableDiskPaging's doc-comment continuity; the real
-	// eviction order now comes from pageList (BUG-664 round-2 P2: O(len)
-	// linear scan+splice replaced by an O(1)-amortised doubly-linked list,
-	// see pageList's own doc comment). Deliberately still never a map for
-	// ORDER purposes (GR#21): pageList's traversal order is exactly touch
-	// history, never Go's randomised map iteration order -- pageElem below
-	// is used only for O(1) NODE LOOKUP, never to decide eviction order.
-	pageOrder []int
 	// pageList is the deterministic LRU order of shard indices currently
 	// resident in cold (paging-enabled mode only): Front() is the
 	// least-recently-touched resident, Back() the most recent.
 	// touchShardLocked moves a shard's node to the back in O(1) via
 	// pageElem's lookup (container/list itself never allocates a hidden
 	// hash map -- Go's map only backs pageElem here, for finding a node by
-	// shard index, and is never iterated to establish an ORDER). Kept
-	// alongside pageOrder (a plain slice) for now so resetForLoad's
-	// existing reseed idiom keeps compiling; both are rebuilt together.
+	// shard index, and is never iterated to establish an ORDER). This is
+	// the ONE live eviction-order structure (BUG-712: the pre-existing
+	// `pageOrder []int` field was a write-only leftover from the round-2 P2
+	// O(1) rework -- seeded by seedPageBookkeepingLocked and never read by
+	// anything, while shardAt's real eviction order had already moved to
+	// pageList; deleted rather than kept "for doc continuity", since a
+	// dead field that participant_test.go's field-parity map still had to
+	// name as if it were live state is exactly the GR#3/GR#18 hazard a
+	// future reader trips over). Deliberately still never a map for ORDER
+	// purposes (GR#21): pageList's traversal order is exactly touch
+	// history, never Go's randomised map iteration order -- pageElem below
+	// is used only for O(1) NODE LOOKUP, never to decide eviction order.
 	pageList *list.List
 	// pageElem is pageList's O(1) node lookup: shard index -> its
 	// *list.Element, so touchShardLocked/evictOverBudgetLocked never do a
 	// linear scan over the resident set (BUG-664 round-2 P2). Guarded by
-	// pagingMu, exactly like pageList and pageOrder.
+	// pagingMu, exactly like pageList.
 	pageElem map[int]*list.Element
 	// residentCount is an O(1)-maintained mirror of "how many of the
 	// numColdShards slots in cold are non-nil right now" (BUG-664 round-2
@@ -173,6 +173,33 @@ type CitizensAPI struct {
 	// lock modes without a nested-acquire deadlock or lock-order hazard,
 	// since pagingMu is never held while acquiring mu (only the reverse).
 	pagingMu sync.Mutex
+
+	// pageFault (round ACCEPT on BUG-712/BUG-713, F1) latches the FIRST
+	// unrecoverable PageStore.Load failure this CitizensAPI has ever hit
+	// (ErrPageDecodeCorrupt or ErrPageWorldMismatch/ErrPageShardIndexMismatch)
+	// -- see loadShardLocked's doc comment for why this is a poison flag
+	// rather than a threaded error return: shardAt/acquireShard have ~20
+	// call sites across registry.go/fertility.go/participant.go, most
+	// inside helpers that return int/bool/nothing (TotalPopulation,
+	// PopulationHash, mutateColdLocked, coldRowLocked, ...) and are
+	// themselves called from many more places -- rethreading a genuine
+	// error return through that whole call graph is a package-wide
+	// signature change, not a same-round P2 fix, and would touch public
+	// API surface (TotalPopulation/PopulationHash's own return types) that
+	// callers across the engine depend on. Instead, every already-error-
+	// returning entrypoint that MUTATES the cold store or advances the
+	// tick (SeedColdRecords, SeedHouseholds, ApplyFidelityCommand,
+	// ApplyLifeEventCommand, AdvanceDayTick, AdvanceMonth) checks this
+	// flag FIRST via failIfPageFault and refuses with the SAME latched
+	// registry error rather than proceeding
+	// once ANY shard has been silently substituted-empty by a corrupt or
+	// foreign page file -- once a city's cold store is known to contain a
+	// fabricated shard, no further mutation should be trusted to be
+	// computing over real data. Lock-free atomic.Pointer (mirrors self's
+	// own SEC-020 copyguard pattern in this same struct) so it can be read
+	// from loadShardLocked (pagingMu held) and every public entrypoint
+	// (mu held, or neither) without a lock-order hazard.
+	pageFault atomic.Pointer[errs.E]
 
 	mu sync.RWMutex
 
@@ -226,6 +253,56 @@ func (c *CitizensAPI) checkNotCopied(correlationID string, method string) error 
 	return nil
 }
 
+// failIfPageFault (round ACCEPT on BUG-712/BUG-713, F1) returns a non-nil
+// error once c.pageFault has ever been latched by loadShardLocked -- see
+// pageFault's own doc comment on the struct for the full rationale (a
+// poison flag, not a threaded shardAt/loadShardLocked error return, given
+// the ~20-call-site blast radius that full propagation would require).
+// Called at the same "first thing this method does" position as
+// checkNotCopied, by every already-error-returning mutation/tick
+// entrypoint that touches the cold store (SeedColdRecords, SeedHouseholds,
+// ApplyFidelityCommand, ApplyLifeEventCommand, AdvanceDayTick,
+// AdvanceMonth): once ANY shard has been silently substituted-empty by a
+// corrupt or foreign page file, none of them proceed to compute over what
+// may be a fabricated world. Wraps the latched error fresh with this call's
+// own correlationID and method name (GR#1) while preserving the original
+// fault as the wrapped cause, so every refusal after the first still
+// carries an accurate correlationID/method pair rather than replaying the
+// first caller's.
+func (c *CitizensAPI) failIfPageFault(correlationID, method string) error {
+	// astgate (BUG-024 ratchet) flags any *CitizensAPI receiver method that
+	// never calls checkNotCopied as an unguarded entry point, regardless of
+	// whether it actually touches a copy-guarded field -- every OTHER
+	// caller of this helper already ran checkNotCopied first, so this is a
+	// belt-and-braces re-check, not new protection, but it is what keeps
+	// this method off the live-tree violation list.
+	if err := c.checkNotCopied(correlationID, method); err != nil {
+		return err
+	}
+	f := c.pageFault.Load()
+	if f == nil {
+		return nil
+	}
+	// round RE-VERIFY on BUG-712/BUG-713, P3: f.Code's own registry
+	// template (e.g. ErrPageDecodeCorrupt's "...page file for shard
+	// {shard} failed to decode...") renders against the ctx passed to
+	// THIS Wrap call, not the original fault's -- a bare {"method":...,
+	// "firstFaultAt":...} ctx with no "shard" key left the {shard}
+	// placeholder rendering as the literal, unfilled text on every
+	// refusal after the first. Copy the original fault's ctx forward
+	// first (never mutate f.Ctx itself -- it may be read concurrently by
+	// another caller wrapping the same latched *errs.E) so "shard" (and
+	// anything else the original carried) survives into the re-wrap,
+	// then layer this call's own method/firstFaultAt on top.
+	ctx := make(map[string]any, len(f.Ctx)+2)
+	for k, v := range f.Ctx {
+		ctx[k] = v
+	}
+	ctx["method"] = method
+	ctx["firstFaultAt"] = f.CorrelationID
+	return errs.Wrap(f.Code, correlationID, f, ctx)
+}
+
 // EnableDiskPaging wires BUG-664's disk-backed LRU PageStore in as the real
 // residency manager for cold (A7, doc.go's "NVMe and paging" section):
 // beyond maxResident of the numColdShards shards, the least-recently-used
@@ -247,14 +324,21 @@ func (c *CitizensAPI) EnableDiskPaging(dir string, maxResident int, correlationI
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.pages = NewPageStore(dir, maxResident)
+	// BUG-713 P3: stamp every page file this store writes with c.seed (this
+	// registry's world seed -- the closest thing engine.citizens has to a
+	// "city identity" of its own; a separate lineage id lives one layer up
+	// at the composition root/persist.CityKey and is out of this package's
+	// registered dependency graph, GR#20/GR#25) so a directory accidentally
+	// reused across two different worlds is refused rather than silently
+	// resurrecting the wrong city's shard under a matching index.
+	c.pages = NewPageStore(dir, maxResident, c.seed)
 	c.maxResidentShards = maxResident
 	c.seedPageBookkeepingLocked()
 	return nil
 }
 
-// seedPageBookkeepingLocked (re)builds pageOrder/pageList/pageElem/
-// residentCount/shardPins from the CURRENT contents of cold. Called from
+// seedPageBookkeepingLocked (re)builds pageList/pageElem/residentCount/
+// shardPins from the CURRENT contents of cold. Called from
 // EnableDiskPaging (first wiring) and resetForLoad (a load target rebuilds
 // cold from scratch, so any pre-reset LRU/pin history is meaningless and
 // must never survive into the loaded city -- see resetForLoad's own doc
@@ -267,14 +351,12 @@ func (c *CitizensAPI) EnableDiskPaging(dir string, maxResident int, correlationI
 // full-registry reset, never concurrently with a live shardAt/acquireShard
 // call, so pagingMu is not needed here).
 func (c *CitizensAPI) seedPageBookkeepingLocked() {
-	c.pageOrder = c.pageOrder[:0]
 	c.pageList = list.New()
 	c.pageElem = make(map[int]*list.Element, numColdShards)
 	c.residentCount = 0
 	for i := range c.cold {
 		c.shardPins[i] = 0
 		if c.cold[i] != nil {
-			c.pageOrder = append(c.pageOrder, i)
 			c.pageElem[i] = c.pageList.PushBack(i)
 			c.residentCount++
 		}
@@ -395,7 +477,30 @@ func (c *CitizensAPI) loadShardLocked(shard int) *ColdShard {
 	// evictOverBudgetLocked always Stores before nilling) -- fail safe
 	// with a fresh empty shard rather than a nil-deref crash (GR#1) if it
 	// is ever hit.
-	s, ok := c.pages.Load(shard)
+	s, ok, err := c.pages.Load(shard, errs.NewCorrelationID())
+	if err != nil {
+		// round ACCEPT on BUG-712/BUG-713, F1: err is now one of
+		// ErrPageDecodeCorrupt / ErrPageWorldMismatch /
+		// ErrPageShardIndexMismatch -- NEVER a genuine "never persisted"
+		// miss (that path returns ok==false, err==nil, unchanged). Already
+		// logged loudly via errs.New/Wrap's own construct-time log call
+		// (GR#1). loadShardLocked still has no error return of its own
+		// (see pageFault's doc comment on the struct for the full
+		// rethread-the-whole-call-graph blast-radius argument), so this
+		// shard's slot is still filled with a fresh empty shard below --
+		// exactly the pre-fix substitution -- but the failure is no longer
+		// SILENT: pageFault latches the first such error (first one wins;
+		// c.self.CompareAndSwap semantics aren't needed since every writer
+		// races to store the SAME kind of "something is wrong" signal, and
+		// which specific shard's error wins the race is immaterial -- the
+		// caller-visible contract is just "was there ever a fault", via
+		// failIfPageFault), and every already-error-returning public
+		// entrypoint refuses further work once it is set.
+		if c.pageFault.Load() == nil {
+			c.pageFault.Store(err.(*errs.E))
+		}
+		ok = false
+	}
 	if !ok {
 		s = newColdShard(0)
 	}
@@ -409,9 +514,10 @@ func (c *CitizensAPI) loadShardLocked(shard int) *ColdShard {
 // touchShardLocked moves shard to the most-recently-used end of pageList
 // (caller holds pagingMu). O(1) amortised via pageElem's node lookup
 // (BUG-664 round-2 P2: this used to be an O(len(pageOrder)) linear
-// scan+splice on every single shardAt call) -- pageOrder is kept alongside
-// as a plain append-only mirror purely for resetForLoad/doc continuity,
-// never consulted for eviction order any more.
+// scan+splice on every single shardAt call, where pageOrder was the
+// then-live LRU slice; BUG-712 deleted that slice once it stopped being
+// read anywhere -- pageList/pageElem below are now the sole eviction-order
+// state).
 func (c *CitizensAPI) touchShardLocked(shard int) {
 	if e, ok := c.pageElem[shard]; ok {
 		c.pageList.MoveToBack(e)
@@ -448,6 +554,24 @@ func (c *CitizensAPI) touchShardLocked(shard int) {
 // through the pointer shardAt/acquireShard handed out, not through a Store
 // call) -- a stale disk copy at eviction time would silently lose exactly
 // that mutation the next time this shard is paged back in.
+//
+// BUG-713: after a successful Store, this also calls c.pages.Forget(victim)
+// to drop the shard from PageStore's OWN internal resident cache -- before
+// this fix, Store's makeResidentLocked left the evicted shard's pointer
+// alive in PageStore.resident at PageStore's own maxResident ceiling,
+// completely independent of this struct's residentCount/maxResidentShards
+// ceiling. Two independent LRUs over the same shard set meant (a) real
+// resident memory could reach ~2x the configured budget (this cache's
+// ceiling PLUS PageStore's own), and (b) a shard reachable through
+// PageStore.resident's cache would be served that in-memory pointer on the
+// next Load, silently masking a corrupt or missing on-disk .page file --
+// exactly the disk-defect-hiding aliasing the bug report named. Forget
+// makes PageStore a pure disk-backed persistence layer for this call path
+// (one real cache -- this struct's cold/pageList -- one real ceiling,
+// maxResidentShards), while leaving PageStore's own standalone
+// Store/Load/evictOneLocked LRU behaviour (paging_test.go's direct
+// coverage of PageStore in isolation) completely intact for a caller that
+// never calls Forget.
 func (c *CitizensAPI) evictOverBudgetLocked(keep int) {
 	for c.residentCount > c.maxResidentShards {
 		var victim = -1
@@ -474,11 +598,14 @@ func (c *CitizensAPI) evictOverBudgetLocked(keep int) {
 			// acquireShard/releaseShard call once the transient I/O issue
 			// clears. victim's pageList/pageElem entry was already removed
 			// above; touchShardLocked will transparently re-seed it the
-			// next time this shard is touched, exactly as before this
-			// rework (pageOrder had the same "removed, not re-added on
-			// failure" behaviour).
+			// next time this shard is touched.
 			return
 		}
+		// BUG-713: the shard is durably persisted (Store above just wrote
+		// it and fsync'd via os.WriteFile) -- drop PageStore's OWN resident
+		// copy now so this shard's next Load is a REAL disk read, not a
+		// hit against a second, independent in-memory cache.
+		c.pages.Forget(victim)
 		c.cold[victim] = nil
 		c.residentCount--
 	}
@@ -613,6 +740,9 @@ func (c *CitizensAPI) SeedColdRecords(records []ColdRecord, correlationID string
 	if err := c.checkNotCopied(correlationID, "SeedColdRecords"); err != nil {
 		return err
 	}
+	if err := c.failIfPageFault(correlationID, "SeedColdRecords"); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, r := range records {
@@ -687,6 +817,9 @@ func (c *CitizensAPI) SeedColdRecords(records []ColdRecord, correlationID string
 // the separate household-id space.
 func (c *CitizensAPI) SeedHouseholds(records []ColdRecord, correlationID string) error {
 	if err := c.checkNotCopied(correlationID, "SeedHouseholds"); err != nil {
+		return err
+	}
+	if err := c.failIfPageFault(correlationID, "SeedHouseholds"); err != nil {
 		return err
 	}
 	c.mu.Lock()
@@ -868,6 +1001,9 @@ func (c *CitizensAPI) ApplyFidelityCommand(cmd FidelityCommand) error {
 	if err := c.checkNotCopied(cmd.CorrelationID, "ApplyFidelityCommand"); err != nil {
 		return err
 	}
+	if err := c.failIfPageFault(cmd.CorrelationID, "ApplyFidelityCommand"); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -913,6 +1049,9 @@ func (c *CitizensAPI) ApplyFidelityCommand(cmd FidelityCommand) error {
 // surface). It is the only mutation path for citizen/household state.
 func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 	if err := c.checkNotCopied(cmd.CorrelationID, "ApplyLifeEventCommand"); err != nil {
+		return err
+	}
+	if err := c.failIfPageFault(cmd.CorrelationID, "ApplyLifeEventCommand"); err != nil {
 		return err
 	}
 	c.mu.Lock()
@@ -1121,6 +1260,9 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 	if err := c.checkNotCopied(correlationID, "AdvanceDayTick"); err != nil {
 		return 0, 0, err
 	}
+	if err := c.failIfPageFault(correlationID, "AdvanceDayTick"); err != nil {
+		return 0, 0, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1327,6 +1469,9 @@ func (c *CitizensAPI) VitalEvents(correlationID string) (births, deaths int) {
 // for tests and the perf harness.
 func (c *CitizensAPI) AdvanceMonth(correlationID string) error {
 	if err := c.checkNotCopied(correlationID, "AdvanceMonth"); err != nil {
+		return err
+	}
+	if err := c.failIfPageFault(correlationID, "AdvanceMonth"); err != nil {
 		return err
 	}
 	for d := 0; d < DaysPerMonth; d++ {

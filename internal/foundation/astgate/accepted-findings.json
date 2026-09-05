@@ -2402,5 +2402,13 @@
   {
     "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|SetMortalityModifier|c.pages|*CitizensAPI.pages",
     "reason": "MOD-034 downstream-effect application round (2026-09-05): the same 'presence, not effect' over-approximation this file's SetSeason|c.pages and SetDeathDrainCapacity|c.pages entries already document -- SEC-049's field-access enumeration registers a ReachableFunc for CitizensAPI's EVERY declared method once CitizensAPI has a `pages *PageStore` field (a candidate type), regardless of whether the method body actually references it. SetMortalityModifier (added this round to wire the OPTIONAL injected engine.wellbeing mortality-hazard multiplier seam) was read in full: its entire body is `checkNotCopied` on its OWN receiver, `c.mu.Lock()/defer Unlock()`, and `c.mortalityModifier = getter` -- it never references c.pages at all, in any form. There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the identical over-approximation the SetSeason/SetDeathDrainCapacity entries already document for this exact field on this exact type."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|failIfPageFault|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "round ACCEPT on BUG-712/BUG-713, F1 (2026-09-05): failIfPageFault has its OWN direct c.checkNotCopied() call (added specifically to satisfy the receiver-method finding astgate raised for this same function), but never touches c.deathQueue at all -- it only reads c.pageFault (an atomic.Pointer) and returns a wrapped error. Same over-approximation shape as this file's own pre-existing entries for every other CitizensAPI receiver method (TotalPopulation|c.deathQueue, SeedColdRecords|c.deathQueue, etc, all above in this same ledger): astgate's conservative sweep flags EVERY candidate-type field of the receiver's struct for any method lacking a field-targeted guard call, regardless of whether the method body references that field."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|failIfPageFault|c.pages|*CitizensAPI.pages",
+    "reason": "round ACCEPT on BUG-712/BUG-713, F1 (2026-09-05): failIfPageFault has its OWN direct c.checkNotCopied() call, but never touches c.pages -- it only reads c.pageFault (an atomic.Pointer) and returns a wrapped error. Same over-approximation shape as this file's own pre-existing entries for every other CitizensAPI receiver method (TotalPopulation|c.pages, SeedColdRecords|c.pages, etc, all above in this same ledger)."
   }
 ]
