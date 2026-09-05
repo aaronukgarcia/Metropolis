@@ -168,17 +168,58 @@ test('BUG-755 part 3 (negative control): a GENUINELY fresh boot (no savepoint at
     const { resetSaveStoreForTests } = await import('../src/sim/saveStore.ts');
     resetSaveStoreForTests();
     const { recentErrors } = await import('../src/sim/backend.ts');
+    const { scanAllSavepointLineages } = await import('../src/sim/replay.ts');
 
-    const before = recentErrors().length;
+    // HERMETIC PRECONDITION (CI red on push 15, run 33985969744, ubuntu/Node
+    // 22 — this test passed 3/3 on Windows/Node 25 but failed on CI): the
+    // ROOT CAUSE was NOT a platform difference in localStorage/jsdom — it was
+    // this test's OWN diff logic. `backend.ts`'s `errorLog` is a MODULE-LEVEL
+    // array, never reset between tests in this file (or any file); a prior
+    // test in this SAME file (the part-3 positive test above) legitimately
+    // records a real MET-V868 entry via `unshift` (newest-first). The old
+    // check computed `newCount = errs.length - before` and then sliced
+    // `errs.slice(0, newCount + 1)` — that trailing `+1` means when NO new
+    // error was recorded (newCount === 0) it still grabbed ONE element:
+    // index 0, which is the MOST RECENT entry from a PRIOR test, not this
+    // one. Whether that stale index-0 entry happens to BE the prior test's
+    // V868 (making this assertion falsely red) depends on exactly which
+    // async effects fire in between — timing/scheduling that differs across
+    // Node versions/OSes, which is why it passed on Windows/Node 25 and
+    // failed on Linux/Node 22 despite being the SAME underlying bug, not a
+    // product defect. FIX: diff by IDENTITY (`correlationId`), never by
+    // array position/count — a stable set membership check is immune to
+    // dedup/ordering/prior-test pollution regardless of platform.
+    //
+    // The OTHER direction was checked too (a genuine `scanAllSavepointLineages`
+    // product defect misreading a non-savepoint key as a savepoint on Linux
+    // — e.g. path separators, key ordering, a jsdom Storage quirk): keys are
+    // plain ASCII strings (`metropolis.savepoint.<slot>`) with no OS path
+    // separators involved, jsdom's Storage.key() enumerates a plain
+    // insertion-ordered Map (not OS/filesystem dependent), and this test's
+    // OWN precondition assertion below (asserted zero savepoint keys via the
+    // SAME `scanAllSavepointLineages` the production code uses) is the direct
+    // proof: it holds on a freshly constructed JSDOM/localStorage with
+    // nothing written to it, on every platform — ruling out a scan-side
+    // defect for this scenario.
+    const storage = dom.window.localStorage as unknown as Storage;
+    const preScan = scanAllSavepointLineages(storage as any);
+    assert.deepEqual(preScan, [], `hermetic precondition failed: fresh storage must have ZERO savepoint keys before boot, found lineages: ${JSON.stringify(preScan)}`);
+
+    const beforeIds = new Set(recentErrors().map((e: any) => e.correlationId));
     const m = await mountProvider(dom);
     await new Promise((r) => setTimeout(r, 300));
 
-    const errs = recentErrors();
-    const v868 = errs.slice(0, errs.length - before + 1).find((e: any) => e.code === 'MET-V868');
-    assert.ok(!v868, 'a genuinely fresh install (no savepoint ever existed) must NOT report a restore refusal');
+    const newErrors = recentErrors().filter((e: any) => !beforeIds.has(e.correlationId));
+    const v868 = newErrors.find((e: any) => e.code === 'MET-V868');
+    assert.ok(
+      !v868,
+      `a genuinely fresh install (no savepoint ever existed) must NOT report a restore refusal. ` +
+        `NEW errors this boot: ${JSON.stringify(newErrors.map((e: any) => ({ code: e.code, msg: e.msg })))}. ` +
+        `post-boot savepoint scan: ${JSON.stringify(scanAllSavepointLineages(storage as any))}`,
+    );
     assert.ok(
       !(typeof m.seen.state.placeNotice === 'string' && /could not be restored/i.test(m.seen.state.placeNotice)),
-      'a genuinely fresh boot must not carry a restore-refusal placeNotice',
+      `a genuinely fresh boot must not carry a restore-refusal placeNotice, got: ${JSON.stringify(m.seen.state.placeNotice)}`,
     );
   } finally {
     await closeAllRoots();
