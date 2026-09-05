@@ -592,23 +592,65 @@ describe('ATTACK 7 — GR#16: a wrong-but-typed capacityTier from storage', () =
     assert.equal(buildingCapacityOf(NURSERY, -1), T0, 'negative tier clamps to base');
   });
 
-  test('END-TO-END: a fractional-tier tier-9 group IS consolidated away, losing real capacity', () => {
+  test('END-TO-END, FIXED (BUG-742): a fractional-tier tier-9 group is NEVER consolidated away, and never silently loses capacity', () => {
     const tiers = [1.5, ...Array.from({ length: G - 1 }, () => 9)];
     let s = on(fixture({ tiers, cityCount: 2 }));
     s = runMonths(s, 12);
-    // OBSERVED (round finding F1, pinned so a future fix flips it
-    // DELIBERATELY rather than by accident): one fractional member is enough
-    // for the whole tier-9 group to sail through both gates and be merged
-    // away — the exact BUG-736 shape, reachable only from a corrupt/
-    // hand-edited save. If a later fix coerces capacityTier at the storage
-    // boundary (or makes buildingCapacityOf total), these three lines flip
-    // and this test must be updated to the fixed expectation.
-    assert.equal(cityCountOf(s), 3, 'F1: the poisoned group WAS consolidated (2 headroom + 1 new successor)');
-    assert.equal(nurseryCountOf(s), 0, 'F1: every nursery in the poisoned group was demolished');
-    assert.equal(
-      allSkips(s).filter((k) => k.reason === 'capacity loss').length,
-      0,
-      'F1: the capacity-loss gate never fired — NaN < 0 is false, so the gate fails OPEN',
-    );
+    // FIXED (round finding F1 -> BUG-742): the density-apply gate in
+    // engine.ts now checks Number.isFinite(groupCapacityReal) BEFORE the
+    // naive `< 0` compare and skips the transaction outright ('capacity
+    // unknown') whenever any group member's capacityTier makes
+    // buildingCapacityOf return undefined. The poisoned group can never be
+    // consolidated — no successor, no demolition, real capacity intact.
+    assert.equal(cityCountOf(s), 2, 'the poisoned group is never consolidated: only the 2 headroom cities exist');
+    assert.equal(nurseryCountOf(s), G, 'every nursery in the poisoned group survives, untouched');
+    assert.ok(allSkips(s).some((k) => k.reason === 'capacity unknown'), "the poisoned group is skipped every pass it's evaluated in, as 'capacity unknown'");
+    assert.equal(allSkips(s).filter((k) => k.reason === 'capacity loss').length, 0, 'the naive capacity-loss reason never fires for a non-finite sum — NaN < 0 is false');
+    assert.equal(allTxns(s).length, 0, 'no transaction of any kind touched this city');
+  });
+
+  test('a REAL transaction in an UNRELATED family still consolidates normally in the same pass a poisoned group is skipped', () => {
+    // The poisoned tier-9 nursery group from above, PLUS a separate healthy
+    // off_tower group — a DIFFERENT consolidation family, so it is never
+    // affected by the poisoned nursery family's own cityFamilyCapacity()
+    // total going non-finite (CEIL-3's citywide denominator sums EVERY
+    // building in a family, so a poisoned building anywhere in a family
+    // correctly blocks every OTHER candidate sharing that same family too —
+    // by design, not a bug: the city-wide total for that family is
+    // genuinely unknowable while the corruption exists. A different family
+    // is therefore required to prove a real transaction can still land
+    // elsewhere in the SAME pass.)
+    const OFF_TOWER = SPECS.off_tower;
+    const officeRung = consolidationLadder().find((e) => e.from === 'off_tower' && e.to === 'off_towers_downtown');
+    const oG = officeRung.groupSize;
+    const buildings = [...roadRow(0, 15)];
+    const tiers = [1.5, ...Array.from({ length: G - 1 }, () => 9)];
+    tiers.forEach((tier, i) => {
+      buildings.push({ id: 100 + i, spec: 'edu_nursery', x: i % 16, y: 1 + Math.floor(i / 16), capacityTier: tier, builtTick: -1000 });
+    });
+    for (let x = 0; x <= 15; x++) buildings.push({ id: 2000 + x, spec: 'road', x: 32 + x, y: 0, builtTick: -1000 });
+    for (let i = 0; i < oG; i++) {
+      buildings.push({ id: 300 + i, spec: 'off_tower', x: 32 + (i % 8) * OFF_TOWER.w, y: 1 + Math.floor(i / 8) * OFF_TOWER.h, capacityTier: 0, builtTick: -1000 });
+    }
+    for (let h = 0; h < 2; h++) buildings.push({ id: 9000 + h, spec: 'edu_nursery_city', x: 300 + h * 10, y: 300, builtTick: -1000 });
+    // Family-share headroom for the OFFICE family too (mirrors the nursery
+    // headroom just above) — without it the lone off_tower group's own
+    // successor would legitimately BE 100% of its family and CEIL-3 would
+    // correctly refuse it for THAT reason, defeating the point of this test
+    // (proving the healthy group succeeds, not proving a second, unrelated
+    // gate also fires).
+    for (let h = 0; h < 2; h++) buildings.push({ id: 9100 + h, spec: 'off_towers_downtown', x: 400 + h * 10, y: 400, builtTick: -1000 });
+    let s = on(withConnectivity(mk({ buildings })));
+    // 24 months (not 12): the monthly-twelfth rotation only guarantees
+    // every section has been in scope at least once by the 12th month
+    // (the whole-map pass); a second full cycle removes any doubt that
+    // either section's own twelfth-turn ordering could starve the other.
+    s = runMonths(s, 24);
+    assert.ok(allSkips(s).some((k) => k.reason === 'capacity unknown'), 'the poisoned nursery section is skipped as capacity unknown, not silently consolidated');
+    assert.equal(allSkips(s).filter((k) => k.reason === 'capacity loss').length, 0, 'the naive capacity-loss reason never fires for a non-finite sum');
+    assert.ok(allTxns(s).some((t) => t.added[0]?.spec === 'off_towers_downtown'), 'the unrelated healthy off_tower section still consolidates normally');
+    const removedIds = new Set(allTxns(s).flatMap((t) => t.removed.map((r) => r.id)));
+    for (const id of removedIds) assert.ok(id >= 300, `id ${id} was demolished but belongs to the POISONED nursery group`);
+    assert.equal(nurseryCountOf(s), G, 'the poisoned nursery group survives in full');
   });
 });

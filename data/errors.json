@@ -135,7 +135,9 @@
       "G5410-G5419": "reserved for feat.gameinit (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
       "V867-V867": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\" -- renumbered from V865 to V867 after a collision with another lane's concurrent claim on V865/V866 from the same HEAD)",
       "G5420-G5423": "reserved for feat.gameinit (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"G\")",
-      "E1000-E1001": "reserved for feat.saveux (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"E\")"
+      "E1000-E1001": "reserved for feat.saveux (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"E\")",
+      "V865-V865": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V866-V866": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -5593,6 +5595,18 @@
       "module": "feat.saveux",
       "message": "save bundle at {path} predates FEAT-143 (no GameMode field recorded): loading into the current real-mode session only, mode assumed 'real'",
       "remedy": "Per the lead ruling (feat.gameinit.md AC-5, 2026-09-05), a pre-FEAT-143 bundle with no recorded mode loads ONLY into a real-mode session (the conservative default) and is re-stamped with GameMode='real' on its next save. An unlimited session refuses this same bundle outright (MET-E820)."
+    },
+    "MET-V865": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "Save buildings[{index}] had a fractional/non-finite/out-of-range capacityTier ({raw}) -- coerced to {coerced}",
+      "remedy": "BUG-742/BUG-736: a hand-edited or corrupted save carried a capacityTier that is not a safe integer index into the spec's capacityTiers ladder. The value was coerced to a safe integer clamped to the ladder length (or dropped to 0 if non-finite/negative) so the consolidator's capacity math never divides/compares against NaN. Re-export the save from a working session if this recurs."
+    },
+    "MET-V866": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "Consolidator skipped section {sectionKey} (family {family}): capacity unknown -- a non-finite group or citywide family capacity was detected",
+      "remedy": "BUG-742/BUG-736: a corrupt/hand-edited capacityTier made this candidate's real capacity (or its family's citywide total) unrepresentable as a finite number. The transaction was skipped, not silently applied -- no capacity was lost. Re-export the save from a working session if this recurs, or check for a hand-edited capacityTier field on a building in the reported family."
     }
   }
 }

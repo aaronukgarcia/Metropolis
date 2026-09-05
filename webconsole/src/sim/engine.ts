@@ -2112,7 +2112,33 @@ function applyConsolidatorPass(
     // (b) is a follow-up BOW item if Aaron wants the ladder to actually
     // clear tier-9-and-above groups instead of leaving them skipped forever.
     const groupCapacityReal = group.reduce((sum, b) => sum + buildingCapacityOf(fromSpec, b.capacityTier ?? 0), 0);
+    // BUG-742/BUG-736 round F1: a corrupt/hand-edited save's fractional
+    // capacityTier can make buildingCapacityOf -> capacityAtTier's array
+    // index miss, returning `undefined` and turning this sum into NaN.
+    // `NaN < 0` is FALSE, so the naive gate below would silently let a
+    // capacity-unknown group through. Fail CLOSED instead: a non-finite
+    // groupCapacityReal (or the capacityGain derived from it) skips the
+    // transaction outright. gamesave.ts's/replay.ts's storage-boundary
+    // coercion (data.ts's coerceBuildingCapacityTier) should prevent this
+    // at load time, but the gate here does not trust that as its only
+    // defence. GR#1/GR#7 (round P3): the registry error is NOT recorded
+    // here — engine.ts/applyConsolidatorPass runs INSIDE the pure reducer
+    // (a monthly tick, or journal replay), and backend.recordError reads
+    // the wall clock, stringifies to JSON, and writes to browser storage
+    // (the exact BUG-602 shape GR#21 bans from this lane). `skipped.push`
+    // below is plain, journalled SimState — sim/newsFeed.ts's render-side
+    // observer drains it into both a news-feed entry AND the registry
+    // error (MET-V866), an OUTBOX
+    // pattern instead of a reducer-side side effect.
+    if (!Number.isFinite(groupCapacityReal)) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'capacity unknown' });
+      continue;
+    }
     const capacityGain = capacityOf(toSpec) - groupCapacityReal;
+    if (!Number.isFinite(capacityGain)) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'capacity unknown' });
+      continue;
+    }
     if (capacityGain < 0) {
       skipped.push({ sectionKey: opp.sectionKey, reason: 'capacity loss' });
       continue;
@@ -2160,6 +2186,18 @@ function applyConsolidatorPass(
     const familyTotalBefore = cityFamilyCapacity(index, familyKey) + (familyCapacityDelta.get(familyKey) ?? 0);
     const successorCapacity = capacityOf(toSpec);
     const groupCapacityApprox = groupCapacityReal;
+    // CEIL-3, BUG-742: `groupCapacityReal` is already proven finite by the
+    // capacity-loss gate above (it continues before reaching here otherwise),
+    // but `Math.max(0, before - NaN)` is itself NaN, and a NaN ceiling
+    // compares false against everything — a non-finite subtrahend here must
+    // be treated as a refusal, not a silent pass, same fail-closed posture
+    // as the capacity-loss gate rather than trusting only that earlier check.
+    // Round P3 (same rationale as the capacity-loss gate above): no
+    // recordError here either — this is still inside the reducer.
+    if (!Number.isFinite(groupCapacityApprox) || !Number.isFinite(familyTotalBefore)) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'capacity unknown' });
+      continue;
+    }
     const familyTotalAfter = Math.max(0, familyTotalBefore - groupCapacityApprox) + successorCapacity;
     if (successorCapacity > CONSOLIDATOR_MAX_FAMILY_SHARE * familyTotalAfter) {
       skipped.push({ sectionKey: opp.sectionKey, reason: 'family share ceiling' });
@@ -2456,6 +2494,20 @@ function applyConsolidatorPass(
     });
   }
 
+  // NOTE (BUG-742 round F1 P3): a skip-only pass (transactions.length === 0
+  // but skipped.length > 0) is STILL logged here, unchanged from BUG-736 —
+  // the wide existing test estate (ATTACK 3/4/5/6 in
+  // attack-bug736-round.test.mjs) depends on skip reasons being visible via
+  // consolidatorLog even for passes that never produced a real transaction
+  // (e.g. a permanently-stuck 40-nursery estate re-evaluated every month for
+  // 24 months with zero transactions the whole time). Suppressing the
+  // passLog here would silence that entire visibility contract. The actual
+  // P3 defect — a skip-only pass's log entry landing at consolidatorLog[0]
+  // ahead of an unconsumed REAL pass, so Undo silently no-ops against the
+  // skip-only entry while still marking consolidatorUndoConsumed = true and
+  // permanently burying the real pass — is fixed at the READ side instead:
+  // undoLastConsolidatorPass (below) now searches for the nearest entry that
+  // actually HAS transactions, rather than blindly trusting `log[0]`.
   if (transactions.length === 0 && skipped.length === 0) {
     return { state: cur, passLog: null };
   }
@@ -2498,13 +2550,86 @@ function applyConsolidatorPass(
  */
 function undoLastConsolidatorPass(state: SimState): SimState {
   const log = state.consolidatorLog ?? [];
-  const last = log[0];
+  // BUG-742 round REJECT (opus-round-bug742), two findings resolved together:
+  //
+  // D1 (asserted, must hold): a NORMAL, non-buggy log can legitimately start
+  // with skip-only entries ahead of an unconsumed real pass — e.g. a real
+  // pass lands, then a DIFFERENT, permanently-stuck estate gets evaluated
+  // and re-skipped every month after it. `consolidatorUndoConsumed` stays
+  // correctly false the whole time (nothing has consumed it), so the player
+  // presses Undo for the first time expecting the still-recent real pass to
+  // reverse. A literal `log[0]` here would find a skip-only entry (empty
+  // transactions/removed/added), silently do NOTHING to the city, yet still
+  // mark the flag consumed and pop that entry off the log — permanently
+  // wasting the player's undo on a no-op. That is the SAME class of defect
+  // this whole fix exists to close, just reached from a normal state instead
+  // of a re-armed one. Skipping past every skip-only entry to the nearest
+  // one that actually HAS transactions is therefore still required.
+  //
+  // F1 (the round's REJECT finding): a PRIOR draft combined this search with
+  // a reset condition that re-armed `consolidatorUndoConsumed = false` on
+  // ANY appended pass, skip-only included (see ~3511 below). That combo was
+  // the real bug: an ALREADY-CONSUMED undo would be silently re-armed by the
+  // next skip-only pass on a permanently-poisoned estate, and the search
+  // would then reach PAST the log's own most-recent boundary to a
+  // months-old real pass — reversing it long after the city had moved on
+  // (deleting a live successor, resurrecting demolished members at their old
+  // ids onto tiles since built on, refunding stale money — the round's
+  // D2/D4/D5 proof). The fix is NOT to abandon the search (that would just
+  // reintroduce D1's defect from the other direction) — it is to stop the
+  // flag being wrongly re-armed in the first place: the reset condition
+  // below now gates on `p.transactions.length > 0`, so a skip-only pass
+  // never touches undo eligibility at all. With that fixed, this search can
+  // only ever reach as far as the single most recent pass the flag actually
+  // permits reversing — exactly single-level undo, whether or not skip-only
+  // entries sit ahead of it in the log.
+  const undoIndex = log.findIndex((p) => p.transactions.length > 0);
+  const last = undoIndex >= 0 ? log[undoIndex] : undefined;
   // F4 FIX (independent round finding): single-level, enforced by the
   // consolidatorUndoConsumed flag (see its doc comment, types.ts) — popping
   // the log alone is not single-level, since a SECOND press would then find
   // the PREVIOUS pass sitting at the new log[0] and cheerfully reverse that
   // one too.
-  if (!last || (state.consolidatorUndoConsumed ?? false)) return state; // idempotent — AC-26
+  // BUG-742 round-2 finding (log-cap ageing): consolidatorLog is a CAPPED
+  // ring (CONSOLIDATOR_LOG_CAP). A real, still-unconsumed pass can age OUT
+  // of the log entirely under a long enough run of skip-only passes on a
+  // permanently-poisoned estate (each one still gets its own log entry —
+  // see applyConsolidatorPass's own note — and the ring evicts the OLDEST
+  // entry once full). When that happens, `consolidatorUndoConsumed` is
+  // still (correctly) false — nothing has consumed it — but there is no
+  // longer ANY entry left to reverse: `last` is `undefined` even though the
+  // flag says an undo should be available. Previously this fell through to
+  // the SAME silent `return state` as the ordinary "already consumed"
+  // no-op below, meaning the player's Undo button would look enabled and
+  // do NOTHING, forever, with zero feedback. Distinguish the two cases: an
+  // ALREADY-consumed flag with nothing to reverse stays silent (expected,
+  // idempotent — AC-26); an UNCONSUMED flag with nothing to reverse means
+  // the real pass is gone for good, so clear the flag (nothing will ever
+  // become undoable again for it) and surface exactly one plain,
+  // journalled placeNotice — newsFeed.ts already observes this field
+  // (BUG-2326609784's absorbed source), so this reuses the EXISTING
+  // render-side surfacing contract rather than inventing a new one, and
+  // never touches backend.recordError from inside the reducer (GR#21).
+  //
+  // Distinct from the ORDINARY empty-log case (a pristine city where no
+  // pass has EVER run — `consolidatorLog` only ever GROWS via a real
+  // append or SHRINKS via undo/the cap's own eviction, so an empty log
+  // with an unconsumed flag can only mean "genuinely nothing has ever
+  // happened yet", never "something happened and vanished"): that case
+  // MUST stay a pure identity no-op (AC-26's own existing contract,
+  // proven by consolidator-mutation.test.mjs/attack-consolidator-mutation-
+  // round.test.mjs's reference-equality assertions) — the log-cap fix
+  // only fires for a NON-EMPTY log with no reversible entry, which can
+  // only arise from real ageing-out.
+  if (!last) {
+    if ((state.consolidatorUndoConsumed ?? false) || log.length === 0) return state; // idempotent — AC-26
+    return {
+      ...state,
+      consolidatorUndoConsumed: true,
+      placeNotice: 'Nothing to undo: the last consolidation is no longer in the log.',
+    };
+  }
+  if (state.consolidatorUndoConsumed ?? false) return state; // idempotent — AC-26
 
   const byId = new Map(state.buildings.map((b) => [b.id, b]));
   const addedIds = new Set<number>();
@@ -2584,7 +2709,10 @@ function undoLastConsolidatorPass(state: SimState): SimState {
     roadConnectivity: computeRoadConnectivity({ ...state, buildings: finalBuildings }),
     funds: state.funds + reversedNetCost,
     cumulativeCapexSpent: Math.max(0, (state.cumulativeCapexSpent ?? 0) - reversedBuildCost),
-    consolidatorLog: log.slice(1),
+    // Remove exactly the entry that was reversed (`undoIndex`), not always
+    // index 0 — any skip-only entries logged AHEAD of it (real history,
+    // never touched by this undo) are preserved in place.
+    consolidatorLog: [...log.slice(0, undoIndex), ...log.slice(undoIndex + 1)],
     // F4 FIX: this reversal is now CONSUMED — a second consolidatorUndo
     // press is a no-op until a new pass runs (see the flag's doc comment).
     consolidatorUndoConsumed: true,
@@ -3429,10 +3557,22 @@ function advance(s: SimState): SimState {
             ...(s.consolidatorLog ?? []),
           ].slice(0, CONSOLIDATOR_LOG_CAP)
         : s.consolidatorLog,
-    // F4 FIX: a NEW pass earns a fresh, one-time undo — reset the
-    // single-level consumed-flag whenever a pass is actually appended to the
-    // log (never touched on a tick that ran no pass).
-    consolidatorUndoConsumed: consolidatorPassLogs.length > 0 ? false : s.consolidatorUndoConsumed,
+    // F4 FIX, tightened by BUG-742 round REJECT (F1): a NEW pass earns a
+    // fresh, one-time undo — but ONLY when that pass actually DID something.
+    // The original condition here was `consolidatorPassLogs.length > 0`,
+    // which re-arms the flag for a SKIP-ONLY pass too (e.g. a permanently
+    // poisoned estate, re-evaluated and re-skipped every month it's in
+    // scope). That is the actual P3 defect: an already-consumed undo would
+    // silently come back "available" long after the real pass it belonged
+    // to, even though nothing new happened for the player to undo — and
+    // since `undoLastConsolidatorPass` always reverses `log[0]` (restored
+    // above), pressing it then would reverse whatever real pass is still
+    // sitting under the skip-only entries, however stale. Gating the reset
+    // on `p.transactions.length > 0` closes this at its source: a skip-only
+    // pass changes NOTHING about undo eligibility, so an already-consumed
+    // flag stays consumed straight through any number of them, exactly
+    // as long as no NEW real pass has landed.
+    consolidatorUndoConsumed: consolidatorPassLogs.some((p) => p.transactions.length > 0) ? false : s.consolidatorUndoConsumed,
     // BUG-419: record the START-of-tick population that computeFlows() charged
     // population-scaled flows on (s.population, before the growth update above), so
     // consistency checks recompute Wages/Council Tax against the SAME basis the engine

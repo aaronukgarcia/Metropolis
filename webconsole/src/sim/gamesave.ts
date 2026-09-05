@@ -7,6 +7,7 @@ import { emptyJournal } from './journal.ts';
 import { gameDate } from './utils.ts';
 import { sanitizeTreasury } from './engine.ts';
 import { codedError } from './backend.ts';
+import { coerceBuildingCapacityTier } from './data.ts';
 
 export const GAME_SAVE_FORMAT = 'metropolis-save/1';
 
@@ -65,6 +66,21 @@ function rejectSave(reason: string): never {
 }
 
 /**
+ * BUG-742 round F3/E1: a thin, genuinely IN-PLACE wrapper over the shared,
+ * non-mutating data.ts boundary helper (coerceBuildingCapacityTier). Safe
+ * to mutate `b` here ONLY because every call site below hands this a
+ * FRESH shallow clone of the array element — never the original object,
+ * which may be the exact same reference as a caller's own live SimState
+ * building (round finding E1: buildGameSave does not deep-clone
+ * state.buildings, and createSavepoint stores `snapshot: state` directly,
+ * with no clone either).
+ */
+function coerceCapacityTierInPlace(b: Record<string, unknown>, index: number): void {
+  const coerced = coerceBuildingCapacityTier(b, index);
+  if (coerced !== b) b.capacityTier = coerced.capacityTier;
+}
+
+/**
  * BUG-446/AC-3/AC-8: validate one entry of snapshot.buildings against the
  * REAL Building shape (types.ts) — the exact fields buildGameSave/the engine
  * actually write, not an invented schema. Required: id (number), spec
@@ -72,6 +88,13 @@ function rejectSave(reason: string): never {
  * capacityTier, lastAutoScaleTick), if present, must carry their declared
  * type — a wrong-typed optional is still garbage that would break the
  * reducer downstream, so it is rejected too rather than silently coerced.
+ * capacityTier's VALUE is not validated here at all (BUG-742 round F3): a
+ * `typeof number` that is fractional/non-finite/out-of-range is coerced
+ * (not rejected) via the shared data.ts boundary helper
+ * (coerceSnapshotBuildings), applied once over the whole array by
+ * validateGameSaveShape AFTER this per-element structural pass — never
+ * duplicated here, so gamesave.ts's file-load path and every savepoint
+ * reader (replay.ts/store.tsx) share the identical coercion (GR#3 SSOT).
  */
 function validateBuildingElement(value: unknown, index: number): void {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -141,6 +164,31 @@ function validateGameSaveShape(parsed: unknown): {
     rejectSave('Snapshot is missing tick or buildings');
   }
   (snap.buildings as unknown[]).forEach((b, i) => validateBuildingElement(b, i));
+  // BUG-742 round F3/E1: coerce AFTER structural validation passes — every
+  // element is already proven to be an object with the right FIELD TYPES;
+  // this only repairs capacityTier's VALUE, via the shared data.ts boundary
+  // helper every other storage reader (replay.ts/store.tsx) also calls
+  // (GR#3 SSOT: coerceCapacityTierInPlace above is a thin wrapper over it).
+  //
+  // E1 (round finding): `snap` here is `sp.snapshot`, and `createSavepoint`
+  // (replay.ts) sets `snapshot: state` directly — no clone. When
+  // `validateGameSaveObject` is called on a save built (in-process, no
+  // JSON round-trip) FROM a live SimState via `buildGameSave`, and that
+  // state needed no OTHER sanitizing (sanitizeTreasury's own
+  // identity-preserving early return), `snap` and `sp.snapshot` end up
+  // being the EXACT SAME OBJECT as the caller's live state. So this maps
+  // to a BRAND-NEW array of FRESH shallow clones — never mutating an
+  // original element in place, never mutating `snap` itself — and only
+  // ever replaces the OUTER `sp.snapshot` pointer (a disposable save DTO,
+  // never the live state) with a new object, leaving whatever `snap` may
+  // alias completely untouched.
+  const coercedBuildings = (snap.buildings as unknown[]).map((element, index) => {
+    if (!element || typeof element !== 'object' || Array.isArray(element)) return element;
+    const b: Record<string, unknown> = { ...(element as Record<string, unknown>) };
+    coerceCapacityTierInPlace(b, index);
+    return b;
+  });
+  (sp as Record<string, unknown>).snapshot = { ...snap, buildings: coercedBuildings };
   const journal = o.journal;
   if (!journal || typeof journal !== 'object' || Array.isArray(journal)) {
     rejectSave('Save is missing journal');

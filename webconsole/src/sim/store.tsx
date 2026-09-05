@@ -46,6 +46,7 @@ import {
   migrateLegacySavepointsInPlace,
   persistSavepointWithReason,
   persistSavepointForced,
+  decodeSavepointBytes,
   type Savepoint,
   type StorageLike,
   type SavepointRejectReason,
@@ -650,11 +651,17 @@ export function freshestSavepoint(candidates: Array<Savepoint | null>): Savepoin
  * parse error degrades to `null`, matching every other savepoint reader in
  * this codebase (a corrupt IDB entry must never crash the boot-freshness
  * check — localStorage's own copy is always the safe fallback).
+ *
+ * BUG-742 round F3 (GR#16): routes through replay.ts's shared
+ * decodeSavepointBytes (the SAME boundary readSlot/restampSavepointsBuildVersion/
+ * migrateLegacySavepointsInPlace use) so an IndexedDB-sourced savepoint gets
+ * the identical capacityTier coercion as every other storage reader — this
+ * was the fourth of the round's four gap sites.
  */
 function decodeSavepointRaw(raw: string | null): Savepoint | null {
   if (raw === null) return null;
   try {
-    return JSON.parse(decode(raw)) as Savepoint;
+    return decodeSavepointBytes(raw);
   } catch {
     return null;
   }

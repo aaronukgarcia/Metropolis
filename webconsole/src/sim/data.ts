@@ -49,7 +49,7 @@ import {
 // is a leaf for this purpose too — it imports only commitqueue.ts and a
 // type-only debugjson.ts, never data.ts — so this import is call-time/
 // module-eval safe and introduces no cycle.
-import { codedError } from './backend.ts';
+import { codedError, recordError } from './backend.ts';
 
 export const MAP_W = 440;
 export const MAP_H = 260;
@@ -501,6 +501,73 @@ export function capacityAtTier(sp: Spec | undefined, tier: number): number {
   // (above, run at catalogue-load time against SPECS) makes impossible to
   // ship silently -- a spec missing it throws MET-V852 on import instead.
   return sp.residents ?? sp.jobs ?? 0;
+}
+
+/**
+ * BUG-742 round F3 (GR#16 safeX idiom, GR#3 SSOT): the ONE shared
+ * storage-boundary coercion for a building's `capacityTier`, used by EVERY
+ * reader that turns persisted bytes into building data — gamesave.ts's
+ * File-Open/named-save validation AND replay.ts's/store.tsx's savepoint
+ * decode paths (readSlot, restampSavepointsBuildVersion,
+ * migrateLegacySavepointsInPlace, decodeSavepointRaw). The round's F3 finding:
+ * the coercion originally sat ONLY on gamesave.ts's validateBuildingElement,
+ * so the DEFAULT boot path (autosave/savepoint restore, which never goes
+ * through gamesave.ts at all) admitted a poisoned tier (e.g. 8.7) verbatim,
+ * turning citywide capacity aggregates to NaN and never self-healing.
+ *
+ * Clamps a `typeof number` capacityTier to a safe integer in
+ * `[0, ladderLength - 1]` (ladderLength 0 -- no capacityTiers ladder
+ * registered for this spec, or the spec is unknown -- clamps to 0, the only
+ * defined tier). A wrong-TYPE value (string/bool/etc) or `undefined` is left
+ * untouched -- rejecting an entirely wrong type is a structural-validation
+ * concern for the caller (gamesave.ts's rejectSave), not this coercion's job.
+ *
+ * NEVER mutates `b` -- returns the SAME reference when nothing needs to
+ * change, or a NEW shallow-cloned object when it does (round finding E1): a
+ * caller may hand in a building object that is ALSO referenced by its own
+ * live SimState (buildGameSave does not deep-clone state.buildings), so
+ * mutating in place would corrupt the live game state as a side effect of
+ * merely validating/loading a save built FROM it.
+ */
+export function coerceBuildingCapacityTier(b: Record<string, unknown>, index: number): Record<string, unknown> {
+  if (b.capacityTier === undefined || typeof b.capacityTier !== 'number') return b;
+  const raw = b.capacityTier;
+  const sp = typeof b.spec === 'string' ? SPECS[b.spec] : undefined;
+  const maxTier = sp?.capacityTiers && sp.capacityTiers.length > 0 ? sp.capacityTiers.length - 1 : 0;
+  let coerced = Number.isFinite(raw) ? Math.trunc(raw) : 0;
+  if (coerced < 0) coerced = 0;
+  if (coerced > maxTier) coerced = maxTier;
+  // NaN !== NaN, so a non-finite raw always reports here too.
+  if (coerced === raw) return b;
+  recordError(
+    `Building[${index}]${typeof b.spec === 'string' ? ` (${b.spec})` : ''} had a fractional/non-finite/out-of-range capacityTier (${String(raw)}) -- coerced to ${coerced}`,
+    { type: 'app', action: 'storageBoundary', code: 'MET-V865' },
+  );
+  return { ...b, capacityTier: coerced };
+}
+
+/**
+ * Coerce every building in a decoded snapshot's `buildings` array via
+ * coerceBuildingCapacityTier -- the shared entry point every storage reader
+ * (gamesave.ts, replay.ts, store.tsx) calls on its OWN freshly-decoded copy
+ * (round F3: "operate on the decoded copy, never the caller's live object
+ * graph"). NEVER mutates `buildings` -- returns the SAME array reference
+ * when nothing changed (so a caller doing `snap.buildings =
+ * coerceSnapshotBuildings(snap.buildings)` never manufactures needless
+ * churn for an already-clean save/savepoint), or a brand NEW array when at
+ * least one element needed coercion. A non-object array element (garbage
+ * that a structural validator elsewhere will reject) is passed through
+ * untouched -- this function's only job is the ONE known-shape field.
+ */
+export function coerceSnapshotBuildings<T>(buildings: readonly T[]): readonly T[] {
+  let changed = false;
+  const out = buildings.map((b, i) => {
+    if (!b || typeof b !== 'object' || Array.isArray(b)) return b;
+    const coerced = coerceBuildingCapacityTier(b as Record<string, unknown>, i) as unknown as T;
+    if (coerced !== b) changed = true;
+    return coerced;
+  });
+  return changed ? out : buildings;
 }
 
 /**

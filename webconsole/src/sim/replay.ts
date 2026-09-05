@@ -16,7 +16,7 @@ import { reducer, initialState as getInitialState, nextSafeBuildingId, computeFl
 import { runConsistencyChecks } from './consistency.ts';
 import type { ConsistencyReport, RecomputedFlowsOverride } from './consistency.ts';
 import type { ReplayProgress } from './genesisReplay.ts';
-import { SPECS, stampJobsGrandfather, stampJobsGrandfatherForce, needsJobsGrandfather } from './data.ts';
+import { SPECS, stampJobsGrandfather, stampJobsGrandfatherForce, needsJobsGrandfather, coerceSnapshotBuildings } from './data.ts';
 import { emptyJournal } from './journal.ts';
 import { safeSetItem } from './safeStorage.ts';
 import { encode, decode } from './saveCodec.ts';
@@ -219,6 +219,36 @@ export function savepointKey(slot: number, lineageId?: string): string {
 }
 
 /**
+ * BUG-742 round F3 (GR#16): the ONE shared decode boundary for a raw
+ * localStorage/IndexedDB savepoint string — `JSON.parse(decode(raw))` PLUS
+ * the storage-boundary capacityTier coercion (data.ts's
+ * coerceSnapshotBuildings), so EVERY caller that turns raw persisted bytes
+ * into a `Savepoint` gets the SAME fail-closed treatment gamesave.ts's
+ * file-load path already had. Closes the round's F3 gap: readSlot,
+ * restampSavepointsBuildVersion, and migrateLegacySavepointsInPlace below
+ * all shared the bare `JSON.parse(decode(raw)) as Savepoint` line — the
+ * DEFAULT boot path never coerced a poisoned tier, and (since two of these
+ * three write the decoded value straight back to storage to restamp a
+ * field) the corruption never self-healed either. Routing all three through
+ * here means the very next restamp/migration write now carries the FIXED
+ * value forward. store.tsx's decodeSavepointRaw shares this too.
+ *
+ * Operates on the just-parsed COPY only: `JSON.parse` already produced a
+ * brand-new object graph unrelated to any live SimState, and
+ * coerceSnapshotBuildings itself never mutates in place (data.ts's own
+ * contract) — so this is safe even though none of these callers could ever
+ * hand in a shared/live reference in the first place.
+ */
+export function decodeSavepointBytes(raw: string): Savepoint {
+  const sp = JSON.parse(decode(raw)) as Savepoint;
+  const snap = sp?.snapshot as { buildings?: unknown[] } | undefined;
+  if (snap && Array.isArray(snap.buildings)) {
+    snap.buildings = coerceSnapshotBuildings(snap.buildings) as unknown[];
+  }
+  return sp;
+}
+
+/**
  * Read a single savepoint slot. Fail-safe: a missing key, corrupt JSON, or a
  * parse error all degrade to `null` — never throws.
  */
@@ -228,7 +258,7 @@ function readSlot(storage: StorageLike, slot: number, lineageId?: string): Savep
     if (!raw) return null;
     // FEAT-1972079935: decode() is a no-op on a legacy uncompressed value
     // (no LZv1: prefix), so this reads both old and new savepoints.
-    return JSON.parse(decode(raw)) as Savepoint;
+    return decodeSavepointBytes(raw);
   } catch {
     return null;
   }
@@ -625,7 +655,12 @@ export function restampSavepointsBuildVersion(
     try {
       const raw = storage.getItem(savepointKey(slot, effectiveLineageId));
       if (!raw) continue;
-      const sp = JSON.parse(decode(raw)) as Savepoint;
+      // BUG-742 round F3: decodeSavepointBytes coerces capacityTier on the
+      // way in, and since this function writes `sp` straight back out
+      // below, a previously-poisoned slot now SELF-HEALS on its next
+      // build-version restamp instead of carrying the corruption forward
+      // forever unfixed.
+      const sp = decodeSavepointBytes(raw);
       if (!sp || typeof sp !== 'object') continue;
       if (sp.buildVersion === runningVersion) continue; // already current
       sp.buildVersion = runningVersion;
@@ -657,7 +692,10 @@ export function migrateLegacySavepointsInPlace(storage: StorageLike): boolean {
     try {
       const raw = storage.getItem(savepointKey(slot)); // unnamespaced = legacy
       if (!raw) continue;
-      const sp = JSON.parse(decode(raw)) as Savepoint;
+      // BUG-742 round F3: same self-healing property as
+      // restampSavepointsBuildVersion above — this write-back also carries
+      // the coerced capacityTier forward.
+      const sp = decodeSavepointBytes(raw);
       if (!sp || typeof sp !== 'object') continue;
       if (sp.lineageId === LEGACY_LINEAGE_ID) continue; // already stamped
       sp.lineageId = LEGACY_LINEAGE_ID;

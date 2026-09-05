@@ -27,7 +27,7 @@
 //   the "Needs a clear NxN area" hover hint — tied to the live cursor, not a
 //   stacked notice.
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSim } from '../sim/simContext';
 import {
   createNewsFeedSeq,
@@ -35,6 +35,7 @@ import {
   observeNews,
   type NewsEntry,
 } from '../sim/newsFeed';
+import { recordError } from '../sim/backend';
 
 const SEVERITY_LABEL: Record<NewsEntry['severity'], string> = {
   info: 'Info',
@@ -52,6 +53,32 @@ export function NewsFeed() {
   // How many of the CURRENT ring's entries have been seen (from the front —
   // ring is newest-first) — everything beyond this index counts as unread.
   const [seenCount, setSeenCount] = useState(0);
+
+  // BUG-742 re-verify (opus-reverify-bug742, R3d): NewsFeed never remounts
+  // across Load / New Game (it's a persistent HUD element), so trackerRef's
+  // consolidatorCapacityUnknownMaxId high-water mark used to survive a city
+  // switch too. Loading an OLDER save, or starting a New Game, legitimately
+  // restarts consolidatorLog pass ids at 1 — every genuine post-load
+  // capacity-unknown notice was then silently suppressed as "stale" until
+  // ids climbed back past whatever the PREVIOUS city's mark had reached.
+  // `state.lineageId` (types.ts) is the opaque per-city identity minted
+  // once at every genesis — reset the tracker the instant the observed
+  // lineage differs from the last one seen, so a fresh city always starts
+  // this dedupe state from scratch. `seqRef` (NewsEntry.id generation) and
+  // `recordedIdsRef` (the MET-V866 effect's dedupe, below) are deliberately
+  // NOT reset here: they only need session-wide uniqueness, never reset by
+  // design, and resetting them could let a new lineage mint an id that
+  // COLLIDES with one still sitting in the visible `ring` from the old
+  // lineage (this component does not clear the ring on a lineage change).
+  // This is a RENDER-PHASE reset (matches the render-phase derivation
+  // pattern below, and is StrictMode-safe by the same "second invocation
+  // sees no change" argument), not a remount — resetting a ref in place,
+  // not re-creating the component.
+  const lastLineageIdRef = useRef<string | undefined>(state.lineageId);
+  if (lastLineageIdRef.current !== state.lineageId) {
+    lastLineageIdRef.current = state.lineageId;
+    trackerRef.current = createNewsFeedTracker();
+  }
 
   // Deliberately a RENDER-PHASE state derivation (React's documented
   // "adjusting state when a prop changes" pattern — see "You Might Not Need
@@ -74,23 +101,34 @@ export function NewsFeed() {
     notice: unknown;
     milestoneNotice: unknown;
     placeNotice: unknown;
+    consolidatorLatestPass: unknown;
   } | null>(null);
+  // BUG-742 round P3: `state.consolidatorLog[0]` — the newest pass, which
+  // may be a 'capacity unknown' skip-only entry — is journalled, plain
+  // SimState (engine.ts never re-references consolidatorLog on a tick that
+  // logged nothing), so its object identity is stable exactly like
+  // notice/milestoneNotice/placeNotice above: it only changes reference
+  // when a NEW pass is actually appended.
+  const consolidatorLatestPass = state.consolidatorLog?.[0] ?? null;
   const sourcesChanged =
     lastObservedRef.current === null ||
     lastObservedRef.current.notice !== state.notice ||
     lastObservedRef.current.milestoneNotice !== state.milestoneNotice ||
-    lastObservedRef.current.placeNotice !== state.placeNotice;
+    lastObservedRef.current.placeNotice !== state.placeNotice ||
+    lastObservedRef.current.consolidatorLatestPass !== consolidatorLatestPass;
   if (sourcesChanged) {
     lastObservedRef.current = {
       notice: state.notice,
       milestoneNotice: state.milestoneNotice,
       placeNotice: state.placeNotice,
+      consolidatorLatestPass,
     };
     const nextRing = observeNews(
       {
         notice: state.notice,
         milestoneNotice: state.milestoneNotice,
         placeNotice: state.placeNotice,
+        consolidatorLatestPass,
         tick: state.tick,
       },
       trackerRef.current,
@@ -104,6 +142,31 @@ export function NewsFeed() {
 
   const unreadCount = Math.max(0, ring.length - seenCount);
   const latest = ring[0] ?? null;
+
+  // BUG-742 round-2 finding (4): backend.recordError does a localStorage
+  // ring write — a side effect — and previously fired directly inside
+  // observeNews's render-phase call above. React's own guidance is side
+  // effects belong in useEffect, not render (render can run more than once
+  // per commit, or be thrown away, under Concurrent Mode); newsFeed.ts no
+  // longer calls recordError at all (see its own doc comment). This effect
+  // is the ONE place that does. Scans the WHOLE ring (bounded to
+  // NEWS_FEED_MAX_ENTRIES, cheap) rather than only `ring[0]` — a
+  // capacity-unknown entry can be buried under a LATER levelup/milestone/
+  // placeNotice push in the same or a later render, so watching only the
+  // top entry would silently miss it. `recordedIdsRef` is the dedupe: keyed
+  // on each entry's own stable `id` (observeNews's (id,tick)+high-water-mark
+  // logic already guarantees at most one push per real event), so this
+  // fires exactly once per genuine event even across React 18 StrictMode's
+  // documented double-invoke of the same effect body.
+  const recordedIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const entry of ring) {
+      if (entry.source !== 'consolidatorCapacityUnknown') continue;
+      if (recordedIdsRef.current.has(entry.id)) continue;
+      recordedIdsRef.current.add(entry.id);
+      recordError(entry.text, { type: 'app', action: 'consolidator', code: 'MET-V866' });
+    }
+  }, [ring]);
 
   function toggleExpanded() {
     setExpanded((v) => {

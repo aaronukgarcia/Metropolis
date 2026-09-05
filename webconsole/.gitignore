@@ -9,3 +9,6 @@
 
 # Vite build output
 /dist/
+
+# BUG-742 redproof in-tree mutant TEMP (created by the test itself)
+/.mutant-tmp/
