@@ -307,11 +307,15 @@ jobs:
               --ingress external --target-port 8080 --transport auto \
               --args="-addr 0.0.0.0:8080 -persist-dir /data -city ${{ github.event.inputs.city }} -tick-interval 1s -snapshot-every 360" \
               --secrets "metroserve-shared-secret=REPLACE-BEFORE-FIRST-RUN" \
-              --env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret" \
-              --azure-file-volume-name "metroserve-data-volume" \
-              --azure-file-volume-account-name "${{ env.STORAGE_ACCOUNT }}" \
-              --azure-file-volume-share-name "${{ env.FILE_SHARE_NAME }}" \
-              --azure-file-volume-mount-path "/data"
+              --env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret"
+            # DURABLE VOLUME DEFERRED (BUG-716): the --azure-file-volume-* flags are
+            # unrecognized by this runner's az containerapp extension version (the
+            # 'RE-VERIFY before first run' note above, adjudicated by the deploy run).
+            # metroserve runs with ephemeral in-image /data (BUG-693 made it nonroot-
+            # writable), which PROVES the deploy pipeline end-to-end and serves the
+            # app; the durable Azure Files mount (env storage 'metroserve-data' is
+            # already registered on metropolis-env) is re-attached via a container-app
+            # YAML spec as the BUG-716 follow-up.
             # Sticky sessions (design doc §1.5/ASM-1506 — Container Apps
             # ingress session affinity). Not load-bearing for correctness
             # (determinism means any replica can rebuild any city by
