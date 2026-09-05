@@ -32,8 +32,15 @@ type dispensationState struct {
 	usedThisMonth int64
 }
 
+// resetMonthLocked mirrors hearseState.resetMonthLocked's identical
+// BUG-720 round F4 fix (see that method's doc comment for the full
+// argument): `>` rather than `!=` so a month number that goes BACKWARDS
+// (a plain Composition.Load's tick/month-0 restart) never refunds the
+// month's already-spent dispensation budget, while a LoadAt's
+// tick-continuous, monotonically-increasing month sequence is unaffected
+// (byte-identical to the old `!=` check on that path).
 func (ds *dispensationState) resetMonthLocked(month int64) {
-	if month != ds.lastMonth {
+	if month > ds.lastMonth {
 		ds.lastMonth = month
 		ds.usedThisMonth = 0
 	}

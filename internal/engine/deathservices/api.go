@@ -325,6 +325,29 @@ func (d *DeathServicesAPI) HandoffCursor(correlationID string) (int64, error) {
 	return d.handoffCursor, nil
 }
 
+// ResetHandoffCursor forces the persisted handoff-stream paging watermark
+// back to 0 (BUG-720/BUG-689 P2 follow-up: the over-length-cursor wedge --
+// see compose's intakeDeathServices doc comment for the full defect this
+// closes). handoffCursor's ONLY other mutator is IntakeFromHandoff's
+// `+= len(deaths)`, which is additive-only by design (the exactly-once
+// paging contract) -- correcting an already-impossible large value (a
+// hand-edited/corrupt save, never something this codebase itself writes)
+// needs a real reset, not another addition on top of it (adding to
+// math.MaxInt64 wraps to a negative int64, which is a WORSE corrupt state
+// than the one being corrected). This is a narrow, explicit escape hatch
+// for exactly that composition-root-detected-impossible-value case, never
+// called from this package's own normal Intake/IntakeFromHandoff/decode
+// paths.
+func (d *DeathServicesAPI) ResetHandoffCursor(correlationID string) error {
+	if err := d.checkNotCopied(correlationID, "ResetHandoffCursor"); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.handoffCursor = 0
+	d.mu.Unlock()
+	return nil
+}
+
 // intakeLocked is Intake's lock-held implementation, extracted so
 // IntakeFromHandoff can apply the identical dedup/dispensation-signal
 // logic atomically alongside its own cursor advance. Caller must hold d.mu.

@@ -333,30 +333,30 @@ func asErrsE(err error, target **errs.E) bool {
 	return true
 }
 
-// TestAttackBUG689_FINDING_NoDisposalIsEverDriven is FINDING F2 (P1,
-// scope): this is the answer to Aaron's actual question, "when do we see
-// crematoriums and hearses?".
-//
-// The landed wiring drives INTAKE ONLY. Grepping the whole composition
-// root for deathservices call sites finds exactly two: HandoffCursor and
-// IntakeFromHandoff. Nothing ever calls RegisterCemetery,
-// RegisterCrematorium, Bury, Cremate, RunHearseTransport or Dispense — so
-// a composed engine has ZERO cemeteries and ZERO crematoria for its whole
-// life, and every intaken body sits in BodyAwaiting forever.
-//
-// The AC-14 conservation identity (Sum() == BodiesReleased) holds
-// TRIVIALLY in that world, because Awaiting is one of the five buckets it
-// sums — which is why the estate's own conservation assertions pass while
-// no disposal happens at all. This test makes the difference visible:
-// bodies released == bodies awaiting, all four terminal buckets zero.
-//
-// This test PINS THE CURRENT GAP. The first increment that wires a
-// disposal step will break it; that break is the signal to delete the pin.
-func TestAttackBUG689_FINDING_NoDisposalIsEverDriven(t *testing.T) {
+// TestAttackBUG720_FINDING_NoDisposalIsEverDriven_FIXED is FINDING F2 (P1,
+// scope)'s FIXED form — the pin's own doc comment named the exact
+// condition that would flip it: "The first increment that wires a
+// disposal step will break it; that break is the signal to delete the pin."
+// BUG-720 is that increment: deathServicesRunHook (compose.go, registered
+// daily, right after "build") now drives RunHearseTransport/Bury,
+// Cremate, and — while dispensation is active — Dispense every simulated
+// day. Renamed from the FINDING/pin form to a FIXED regression proving the
+// gap stays closed: WITHOUT at least one registered cemetery or
+// crematorium, backlog still equals released (the disposal channels have
+// nothing to dispose INTO — that is not the class of gap this bug closes,
+// see the compose test's TestAttackBUG720_RunLoop_DrainsAwaitingBacklog
+// suite for the actual crematorium/cemetery-registered proof), but with
+// one crematorium registered, the SAME driven months now measurably
+// dispose of bodies — the answer to Aaron's "when do we see crematoriums
+// and hearses?" is no longer "never".
+func TestAttackBUG720_FINDING_NoDisposalIsEverDriven_FIXED(t *testing.T) {
 	cid := errs.NewCorrelationID()
 	api := buildGuaranteedDeathCitizensAPI(t, attackSeed)
 	e := core.NewEngine(core.WithWorldSeed(attackSeed), core.WithPoolSize(1))
-	comp, err := Wire(e, &Deps{Citizens: api})
+	comp, err := Wire(e, &Deps{
+		Citizens:               api,
+		DeathServiceCrematoria: []string{"crematorium-1"},
+	})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}
@@ -375,13 +375,20 @@ func TestAttackBUG689_FINDING_NoDisposalIsEverDriven(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AwaitingBacklog: %v", err)
 	}
-	if int64(backlog) != cons.BodiesReleased {
-		t.Fatalf("F2 appears FIXED: %d of %d released bodies left Awaiting — some disposal step is now "+
-			"driven by the tick. Delete this pin and record the fix. (%+v)", backlog, cons.BodiesReleased, cons)
+	if int64(backlog) == cons.BodiesReleased {
+		t.Fatalf("F2 REGRESSED: all %d released bodies are still Awaiting with a crematorium registered — "+
+			"the BUG-720 disposal run loop is no longer driving Cremate/Dispense (conservation snapshot %+v).",
+			cons.BodiesReleased, cons)
 	}
-	t.Logf("F2 CONFIRMED: after 4 composed months, all %d released bodies are still Awaiting; "+
-		"no burial, cremation, hearse trip or dispensation is ever driven by the composed tick "+
-		"(conservation snapshot %+v). Crematoriums and hearses still do not RUN.", backlog, cons)
+	if cons.BodiesCremated == 0 && cons.BodiesHandledByDispensation == 0 {
+		t.Fatalf("F2 REGRESSED: zero bodies cremated AND zero dispensed after 4 composed months with a "+
+			"crematorium registered — some other channel drained the backlog instead of the ones this bug wires "+
+			"(conservation snapshot %+v).", cons)
+	}
+	t.Logf("F2 FIXED (BUG-720): after 4 composed months with one crematorium registered, %d of %d released "+
+		"bodies were disposed of (cremated=%d, dispensed=%d), only %d left Awaiting (conservation snapshot %+v). "+
+		"Crematoriums and hearses now RUN.",
+		cons.BodiesReleased-int64(backlog), cons.BodiesReleased, cons.BodiesCremated, cons.BodiesHandledByDispensation, backlog, cons)
 }
 
 // TestAttackBUG689_ComposeUsesLiveModuleDrainCapacity is the FIXED form of

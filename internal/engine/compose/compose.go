@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sort"
 	"sync/atomic"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
@@ -366,6 +367,47 @@ type Deps struct {
 	// mirrors LoadMarket/LoadTraffic's identical shape above.
 	LoadDeathServices func(correlationID string) (*deathservices.DeathServicesAPI, error)
 
+	// DeathServiceCemeteries / DeathServiceCrematoria (BUG-720) pre-register
+	// cemetery/crematorium instances at Wire time. This is a STOPGAP seam,
+	// not the sanctioned long-term registration path: BUG-720's own
+	// investigation found TWO real engine.build-owned API gaps that block
+	// registering a cemetery/crematorium from an actual player-built
+	// structure the way [build.BuildAPI]'s existing engine.services bridge
+	// (registerCompletedServicesLocked/registerServiceLocked, build.go)
+	// already does for generic ServiceKind buildings —
+	//
+	//  1. compose's own protocol.KindBuild handler (below, "case
+	//     protocol.KindBuild") never populates [build.BuildCommand.
+	//     BuildingID] from the player's protocol.BuildPayload — only Zone
+	//     is set — so NO ServiceKind-declaring catalogue building (cemetery/
+	//     crematorium among them; this is generic, not deathservices-
+	//     specific) can ever be registered with engine.services via the
+	//     live player build path today, only via a direct BuildCommand a
+	//     test constructs by hand.
+	//  2. Even with (1) fixed, [build.BuildOrder] (the public projection
+	//     [build.BuildAPI.Queue] returns) does not expose BuildingID or any
+	//     buildingID-keyed accessor, so compose has no exported way to
+	//     discover WHICH completed structure is a cemetery/crematorium in
+	//     order to call [deathservices.DeathServicesAPI.RegisterCemetery]/
+	//     [deathservices.DeathServicesAPI.RegisterCrematorium] (a distinct
+	//     registry from engine.services' generic ServiceSpec — plot/
+	//     throughput tracking that module owns itself, so even a fixed (1)
+	//     would only register the generic engine.services capacity term,
+	//     never deathservices' own cemetery/crematorium state).
+	//
+	// Both are engine.build-owned changes (a BuildOrder field/accessor, and
+	// a compose<->protocol BuildingID translation), filed as a follow-up
+	// for the architect rather than invented here. Until they land, this
+	// Deps seam is the only way a live composition gets cemetery/
+	// crematorium capacity registered — nil/empty reproduces today's
+	// "nothing ever runs" behaviour exactly (BUG-720's own starting
+	// symptom). There is also no RegisterCemetery/RegisterCrematorium
+	// "Unregister" — a bulldozed cemetery/crematorium cannot be
+	// decommissioned from deathservices' registry today; that gap is
+	// likewise left STOPPED, not invented around.
+	DeathServiceCemeteries []DeathServiceCemeterySpec
+	DeathServiceCrematoria []string
+
 	// LoadTraffic overrides construction of the FEAT-206 engine.traffic
 	// dependency (defaults to loadDefaultTraffic — traffic.New() +
 	// LoadConfig against the resolved data/ dir, mirroring LoadMarket's
@@ -478,6 +520,27 @@ var registrationOrder = []moduleRegistration{
 	// check observes the same day's result — deterministic intra-phase
 	// order via this slice's iteration order (GR#21).
 	{name: "build", phase: core.PhaseDailyTick, hook: func(st *simState) core.PhaseHook { return &buildHook{st: st} }},
+	// BUG-720: crematoriums/cemeteries/hearses NOW RUN. Registered on the
+	// DAILY tick (not PhasePopulation, where BUG-689's Intake sits) because
+	// cremation's own data-sourced throughput is a PER-DAY cap
+	// (deathservices/crematory.go's DailyThroughput, spec seed 12/d) — a
+	// monthly call would only ever charge one day's worth of cremation
+	// capacity per month, an ~30x under-run of the real budget. Hearse
+	// transport/dispensation are month-scoped budgets internally
+	// (hearse.go/dispensation.go's own resetMonthLocked), so calling them
+	// once per DAY simply drains that monthly pool across ~30 daily calls —
+	// the same amortised-across-the-month shape citizens' own daily cold
+	// pass (coldPassHook, registered just above build in this slice) and
+	// build's own daysPerTick materials/labour/lead-time draw already use.
+	// Placed AFTER build (so a same-day newly-completed structure — once
+	// the two engine.build gaps this bug's Deps.DeathServiceCemeteries doc
+	// comment names are closed — would be visible to this sweep the same
+	// tick it lands, mirroring build's own "before invariant" positioning
+	// rationale) and BEFORE invariant (so this hook's SettleOpex finance
+	// posting is observed by the SAME day's conservation check, exactly
+	// the ordering build's own doc comment above establishes for its
+	// demolish-compensation posting).
+	{name: "deathservices-run", phase: core.PhaseDailyTick, hook: func(st *simState) core.PhaseHook { return &deathServicesRunHook{st: st} }},
 	{name: "attract", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &attractHook{st: st} }},
 	// BUG-689: engine.deathservices' monthly Intake, matching MOD-083's own
 	// month-level budget semantics (hearse/dispensation throughput are
@@ -678,6 +741,55 @@ func (c *Composition) Traffic() *traffic.TrafficAPI {
 // tests and inspection tooling.
 func (c *Composition) DeathServices() *deathservices.DeathServicesAPI {
 	return c.state.deathServices
+}
+
+// DeathServiceCemeterySpec pre-registers one cemetery at Wire time with an
+// explicit plot capacity (BUG-720's Deps.DeathServiceCemeteries stopgap
+// seam — see that field's doc comment for why this exists instead of a
+// real build-completion trigger). Capacity <= 0 uses
+// [deathservices.DeathServicesAPI.RegisterCemetery]'s data-sourced default
+// instead of [deathservices.DeathServicesAPI.RegisterCemeteryWithCapacity]
+// (GR#15: never silently substitute 0 for "unset").
+type DeathServiceCemeterySpec struct {
+	ID       string
+	Capacity int64
+}
+
+// DeathServicesRunStatus is BUG-720's GR#17 observability surface (AC per
+// this bug's own brief): a point-in-time read of the live disposal
+// pipeline, backed entirely by [deathservices.DeathServicesAPI]'s own
+// registered accessors (AwaitingBacklog/DispensationActive) plus the two
+// registry rosters this composition tracks (see simState.
+// deathServiceCemeteryIDs/deathServiceCrematoriumIDs's doc comment for why
+// deathservices itself exposes no enumeration accessor). A dedicated
+// f4-style UI publish view (mirroring services_publish.go's
+// buildServicesCapacityDemandPatch) is a legitimate fast-follow, not
+// required for BUG-720's "make it run" scope — this accessor is the same
+// class of test/inspection surface [Composition.DeathServices] already is.
+type DeathServicesRunStatus struct {
+	AwaitingBacklog      int
+	DispensationActive   bool
+	CemeteriesRegistered int
+	CrematoriaRegistered int
+}
+
+// DeathServicesRunStatus returns the current disposal-pipeline status
+// (BUG-720). Returns the zero value, no error, when deathservices is not
+// wired (mirrors this package's other nil-wiring-is-a-documented-no-op
+// accessors, e.g. intakeDeathServices).
+func (c *Composition) DeathServicesRunStatus() DeathServicesRunStatus {
+	st := c.state
+	if st.deathServices == nil {
+		return DeathServicesRunStatus{}
+	}
+	backlog, _ := st.deathServices.AwaitingBacklog(st.cid)
+	active, _ := st.deathServices.DispensationActive(st.cid)
+	return DeathServicesRunStatus{
+		AwaitingBacklog:      backlog,
+		DispensationActive:   active,
+		CemeteriesRegistered: len(st.deathServiceCemeteryIDs),
+		CrematoriaRegistered: len(st.deathServiceCrematoriumIDs),
+	}
 }
 
 // Journaler returns the composed engine's engine-owns-journal seam
@@ -1136,6 +1248,36 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	if err := deathServicesAPI.Wire(servicesAPI, logisticsAPI, cid); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "deathservices"})
 	}
+	// BUG-720 stopgap registration (see Deps.DeathServiceCemeteries' doc
+	// comment for why this is a Wire-time seam rather than a real
+	// build-completion trigger): register every pre-declared cemetery/
+	// crematorium BEFORE any hook ever runs (AC-4's "no partially-wired
+	// engine on a construction failure", mirrored here), and remember the
+	// ids in deterministic (sorted) order — deathservices exposes no
+	// enumeration accessor of its own, so this composition's own roster is
+	// the only record of which ids exist to sweep daily.
+	deathServiceCemeteryIDs := make([]string, 0, len(deps.DeathServiceCemeteries))
+	for _, spec := range deps.DeathServiceCemeteries {
+		if spec.Capacity > 0 {
+			if err := deathServicesAPI.RegisterCemeteryWithCapacity(spec.ID, spec.Capacity, cid); err != nil {
+				return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "deathservices", "step": "RegisterCemeteryWithCapacity", "cemeteryId": spec.ID})
+			}
+		} else {
+			if err := deathServicesAPI.RegisterCemetery(spec.ID, cid); err != nil {
+				return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "deathservices", "step": "RegisterCemetery", "cemeteryId": spec.ID})
+			}
+		}
+		deathServiceCemeteryIDs = append(deathServiceCemeteryIDs, spec.ID)
+	}
+	sort.Strings(deathServiceCemeteryIDs)
+	deathServiceCrematoriumIDs := make([]string, 0, len(deps.DeathServiceCrematoria))
+	for _, id := range deps.DeathServiceCrematoria {
+		if err := deathServicesAPI.RegisterCrematorium(id, cid); err != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "deathservices", "step": "RegisterCrematorium", "crematoriumId": id})
+		}
+		deathServiceCrematoriumIDs = append(deathServiceCrematoriumIDs, id)
+	}
+	sort.Strings(deathServiceCrematoriumIDs)
 	// FEAT-087 inc3/BUG-689 (GR#3 SSOT fix, round follow-up G2): wire
 	// citizens' FEAT-088 [citizens.DrainCapacity] (ASM-580) through
 	// MOD-083's OWN registered composition-root adapter,
@@ -1195,38 +1337,40 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	}
 
 	st := &simState{
-		e:                       e,
-		cid:                     cid,
-		seed:                    e.WorldSeed(),
-		citizens:                c,
-		world:                   w,
-		market:                  m,
-		consumption:             consumptionAPI,
-		waterNet:                waterNet,
-		powerNet:                powerNet,
-		gasNet:                  gasNet,
-		buildAPI:                buildAPI,
-		attract:                 attractAPI,
-		finance:                 financeAPI,
-		crime:                   crimeAPI,
-		leisure:                 leisureAPI,
-		refuse:                  refuseAPI,
-		services:                servicesAPI,
-		firms:                   firmsAPI,
-		deathServices:           deathServicesAPI,
-		wellbeingAPI:            wellbeingAPI,
-		wellbeingSeams:          wellbeingSeams,
-		wellbeingStatus:         computeWellbeingStatus(wellbeingAPI, wellbeingSeams, 0, 0, 0),
-		traffic:                 trafficAPI,
-		extCommute:              extCommuteAPI,
-		unlocks:                 unlocksAPI,
-		attractTerms:            attractTerms,
-		leisureVenuesRegistered: make(map[uint64]bool),
-		treasury:                ledgerBalance(financeAPI, finance.AcctTreasury),
-		citizenWealth:           ledgerBalance(financeAPI, finance.AcctHouseholds),
-		nextCitizenID:           1,
-		seedResidentIDBase:      deps.SeedResidentIDBase,
-		seedResidentIDCount:     deps.SeedResidentIDCount,
+		e:                          e,
+		cid:                        cid,
+		seed:                       e.WorldSeed(),
+		citizens:                   c,
+		world:                      w,
+		market:                     m,
+		consumption:                consumptionAPI,
+		waterNet:                   waterNet,
+		powerNet:                   powerNet,
+		gasNet:                     gasNet,
+		buildAPI:                   buildAPI,
+		attract:                    attractAPI,
+		finance:                    financeAPI,
+		crime:                      crimeAPI,
+		leisure:                    leisureAPI,
+		refuse:                     refuseAPI,
+		services:                   servicesAPI,
+		firms:                      firmsAPI,
+		deathServices:              deathServicesAPI,
+		deathServiceCemeteryIDs:    deathServiceCemeteryIDs,
+		deathServiceCrematoriumIDs: deathServiceCrematoriumIDs,
+		wellbeingAPI:               wellbeingAPI,
+		wellbeingSeams:             wellbeingSeams,
+		wellbeingStatus:            computeWellbeingStatus(wellbeingAPI, wellbeingSeams, 0, 0, 0),
+		traffic:                    trafficAPI,
+		extCommute:                 extCommuteAPI,
+		unlocks:                    unlocksAPI,
+		attractTerms:               attractTerms,
+		leisureVenuesRegistered:    make(map[uint64]bool),
+		treasury:                   ledgerBalance(financeAPI, finance.AcctTreasury),
+		citizenWealth:              ledgerBalance(financeAPI, finance.AcctHouseholds),
+		nextCitizenID:              1,
+		seedResidentIDBase:         deps.SeedResidentIDBase,
+		seedResidentIDCount:        deps.SeedResidentIDCount,
 	}
 	// treasury is seeded through setTreasury (never assigned directly)
 	// so the BUG-324 publish mirror is correct from before the engine
@@ -1492,6 +1636,20 @@ type simState struct {
 	wellbeingAPI    *wellbeing.WellbeingAPI
 	wellbeingSeams  []wellbeingSeamStatus
 	wellbeingStatus WellbeingStatus
+
+	// deathServiceCemeteryIDs / deathServiceCrematoriumIDs (BUG-720) are the
+	// deterministic (sorted, GR#21), Wire-time-populated rosters of every
+	// cemetery/crematorium id this composition registered via
+	// Deps.DeathServiceCemeteries/DeathServiceCrematoria — deathservices
+	// itself exposes no enumeration accessor (RegisterCemetery/
+	// RegisterCrematorium only ever insert into its own unexported maps),
+	// so compose tracks the ids it registered itself in order to drive
+	// deathServicesRunHook's daily RunHearseTransport/Cremate sweep and
+	// DeathServicesRunStatus's roster counts. See Deps.DeathServiceCemeteries'
+	// doc comment for why this is a Wire-time stopgap rather than a live,
+	// build-completion-driven roster.
+	deathServiceCemeteryIDs    []string
+	deathServiceCrematoriumIDs []string
 
 	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): the composed
 	// engine.traffic dependency (traffic_wire.go). trafficTickHook calls
@@ -2557,7 +2715,69 @@ func (st *simState) intakeDeathServices(month int64) error {
 		return err
 	}
 	if len(deaths) == 0 {
-		return nil
+		// BUG-689 P2 follow-up (over-length cursor wedge --
+		// attack_bug689_reround2_test.go's pinned FINDING): deathservices'
+		// OWN decode-time clamp (participant.go's F6 fix, MET-G5452) can
+		// only ever guard a NEGATIVE cursor -- negative is unconditionally
+		// invalid regardless of the citizens handoff stream's length, so
+		// deathservices' decode step (which never holds a citizens
+		// reference, GR#20) can zero it unilaterally and safely. An
+		// OVER-LENGTH cursor is a different shape of invalid: "impossible"
+		// is defined only relative to the REAL stream length, which only
+		// the composition root can observe (it alone holds both APIs) --
+		// clamping it inside deathservices itself would mean either
+		// guessing an arbitrary ceiling (a real 100M-citizen city can
+		// legitimately reach a huge cursor -- GR#15 bans a hand-picked
+		// magic threshold) or leaving it unguarded, which is exactly the
+		// pinned FINDING: a cursor at or past the stream's length makes
+		// DeathHandoffSince return empty forever, so IntakeFromHandoff is
+		// never called, so the cursor never advances -- permanently
+		// wedged, strictly worse than the negative case, which
+		// self-corrects in one month.
+		//
+		// Fixed HERE, the one place with enough information to make the
+		// correction principled rather than arbitrary:
+		// st.citizens.DeathHandoff's full stream length is the exact,
+		// non-negotiable upper bound a valid cursor can never exceed
+		// (DeathHandoffSince's own documented contract), so any cursor
+		// beyond it is unambiguously impossible, never a size judgement
+		// call. This full-stream read only runs on a month where the
+		// cheap DeathHandoffSince(cursor) call above already returned
+		// empty (the common "genuinely caught up, nothing died this
+		// month" case included) -- bounded cost, never the unconditional
+		// per-month O(stream) read a naive fix would add on the 100M-
+		// citizen path (Aaron's standing perf directive). Clamped to 0
+		// (mirroring F6's own negative treatment, MET-G5452) rather than
+		// to the stream's length, specifically so the very next
+		// IntakeFromHandoff call below is non-empty and therefore
+		// actually WRITES the corrected cursor back through the module's
+		// only real setter -- clamping to len(full) instead would leave
+		// deaths empty, skip IntakeFromHandoff entirely, and leave the
+		// poisoned value persisted forever, self-correcting nothing. Any
+		// already-consumed entries this re-read revisits are safely
+		// absorbed by Intake's own per-citizenID duplicate guard (H4
+		// policy (b), ErrDuplicateDeath handled below exactly as today).
+		if full, ferr := st.citizens.DeathHandoff(st.cid); ferr == nil && cursor > int64(len(full)) {
+			_ = errs.New(deathservices.ErrCorruptHandoffCursor, st.cid, map[string]any{"handoffCursor": cursor, "streamLength": len(full)})
+			// handoffCursor's only other mutator (IntakeFromHandoff) is
+			// additive-only -- re-deriving `deaths` from index 0 alone
+			// would leave the PERSISTED cursor at its original impossible
+			// value, and the next IntakeFromHandoff's `+= len(deaths)`
+			// would add on TOP of it (for math.MaxInt64, wrapping to a
+			// negative int64 -- an even worse corrupt state). Reset the
+			// persisted value first via the module's own explicit escape
+			// hatch (ResetHandoffCursor's doc comment).
+			if rerr := st.deathServices.ResetHandoffCursor(st.cid); rerr != nil {
+				return rerr
+			}
+			deaths, err = st.citizens.DeathHandoffSince(0, st.cid)
+			if err != nil {
+				return err
+			}
+		}
+		if len(deaths) == 0 {
+			return nil
+		}
 	}
 	_, err = st.deathServices.IntakeFromHandoff(deaths, st.cid)
 	// ErrDuplicateDeath is Intake's own documented WARNING-not-abort signal
@@ -2567,6 +2787,289 @@ func (st *simState) intakeDeathServices(month int64) error {
 	if err != nil && !deathservices.IsDuplicateDeath(err) {
 		return err
 	}
+	return nil
+}
+
+// deathServicesRunEffect carries the day/month deathServicesRunHook.RunShard
+// reads from the clock, mirroring deathServicesEffect/attractEffect's
+// identical shape (GR#21: a PhaseHook's RunShard/ApplyEffect split must
+// never read live engine state from ApplyEffect directly).
+type deathServicesRunEffect struct {
+	day   int64
+	month int64
+}
+
+// deathServicesRunHook is BUG-720: the daily run loop that actually drains
+// the Awaiting backlog through hearse transport, burial, cremation, and
+// emergency dispensation — the gap BUG-689 deliberately left open
+// ("Crematoriums still do not RUN — that is BUG-720", ccf15b6's commit
+// message). See registrationOrder's own comment on this hook's entry for
+// why it is a DAILY (not monthly) registration.
+type deathServicesRunHook struct {
+	st *simState
+}
+
+func (h *deathServicesRunHook) RunShard(shard int) ([]core.Effect, error) {
+	if shard != 0 {
+		return nil, nil
+	}
+	clock, err := h.st.e.Clock()
+	if err != nil {
+		return nil, err
+	}
+	return []core.Effect{{Sequence: 0, Payload: deathServicesRunEffect{day: clock.Tick(), month: clock.Month()}}}, nil
+}
+
+func (h *deathServicesRunHook) ApplyEffect(eff core.Effect) {
+	p, ok := eff.Payload.(deathServicesRunEffect)
+	if !ok {
+		return
+	}
+	if err := h.st.runDeathServices(p.day, p.month); err != nil {
+		_ = errs.New(ErrModuleFailed, h.st.cid, map[string]any{"module": "deathservices", "op": "run", "cause": err.Error()})
+	}
+}
+
+// SingleShard implements core.SingleShardHook (mirrors deathServicesHook):
+// the only Effect ever emitted comes from shard 0.
+func (h *deathServicesRunHook) SingleShard() bool { return true }
+
+// deathServicesCremateBatchObserved is a nil-by-default test observation
+// seam (BUG-720 round F1): when set, runDeathServices calls it with the
+// exact batch size it is about to hand [deathservices.DeathServicesAPI.
+// Cremate], once per crematorium per day, immediately before the call.
+// Package-private, never touched by production code, and always nil there
+// — a test sets it (and restores it to nil via defer) to prove the
+// submitted batch size stays bounded by DailyThroughput regardless of
+// backlog size, the count-based (never wall-clock) form of the round's
+// perf finding.
+var deathServicesCremateBatchObserved func(crematoriumID string, submitted int)
+
+// runDeathServices is BUG-720's disposal run loop: every simulation day, it
+// drains the CURRENT Awaiting backlog through every registered cemetery
+// (hearse transport, one body per trip, bounded by the shared monthly
+// hearse budget AND, when wired, engine.logistics congestion — hearse.go's
+// RunHearseTransport), then every registered crematorium (bounded by that
+// crematorium's own data-sourced daily throughput — crematory.go's
+// Cremate), then — only while dispensation is active — the emergency
+// multi-body dispensation channel (dispensation.go's Dispense). Nil-wiring
+// fail-safe: a nil st.deathServices (never true through Wire today, same
+// defensive posture as intakeDeathServices) is a documented no-op.
+//
+// day is the caller-supplied simulation day counter Cremate's own AC-19
+// requires (never wall-clock) — clock.Tick() is exactly that: a monotonic
+// per-simulation-day counter, unrelated to real time.
+//
+// Iteration order over multiple cemeteries/crematoria is the composition's
+// OWN sorted id roster (deathServiceCemeteryIDs/deathServiceCrematoriumIDs,
+// populated once at Wire time — GR#21: never a map range), so a fixture
+// with several registered instances processes them in the same order
+// regardless of pool size. AwaitingSorted is re-read before EACH disposal
+// call rather than once up front: Bury/Cremate/Dispense's own admission
+// gates (awaitingAheadCountLocked) are computed against the CURRENT
+// backlog, and a body already claimed by an earlier call in this same day
+// would otherwise be re-offered to a later call and rejected with
+// ErrBodyAlreadyHandled, aborting that call's ENTIRE batch (Cremate/
+// RunHearseTransport are documented all-or-nothing on an unknown/
+// already-terminal id) — re-fetching keeps every call's input a genuinely
+// still-Awaiting set.
+func (st *simState) runDeathServices(day, month int64) error {
+	if st.deathServices == nil {
+		return nil
+	}
+
+	// Hearse transport + burial: one cemetery at a time, deterministic
+	// order, refetching the backlog between cemeteries (see doc above).
+	//
+	// BUG-720 round F1 perf fix: the batch handed to RunHearseTransport is
+	// truncated to the fleet's REMAINING monthly budget first (never the
+	// raw, unbounded backlog) — RunHearseTransport's own admission gate
+	// (buryLocked -> awaitingAheadCountLocked, O(len(bodies))) runs once
+	// per body it actually TRANSPORTS, which is already capped at the
+	// budget internally, but Pass 1's dedup/validate still walks the
+	// WHOLE submitted slice first; truncating here keeps that walk (and
+	// every allocation sized off it) bounded by the budget too, not the
+	// backlog.
+	for _, cemeteryID := range st.deathServiceCemeteryIDs {
+		remaining, err := st.deathServices.RemainingHearseBudget(month, st.cid)
+		if err != nil {
+			return err
+		}
+		if remaining <= 0 {
+			break // shared city-wide budget exhausted -- no cemetery can transport more this month
+		}
+		awaiting, err := st.deathServices.AwaitingSorted(st.cid)
+		if err != nil {
+			return err
+		}
+		if len(awaiting) == 0 {
+			break
+		}
+		if int64(len(awaiting)) > remaining {
+			awaiting = awaiting[:remaining]
+		}
+		if _, _, err := st.deathServices.RunHearseTransport(awaiting, cemeteryID, month, st.cid); err != nil {
+			return err
+		}
+	}
+
+	// Cremation: one crematorium at a time, deterministic order, cost
+	// posted through engine.finance's SettleOpex — the sanctioned
+	// "service operating expenditure" transaction (finance/stages.go),
+	// the same shape internal/engine/maintenance's SetFinance-wired
+	// SettleOpex caller uses. deathservices deliberately has NO
+	// engine.finance edge of its own (doc.go: "NOT engine.finance...
+	// costs are plain int64 micro-pounds") — Cremate returns a plain
+	// int64 cost precisely so the composition root, which DOES hold the
+	// registered engine.finance edge, converts and posts it at its own
+	// boundary, exactly as that return value's own doc comment
+	// prescribes.
+	//
+	// BUG-720 round F1 perf fix (the round's headline finding): Cremate's
+	// own admission loop calls awaitingAheadCountLocked (O(len(bodies)))
+	// once per SUBMITTED id, not once per id it actually cremates, with
+	// NO early break once the daily cap is reached — handing it the
+	// entire (often much larger) Awaiting backlog every day made that
+	// loop cost O(backlog x totalBodies) for a result capped at
+	// DailyThroughput regardless (measured: 109ms/2.65s/17.08s per
+	// SIMULATED month at backlog 500/2000/5000 to cremate the same ~360
+	// bodies either way). Truncating to RemainingDailyThroughput FIRST
+	// bounds it to O(throughput x totalBodies), independent of backlog
+	// size — see TestBUG720_DailySweepBoundedByThroughputNotBacklog for
+	// the count-based (never wall-clock) regression proof.
+	for _, crematoriumID := range st.deathServiceCrematoriumIDs {
+		remaining, err := st.deathServices.RemainingDailyThroughput(crematoriumID, day, st.cid)
+		if err != nil {
+			return err
+		}
+		if remaining <= 0 {
+			continue // this crematorium's own daily cap already spent today
+		}
+		awaiting, err := st.deathServices.AwaitingSorted(st.cid)
+		if err != nil {
+			return err
+		}
+		if len(awaiting) == 0 {
+			break
+		}
+		if int64(len(awaiting)) > remaining {
+			awaiting = awaiting[:remaining]
+		}
+		// BUG-720 round F1 test seam: a nil-by-default observer hook so a
+		// test can capture the SUBMITTED batch size Cremate actually
+		// receives (the count the round's finding measured cost scaling
+		// against) without instrumenting deathservices itself. Zero cost
+		// in production (a single nil check).
+		if deathServicesCremateBatchObserved != nil {
+			deathServicesCremateBatchObserved(crematoriumID, len(awaiting))
+		}
+		_, cost, err := st.deathServices.Cremate(awaiting, crematoriumID, day, st.cid)
+		if err != nil {
+			return err
+		}
+		if cost > 0 && st.finance != nil {
+			if _, err := st.finance.SettleOpex(finance.Money(cost)); err != nil {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "SettleOpex", "cause": err.Error()})
+			} else {
+				st.syncMoneyFromLedger()
+			}
+		}
+	}
+
+	backlog, err := st.deathServices.AwaitingBacklog(st.cid)
+	if err != nil {
+		return err
+	}
+
+	// BUG-720 dispensation: the backlog-crisis trigger this bug's brief
+	// asks for, layered ADDITIVELY on top of BUG-689's already-working
+	// EmergencyFlag activation (Intake/IntakeFromHandoff's intakeLocked
+	// already raises active on a weather-flagged death — nothing to add
+	// there). data/deathservices.json's backlogCapacityCeiling is
+	// documented "informational-only in inc1" (config.go) — this is that
+	// field's first real consumer.
+	//
+	// Raise-only while over the ceiling, mirroring Intake's own "raise
+	// only, never lower on an ordinary signal" policy (H5): a backlog at
+	// or above the data-sourced ceiling is itself a crisis regardless of
+	// whether a weather EmergencyFlag also happened to be present.
+	//
+	// Clear ONLY once backlog is fully drained to zero, deliberately NOT
+	// "back under the ceiling" — this composition has no accessor for
+	// the live FEAT-087 weather-event signal itself (citizens.
+	// IsWeatherEmergency takes an unexported MortalityConfig with no
+	// CitizensAPI-level wrapper — a real gap, filed as a follow-up, not
+	// invented around here), so it cannot distinguish "activated by
+	// backlog" from "activated by a still-ongoing weather emergency".
+	// Backlog==0 is the one condition safe to treat as "done" regardless
+	// of WHY dispensation activated: there is nothing left to disperse
+	// either way, and the next EmergencyFlag-carrying Intake batch (or
+	// the very next tick's backlog re-crossing the ceiling) re-raises it
+	// exactly as before — AC-12's reversion guarantee is not weakened by
+	// waiting for a full drain rather than a partial one.
+	cfg, cfgErr := st.deathServices.Config(st.cid)
+	if cfgErr == nil {
+		ceiling := cfg.BacklogCapacityCeiling()
+		active, actErr := st.deathServices.DispensationActive(st.cid)
+		if actErr == nil {
+			if ceiling > 0 && int64(backlog) >= ceiling && !active {
+				if err := st.deathServices.SetDispensationActive(true, st.cid); err != nil {
+					return err
+				}
+				active = true
+			} else if backlog == 0 && active {
+				if err := st.deathServices.SetDispensationActive(false, st.cid); err != nil {
+					return err
+				}
+				active = false
+			}
+			if active && backlog > 0 {
+				// Dispense drains via its OWN multi-body van/truck channel
+				// (dispensation.go), sharing hearse.usedThisMonth only in
+				// the inactive single-body branch — while active, this is
+				// the module's documented emergency-throughput lift, used
+				// here for the SAME reason RunHearseTransport is used
+				// above: drive every declared disposal channel, not just
+				// the ordinary one.
+				//
+				// LOOPED, unlike the single RunHearseTransport/Cremate
+				// calls above: Dispense truncates its OWN input to the
+				// data-sourced per-call van capacity (dispensationVanBodyCapacity,
+				// spec seed 6) BEFORE consulting the remaining monthly
+				// budget (DispensationMonthlyBudget, hearseMonthlyTransportBudget
+				// x dispensationThroughputMultiplier) — unlike
+				// RunHearseTransport, which processes many trips' worth of
+				// bodies in ONE call. A single Dispense call therefore
+				// moves at most one van's load; calling it once per DAY
+				// would silently cap the "24x7 operation" (dispensationState's
+				// own doc) emergency channel at van-capacity-per-day, an
+				// order of magnitude under its own documented monthly
+				// budget. Looping here (bounded: each successful call
+				// strictly drains the backlog by >0, and the remaining
+				// monthly budget is exactly as finite) drives up to the
+				// FULL remaining monthly budget in a single crisis day,
+				// which is the correct reading of "24x7" for an emergency
+				// response channel.
+				for {
+					awaiting, err := st.deathServices.AwaitingSorted(st.cid)
+					if err != nil {
+						return err
+					}
+					if len(awaiting) == 0 {
+						break
+					}
+					dispensed, err := st.deathServices.Dispense(awaiting, month, st.cid)
+					if err != nil {
+						return err
+					}
+					if len(dispensed) == 0 {
+						break // monthly budget exhausted for today
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

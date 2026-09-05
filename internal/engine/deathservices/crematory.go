@@ -90,6 +90,49 @@ func (d *DeathServicesAPI) PerBodyCostMicropounds(correlationID string) (int64, 
 	return d.cfg.CremationCostPerBodyMicropounds(), nil
 }
 
+// RemainingDailyThroughput returns crematoriumID's remaining cremation
+// capacity for day (BUG-720 round F1 perf fix): DailyThroughput() minus
+// whatever that crematorium has already cremated on day, or the FULL
+// DailyThroughput() when day is not the crematorium's last-seen day (the
+// counter has not reset yet, so nothing has been consumed against day's
+// allowance). A PURE, non-mutating read — unlike Cremate, this never
+// advances lastDay/cremToday, so calling it any number of times before
+// (or without ever) calling Cremate has zero effect on the module's own
+// state.
+//
+// This exists so a caller (compose's daily run loop) can size its
+// SUBMITTED batch to what a crematorium can actually use TODAY before
+// calling [DeathServicesAPI.Cremate] — Cremate's own admission loop calls
+// [DeathServicesAPI.awaitingAheadCountLocked] (O(len(bodies))) once per
+// SUBMITTED id, not once per id it actually cremates, so handing it the
+// entire (often much larger) Awaiting backlog every day makes that loop
+// cost O(backlog x totalBodies) for a result that is capped at
+// DailyThroughput regardless (measured: 109ms/2.65s/17.08s per month at
+// backlog 500/2000/5000 to cremate the same ~360 bodies either way).
+// Truncating the submitted batch to this method's return value first
+// bounds Cremate's own loop to O(throughput x totalBodies), independent
+// of backlog size.
+func (d *DeathServicesAPI) RemainingDailyThroughput(crematoriumID string, day int64, correlationID string) (int64, error) {
+	if err := d.checkNotCopied(correlationID, "RemainingDailyThroughput"); err != nil {
+		return 0, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	cr, ok := d.crematoria[crematoriumID]
+	if !ok {
+		return 0, errs.New(ErrUnknownCrematorium, correlationID, map[string]any{"crematoriumId": crematoriumID})
+	}
+	throughput := d.cfg.CremationDailyThroughputPerBody()
+	if day != cr.lastDay {
+		return throughput, nil
+	}
+	remaining := throughput - cr.cremToday
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, nil
+}
+
 // Cremate attempts to cremate bodyIDs at crematoriumID on the given day
 // index (a caller-supplied simulation day counter, never wall-clock,
 // AC-19). It processes bodies in the given order up to the crematorium's

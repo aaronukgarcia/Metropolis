@@ -283,39 +283,41 @@ func TestAttackBUG689_RR2_FINDING_OverLengthCursorPermanentlyDropsDeaths(t *test
 				t.Fatalf("fixture divergence: hostile arm handoff=%d, control=%d — the arms must be otherwise identical", len(handoff), len(ctrlHandoff))
 			}
 
-			// PIN: the cursor is installed verbatim (NOT clamped the way a
-			// negative one is), never advances, and every death in those
-			// three months is silently lost.
+			// FIX (BUG-720 P2 follow-up): decode itself is UNCHANGED — the
+			// raw wire value is still installed verbatim by
+			// applyLoadRecord (F6's negative-only clamp is the one
+			// decode-time guard, and an over-length value is only
+			// detectable relative to citizens' live stream length, which
+			// deathservices' decode step never has access to, GR#20 — see
+			// compose's intakeDeathServices doc comment for the full
+			// argument). The correction instead lives at the composition
+			// root, the one place with both APIs: the FIRST driven
+			// month's intake finds DeathHandoffSince(cursor) empty,
+			// discovers cursor exceeds the real stream length, resets the
+			// persisted cursor via [deathservices.DeathServicesAPI.
+			// ResetHandoffCursor], and re-reads the full stream from 0 —
+			// so this hostile arm ends up bit-for-bit CAUGHT UP with the
+			// control arm after the same three driven months, not merely
+			// "no longer wedged forever".
 			if decoded != tc.cursor {
-				t.Fatalf("FINDING CLOSED (re-read this pin): an over-length handoffCursor of %d decoded to %d — "+
-					"the decode path now bounds the cursor from above. Update this test to assert the new, correct behaviour "+
-					"(clamp + a registry code, mirroring F6/MET-G5452's negative-cursor treatment).", tc.cursor, decoded)
+				t.Fatalf("decode-time behaviour changed: an over-length handoffCursor of %d decoded to %d — "+
+					"applyLoadRecord is documented to install a decoded cursor verbatim (only F6's negative guard fires "+
+					"at decode time); if this now differs, update this assertion to match the new decode contract.",
+					tc.cursor, decoded)
 			}
-			if after != tc.cursor {
-				t.Fatalf("FINDING CLOSED (re-read this pin): the over-length cursor moved from %d to %d over three driven months — "+
-					"self-correction now exists. Update this pin.", tc.cursor, after)
+			if after != ctrlCursor {
+				t.Fatalf("self-correction should converge on the SAME cursor the control arm reached: hostile=%d control=%d", after, ctrlCursor)
 			}
-			// released is measured against the bundle's OWN restored body
-			// count: this arm must have intaken exactly ZERO NEW bodies
-			// over the three months, while the control intaken every death
-			// in the same stream.
-			if released != savedReleased {
-				t.Fatalf("FINDING CLOSED (re-read this pin): the over-length cursor arm intaken %d NEW bodies "+
-					"(released %d vs the bundle's own %d, backlog %d) — deaths now reach deathservices despite the "+
-					"poisoned cursor. Update this pin.", released-savedReleased, released, savedReleased, backlog)
+			if released != ctrlReleased {
+				t.Fatalf("self-correction should intake the FULL stream (replaying already-consumed entries as safely-absorbed "+
+					"duplicates, H4 policy (b)), catching up to the control arm exactly: hostile released=%d control=%d (bundle's own restored %d)",
+					released, ctrlReleased, savedReleased)
 			}
-			if released >= ctrlReleased {
-				t.Fatalf("FINDING CLOSED (re-read this pin): the poisoned arm kept pace with the control (%d vs %d). Update this pin.", released, ctrlReleased)
-			}
-			// The gap itself, stated as data: the control intaken every
-			// death, this arm intaken NO NEW ones, and no error surfaced.
-			t.Logf("FINDING (P2, open): handoffCursor=%d survives decode verbatim (F6 clamps only NEGATIVE). "+
-				"Over three driven months the control arm reached %d bodies against a %d-record handoff stream; "+
-				"this arm stayed at the bundle's own %d (ZERO new intakes, %d deaths silently dropped), "+
-				"cursor still %d, no error and no registry code raised. deathservices is permanently wedged: "+
-				"DeathHandoffSince returns empty for an at-or-past-length cursor, so IntakeFromHandoff is never called, "+
-				"so the cursor never advances. Strictly worse than the negative case F6 DID guard, which self-corrects in one month.",
-				tc.cursor, ctrlReleased, len(ctrlHandoff), savedReleased, ctrlReleased-released, after)
+			t.Logf("BUG-720 P2 follow-up CLOSED: handoffCursor=%d self-corrected to %d (== control's %d) over three driven "+
+				"months via compose's intakeDeathServices detecting cursor > len(citizens' live stream) and calling "+
+				"ResetHandoffCursor — released %d bodies (== control's %d), backlog %d (BUG-720's own run loop now "+
+				"processes dispensation even with no cemetery/crematorium registered), zero silently dropped, MET-G5452 raised once.",
+				tc.cursor, after, ctrlCursor, released, ctrlReleased, backlog)
 		})
 	}
 }

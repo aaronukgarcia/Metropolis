@@ -56,12 +56,75 @@ func (d *DeathServicesAPI) HearseMonthlyBudget(correlationID string) (int64, err
 }
 
 // resetMonthLocked rolls the hearse's used-this-month counter to zero when
-// month advances past the last-seen month. Caller must hold d.mu.
+// month ADVANCES past the last-seen month. Caller must hold d.mu.
+//
+// BUG-720 round F4 fix: this used to reset on ANY change (month !=
+// h.lastMonth), including month going BACKWARDS relative to the persisted
+// watermark. A plain [DeathServicesAPI]-owning Composition.Load restores
+// this module's state (including lastMonth/usedThisMonth, participant.go)
+// but leaves the ENGINE's own clock at tick/month 0 (save_wire.go's
+// documented snapshot-not-tick-continuous contract, unlike LoadAt) — so
+// the very first post-Load day called this with month=0, which is almost
+// always LESS than the persisted lastMonth, and the old `!=` check treated
+// that as "a new month started", handing back the FULL monthly budget for
+// free (a save-scum exploit: save mid-month after spending the budget,
+// reload, get it back). Comparing with `>` instead of `!=` means a month
+// number that goes backwards is no longer treated as a new month at all —
+// the persisted usedThisMonth stays in force until the ENGINE's own month
+// counter genuinely climbs back past the watermark it was saved at, which
+// is the only way a budget can be legitimately exhausted-then-fresh again.
+// For LoadAt (tick-continuous restore, month only ever increases) this is
+// BYTE-IDENTICAL to the old `!=` check: on any monotonically
+// non-decreasing sequence, `month != lastMonth` is true exactly when
+// `month > lastMonth` is (month < lastMonth never occurs), so nothing
+// observable changes for that path (proven by
+// TestAttackBUG720_HookOrderStableAcrossSaveBoundary, which exercises
+// exactly that continuation).
 func (h *hearseState) resetMonthLocked(month int64) {
-	if month != h.lastMonth {
+	if month > h.lastMonth {
 		h.lastMonth = month
 		h.usedThisMonth = 0
 	}
+}
+
+// RemainingHearseBudget returns the hearse fleet's remaining monthly
+// transport budget for month (BUG-720 round F1 perf fix, mirroring
+// [DeathServicesAPI.RemainingDailyThroughput]'s identical purpose for
+// cremation): HearseMonthlyBudget() minus whatever has already been
+// consumed against month, or the FULL budget when month is not the
+// hearse's last-seen month. A PURE, non-mutating read — it never calls
+// resetMonthLocked itself, so a caller may query it any number of times
+// (including for a month that has not "started" from this module's own
+// perspective yet) with zero effect on state; RunHearseTransport is the
+// only thing that ever advances usedThisMonth.
+//
+// Used by compose's daily run loop to size its submitted batch to what
+// the hearse fleet can actually use this month BEFORE calling
+// [DeathServicesAPI.RunHearseTransport] — bounding buryLocked's own
+// per-submitted-id admission-gate cost
+// ([DeathServicesAPI.awaitingAheadCountLocked], O(len(bodies))) to
+// O(remaining budget) rather than O(backlog).
+func (d *DeathServicesAPI) RemainingHearseBudget(month int64, correlationID string) (int64, error) {
+	if err := d.checkNotCopied(correlationID, "RemainingHearseBudget"); err != nil {
+		return 0, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	budget := d.cfg.HearseMonthlyTransportBudget()
+	if month > d.hearse.lastMonth {
+		// A genuinely new month (from resetMonthLocked's own "advances
+		// past" definition, F4's fix) has not consumed anything yet.
+		return budget, nil
+	}
+	// month == lastMonth (the common case) OR month < lastMonth (F4's
+	// reverted-month case, e.g. the first tick after a plain Load) both
+	// read the SAME persisted bucket resetMonthLocked would not touch —
+	// whatever has already been spent against it stays spent.
+	remaining := budget - d.hearse.usedThisMonth
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, nil
 }
 
 // RunHearseTransport attempts to move up to len(bodyIDs) Awaiting bodies
