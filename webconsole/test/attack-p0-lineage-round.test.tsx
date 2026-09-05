@@ -514,7 +514,7 @@ test('KILL-SHOT (reverse): new game first -> load the LEGACY city via applyLoade
     const { initialState, reducer } = await import('../src/sim/engine.ts');
     const { buildGameSave, gameSaveText } = await import('../src/sim/gamesave.ts');
     const { emptyJournal, recordAction } = await import('../src/sim/journal.ts');
-    const { readAllSavepoints, mostRecentSavepoint, readCurrentLineageId, LEGACY_LINEAGE_ID } = await import('../src/sim/replay.ts');
+    const { readAllSavepoints, mostRecentSavepoint, readCurrentLineageId, LEGACY_LINEAGE_ID, restoreFromSavepoint } = await import('../src/sim/replay.ts');
     const { versionBadgeLabel } = await import('../src/sim/version.ts');
     const storage = dom.window.localStorage as unknown as Storage;
 
@@ -589,17 +589,28 @@ test('KILL-SHOT (reverse): new game first -> load the LEGACY city via applyLoade
     resetSaveStoreForTests();
     m = await mountProvider(dom);
     await new Promise((r) => setTimeout(r, 1500));
+    // BUG-755 (this test's own failure prose used to hardcode BUG-687's
+    // pointer-write root cause verbatim, unconditionally — which read as the
+    // actual cause of EVERY future failure of this assertion, even one with a
+    // completely different mechanism (e.g. BUG-755's duplicate-inflow-label
+    // consistency rejection, which never touches the lineage pointer at all).
+    // Diagnose what ACTUALLY happened on this run instead of asserting a
+    // fixed narrative: re-run the exact same restore the boot just took
+    // (read-only — restoreFromSavepoint never mutates storage) against the
+    // pointer's current lineage, and report its real success/failure reason.
+    const diagLineageId = readCurrentLineageId(storage);
+    const diagRestore = restoreFromSavepoint(storage, diagLineageId);
+    const diagNote = diagRestore.success
+      ? `restoreFromSavepoint on lineage '${diagLineageId}' SUCCEEDED (${diagRestore.state?.buildings.length ?? '?'} buildings, ` +
+        `${diagRestore.replayed ?? 0} tail action(s) replayed) — if this still doesn't match, the pointer is aimed at the wrong ` +
+        `lineage (afterLoadPointer was '${afterLoadPointer}'), not a restore failure`
+      : `restoreFromSavepoint on lineage '${diagLineageId}' was REFUSED: ${diagRestore.reason}`;
     pin(() =>
       assert.equal(
         m.seen.state.buildings.length,
         LOADED_PLAYED,
         `THE RELOAD BOOTED THE WRONG CITY: got ${m.seen.state.buildings.length} buildings; the loaded-and-played city has ${LOADED_PLAYED} and the ` +
-          `abandoned new game has ${NEW_BUILDINGS}. ROOT CAUSE: store.tsx's applyLoadedSave writes the current-lineage pointer only inside ` +
-          '`if (savepointToPersist.lineageId)`. A LEGACY save (any city saved before this fix — i.e. every existing save file and named slot) ' +
-          "carries NO lineageId, so the pointer is LEFT on whatever lineage was current before the Load. The loaded city's savepoints then go to " +
-          `the legacy keys while the pointer still says '${afterLoadPointer}', and the next boot restores the ABANDONED city. This is BUG-687's ` +
-          'own mechanism, reached through Load instead of Start Over. Fix: write the pointer unconditionally, normalising an absent lineageId to ' +
-          "LEGACY_LINEAGE_ID (the same normalizeLineageId the freshness comparator already uses).",
+          `abandoned new game has ${NEW_BUILDINGS}. DIAGNOSIS: ${diagNote}.`,
       ),
     );
     // And the new game is still recoverable under its own lineage.

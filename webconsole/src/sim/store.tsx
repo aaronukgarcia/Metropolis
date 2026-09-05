@@ -43,6 +43,7 @@ import {
   readCurrentLineageId,
   writeCurrentLineageId,
   mintLineageId,
+  scanAllSavepointLineages,
   migrateLegacySavepointsInPlace,
   persistSavepointWithReason,
   persistSavepointForced,
@@ -825,6 +826,17 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // constant for the bug617/scale-gate test suites, which exercise
     // `prepareRestoreForChunkedTail`/`replayTailChunked` directly and have no
     // dependency on this branch.
+    // BUG-755 (P0, save loss; lead ruling part 3): if a savepoint EXISTS for
+    // this lineage but BOTH restore paths below refuse it, the boot must
+    // never silently fall through to a fresh city — that is exactly the
+    // "player's whole city discarded with zero explanation" defect this bug
+    // is about. Capture each attempt's refusal reason here (both start
+    // `undefined` — nothing to report if `most` is itself null, i.e. this is
+    // genuinely the very first boot ever) so the fresh-boot fallback further
+    // down can record a LOUD registry error (MET-V868) and leave a visible
+    // trail on the booted state, instead of a mute genuinely-fresh-looking city.
+    let preparedFailureReason: string | undefined;
+    let restoreFailureReason: string | undefined;
     if (most) {
       const prepared = prepareRestoreForChunkedTail(window.localStorage, currentLineageId);
       if (prepared.success && prepared.state && prepared.tail) {
@@ -852,6 +864,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       }
       // prepare failed — fall through to the normal path below, which will
       // independently fail the same way and degrade to a fresh/dev-city boot.
+      preparedFailureReason = prepared.reason ?? 'prepareRestoreForChunkedTail failed with no reason';
     }
 
     const restoreResult = restoreFromSavepoint(window.localStorage, currentLineageId);
@@ -873,12 +886,65 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // Mint a NEW lineage id and make it current immediately, so this
     // session's very first autosave already lands in its own namespaced
     // slots rather than the shared legacy ones (reserved for pre-fix data).
+    //
+    // BUG-755 (P0, save loss; lead ruling part 3): restoreResult.reason
+    // isn't captured until we're already here (restoreResult falling through
+    // is the normal "no savepoint at all" path too), so record it now.
+    restoreFailureReason = restoreResult.reason;
     const fresh =
       typeof process !== 'undefined' && process.env.NODE_TEST_CONTEXT
         ? initialState()
         : loadDevCity1();
     const freshLineageId = fresh.lineageId ?? mintLineageId();
     fresh.lineageId = freshLineageId;
+    // BUG-755 (P0, save loss; lead ruling part 3, TIGHTENED by the
+    // independent round's ATTACK A): never let a real savepoint fall through
+    // to a fresh boot mutely. Two distinct shapes both count:
+    //   (a) `most` truthy — a savepoint exists for the CURRENT lineage but
+    //       both restore attempts above REFUSED it (the original part-3
+    //       shape).
+    //   (b) `most` is null (nothing under the current lineage) but a
+    //       savepoint exists under a DIFFERENT lineage id — the current-
+    //       lineage POINTER has drifted (BUG-687 territory) and `most`'s
+    //       single-lineage lookup can never see it. Without this branch the
+    //       loud guard never fires at all here, and a real save on disk is
+    //       STILL silently discarded — the attacker's exact finding.
+    // The whole detection+report block is wrapped in try/catch (P2, the
+    // independent round): this `[boot]` initializer's contract is
+    // never-crash — recordError's ring bookkeeping and getAppVersion() are
+    // themselves unguarded, so a failure inside THIS diagnostic block must
+    // never take the boot down with it. Worst case on a throw here: the
+    // fresh city still boots, just without the loud trail — never a crash.
+    try {
+      if (most) {
+        const reasonText =
+          preparedFailureReason && restoreFailureReason && preparedFailureReason !== restoreFailureReason
+            ? `${preparedFailureReason}; ${restoreFailureReason}`
+            : (preparedFailureReason ?? restoreFailureReason ?? 'restore refused with no reason captured');
+        recordError(
+          `Savepoint restore refused for lineage ${currentLineageId}: ${reasonText} -- booted a fresh city instead of the ${most.snapshotTick}-tick save`,
+          { type: 'app', action: 'load', code: 'MET-V868' },
+        );
+        fresh.placeNotice =
+          `Your saved city (tick ${most.snapshotTick}) could not be restored (${reasonText}) — a new city was started instead. ` +
+          'The old save was NOT deleted; report this so it can be recovered.';
+      } else {
+        const otherLineages = scanAllSavepointLineages(window.localStorage).filter((id) => id !== currentLineageId);
+        if (otherLineages.length > 0) {
+          recordError(
+            `Savepoint restore refused: no savepoint found for current lineage '${currentLineageId}', but savepoint(s) exist under ` +
+              `other lineage id(s) [${otherLineages.join(', ')}] -- booted a fresh city instead. This is a lineage-pointer mismatch, not a missing save.`,
+            { type: 'app', action: 'load', code: 'MET-V868' },
+          );
+          fresh.placeNotice =
+            `A saved city was found but not under your current profile (lineage mismatch: current='${currentLineageId}', ` +
+            `found=[${otherLineages.join(', ')}]) — a new city was started instead. Your old save was NOT deleted; report this so it can be recovered.`;
+        }
+      }
+    } catch {
+      // Never let the loud-refusal diagnostic itself take the boot down —
+      // see the P2 doc comment above. The fresh city still boots below.
+    }
     writeCurrentLineageId(window.localStorage, freshLineageId);
     return {
       state: sanitizeTreasury(fresh),
@@ -2168,10 +2234,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
         const result = chunk.value as { state: SimState; replayed: number };
         let finalState = { ...result.state, nextId: nextSafeBuildingId(result.state.buildings) };
         finalState = sanitizeTreasury(finalState);
+        // BUG-755 (P0, save loss): gate on `blockingFailures`, not the raw
+        // `failures` count — a check in RESTORE_NONBLOCKING_CHECK_IDS (a
+        // cosmetic property, e.g. two inflow lines sharing one label) must
+        // never abort a chunked tail-replay load. This is the same restore
+        // contract as replay.ts's restoreFromSavepoint/prepareRestoreForChunkedTail.
         const afterReport = checkConsistencyRecoveringStaleFlows(finalState);
-        if (afterReport.failures > 0) {
+        if (afterReport.blockingFailures > 0) {
           finish(
-            `Load aborted — replayed city failed consistency (${afterReport.failures} failures). Your city is still usable from an earlier point.`,
+            `Load aborted — replayed city failed consistency (${afterReport.blockingFailures} blocking of ${afterReport.failures} failures). Your city is still usable from an earlier point.`,
           );
           return;
         }
@@ -2213,11 +2284,12 @@ export function SimProvider({ children }: { children: ReactNode }) {
           // either landing a state this project's own gate does not trust,
           // or crashing the load entirely over an edge case in actions that
           // already applied safely once.
+          // BUG-755: gate on `blockingFailures` — see the doc comment above.
           const reconciledReport = checkConsistencyRecoveringStaleFlows(reconciledState);
-          if (reconciledReport.failures > 0) {
+          if (reconciledReport.blockingFailures > 0) {
             recordError(
               `${buffered.length} action(s) dispatched while your city was loading could not be safely merged in ` +
-                `(${reconciledReport.failures} consistency failures) and were dropped from the loaded city. They remain ` +
+                `(${reconciledReport.blockingFailures} blocking of ${reconciledReport.failures} consistency failures) and were dropped from the loaded city. They remain ` +
                 'in the journal, so a Rebuild from Genesis (Config) will recover them.',
               { type: 'app', action: 'load' },
             );

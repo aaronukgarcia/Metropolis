@@ -104,7 +104,7 @@ test('level-up grants ~10% cash + notice, EXACTLY ONCE per crossing', () => {
   const expectCash = Math.round(s0.funds * LEVEL_REWARD_RATE);
   assert.equal(s1b.lastRewardedLevel, 2, 'lastRewardedLevel updated after drain');
   // Verify reward appears in flows
-  const levelRewardFlows = s1b.lastFlows.inflows.filter((f) => f.label === 'Level Rewards');
+  const levelRewardFlows = s1b.lastFlows.inflows.filter((f) => f.label.startsWith('Level Rewards'));
   assert.equal(levelRewardFlows.length, 1, 'exactly one Level Rewards inflow');
   assert.equal(levelRewardFlows[0].value, expectCash, 'Level Rewards inflow is the expected amount');
   // Funds change = reward + other flows (which may be positive or negative)
@@ -143,7 +143,7 @@ test('crossing multiple levels at once rewards each level exactly once', () => {
   const s2 = reducer(s1, { type: 'tick' });
   assert.equal(s2.lastRewardedLevel, 4, 'lastRewardedLevel caught up after drain');
   // Verify rewards appear in flows (one per level crossed)
-  const levelRewardFlows = s2.lastFlows.inflows.filter((f) => f.label === 'Level Rewards');
+  const levelRewardFlows = s2.lastFlows.inflows.filter((f) => f.label.startsWith('Level Rewards'));
   assert.equal(levelRewardFlows.length, 3, 'three Level Rewards inflows (one per level)');
   // Compute expected rewards based on compounding (each level gets 10% of current funds)
   let expectedReward = 0;

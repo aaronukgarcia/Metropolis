@@ -137,7 +137,8 @@
       "G5420-G5423": "reserved for feat.gameinit (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"G\")",
       "E1000-E1001": "reserved for feat.saveux (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"E\")",
       "V865-V865": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V866-V866": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V866-V866": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V868-V869": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -5613,6 +5614,12 @@
       "module": "ui.webconsole",
       "message": "Consolidator skipped section {sectionKey} (family {family}): capacity unknown -- a non-finite group or citywide family capacity was detected",
       "remedy": "BUG-742/BUG-736: a corrupt/hand-edited capacityTier made this candidate's real capacity (or its family's citywide total) unrepresentable as a finite number. The transaction was skipped, not silently applied -- no capacity was lost. Re-export the save from a working session if this recurs, or check for a hand-edited capacityTier field on a building in the reported family."
+    },
+    "MET-V868": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "Savepoint restore refused for lineage {lineageId}: {reason} -- booted a fresh city instead of the {snapshotTick}-tick save",
+      "remedy": "BUG-755: the existing savepoint failed the boot-time consistency/restore gate ({reason}). This is NOT a fresh install -- a save exists and was not used. Check the Standby/Rebuild prompt (or the news feed) for a recovery option before starting a new city; the refused savepoint is untouched on disk and a future fix may still recover it."
     }
   }
 }

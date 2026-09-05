@@ -170,6 +170,45 @@ function linkNodeModulesIntoShadow(shadowRoot) {
       /* best-effort */
     }
   }
+  // BUG-755 follow-up: the doc comment above this function was written for
+  // "JSX-less .tsx" targets (every prior caller of this helper only ever
+  // CALLED a function exported from a .tsx module, never rendered one) — a
+  // caller that mounts a REAL JSX-bearing component (e.g. store.tsx's own
+  // `<SimContext.Provider>...</SimContext.Provider>` return) needs the SAME
+  // `jsx: "react-jsx"` automatic-runtime setting webconsole/tsconfig.json
+  // declares, or tsx/esbuild falls back to the classic pragma and throws
+  // "React is not defined" the moment the component actually renders (proven
+  // directly: bug755-restore-refusal-loud-redproof.test.mjs reproduced this
+  // exact failure before this fix). Copying the real tsconfig.json's
+  // compilerOptions into the shadow is additive and harmless for every
+  // existing non-JSX-rendering caller, which never needed it.
+  const tsconfigDest = join(shadowRoot, 'tsconfig.json');
+  if (!existsSync(tsconfigDest)) {
+    try {
+      const realTsconfig = join(WEBCONSOLE_ROOT, 'tsconfig.json');
+      if (existsSync(realTsconfig)) {
+        // Only `compilerOptions` is copied, deliberately dropping the real
+        // file's `"include": ["src", "test"]`. MEASURED DIRECTLY (isolated
+        // repro before this fix): esbuild/tsx treats a copied tsconfig's
+        // `include` as scoping which files belong to the "project" — since
+        // the shadow FLATTENS webconsole/src's contents to its own root
+        // (there is no `src/` subdirectory inside the shadow at all), every
+        // shadow file falls OUTSIDE that stale `include` glob and silently
+        // falls back to esbuild's default CLASSIC jsx transform instead of
+        // the tsconfig's own `jsx: "react-jsx"` — reproducing exactly
+        // "ReferenceError: React is not defined" the moment a JSX-bearing
+        // component (e.g. store.tsx's `<SimContext.Provider>`) actually
+        // renders. Only the compiler options (jsx/target/module/etc, none of
+        // which reference a real filesystem path) are relevant to the
+        // transform; omitting `include` entirely makes every file in the
+        // shadow part of the (implicit, unscoped) project again.
+        const real = JSON.parse(readFileSync(realTsconfig, 'utf8'));
+        writeFileSync(tsconfigDest, JSON.stringify({ compilerOptions: real.compilerOptions ?? {} }), 'utf8');
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
 }
 
 // R5 (BUG-739 round REJECT, 2026-09-05): createMutantShadow() hands its

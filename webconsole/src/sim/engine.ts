@@ -2901,6 +2901,30 @@ function advance(s: SimState): SimState {
     inflows = [...inflows, { label: 'Consolidation Scrap', value: consolidatorScrapRecovered }];
   }
 
+  // BUG-755 (P0, save loss): both the pending-reward drain loop below and the
+  // in-tick crossing loop further down used the SAME bare 'Level Rewards'
+  // label for every entry. A tick that drains 2+ queued rewards (or a queued
+  // reward plus an in-tick crossing) wrote duplicate inflow labels into
+  // lastFlows — a save from that tick persists fine, but on the NEXT boot
+  // consistency.ts's flows.inflow-labels-unique check rejects the snapshot as
+  // inconsistent, and store.tsx's boot initializer silently discards the
+  // whole city for a fresh one. Fix: every level-reward inflow is now labelled
+  // per level (`Level Rewards (Level N)`), which keeps the per-level fiscal-
+  // panel visibility the comments below ask for AND is unique across the
+  // overwhelmingly common case (levels only increase, so two entries in one
+  // tick almost never share a level). If two entries DO still share a level in
+  // one tick (e.g. a corrupted/replayed queue re-crossing an already-paid
+  // level), `levelRewardInflowLabel` appends a STABLE ordinal (` #2`, ` #3`,
+  // ...) derived purely from how many same-level entries have been seen so
+  // far THIS tick — never Date.now()/Math.random() (GR#21), so replay is
+  // still byte-identical.
+  const levelRewardLabelCounts = new Map<number, number>();
+  function levelRewardInflowLabel(level: number): string {
+    const seen = levelRewardLabelCounts.get(level) ?? 0;
+    levelRewardLabelCounts.set(level, seen + 1);
+    return seen === 0 ? `Level Rewards (Level ${level})` : `Level Rewards (Level ${level}) #${seen + 1}`;
+  }
+
   // Drain pending rewards queue (from debugXp and place actions).
   // Each applies through flows so it's visible in fiscal panel and counts for conservation.
   //
@@ -2913,7 +2937,7 @@ function advance(s: SimState): SimState {
   const safePendingRewards = sanitizePendingRewards(s.pendingRewards, isValidLevelReward);
   let nextNotice = s.notice;
   for (const pr of safePendingRewards) {
-    inflows = [...inflows, { label: 'Level Rewards', value: pr.totalReward }];
+    inflows = [...inflows, { label: levelRewardInflowLabel(pr.newLevel), value: pr.totalReward }];
     nextNotice = pr.notice; // Last notice wins (multiple crossings rare but possible)
   }
 
@@ -3148,7 +3172,11 @@ function advance(s: SimState): SimState {
   const inTickRewards = computeLevelRewards(tempState);
   for (const lr of inTickRewards) {
     // Record each per-level reward as a separate inflow for fiscal panel visibility.
-    inflows = [...inflows, { label: 'Level Rewards', value: lr.totalReward }];
+    // BUG-755: shares the SAME levelRewardInflowLabel counter as the pending-
+    // rewards loop above, so a tick that drains a pending reward AND crosses a
+    // level in-tick (or crosses 2+ levels in-tick) still gets unique labels —
+    // the counter is keyed on `s.tick`'s single computeFlows() call, not per-loop.
+    inflows = [...inflows, { label: levelRewardInflowLabel(lr.newLevel), value: lr.totalReward }];
     funds += lr.totalReward; // CRITICAL: Apply reward to funds (BUG-406 R7 fix)
     nextNotice = lr.notice; // Latest level's notice (usually just one in-tick)
   }

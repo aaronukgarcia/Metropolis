@@ -70,7 +70,45 @@ export interface ConsistencyReport {
    * `foldGraceHistory`.
    */
   rawFailedSignatures: Record<string, number>;
+  /**
+   * BUG-755 (P0, save loss): the number of FAILING checks that are allowed to
+   * block a savepoint restore — i.e. `failures` minus any check whose id is
+   * in `RESTORE_NONBLOCKING_CHECK_IDS` below. A restore caller (replay.ts's
+   * `checkConsistencyRecoveringStaleFlows` / `prepareRestoreForChunkedTail` /
+   * `restoreFromSavepoint`) MUST gate on THIS field, never on `failures` —
+   * `failures` stays the full, unfiltered count so the debug/consistency
+   * report (surfaced in debugjson.ts and the Debug tab) still shows every
+   * real defect, cosmetic or not. See the constant's own doc comment for why
+   * a check earns non-blocking status.
+   */
+  blockingFailures: number;
 }
+
+/**
+ * BUG-755 (P0, save loss; lead ruling part 2): checks whose failure alone
+ * must NEVER refuse a savepoint restore. A restore-blocking failure means the
+ * SAVED DATA itself is untrustworthy (a duplicate building id, a non-finite
+ * funds value, a tampered conservation identity, a smuggled placeholder
+ * spec...) — the kind of corruption `restoreFromSavepoint`'s fail-safe exists
+ * to catch. `flows.inflow-labels-unique` is different in kind: it flags a
+ * COSMETIC property of the labels attached to an already-applied, otherwise-
+ * correct funds movement (BUG-755's root cause — two level-reward inflows
+ * sharing one label in a single tick, fixed at the source in engine.ts) — it
+ * says nothing about whether the FUNDS THEMSELVES are trustworthy
+ * (conservation.funds-vs-flows is a SEPARATE, still fully blocking check that
+ * would independently catch a real funds-corrupting defect). Refusing an
+ * entire city over a duplicate LABEL — discarding a real save because of a
+ * property no player has ever seen — is a disproportionate response measured
+ * against what the check actually proves.
+ *
+ * Membership here does NOT weaken the check outside restore: debugjson.ts and
+ * every other `runConsistencyChecks` caller still sees this id fail exactly
+ * as loudly (via `failures`, unfiltered) in the debug/consistency report —
+ * only the restore-path callers (replay.ts) read `blockingFailures` instead.
+ */
+export const RESTORE_NONBLOCKING_CHECK_IDS: ReadonlySet<string> = new Set([
+  'flows.inflow-labels-unique',
+]);
 
 /**
  * BUG-624 (Aaron/Opus round, 2026-09-03): the flows-vs-recompute per-line
@@ -1031,5 +1069,6 @@ export function runConsistencyChecks(
   });
 
   const failures = checks.filter((c) => !c.ok).length;
-  return { checks, failures, rawFailedLineIds, rawFailedSignatures };
+  const blockingFailures = checks.filter((c) => !c.ok && !RESTORE_NONBLOCKING_CHECK_IDS.has(c.id)).length;
+  return { checks, failures, blockingFailures, rawFailedLineIds, rawFailedSignatures };
 }

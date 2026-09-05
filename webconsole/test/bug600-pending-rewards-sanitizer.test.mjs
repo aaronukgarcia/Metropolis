@@ -163,7 +163,7 @@ test('BUG-600 drain-time: a valid pendingRewards entry still pays out through fu
   const withValid = { ...s, pendingRewards: [VALID_LEVEL_REWARD] };
   const before = withValid.funds;
   const out = tickOnce(withValid);
-  const levelInflows = out.lastFlows.inflows.filter((f) => f.label === 'Level Rewards');
+  const levelInflows = out.lastFlows.inflows.filter((f) => f.label.startsWith('Level Rewards'));
   assert.ok(levelInflows.some((f) => f.value === VALID_LEVEL_REWARD.totalReward), 'the valid reward must still be paid');
   assert.equal(out.lastRewardedLevel, VALID_LEVEL_REWARD.newLevel, 'lastRewardedLevel must reflect the valid drained entry');
   assert.ok(conservationOk(out));
@@ -184,7 +184,7 @@ test('BUG-600 drain-time: a mixed valid+junk pendingRewards array pays ONLY the 
   const s = base();
   const mixed = { ...s, pendingRewards: [VALID_LEVEL_REWARD, { garbage: true }, null, { totalReward: NaN, newLevel: 9, notice: {} }] };
   const out = tickOnce(mixed);
-  const levelInflows = out.lastFlows.inflows.filter((f) => f.label === 'Level Rewards');
+  const levelInflows = out.lastFlows.inflows.filter((f) => f.label.startsWith('Level Rewards'));
   assert.equal(levelInflows.length, 1, 'only the one valid entry may pay');
   assert.equal(levelInflows[0].value, VALID_LEVEL_REWARD.totalReward);
   assert.ok(conservationOk(out));

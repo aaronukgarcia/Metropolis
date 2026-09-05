@@ -304,6 +304,58 @@ export function mostRecentSavepoint(savepoints: Savepoint[]): Savepoint | null {
   return savepoints.reduce((best, sp) => (sp.savedAt > best.savedAt ? sp : best));
 }
 
+/**
+ * BUG-755 P1 (independent round ATTACK A, opus-round-bug755): `most`
+ * (mostRecentSavepoint(readAllSavepoints(storage, now, currentLineageId)))
+ * only ever looks under ONE lineage. If the CURRENT-LINEAGE POINTER has
+ * drifted from the lineage a real savepoint was actually written under
+ * (BUG-687 lineage territory), `most` is null even though a real save sits
+ * on disk — the exact silent-fresh-boot shape BUG-755's loud-refusal guard
+ * exists to eliminate, just reached through a different door. This scans
+ * EVERY key in storage (not just the current lineage's three slots) and
+ * returns which lineage ids have at least one savepoint key, so a caller can
+ * fire the loud path even when `most` itself is null.
+ *
+ * Fail-safe (GR#16): a storage object that does not expose real
+ * `length`/`key()` enumeration (StorageLike's own minimal contract — most
+ * test doubles in this codebase are a bare Map-backed getItem/setItem) is
+ * NOT assumed to support it — this degrades to an empty result rather than
+ * throwing. Real `window.localStorage` always exposes both.
+ */
+export function scanAllSavepointLineages(storage: StorageLike): string[] {
+  const wide = storage as unknown as { length?: unknown; key?: unknown };
+  if (typeof wide.length !== 'number' || typeof wide.key !== 'function') return [];
+  const found = new Set<string>();
+  try {
+    const total = wide.length as number;
+    // `key` is a real Storage prototype METHOD — it must be invoked bound to
+    // `storage` itself (`.call(storage, i)`), never extracted into a bare
+    // reference and called standalone, or every real Storage implementation
+    // throws "Illegal invocation" on the very first call (silently caught by
+    // this function's own try/catch, degrading to an empty result every
+    // time — measured directly: this was BUG-755's own P1 fix's first
+    // draft, verified broken before this comment existed).
+    const keyFn = wide.key as (i: number) => string | null;
+    for (let i = 0; i < total; i++) {
+      const key = keyFn.call(storage, i);
+      if (!key || !key.startsWith(`${SAVEPOINT_KEY_PREFIX}.`)) continue;
+      const rest = key.slice(SAVEPOINT_KEY_PREFIX.length + 1);
+      const segments = rest.split('.');
+      const lastSeg = segments[segments.length - 1];
+      // A real savepoint slot key's last segment is a bare integer (the
+      // slot); anything else (e.g. the durable-overflow `.idbOnly` key) is a
+      // DIFFERENT key family under the same prefix and must not be
+      // misread as a savepoint.
+      if (!/^\d+$/.test(lastSeg)) continue;
+      const lineageId = segments.length === 1 ? LEGACY_LINEAGE_ID : segments.slice(0, -1).join('.');
+      found.add(lineageId);
+    }
+  } catch {
+    return [];
+  }
+  return Array.from(found);
+}
+
 /** P0 RCA fix, item 3/4: why `persistSavepointWithReason` refused a write. */
 export type SavepointRejectReason = 'stale-overwrite' | 'storage-error';
 
@@ -894,11 +946,18 @@ export function prepareRestoreForChunkedTail(storage: StorageLike, lineageId?: s
     const needsJobsGrandfatherCatchUp = needsJobsGrandfather(state);
     state = stampJobsGrandfather(state);
 
+    // BUG-755 (P0, save loss; lead ruling part 2): gate on `blockingFailures`,
+    // NOT the raw `failures` count — a check in RESTORE_NONBLOCKING_CHECK_IDS
+    // (currently only flows.inflow-labels-unique, a cosmetic label-uniqueness
+    // property that says nothing about whether the underlying save data is
+    // trustworthy) must never refuse a real save. The full `failures` count
+    // still surfaces in the returned reason string when the restore IS
+    // refused, so a non-blocking-but-still-failing check remains visible.
     const beforeReport = checkConsistencyRecoveringStaleFlows(state);
-    if (beforeReport.failures > 0) {
+    if (beforeReport.blockingFailures > 0) {
       return {
         success: false,
-        reason: `Snapshot failed consistency (${beforeReport.failures} failures)`,
+        reason: `Snapshot failed consistency (${beforeReport.blockingFailures} blocking of ${beforeReport.failures} failures)`,
       };
     }
 
@@ -1066,11 +1125,13 @@ export function restoreFromSavepoint(storage: StorageLike, lineageId?: string): 
     // then autosave fired with no further journal tail) leaves this snapshot's
     // lastFlows stale relative to its own taxRates/policies/buildings — retry
     // with a recompute before failing (see checkConsistencyRecoveringStaleFlows).
+    // BUG-755: gate on `blockingFailures` — see the doc comment on the
+    // matching gate in prepareRestoreForChunkedTail above for why.
     const beforeReport = checkConsistencyRecoveringStaleFlows(state);
-    if (beforeReport.failures > 0) {
+    if (beforeReport.blockingFailures > 0) {
       return {
         success: false,
-        reason: `Snapshot failed consistency (${beforeReport.failures} failures)`,
+        reason: `Snapshot failed consistency (${beforeReport.blockingFailures} blocking of ${beforeReport.failures} failures)`,
       };
     }
 
@@ -1098,11 +1159,13 @@ export function restoreFromSavepoint(storage: StorageLike, lineageId?: string): 
     // BUG-603: the journal tail can itself end on a non-tick action (e.g. tick,
     // then a policy toggle, then autosave) — retry with a recompute before
     // failing, exactly like the pre-replay gate above.
+    // BUG-755: gate on `blockingFailures` — see the doc comment on the
+    // matching gate in prepareRestoreForChunkedTail above for why.
     const afterReport = checkConsistencyRecoveringStaleFlows(state);
-    if (afterReport.failures > 0) {
+    if (afterReport.blockingFailures > 0) {
       return {
         success: false,
-        reason: `Replay failed consistency (${afterReport.failures} failures) after ${replayed} actions`,
+        reason: `Replay failed consistency (${afterReport.blockingFailures} blocking of ${afterReport.failures} failures) after ${replayed} actions`,
       };
     }
 

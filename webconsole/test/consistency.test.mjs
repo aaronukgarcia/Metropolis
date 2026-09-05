@@ -96,7 +96,7 @@ test('RED: IN-TICK level rewards NOT applied to funds (remove funds += line brea
   const income = s.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
   const expense = s.lastFlows.outflows.reduce((a, b) => a + b.value, 0);
   const recordedLevelReward = s.lastFlows.inflows
-    .filter((f) => f.label === 'Level Rewards')
+    .filter((f) => f.label.startsWith('Level Rewards'))
     .reduce((a, f) => a + f.value, 0);
 
   // Tick snapshot conservation
@@ -129,7 +129,7 @@ test('TICK-PATH + PENDING QUEUE: debugXp queues reward, drained on advance()', (
   assert.ok(s1.funds > s.funds, 'funds increased after drain');
 
   // Verify rewards appear in flows
-  const levelRewardFlows = s1.lastFlows.inflows.filter((f) => f.label === 'Level Rewards');
+  const levelRewardFlows = s1.lastFlows.inflows.filter((f) => f.label.startsWith('Level Rewards'));
   assert.ok(levelRewardFlows.length > 0, 'Level Rewards appears in flows after drain');
 
   // Conservation after advance should PASS with exact tick snapshot match
@@ -164,7 +164,7 @@ test('PLACE + PENDING QUEUE: place action queues reward if level crossed, draine
     assert.ok(s2.funds > s1.funds, 'funds increased after drain');
 
     // Verify reward appears in flows
-    const levelRewardFlows = s2.lastFlows.inflows.filter((f) => f.label === 'Level Rewards');
+    const levelRewardFlows = s2.lastFlows.inflows.filter((f) => f.label.startsWith('Level Rewards'));
     assert.ok(levelRewardFlows.length > 0, 'Level Rewards appears in flows after drain');
 
     // Conservation after advance should PASS with exact tick snapshot match
