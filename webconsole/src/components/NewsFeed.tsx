@@ -47,72 +47,101 @@ const SEVERITY_LABEL: Record<NewsEntry['severity'], string> = {
 
 export function NewsFeed() {
   const { state } = useSim();
-  const trackerRef = useRef(createNewsFeedTracker());
-  const seqRef = useRef(createNewsFeedSeq());
-  const [ring, setRing] = useState<NewsEntry[]>([]);
-  const [expanded, setExpanded] = useState(false);
-  // How many of the CURRENT ring's entries have been seen (from the front —
-  // ring is newest-first) — everything beyond this index counts as unread.
-  const [seenCount, setSeenCount] = useState(0);
 
-  // BUG-742 re-verify (opus-reverify-bug742, R3d): NewsFeed never remounts
-  // across Load / New Game (it's a persistent HUD element), so trackerRef's
-  // consolidatorCapacityUnknownMaxId high-water mark used to survive a city
-  // switch too. Loading an OLDER save, or starting a New Game, legitimately
-  // restarts consolidatorLog pass ids at 1 — every genuine post-load
-  // capacity-unknown notice was then silently suppressed as "stale" until
-  // ids climbed back past whatever the PREVIOUS city's mark had reached.
-  // `state.lineageId` (types.ts) is the opaque per-city identity minted
-  // once at every genesis — reset the tracker the instant the observed
-  // lineage differs from the last one seen, so a fresh city always starts
-  // this dedupe state from scratch. `seqRef` (NewsEntry.id generation) and
-  // `recordedIdsRef` (the MET-V866 effect's dedupe, below) are deliberately
-  // NOT reset here: they only need session-wide uniqueness, never reset by
-  // design, and resetting them could let a new lineage mint an id that
-  // COLLIDES with one still sitting in the visible `ring` from the old
-  // lineage (this component does not clear the ring on a lineage change).
-  // This is a RENDER-PHASE reset (matches the render-phase derivation
-  // pattern below, and is StrictMode-safe by the same "second invocation
-  // sees no change" argument), not a remount — resetting a ref in place,
-  // not re-creating the component.
-  const lastLineageIdRef = useRef<string | undefined>(state.lineageId);
-  if (lastLineageIdRef.current !== state.lineageId) {
-    lastLineageIdRef.current = state.lineageId;
-    trackerRef.current = createNewsFeedTracker();
+  // BUG-756 ROOT CAUSE (confirmed): the ring used to be derived ENTIRELY
+  // during render — a plain ref (`lastObservedRef`) recorded "have I already
+  // observed this exact source snapshot" and, when it hadn't, the component
+  // body mutated `trackerRef`/`seqRef` and called `setRing` directly, all
+  // inside the render function. An independent round mounted this component
+  // with a REAL `createRoot` + `<React.StrictMode>` + `act` harness and
+  // measured DOM ENTRIES: [] for every source (levelup/milestone/
+  // placeNotice/consolidatorCapacityUnknown alike) even though the tracker
+  // ended up correctly marked as "observed" — i.e. the render-phase
+  // bookkeeping ran, but the entry never reached committed state. The same
+  // harness with StrictMode OFF rendered correctly. The only prior
+  // "StrictMode proof" on file (attack-news-feed-round.test.tsx) was a
+  // hand-simulated model whose own comment admitted SSR does not actually
+  // double-invoke — it never exercised React's real dev-mode double
+  // invocation of render/state-initializers, so it never could have caught
+  // this. React's own guidance is explicit: don't write refs or call
+  // setState during render except via the sanctioned "adjusting state when
+  // a prop changes" / lazy-initialization patterns — and even those must be
+  // pure functions of the CURRENT inputs, never something that accumulates
+  // across an unpredictable number of invocations.
+  //
+  // FIX — two pieces:
+  //   1. First paint (covers SSR, which never runs effects, AND the very
+  //      first client render) uses `useState`'s LAZY INITIALIZER — a
+  //      **pure** function of the current notice/milestone/placeNotice/
+  //      consolidator/payrollShortfall snapshot: every call starts from a
+  //      brand-new tracker+seq+[] and derives the ring from scratch, so it
+  //      does not matter whether React invokes it once or twice (React 18
+  //      StrictMode calls state initializers twice in dev specifically to
+  //      catch impurity) — any invocation's {tracker, ring} pair is
+  //      internally consistent and any one of them landing in committed
+  //      state is correct. Ref writes inside a lazy initializer are React's
+  //      documented exception to "never write refs during render".
+  //   2. Every SUBSEQUENT activation (the player levels up, a milestone
+  //      fires, a payroll shortfall starts/clears, etc., while the feed is
+  //      already mounted) is derived in a `useEffect`, keyed on the exact
+  //      source values (React's dependency-array Object.is comparison
+  //      replaces the old manual `sourcesChanged` check). React 18
+  //      StrictMode's dev-only extra effect cycle calls this effect body
+  //      TWICE for one commit; `lastEffectSourcesRef` (below) skips the
+  //      second invocation's redundant re-check as a cheap early-out, but it
+  //      is NOT what makes the fix correct on its own — see the LOAD-BEARING
+  //      note beside the actual `setRing` call below for why. The genuinely
+  //      load-bearing piece is that `setRing` is called with a CONCRETE
+  //      value, never the functional `setRing(prev => ...)` updater form:
+  //      React 18 StrictMode separately double-invokes a FUNCTION passed to
+  //      setState's updater form (to catch impure updaters), and
+  //      `observeNews` is impure with respect to `prev` because it mutates
+  //      the tracker as a side effect — an EARLIER version of this fix
+  //      proved, via its own red-proof test, that the purity-checking
+  //      second invocation of such an updater sees "already observed" and
+  //      returns `prev` unchanged, and React commits THAT result, silently
+  //      discarding the real push, even with `lastEffectSourcesRef`-style
+  //      gating still in place around the effect body.
+  // Net effect: exactly one entry per genuine activation, on first paint AND
+  // on every later one, with or without StrictMode, with or without SSR.
+  function currentSources() {
+    return {
+      notice: state.notice,
+      milestoneNotice: state.milestoneNotice,
+      placeNotice: state.placeNotice,
+      consolidatorLatestPass,
+      tick: state.tick,
+      payrollShortfall: financeStatus,
+    };
   }
 
   // BUG-723 round finding F1: the live-Go-engine payroll-shortfall status,
   // read from the SAME side-channel seam LiveEngineBadge.tsx already uses
   // (financeStatusTracker.ts, mirroring queueDepth.ts's established
   // subscribe-to-a-module-level-singleton pattern). Unlike
-  // notice/milestoneNotice/placeNotice below, this genuinely CANNOT be
-  // derived during render — it arrives asynchronously over a WebSocket,
-  // is null on the very first render (including SSR) regardless of what
-  // the live engine is doing, and there is no local mock-sim equivalent
-  // to read synchronously — so a useEffect subscription is the correct
-  // (and only) way to observe it, unlike the render-phase-derivable
-  // SimState fields.
+  // notice/milestoneNotice/placeNotice, this genuinely CANNOT be derived
+  // during render — it arrives asynchronously over a WebSocket, is null on
+  // the very first render (including SSR) regardless of what the live
+  // engine is doing, and there is no local mock-sim equivalent to read
+  // synchronously — so a useEffect subscription feeding real React state is
+  // the correct (and only) way to observe it, unlike the
+  // render-phase-derivable SimState fields this component otherwise reads.
   const [financeStatus, setFinanceStatus] = useState<FinanceStatusSnapshot>(() => financeStatusTracker.snapshot());
   useEffect(() => financeStatusTracker.subscribe(setFinanceStatus), []);
 
-  // Deliberately a RENDER-PHASE state derivation (React's documented
-  // "adjusting state when a prop changes" pattern — see "You Might Not Need
-  // an Effect"), NOT a useEffect. Two reasons:
-  //   1. useEffect never runs under SSR (renderToString) — the very first
-  //      paint of an already-active milestone/level-up/placeNotice would
-  //      render an empty "No news yet." ticker until hydration, a visible
-  //      flash-of-missing-news regression the render-phase form avoids
-  //      entirely (the entry is in `ring` on the SAME render that first
-  //      sees the source field non-null).
-  //   2. lastObservedRef is a plain ref mutated synchronously inside the
-  //      component body, so React 18 StrictMode's double render-invocation
-  //      is naturally deduped: the first invocation advances
-  //      lastObservedRef/trackerRef/seqRef and calls setRing (a
-  //      conditional, terminating render-phase update — the pattern React
-  //      explicitly supports); the second invocation (identical props) sees
-  //      `sourcesChanged` false and does nothing. No two-invocation double
-  //      append is possible.
-  const lastObservedRef = useRef<{
+  const trackerRef = useRef(createNewsFeedTracker());
+  const seqRef = useRef(createNewsFeedSeq());
+  const lastLineageIdRef = useRef<string | undefined>(state.lineageId);
+  // Cheap early-out for React 18 StrictMode's dev-only duplicate invocation
+  // of this effect body: a plain "have I already processed this exact
+  // source snapshot" ref, checked and set BEFORE any tracker mutation or
+  // setRing call. NOT the load-bearing fix by itself (see the comment atop
+  // this component) — it exists so the duplicate invocation does no
+  // redundant work, but correctness against StrictMode's updater-purity
+  // double-invocation comes from `setRing` never being called with the
+  // functional form (see the inline comment beside that call).
+  const lastEffectSourcesRef = useRef<{
+    lineageId: string | undefined;
     notice: unknown;
     milestoneNotice: unknown;
     placeNotice: unknown;
@@ -126,38 +155,92 @@ export function NewsFeed() {
   // notice/milestoneNotice/placeNotice above: it only changes reference
   // when a NEW pass is actually appended.
   const consolidatorLatestPass = state.consolidatorLog?.[0] ?? null;
-  const sourcesChanged =
-    lastObservedRef.current === null ||
-    lastObservedRef.current.notice !== state.notice ||
-    lastObservedRef.current.milestoneNotice !== state.milestoneNotice ||
-    lastObservedRef.current.placeNotice !== state.placeNotice ||
-    lastObservedRef.current.consolidatorLatestPass !== consolidatorLatestPass ||
-    lastObservedRef.current.payrollShortfall !== financeStatus;
-  if (sourcesChanged) {
-    lastObservedRef.current = {
+
+  const [ring, setRing] = useState<NewsEntry[]>(() => {
+    const tracker = createNewsFeedTracker();
+    const seq = createNewsFeedSeq();
+    const initialRing = observeNews(currentSources(), tracker, [], seq);
+    trackerRef.current = tracker;
+    seqRef.current = seq;
+    return initialRing;
+  });
+  const [expanded, setExpanded] = useState(false);
+  // How many of the CURRENT ring's entries have been seen (from the front —
+  // ring is newest-first) — everything beyond this index counts as unread.
+  const [seenCount, setSeenCount] = useState(0);
+
+  useEffect(() => {
+    // BUG-742 re-verify (opus-reverify-bug742, R3d): NewsFeed never
+    // remounts across Load / New Game (it's a persistent HUD element), so
+    // trackerRef's consolidatorCapacityUnknownMaxId high-water mark used to
+    // survive a city switch too. `state.lineageId` (types.ts) is the opaque
+    // per-city identity minted once at every genesis — reset the tracker
+    // the instant the observed lineage differs from the last one seen, so a
+    // fresh city always starts this dedupe state from scratch. `seqRef`
+    // (NewsEntry.id generation) and `recordedIdsRef` (the MET-V866 effect's
+    // dedupe, below) are deliberately NOT reset here: they only need
+    // session-wide uniqueness, never reset by design, and resetting them
+    // could let a new lineage mint an id that COLLIDES with one still
+    // sitting in the visible `ring` from the old lineage (this component
+    // does not clear the ring on a lineage change).
+    const signature = {
+      lineageId: state.lineageId,
       notice: state.notice,
       milestoneNotice: state.milestoneNotice,
       placeNotice: state.placeNotice,
       consolidatorLatestPass,
       payrollShortfall: financeStatus,
     };
-    const nextRing = observeNews(
-      {
-        notice: state.notice,
-        milestoneNotice: state.milestoneNotice,
-        placeNotice: state.placeNotice,
-        consolidatorLatestPass,
-        tick: state.tick,
-        payrollShortfall: financeStatus,
-      },
-      trackerRef.current,
-      ring,
-      seqRef.current
-    );
-    if (nextRing !== ring) {
-      setRing(nextRing);
+    const last = lastEffectSourcesRef.current;
+    const alreadyProcessed =
+      last !== null &&
+      last.lineageId === signature.lineageId &&
+      last.notice === signature.notice &&
+      last.milestoneNotice === signature.milestoneNotice &&
+      last.placeNotice === signature.placeNotice &&
+      last.consolidatorLatestPass === signature.consolidatorLatestPass &&
+      last.payrollShortfall === signature.payrollShortfall;
+    if (alreadyProcessed) return; // StrictMode's duplicate invocation of this SAME effect body — no-op, by design.
+    lastEffectSourcesRef.current = signature;
+
+    if (lastLineageIdRef.current !== state.lineageId) {
+      lastLineageIdRef.current = state.lineageId;
+      trackerRef.current = createNewsFeedTracker();
     }
-  }
+    const sources = currentSources();
+    // LOAD-BEARING: deliberately NOT the functional `setRing(prev => ...)`
+    // form. React 18 StrictMode double-invokes a FUNCTION passed to
+    // setState's updater form too (a SEPARATE mechanism from
+    // double-invoking render/effects, to catch impure updaters) — and
+    // `observeNews` mutates `trackerRef`/`seqRef` as a side effect, so it is
+    // NOT pure with respect to its `prev` argument. Confirmed empirically
+    // against a real createRoot+StrictMode+act mount: the updater ran twice
+    // with the SAME `prev`, and React kept the SECOND invocation's result —
+    // by then the tracker was already mutated by the first call, so the
+    // second call saw "already observed" and returned `prev` UNCHANGED,
+    // silently discarding the real push (committed ring stayed empty) EVEN
+    // THOUGH `lastEffectSourcesRef` above had already gated the effect BODY
+    // down to a single real invocation — the attacker neutered that ref
+    // (made it a permanent no-op) and nothing about the failure mode
+    // changed, which is what proves the ref is not the fix. `ring` (the
+    // plain, closed-over component state, read exactly once here) is safe
+    // to use directly because `alreadyProcessed` above already guarantees
+    // this effect's real body runs at most once per genuine source change —
+    // no second call, so no double-invoked-updater surface at all.
+    const nextRing = observeNews(sources, trackerRef.current, ring, seqRef.current);
+    if (nextRing !== ring) setRing(nextRing);
+    // Deliberately NOT keying on `state.tick` — that would re-run this
+    // effect (and the observeNews bailout check) every single tick for no
+    // behavioural change; the fields below are the only ones that gate a
+    // push, and `sources.tick` is only used to LABEL an entry actually
+    // pushed on this same call, so reading the live `state.tick` here is
+    // still exactly the tick a genuine activation happened on. This ALSO
+    // runs once, harmlessly, right after the initial mount (with the SAME
+    // sources the lazy initializer already consumed) — trackerRef already
+    // marks them observed, so it's a guaranteed no-op that round-trips
+    // through the identity bailout above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.lineageId, state.notice, state.milestoneNotice, state.placeNotice, consolidatorLatestPass, financeStatus]);
 
   const unreadCount = Math.max(0, ring.length - seenCount);
   const latest = ring[0] ?? null;
