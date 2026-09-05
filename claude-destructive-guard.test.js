@@ -3268,6 +3268,46 @@ test('FEAT-077 unit: isExemptFile matches only *.md / *.test.js / *_test.go, cas
   assert.equal(isExemptFile('foo_Test.go'), false);
 });
 
+// ---------------------------------------------------------------------------
+// BUG-722 — webconsole test-naming exemption gap (predates .test.mjs/.tsx/
+// .ts/.jsx; the guard's own three shapes never covered the webconsole suite).
+// ---------------------------------------------------------------------------
+
+test('BUG-722 unit: isExemptFile exempts .test.mjs/.test.tsx/.test.ts/.test.jsx under a test/ or __tests__/ directory, or at repo root', () => {
+  // Positive: webconsole test/ directory, one per new shape.
+  assert.equal(isExemptFile('webconsole/test/foo.test.mjs'), true);
+  assert.equal(isExemptFile('webconsole/test/foo.test.tsx'), true);
+  assert.equal(isExemptFile('webconsole/test/foo.test.ts'), true);
+  assert.equal(isExemptFile('webconsole/test/foo.test.jsx'), true);
+  // Positive: __tests__ directory segment, nested arbitrarily deep.
+  assert.equal(isExemptFile('webconsole/src/__tests__/foo.test.mjs'), true);
+  // Positive: bare repo-root filename (no directory at all) — matches the
+  // idiom the guard's own .test.js files already use.
+  assert.equal(isExemptFile('foo.test.mjs'), true);
+  // Negative: a source file under src/ merely NAMED like a test must not
+  // launder a code-bearing commit (the rename-visibility class, BUG-340 r1
+  // F3's comment on getStagedFilesFromDir()).
+  assert.equal(isExemptFile('webconsole/src/sim/foo.test.mjs'), false);
+  assert.equal(isExemptFile('webconsole/src/sim/foo.test.tsx'), false);
+  // Negative: neither test/ nor __tests__/ nor root, still not exempt.
+  assert.equal(isExemptFile('webconsole/lib/foo.test.ts'), false);
+  // Case sensitivity holds for the new shapes too.
+  assert.equal(isExemptFile('webconsole/test/foo.Test.mjs'), false);
+});
+
+test('BUG-722 unit: isExemptFileSet — a mixed commit (one test file, one src file) is NOT exempt', () => {
+  assert.equal(
+    isExemptFileSet(['webconsole/test/foo.test.mjs', 'webconsole/src/sim/foo.ts']),
+    false,
+    'one non-exempt src file anywhere denies the whole set exemption, even alongside a genuinely exempt test file'
+  );
+  assert.equal(
+    isExemptFileSet(['webconsole/test/foo.test.mjs', 'webconsole/test/bar.test.tsx']),
+    true,
+    'an all-webconsole-test-file commit is exempt'
+  );
+});
+
 test('FEAT-077 unit: isExemptFileSet requires a NON-EMPTY list where EVERY file is exempt', () => {
   assert.equal(isExemptFileSet([]), false, 'empty staged diff must be full tier, not exempt (spec, verbatim)');
   assert.equal(isExemptFileSet(['docs/a.md']), true);
@@ -4505,5 +4545,169 @@ test('BUG-214 GREEN: -a/--all, barePathspec, --pathspec-from-file still work cor
     const r2 = runGuard(dir, 'git commit -m "docs" --');
     assert.equal(r2.denied, true, 'bare -- handled');
     assert.match(r2.reason || '', /pathspec|BUG-214/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-722 ATTACK — independent destructive round against the new
+// NEW_TEST_EXT_RE + isUnderExemptTestDir() exemption (opus-round-bug722-guard).
+// Goal of every case below: LAUNDER a code-bearing commit through the new
+// exemption. Each test pins the behaviour observed against the real guard.
+// ---------------------------------------------------------------------------
+
+test('BUG-722 ATTACK unit: path-spelling tricks cannot walk a src/ file into the new exemption', () => {
+  // Dot segments: normalizeGitPath() collapses them BEFORE isExemptFile sees
+  // the path, so a `test/` segment that is cancelled by `..` cannot exempt.
+  assert.equal(isExemptFile(normalizeGitPath('webconsole/src/test/../sim/foo.test.mjs')), false);
+  assert.equal(isExemptFile(normalizeGitPath('webconsole/test/../src/sim/x.test.mjs')), false);
+  // Backslashes (git on Windows) are normalised on BOTH sides — the exempt
+  // spelling stays exempt, the src spelling stays code-bearing.
+  assert.equal(isExemptFile('webconsole\\test\\x.test.mjs'), true);
+  assert.equal(isExemptFile('webconsole\\src\\sim\\x.test.mjs'), false);
+  // Leading ./, a leading /, pathspec magic and an absolute path: normalised
+  // (or, for the absolute path, left carrying a drive segment) — never
+  // exempting a src/ file.
+  assert.equal(isExemptFile(normalizeGitPath('./webconsole/test/x.test.mjs')), true);
+  assert.equal(isExemptFile(normalizeGitPath('/webconsole/src/x.test.mjs')), false);
+  assert.equal(isExemptFile(normalizeGitPath(':(top)webconsole/src/x.test.mjs')), false);
+  assert.equal(isExemptFile(normalizeGitPath('C:/git/Metropolis/webconsole/src/x.test.mjs')), false);
+  // Case variants of the directory segment: the segment compare is exact, so
+  // Test/ TEST/ __TESTS__/ all fail CLOSED (code-bearing), matching the
+  // "git's own casing, no folding" posture of the extension regex.
+  assert.equal(isExemptFile('webconsole/Test/x.test.mjs'), false);
+  assert.equal(isExemptFile('webconsole/TEST/x.test.mjs'), false);
+  assert.equal(isExemptFile('webconsole/__TESTS__/x.test.mjs'), false);
+  // Near-miss directory names must NOT be accepted (mutation catcher for a
+  // startsWith/includes rewrite of the segment compare).
+  assert.equal(isExemptFile('webconsole/tests/x.test.mjs'), false);
+  assert.equal(isExemptFile('webconsole/testing/x.test.mjs'), false);
+  assert.equal(isExemptFile('webconsole/mytest/x.test.mjs'), false);
+  assert.equal(isExemptFile('webconsole/__tests__extra/x.test.mjs'), false);
+  // A unicode lookalike directory (Cyrillic es in "te\u0455t") is not `test`.
+  assert.equal(isExemptFile('webconsole/te\u0455t/x.test.mjs'), false);
+  // Extension near-misses.
+  assert.equal(isExemptFile('foo.test.mjs.js'), false, 'double extension must not read as .test.js');
+  assert.equal(isExemptFile('foo.test.mjsx'), false);
+  assert.equal(isExemptFile('foo.test.MJS'), false, 'uppercase extension must fail closed');
+  assert.equal(isExemptFile('webconsole/test/x.TEST.mjs'), false, 'uppercase .TEST. must fail closed');
+  assert.equal(isExemptFile('test'), false, 'a file literally named `test` with no extension is not a test file');
+  assert.equal(isExemptFile('webconsole/src/sim/__tests__'), false, '__tests__ as a FILENAME is not a directory segment');
+  // Root-level shapes that ARE exempt by design (the bare-filename branch).
+  assert.equal(isExemptFile('test.test.mjs'), true);
+});
+
+test('BUG-722 ATTACK unit: a `test` directory nested under src/ IS exempt — the fix comment overstates the src/ negative', () => {
+  // The production comment says "A file under src/ ... is NOT exempt"; that
+  // holds only for a src file NOT itself under a test/ segment.
+  // isUnderExemptTestDir scans EVERY directory segment, so a `test` dir under
+  // src/ exempts.
+  assert.equal(isExemptFile('webconsole/src/test/evil.test.mjs'), true);
+  // Harmless for webconsole (webconsole/ is not an enforced dir, so nothing
+  // under it is code-bearing anyway — see the e2e case below), but the same
+  // shape under an ENFORCED dir does launder; that is the finding recorded on
+  // BUG-722 by this round.
+  assert.equal(isEnforcedDirPath('webconsole/src/test/evil.test.mjs'), false);
+});
+
+test('BUG-722 ATTACK unit: the new extensions exempt files that isGuardOrHookPath / isEnforcedDirPath call ALWAYS code-bearing', () => {
+  // isExemptCommit() is evaluated BEFORE codeBearing in main(), so an
+  // all-exempt set short-circuits the guard/hook and enforced-dir checks.
+  // Pinned here so any future tightening (or loosening) is a deliberate,
+  // visible change rather than a silent one.
+  const launderable = [
+    'tools/plan/test/evil.test.mjs',
+    'tools/plan/__tests__/evil.test.ts',
+    'data/test/evil.test.mjs',
+    'internal/engine/test/evil.test.ts',
+    '.claude/hooks/test/evil.test.mjs',
+    'githooks/test/evil.test.mjs',
+    'claude-evil.test.mjs',
+    'claude-evil.test.ts',
+  ];
+  for (const p of launderable) {
+    assert.ok(
+      isEnforcedDirPath(p) || isGuardOrHookPath(p) || isRootLevel(p),
+      `${p} must be a code-bearing SHAPE for this pin to mean anything`
+    );
+    assert.equal(isExemptFile(p), true, `${p}: BUG-722 exempts this code-bearing shape (round finding F1/F2)`);
+  }
+  // INHERITED, not introduced: the legacy `.test.js` shape has no directory
+  // restriction at all, so the identical laundering already existed for .js.
+  assert.equal(isExemptFile('tools/plan/evil.test.js'), true);
+  assert.equal(isExemptFile('claude-evil.test.js'), true);
+  assert.equal(isExemptFile('internal/engine/evil.test.js'), true);
+  // The control: same directories, no test-shaped name -> code-bearing.
+  assert.equal(isExemptFile('tools/plan/test/evil.mjs'), false);
+  assert.equal(isExemptFile('claude-evil.mjs'), false);
+  assert.equal(isExemptFile('.claude/hooks/evil.mjs'), false);
+});
+
+test('BUG-722 ATTACK e2e: a .test.mjs under an ENFORCED dir commits with NO verdict, while the same file without the test name is denied', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'tools/plan/test/evil.test.mjs', 'module.exports = 1;\n');
+    const exempt = runGuard(dir, 'git commit -m "test: no tag at all"');
+    assert.equal(exempt.denied, false, 'BUG-722 finding F2: an enforced-dir file laundered by the new extension + test/ dir');
+  });
+  withTempRepo((dir) => {
+    stageFile(dir, 'tools/plan/test/evil.mjs', 'module.exports = 1;\n');
+    const control = runGuard(dir, 'git commit -m "test: no tag at all"');
+    assert.equal(control.denied, true, 'control: identical directory, non-test filename -> full tier');
+  });
+});
+
+test('BUG-722 ATTACK e2e: a root-level claude-*.test.mjs hook-shaped script commits with NO verdict', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'claude-evil.test.mjs', '// hook body\n');
+    const exempt = runGuard(dir, 'git commit -m "test: no tag at all"');
+    assert.equal(exempt.denied, false, 'BUG-722 finding F1: ROOT_GUARD_SCRIPT_RE explicitly covers claude-*.mjs, but the exemption runs first');
+  });
+  withTempRepo((dir) => {
+    stageFile(dir, 'claude-evil.mjs', '// hook body\n');
+    const control = runGuard(dir, 'git commit -m "test: no tag at all"');
+    assert.equal(control.denied, true, 'control: same root guard-script shape without the .test. infix -> full tier');
+  });
+});
+
+test('BUG-722 ATTACK e2e: mixing one non-exempt file into the set restores full tier', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'tools/plan/test/evil.test.mjs', 'module.exports = 1;\n');
+    stageFile(dir, 'internal/foo.go', 'package foo\n');
+    const r = runGuard(dir, 'git commit -m "test: no tag at all"');
+    assert.equal(r.denied, true, 'one code-bearing file anywhere in the set defeats the exemption');
+  });
+});
+
+test('BUG-722 ATTACK e2e: a src/-named .test.mjs is NOT a deny for webconsole — the new directory gate is a no-op for webconsole-only commits', () => {
+  // Non-exempt does not mean denied: webconsole/ is not in ENFORCED_DIR_RE,
+  // so nothing under it is code-bearing on its own. The BUG-722 fix therefore
+  // changes NOTHING for a commit whose staged set is only webconsole test
+  // files; its real effect is on MIXED sets (a webconsole .test.mjs alongside
+  // an enforced-dir or root-level exempt file), and on the enforced-dir/root
+  // shapes pinned above. Recorded so the fix's premise is not mis-read later.
+  withTempRepo((dir) => {
+    stageFile(dir, 'webconsole/src/sim/foo.test.mjs', 'export const x = 1;\n');
+    assert.equal(isExemptFile('webconsole/src/sim/foo.test.mjs'), false);
+    assert.equal(runGuard(dir, 'git commit -m "test: no tag at all"').denied, false);
+  });
+  withTempRepo((dir) => {
+    stageFile(dir, 'webconsole/test/foo.test.mjs', 'export const x = 1;\n');
+    assert.equal(runGuard(dir, 'git commit -m "test: no tag at all"').denied, false);
+  });
+});
+
+test('BUG-722 ATTACK e2e: renaming an enforced-dir source file INTO a test/ dir under a new test extension cannot launder (--no-renames keeps both sides visible)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'tools/plan/generate.js', 'module.exports = 1;\n');
+    git(dir, ['commit', '-m', 'seed the tool']);
+    fs.mkdirSync(path.join(dir, 'tools', 'plan', 'test'), { recursive: true });
+    git(dir, ['mv', 'tools/plan/generate.js', 'tools/plan/test/generate.test.mjs']);
+    const staged = git(dir, ['diff', '--cached', '--no-renames', '--name-only']).trim().split('\n');
+    assert.deepEqual(
+      staged.sort(),
+      ['tools/plan/generate.js', 'tools/plan/test/generate.test.mjs'],
+      'BUG-340 r1 F3: both sides of the rename must be visible to classification'
+    );
+    const r = runGuard(dir, 'git commit -m "test: moved the tool"');
+    assert.equal(r.denied, true, 'the deleted (non-exempt) source side keeps the set out of the exemption');
   });
 });

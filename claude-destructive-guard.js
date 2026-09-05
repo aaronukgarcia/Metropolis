@@ -765,12 +765,46 @@ function isGuardOrHookPath(filePath) {
 // (Aaron, 2026-08-13, "we are not building NASA code"). A commit whose staged
 // set is ENTIRELY docs/tests — and whose argv is classifiable (see
 // isArgvClassifiable) — is exempt from the Destructive verdict requirement
-// (Tester-level verification suffices). The three exempt shapes are the ONLY
-// ones; matching is case-sensitive, git's own casing (no folding anywhere).
+// (Tester-level verification suffices). Matching is case-sensitive, git's own
+// casing (no folding anywhere).
+//
+// BUG-722: the original three shapes (`.md`, `.test.js`, `_test.go`) predate
+// the webconsole's test naming (`webconsole/test/*.test.mjs`, `*.test.tsx`),
+// so a commit touching ONLY webconsole test files was misclassified
+// code-bearing and refused. Extended to also exempt `.test.mjs` / `.test.tsx`
+// / `.test.ts` / `.test.jsx` — but ONLY when the file sits directly at the
+// repo root (where this guard's own `.test.js` files live) or under a `test/`
+// or `__tests__/` directory segment anywhere in its path. A file under `src/`
+// (or any other non-test directory) named to merely LOOK like a test is NOT
+// exempt under the new shapes — see the BUG-340 r1 F3 rename-visibility
+// comment on getStagedFilesFromDir() above: a source file renamed/authored to
+// look test-like must not be able to launder a code-bearing commit past this
+// gate. The original three shapes are UNCHANGED (no directory restriction
+// added to them, to avoid altering already-relied-on behaviour) and are
+// matched by EXEMPT_FILE_RE below; the new four shapes are matched by
+// NEW_TEST_EXT_RE + isUnderExemptTestDir(). Classification stays fail-closed:
+// anything not matched by either path is code-bearing.
 const EXEMPT_FILE_RE = /(\.md|\.test\.js|_test\.go)$/;
 
+// BUG-722: the new webconsole test extensions. Directory-gated — see comment
+// above and isUnderExemptTestDir().
+const NEW_TEST_EXT_RE = /\.test\.(mjs|tsx|ts|jsx)$/;
+
+/** True when `normalizedPath` (forward slashes already) is at the repo root
+ * (no directory at all) or has a `test` or `__tests__` path segment anywhere
+ * before its filename. Used ONLY to gate the new BUG-722 test extensions —
+ * the original three EXEMPT_FILE_RE shapes are not directory-restricted. */
+function isUnderExemptTestDir(normalizedPath) {
+  const segments = normalizedPath.split('/');
+  if (segments.length === 1) return true; // bare filename at repo root
+  const dirSegments = segments.slice(0, -1);
+  return dirSegments.some(seg => seg === 'test' || seg === '__tests__');
+}
+
 function isExemptFile(filePath) {
-  return EXEMPT_FILE_RE.test(filePath.replace(/\\/g, '/'));
+  const p = filePath.replace(/\\/g, '/');
+  if (EXEMPT_FILE_RE.test(p)) return true;
+  return NEW_TEST_EXT_RE.test(p) && isUnderExemptTestDir(p);
 }
 
 function isExemptFileSet(files) {
