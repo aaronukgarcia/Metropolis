@@ -1711,7 +1711,8 @@
         "engine.market",
         "engine.season",
         "engine.world",
-        "int.serializer"
+        "int.serializer",
+        "engine.wellbeing"
       ],
       "sprint": 6
     },
@@ -1793,7 +1794,8 @@
         "engine.unlocks",
         "int.serializer",
         "engine.deathservices",
-        "engine.wellbeing"
+        "engine.wellbeing",
+        "feat.gameinit"
       ],
       "sprint": 6
     },
@@ -3420,7 +3422,8 @@
         "foundation.data",
         "foundation.det",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "engine.wellbeing"
       ],
       "sprint": 10
     },

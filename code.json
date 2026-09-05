@@ -4936,6 +4936,11 @@
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          },
+          {
+            "key": "engine.wellbeing",
+            "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
+            "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
           }
         ]
       },
@@ -5164,6 +5169,11 @@
             "key": "engine.wellbeing",
             "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
             "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
+          },
+          {
+            "key": "feat.gameinit",
+            "moduleGuid": "939179db-288c-42d4-8dc0-4ba794acfda5",
+            "inboundGuid": "828a958d-df24-4d6c-8108-7ced7c9af7d7"
           }
         ]
       },
@@ -5585,6 +5595,10 @@
             "outboundGuid": "22084081-6b7b-498f-9848-f05f424709f8"
           },
           {
+            "key": "engine.attract",
+            "outboundGuid": "7c3d420c-3d6e-48de-9c21-f46ff1b38ead"
+          },
+          {
             "key": "engine.cafe",
             "outboundGuid": "e9809660-e6e5-4ccb-a62d-b782ec32b41a"
           },
@@ -5595,6 +5609,10 @@
           {
             "key": "engine.crime",
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
+          },
+          {
+            "key": "engine.firms",
+            "outboundGuid": "fd65035a-1204-45e0-bdb7-5b9196c77b4f"
           },
           {
             "key": "engine.leisure",
@@ -5928,7 +5946,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          }
+        ]
       },
       "outbound": {
         "guid": "6263d83f-7d7b-4705-937b-7561a9d9250d",
@@ -8830,6 +8853,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "engine.wellbeing",
+            "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
+            "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
           }
         ]
       },
