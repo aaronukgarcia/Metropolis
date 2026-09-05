@@ -28,7 +28,6 @@ import {
 } from './journal';
 import {
   AUTOSAVE_INTERVAL_MS,
-  persistSavepoint,
   createSavepoint,
   restoreFromSavepoint,
   readAllSavepoints,
@@ -39,6 +38,7 @@ import {
   checkConsistencyRecoveringStaleFlows,
   SAVEPOINT_CAP,
   SAVEPOINT_KEY_PREFIX,
+  savepointKey,
   LEGACY_LINEAGE_ID,
   readCurrentLineageId,
   writeCurrentLineageId,
@@ -338,9 +338,97 @@ function mirrorSavepointCheckpoint(lineageId?: string): void {
  * IndexedDB is not the 5MB-constrained medium); `decode()` at read time
  * treats an uncompressed payload as a no-op passthrough.
  */
-function mirrorSavepointDirect(encodedSavepoint: string, lineageId?: string): void {
+/**
+ * BUG-704: the raw (still `encode()`-compressed, exactly as
+ * `persistSavepointWithReason` wrote them) bytes currently sitting in
+ * `window.localStorage`'s rotation slots for `lineageId` — the SAME
+ * localStorage content the freshness gate that just rejected a write
+ * (`persistSavepointWithReason`'s `stale-overwrite`) compared against. Fed
+ * into `guardedSavepointSetItem` (via `mirrorSavepointDirect`) as extra
+ * baselines so the durable store's overflow-slot write is refused by the
+ * SAME staleness decision localStorage already made, instead of only ever
+ * comparing against the overflow slot's own (often empty) prior contents.
+ *
+ * BUG-704 round REJECT (P1): uses replay.ts's EXPORTED `savepointKey` for the
+ * legacy/namespaced key derivation instead of hand-re-deriving that scheme —
+ * a hand-rolled copy that silently drifted from replay.ts's own rule (a
+ * renamed prefix, a changed legacy-id check) would make this function always
+ * read the WRONG key and see "nothing there", degrading BUG-704's fix back to
+ * fail-open with no error (a GR#3 Single-Source-of-Truth violation that is
+ * also a silent regression path).
+ *
+ * A throwing/corrupt localStorage read (round REJECT P3) degrades to an empty
+ * baseline set (the pre-fix single-key comparison) — but that degradation is
+ * now RECORDED (GR#1/#17), not silent: an unreadable savepoint estate is
+ * itself worth knowing about, distinct from "nothing here yet".
+ */
+export function localSavepointBaselines(lineageId?: string): string[] {
+  const baselines: string[] = [];
+  for (let slot = 0; slot < SAVEPOINT_CAP; slot++) {
+    try {
+      const raw = window.localStorage.getItem(savepointKey(slot, lineageId));
+      if (raw !== null) baselines.push(raw);
+    } catch (e) {
+      // Fail-open (never blocks the mirror), but no longer silently — see
+      // doc comment above.
+      recordError(
+        `Reading localStorage savepoint slot ${slot} for the durable cross-store freshness gate failed (${e instanceof Error ? e.message : String(e)}) - proceeding with fewer baselines than expected`,
+        { type: 'app', action: 'save' },
+      );
+    }
+  }
+  return baselines;
+}
+
+/**
+ * BUG-704 round REJECT (P2): the durable store's own gate
+ * (`guardedSavepointSetItem`) can refuse a write independently of whatever
+ * `surfaceSaveRefusal` already recorded for the LOCAL write (the
+ * `storage-error` path never calls `surfaceSaveRefusal` at all, and even on
+ * `stale-overwrite` the durable refusal is a SEPARATE store noticing the same
+ * condition). A refusal at this layer must never be silent (GR#1/#17) —
+ * reuses the exact "a fresher save already exists" wording
+ * `surfaceSaveRefusal` already uses for the player-visible version of this
+ * condition, scoped to the durable copy so the two messages are recognisably
+ * the same family without being indistinguishable in the error ring.
+ */
+/**
+ * BUG-704 re-round 2 (P3 item 2): `reason` (undefined only for the
+ * `.catch`-caught unexpected-throw path below, where 'storage-error' is
+ * always supplied explicitly) decides the wording — a genuine storage
+ * failure is NOT "a fresher save already exists" and must never be reported
+ * as one (GR#1: an inaccurate message sends the player to fix the wrong
+ * thing). `detail` (from `MirrorSavepointDirectResult.error`) is threaded
+ * through verbatim so the recorded message reflects what ACTUALLY happened
+ * (an ordinary stale-overwrite vs the P3-item-1 fail-closed corrupt-baseline
+ * refusal vs a real quota/degraded-store failure) rather than one canned
+ * string standing in for all of them.
+ */
+function recordDurableSavepointRefusal(lineageId: string | undefined, reason: 'stale' | 'storage-error' | undefined, detail: string | undefined): void {
+  const who = `lineage ${lineageId ?? LEGACY_LINEAGE_ID}`;
+  const message =
+    reason === 'storage-error'
+      ? `Durable (IndexedDB) save FAILED for ${who}: ${detail ?? 'unknown storage error'} - this attempt did NOT reach the durable copy.`
+      : `Durable (IndexedDB) save refused for ${who}: ${detail ?? 'an existing durable savepoint is fresher'} - the durable copy was NOT overwritten.`;
+  recordError(message, { type: 'app', action: 'save' });
+}
+
+function mirrorSavepointDirect(encodedSavepoint: string, lineageId?: string, extraExistingRaw: string[] = []): void {
   try {
-    void mirrorSavepointDirectToStore(getDefaultSaveStore(), encodedSavepoint, lineageId);
+    void mirrorSavepointDirectToStore(getDefaultSaveStore(), encodedSavepoint, lineageId, extraExistingRaw)
+      .then((result) => {
+        if (!result.ok) recordDurableSavepointRefusal(lineageId, result.reason, result.error);
+      })
+      .catch((e: unknown) => {
+        // BUG-704 re-round 2 (P3 item 3): `mirrorSavepointDirectToStore`
+        // documents a never-throws contract, but this chain had no `.catch`
+        // at all — an unexpected rejection (a future regression in that
+        // contract, or a truly exotic host failure) would otherwise become
+        // an UNHANDLED PROMISE REJECTION, silently dropping the one signal
+        // that the durable mirror never advanced. Never trusted blindly:
+        // recorded exactly like any other storage-error failure.
+        recordDurableSavepointRefusal(lineageId, 'storage-error', e instanceof Error ? e.message : String(e));
+      });
   } catch {
     /* best-effort */
   }
@@ -359,8 +447,26 @@ function mirrorSavepointDirect(encodedSavepoint: string, lineageId?: string): vo
  *     ordering preserved).
  *   - failure: mirror the savepoint that COULD NOT be written, directly,
  *     bypassing localStorage entirely.
+ *
+ * BUG-704 round REJECT (P2): `reason` decides HOW the failure branch gates
+ * the durable write. `'stale-overwrite'` means localStorage's own freshness
+ * gate made a real judgement call — the durable write is fed the SAME
+ * localStorage baselines that judgement used (BUG-704's whole point: one
+ * shared ordering gate). Anything else (`'storage-error'`, or `undefined` —
+ * the rebuild call site's known-successful `mirrorAfterPersist(true, ...)`
+ * never reaches this branch at all) means localStorage made NO staleness
+ * judgement whatsoever — it is a genuine quota wedge, the EXACT shape this
+ * whole direct-mirror mechanism (FEAT-2326609780 inc2) exists to rescue.
+ * Gating a quota-wedge write against localStorage's frozen rotation-slot
+ * bytes would be STRICTER than the ordinary same-key gate (comparing against
+ * every slot's newest, not just the overflow slot's own prior content) for a
+ * failure mode where localStorage said nothing about freshness at all — a
+ * wedged city could then stop advancing the durable copy silently, with no
+ * localStorage-side signal to explain why. So on `storage-error`, no
+ * baselines are passed — the durable gate falls back to comparing against
+ * ONLY its own prior contents, exactly as before this fix.
  */
-function mirrorAfterPersist(persisted: boolean, savepoint: Savepoint): void {
+export function mirrorAfterPersist(persisted: boolean, savepoint: Savepoint, reason?: SavepointRejectReason): void {
   // P0 RCA fix, item 2: `savepoint.lineageId` (stamped automatically by
   // createSavepoint from the state that produced it) threads straight
   // through to the IDB mirror keys, so two lineages' durable copies can
@@ -368,7 +474,8 @@ function mirrorAfterPersist(persisted: boolean, savepoint: Savepoint): void {
   if (persisted) {
     mirrorSavepointCheckpoint(savepoint.lineageId);
   } else {
-    mirrorSavepointDirect(JSON.stringify(savepoint), savepoint.lineageId);
+    const baselines = reason === 'stale-overwrite' ? localSavepointBaselines(savepoint.lineageId) : [];
+    mirrorSavepointDirect(JSON.stringify(savepoint), savepoint.lineageId, baselines);
   }
 }
 
@@ -2220,7 +2327,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
           // the freshness effect read the WRONG (legacy) IDB keys and
           // refuse every genuine same-lineage rescue as "foreign lineage".
           bootSavepointMetaRef.current = { snapshotTick: healed.snapshotTick, savedAt: healed.savedAt, saveSeq: healed.saveSeq, lineageId: healed.lineageId };
-          const healedOk = persistSavepoint(window.localStorage, healed);
+          // BUG-704 round REJECT (P2): need the reason (stale-overwrite vs
+          // storage-error), not just the boolean — see mirrorAfterPersist's
+          // own doc comment for why the two must be gated differently.
+          const healedResult = persistSavepointWithReason(window.localStorage, healed);
+          const healedOk = healedResult.ok;
           // FEAT-2326609780 inc2 (P2 follow-up filed under BUG-669): this
           // self-heal write previously mirrored NOTHING — a quota-wedged
           // localStorage healed the LIVE city in memory but never advanced
@@ -2229,7 +2340,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
           // Mirror unconditionally, exactly like every other persistSavepoint
           // call site now does — success mirrors the localStorage bytes,
           // failure mirrors `healed` directly into the overflow slot.
-          mirrorAfterPersist(healedOk, healed);
+          mirrorAfterPersist(healedOk, healed, healedResult.reason);
           if (!healedOk) {
             recordError(
               'Self-heal save failed after a large-tail load (storage quota). The replayed city is active now, but the large tail may reappear on the next load — clear journal in Config, then Save.',
@@ -2294,7 +2405,13 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // inc2: stamp the save with the running build + current camera so a later
         // boot on a new build can detect the change and offer a rebuild.
         const savepoint = createSavepoint(state, tail, new Date(), currentBuildVersion(), currentCamera(), nextSaveSeq());
-        const success = persistSavepoint(window.localStorage, savepoint);
+        // BUG-704 round REJECT (P2): need the REASON, not just the boolean —
+        // `persistSavepointWithReason` distinguishes a genuine quota wedge
+        // (`storage-error`, this timer's whole reason for existing per
+        // FEAT-2326609780 inc2) from a stale-overwrite refusal, and
+        // `mirrorAfterPersist` below must treat them differently.
+        const autosaveResult = persistSavepointWithReason(window.localStorage, savepoint);
+        const success = autosaveResult.ok;
         setAutoSaveError(!success);
         if (success) {
           // Update lastSaveIndex to mark this checkpoint.
@@ -2306,7 +2423,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // savepoint that just failed to reach localStorage directly into the
         // durable store's overflow slot, so IndexedDB keeps advancing even
         // while every localStorage slot is wedged.
-        mirrorAfterPersist(success, savepoint);
+        mirrorAfterPersist(success, savepoint, autosaveResult.reason);
       } catch (e) {
         // Catch-all for any error during autosave (e.g., localStorage throws).
         setAutoSaveError(true);
@@ -2990,7 +3107,12 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // skipped, or the next boot resurrects the abandoned city instead of
         // the one the player just loaded.
         writeCurrentLineageId(window.localStorage, normalizeLineageId(savepointToPersist.lineageId));
-        const persisted = persistSavepoint(window.localStorage, savepointToPersist);
+        // BUG-704 round REJECT (P2): need the reason — loading an OLDER save
+        // while the current lineage is already further along is exactly the
+        // stale-overwrite shape mirrorAfterPersist must gate against; a
+        // genuine storage-error here must not be gated the same way.
+        const loadPersistResult = persistSavepointWithReason(window.localStorage, savepointToPersist);
+        const persisted = loadPersistResult.ok;
         // BUG-439 FIX: restore the loaded save's FULL journal (save.journal) into
         // the live journal state/on-disk journal file instead of discarding it as
         // emptyJournal(). Without this, a rebuild triggered right after a load (or
@@ -3008,7 +3130,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // FEAT-2326609780 inc2: mirror unconditionally (was `if (persisted)`
         // — a quota failure here left IndexedDB holding the PREVIOUS city's
         // savepoint even though the player just loaded a different one).
-        mirrorAfterPersist(persisted, savepointToPersist);
+        mirrorAfterPersist(persisted, savepointToPersist, loadPersistResult.reason);
         persistStashedCamera(window.localStorage, save.savepoint.camera ?? currentCamera());
         setRebuildProgress({ actionsDone: 3, actionsTotal: 4, phaseLabel: 'Hydrating city…' });
         setCityName(displayCityName(save.name));
@@ -3091,7 +3213,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       const result = persistSavepointWithReason(window.localStorage, save.savepoint);
       // FEAT-2326609780 inc2: mirror unconditionally, success or failure, so
       // a quota-failed manual save still advances the durable IndexedDB copy.
-      mirrorAfterPersist(result.ok, save.savepoint);
+      mirrorAfterPersist(result.ok, save.savepoint, result.reason);
       if (!result.ok) {
         // P0 RCA fix, item 4: a REFUSED save must NOT clear the journal —
         // the player's real, unsaved history is the ONLY record of what
@@ -3138,7 +3260,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       const save = buildCurrentSave(label, nextSaveSeq());
       const savedAsResult = persistSavepointWithReason(window.localStorage, save.savepoint);
       // FEAT-2326609780 inc2: mirror unconditionally (see mirrorAfterPersist).
-      mirrorAfterPersist(savedAsResult.ok, save.savepoint);
+      mirrorAfterPersist(savedAsResult.ok, save.savepoint, savedAsResult.reason);
       if (!savedAsResult.ok) {
         // P0 RCA fix, item 4 — "the aggravator inside the P0": this return
         // value was PREVIOUSLY IGNORED ENTIRELY (store.tsx:2319 in the RCA's

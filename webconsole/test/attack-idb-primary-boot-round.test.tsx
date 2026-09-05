@@ -420,7 +420,11 @@ test('ATTACK C: a later FAILED persist of an OLDER savepoint overwrites the Inde
     const rescue = createSavepoint(advanced, [], new Date(), running, null);
 
     const store = getDefaultSaveStore();
-    assert.ok(await mirrorSavepointDirect(store, JSON.stringify(rescue)), 'the rescue copy must land in the overflow slot');
+    // BUG-704 re-round 2 (P3 item 2): mirrorSavepointDirect now resolves an
+    // object ({ok, reason?, error?}), not a bare boolean — `assert.ok` on the
+    // object itself would ALWAYS pass (objects are truthy) and silently stop
+    // testing anything; check `.ok` explicitly.
+    assert.ok((await mirrorSavepointDirect(store, JSON.stringify(rescue))).ok, 'the rescue copy must land in the overflow slot');
     assert.equal(JSON.parse((await store.getItem(SAVEPOINT_OVERFLOW_KEY))!).snapshotTick, 900);
 
     // The player now loads an OLDER named save (or any older-lineage

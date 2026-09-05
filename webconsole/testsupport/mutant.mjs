@@ -96,7 +96,7 @@
 // the shadow tree too (as runMutantSelfReinvoke already does for the whole
 // webconsole/test directory) rather than referencing it by real absolute path.
 
-import { cpSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -118,6 +118,59 @@ export const SRC_ROOT = join(TESTSUPPORT_DIR, '..', 'src');
 // webconsole/testsupport -> webconsole
 const WEBCONSOLE_ROOT = join(TESTSUPPORT_DIR, '..');
 const WEBCONSOLE_TEST_ROOT = join(WEBCONSOLE_ROOT, 'test');
+const REAL_NODE_MODULES = join(WEBCONSOLE_ROOT, 'node_modules');
+
+/**
+ * BUG-704: a shadow copy only ever mirrors `webconsole/src` (and, for
+ * `runMutantSelfReinvoke`, `webconsole/test`/`webconsole/testsupport` too) —
+ * never `node_modules`. A target module that imports a real npm dependency
+ * (e.g. `saveCodec.ts`'s `lz-string`, reached transitively by anything that
+ * imports `replay.ts` or `saveStore.ts`) then fails to resolve inside the
+ * shadow with `ERR_MODULE_NOT_FOUND`, indistinguishable from a genuine
+ * mutation-detection failure unless the caller inspects the error text
+ * closely. Rather than make every such caller special-case this, link the
+ * REAL `node_modules` directory into the shadow root once, right after it is
+ * created — a Windows-safe `junction` (works without admin/Developer-Mode
+ * privileges, unlike a plain symlink) that costs nothing to create (no
+ * copying) and is torn down with the rest of the shadow directory. Best
+ * effort: if the real `node_modules` does not exist, or linking fails for
+ * any reason (an already-existing entry, a locked-down filesystem), this
+ * silently no-ops — exactly the pre-existing behaviour for every caller that
+ * doesn't need an npm dependency at all.
+ *
+ * BUG-704 round REJECT (P1) follow-up: a `.tsx` target (e.g. `sim/store.tsx`,
+ * needed to test store.tsx's real production wiring rather than re-deriving
+ * it by hand in a test) additionally needs a loader that understands JSX-less
+ * `.tsx`/extensionless imports the way `webconsole/package.json`'s
+ * `"type": "module"` + the `tsx` loader combination does for the real tree —
+ * without a `package.json` in the shadow, Node's nearest-package.json lookup
+ * walks past the shadow root entirely and falls back to treating `.tsx` as
+ * CJS, which then fails to resolve the SAME extensionless `./engine`-style
+ * imports that work fine one level up. Writing a minimal `{"type":"module"}`
+ * alongside the `node_modules` link removes that ambiguity; harmless for
+ * every existing `.ts`-only caller of this helper, which already worked
+ * without one.
+ */
+function linkNodeModulesIntoShadow(shadowRoot) {
+  if (existsSync(REAL_NODE_MODULES)) {
+    const dest = join(shadowRoot, 'node_modules');
+    if (!existsSync(dest)) {
+      try {
+        symlinkSync(REAL_NODE_MODULES, dest, 'junction');
+      } catch {
+        /* best-effort — see doc comment above */
+      }
+    }
+  }
+  const pkgJsonDest = join(shadowRoot, 'package.json');
+  if (!existsSync(pkgJsonDest)) {
+    try {
+      writeFileSync(pkgJsonDest, '{"type":"module"}', 'utf8');
+    } catch {
+      /* best-effort */
+    }
+  }
+}
 
 // R5 (BUG-739 round REJECT, 2026-09-05): createMutantShadow() hands its
 // shadow directory to the CALLER to clean up (it can't wrap the caller's own
@@ -199,6 +252,7 @@ export function runWithMutant({ targetRelPath, mutate, childBody, timeoutMs = 60
   registerShadowRoot(shadowRoot);
   try {
     cpSync(SRC_ROOT, shadowRoot, { recursive: true });
+    linkNodeModulesIntoShadow(shadowRoot);
     writeFileSync(join(shadowRoot, targetRelPath), mutated, 'utf8');
     const childPath = join(shadowRoot, '__mutant_child.mjs');
     writeFileSync(childPath, childBody, 'utf8');
@@ -254,6 +308,7 @@ export function runBaselineProbe({ targetRelPath, childBody, timeoutMs = 60000, 
   registerShadowRoot(shadowRoot);
   try {
     cpSync(SRC_ROOT, shadowRoot, { recursive: true });
+    linkNodeModulesIntoShadow(shadowRoot);
     const childPath = join(shadowRoot, '__mutant_baseline_child.mjs');
     writeFileSync(childPath, childBody, 'utf8');
     return execFileSync(process.execPath, [...extraArgs, childPath], {
@@ -340,6 +395,7 @@ export function runMutantSelfReinvoke({ targetRelPath, mutate, testFileAbsPath, 
     // load with ERR_MODULE_NOT_FOUND (BUG-739 CI-shape follow-up, same move
     // that relocated this helper out of webconsole/test/).
     cpSync(join(WEBCONSOLE_ROOT, 'testsupport'), join(shadowRoot, 'testsupport'), { recursive: true });
+    linkNodeModulesIntoShadow(shadowRoot);
     writeFileSync(join(shadowRoot, 'src', targetRelPath), mutated, 'utf8');
     const shadowTestPath = join(shadowRoot, 'test', relTestPath);
     return runNodeTestChild(shadowTestPath, testNamePattern, shadowRoot, timeoutMs);
@@ -410,6 +466,7 @@ export function createMutantShadow({ targetRelPath, mutate }) {
   const shadowRoot = mkdtempSync(join(tmpdir(), 'metropolis-mutant-inproc-'));
   registerShadowRoot(shadowRoot);
   cpSync(SRC_ROOT, shadowRoot, { recursive: true });
+  linkNodeModulesIntoShadow(shadowRoot);
   writeFileSync(join(shadowRoot, targetRelPath), mutated, 'utf8');
   return {
     importUrl: (relPath) => pathToFileURL(join(shadowRoot, relPath)).href,

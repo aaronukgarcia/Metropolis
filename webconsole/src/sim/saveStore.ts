@@ -52,6 +52,12 @@
 import { isQuotaError } from './safeStorage.ts';
 import { recordError } from './backend.ts';
 import { decode } from './saveCodec.ts';
+// BUG-704 round REJECT (P2/P3): the reserved legacy-lineage id, imported
+// (not re-literalled as `'legacy'`) so this module's own lineage-scoping and
+// its overflow-key derivation can never silently drift from replay.ts's
+// definition — the SAME reason `savepointKey` is imported by store.tsx
+// rather than hand-re-derived there.
+import { LEGACY_LINEAGE_ID, savepointKey, isUsableSavepointFreshness } from './replay.ts';
 
 /** IndexedDB database name + version for the save estate. */
 export const SAVE_STORE_DB_NAME = 'metropolis-saves';
@@ -401,14 +407,23 @@ function isSavepointGuardedKey(key: string): boolean {
  * an incoming write we cannot evaluate would risk permanently wedging the
  * durable store on an unreadable value.
  */
-function parseSavepointFreshnessMeta(raw: string): { snapshotTick: number; savedAt: string; saveSeq?: number } | null {
+function parseSavepointFreshnessMeta(raw: string): SavepointFreshnessMeta | null {
   try {
-    const parsed = JSON.parse(decode(raw)) as { snapshotTick?: unknown; savedAt?: unknown; saveSeq?: unknown };
-    if (typeof parsed.snapshotTick === 'number' && Number.isFinite(parsed.snapshotTick) && typeof parsed.savedAt === 'string' && parsed.savedAt.length > 0) {
+    const parsed = JSON.parse(decode(raw)) as { snapshotTick?: unknown; savedAt?: unknown; saveSeq?: unknown; lineageId?: unknown };
+    // BUG-704 re-round 2 (P3 item 1): the SAME acceptance predicate
+    // replay.ts's `persistSavepointWithReason` now applies to an occupied
+    // local rotation slot — see `isUsableSavepointFreshness`'s own doc
+    // comment for why the two readers previously disagreed on this exact
+    // point.
+    if (isUsableSavepointFreshness(parsed)) {
       return {
-        snapshotTick: parsed.snapshotTick,
-        savedAt: parsed.savedAt,
+        snapshotTick: parsed.snapshotTick as number,
+        savedAt: parsed.savedAt as string,
         ...(typeof parsed.saveSeq === 'number' && Number.isFinite(parsed.saveSeq) ? { saveSeq: parsed.saveSeq } : {}),
+        // BUG-704 round REJECT (P2): carried through so the cross-store gate
+        // can apply BUG-687 item 5 (a foreign-lineage candidate is never a
+        // competitor) — see `guardedSavepointSetItem`'s own doc comment.
+        ...(typeof parsed.lineageId === 'string' && parsed.lineageId.length > 0 ? { lineageId: parsed.lineageId } : {}),
       };
     }
   } catch {
@@ -417,46 +432,147 @@ function parseSavepointFreshnessMeta(raw: string): { snapshotTick: number; saved
   return null;
 }
 
+/** Parsed freshness metadata for one savepoint candidate (see `parseSavepointFreshnessMeta`). */
+type SavepointFreshnessMeta = { snapshotTick: number; savedAt: string; saveSeq?: number; lineageId?: string };
+
+/**
+ * Normalize a lineage id for comparison — `undefined` and the reserved
+ * legacy lineage are the SAME lineage. A per-module copy of the identical
+ * rule store.tsx's own `normalizeLineageId` (`isStrictlyFresherSavepointMeta`)
+ * uses — kept local rather than imported to avoid a store.tsx <-> saveStore.ts
+ * import cycle (store.tsx already imports FROM saveStore.ts), but pinned to
+ * the SAME shared `LEGACY_LINEAGE_ID` constant so the two never disagree on
+ * WHICH id is reserved, only on where the four-line function itself lives.
+ */
+function normalizeLineageId(lineageId: string | undefined): string {
+  return lineageId && lineageId !== LEGACY_LINEAGE_ID ? lineageId : LEGACY_LINEAGE_ID;
+}
+
+/**
+ * Is `a` newer-or-equal to `b`, using the SAME saveSeq-primary /
+ * tick+savedAt-fallback rule replay.ts's `isIncomingSavepointNewerOrEqual`
+ * and store.tsx's `isStrictlyFresherSavepointMeta` use — kept as one small
+ * shared function so every freshness gate in this estate agrees byte-for-byte
+ * on ordering.
+ *
+ * BUG-704 fix: `saveSeq` is primary ONLY when BOTH sides carry a real one —
+ * this module's original single-key gate treated an ABSENT `saveSeq` as a
+ * literal `0` unconditionally, which is NOT what the other two freshness
+ * gates in this estate do (see `isIncomingSavepointNewerOrEqual`'s and
+ * `isStrictlyFresherSavepointMeta`'s own doc comments for why: a self-heal
+ * ALWAYS stamps a real, positive `saveSeq`, so treating "no saveSeq" as `0`
+ * makes every pre-round-3 savepoint lose UNCONDITIONALLY regardless of tick —
+ * exactly the bug round 3 fixed in the other two gates). Left uncorrected
+ * here, feeding in a baseline that predates `saveSeq` (any savepoint written
+ * before round 3) would make this module's cross-store comparison disagree
+ * with the very decision `persistSavepointWithReason` just made using the
+ * correct rule — the opposite of BUG-704's "one shared gate" goal.
+ */
+function isMetaNewerOrEqual(a: SavepointFreshnessMeta, b: SavepointFreshnessMeta): boolean {
+  const aSeqDefined = Number.isFinite(a.saveSeq);
+  const bSeqDefined = Number.isFinite(b.saveSeq);
+  if (aSeqDefined && bSeqDefined) {
+    const aSeq = a.saveSeq as number;
+    const bSeq = b.saveSeq as number;
+    if (aSeq !== bSeq) return aSeq > bSeq;
+    // tied on a REAL saveSeq — fall through to the tick+savedAt tie-break below
+  }
+  return a.snapshotTick > b.snapshotTick || (a.snapshotTick === b.snapshotTick && a.savedAt >= b.savedAt);
+}
+
 /**
  * `store.setItem`, but for a savepoint-shaped key: refuses (returns
  * `ok:false`, the value already there is left untouched) when a valid
- * EXISTING value is present and the incoming one is not newer-or-equal.
+ * EXISTING value — the durable store's own copy at `key`, OR any of
+ * `extraExistingRaw` — is present and the incoming one is not newer-or-equal
+ * to the NEWEST of all of them.
  *
- * FEAT-2326609780 round 3 (the structural fix — adjudicated): PRIMARY order
- * is `saveSeq`, the monotonic per-lineage persist counter (see
- * `Savepoint.saveSeq`'s own doc comment, replay.ts, and
- * store.tsx's `isStrictlyFresherSavepointMeta` — this module deliberately
- * mirrors that same ordering so the two independent freshness guards in this
- * estate (this one, and the boot-time swap decision) never disagree about
- * which of two savepoints of one lineage is newer). `saveSeq` absent on
- * either side (a pre-round-3 savepoint) is treated as `0`; a tie (both
- * absent, or a genuine equal count) falls back to `persistSavepoint`'s own
- * rule (tick first, `savedAt` as the `>=` tie-break — see replay.ts's
- * `incomingIsNewer`).
+ * BUG-704 fix: this used to compare `value` ONLY against `key`'s own prior
+ * contents. That is exactly right for an ordinary rotation-slot mirror (the
+ * incoming bytes there always CAME FROM localStorage, so there is nothing
+ * else to compare against), but it is the wrong, too-narrow gate for
+ * `mirrorSavepointDirect`'s failure-path write into the OVERFLOW slot: that
+ * savepoint was JUST refused by localStorage's own freshness gate
+ * (`persistSavepointWithReason`'s `stale-overwrite`) as older than what a
+ * rotation slot of the SAME lineage already holds — but the overflow key
+ * itself had never seen a competitor, so the guard let it through
+ * unopposed. The two durable-ish stores (localStorage and the IndexedDB
+ * mirror) then disagreed about which savepoint of this lineage was newest,
+ * and the stale one could resurrect an old city on a later boot (the exact
+ * F4 finding, `attack-bug-436-round.test.mjs`). `extraExistingRaw` lets a
+ * caller feed in the OTHER current copies of this lineage's savepoint (the
+ * localStorage rotation slots that made the staleness call in the first
+ * place) so this is a single ordering gate shared by BOTH stores, not two
+ * gates that can silently disagree.
  *
- * Only ever refuses when BOTH the existing and incoming values parse as
- * well-formed savepoints — an unreadable existing value (never expected in
- * practice, but never trusted blindly either) or an unreadable incoming
- * value never blocks a write, matching this module's fail-open-toward-
- * availability posture everywhere else (GR#1: a durable-layer bug must
- * never be able to brick the save path entirely).
+ * Only ever refuses when BOTH the (newest) existing candidate and the
+ * incoming value parse as well-formed savepoints — an unreadable candidate
+ * (never expected in practice, but never trusted blindly either) never
+ * blocks a write, matching this module's fail-open-toward-availability
+ * posture everywhere else (GR#1: a durable-layer bug must never be able to
+ * brick the save path entirely).
+ *
+ * BUG-704 round REJECT (P2): `extraExistingRaw` candidates whose OWN stamped
+ * `lineageId` differs from the incoming savepoint's lineage are IGNORED
+ * entirely — never allowed to become `newestExisting`, never allowed to
+ * refuse the write. This is the SAME rule store.tsx's
+ * `isStrictlyFresherSavepointMeta` already applies (BUG-687 item 5: "a
+ * foreign-lineage candidate is never a competitor, full stop, regardless of
+ * what its tick/savedAt/saveSeq claim") — without it, a long-lived city's
+ * high tick/saveSeq baseline could wrongly refuse a brand-new, unrelated
+ * city's very first savepoint merely because a caller happened to pass in
+ * cross-lineage baselines. The target key's OWN prior contents are NOT
+ * filtered this way — a namespaced key never physically holds another
+ * lineage's savepoint by construction (see `overflowKeyForLineage`), so
+ * there is nothing to filter there.
  */
-async function guardedSavepointSetItem(store: SaveStore, key: string, value: string): Promise<SaveStoreWriteResult> {
+async function guardedSavepointSetItem(
+  store: SaveStore,
+  key: string,
+  value: string,
+  extraExistingRaw: Array<string | null | undefined> = [],
+): Promise<SaveStoreWriteResult> {
   const existingRaw = await store.getItem(key);
+  const incoming = parseSavepointFreshnessMeta(value);
+  const incomingLineage = normalizeLineageId(incoming?.lineageId);
+
+  let newestExisting: SavepointFreshnessMeta | null = null;
   if (existingRaw !== null) {
-    const existing = parseSavepointFreshnessMeta(existingRaw);
-    const incoming = parseSavepointFreshnessMeta(value);
-    if (existing && incoming) {
-      const existingSeq = Number.isFinite(existing.saveSeq) ? (existing.saveSeq as number) : 0;
-      const incomingSeq = Number.isFinite(incoming.saveSeq) ? (incoming.saveSeq as number) : 0;
-      const incomingIsNewerOrEqual =
-        existingSeq !== incomingSeq
-          ? incomingSeq > existingSeq
-          : incoming.snapshotTick > existing.snapshotTick || (incoming.snapshotTick === existing.snapshotTick && incoming.savedAt >= existing.savedAt);
-      if (!incomingIsNewerOrEqual) {
-        return { ok: false, quota: false, degraded: false, error: 'refused: an existing durable savepoint is fresher (BUG-469-style overwrite protection)' };
-      }
+    const meta = parseSavepointFreshnessMeta(existingRaw);
+    if (meta) newestExisting = meta;
+  }
+  const providedExtras = extraExistingRaw.filter((raw): raw is string => raw !== null && raw !== undefined);
+  let unparsableExtras = 0;
+  for (const raw of providedExtras) {
+    const meta = parseSavepointFreshnessMeta(raw);
+    if (!meta) {
+      unparsableExtras++;
+      continue;
     }
+    if (normalizeLineageId(meta.lineageId) !== incomingLineage) continue; // BUG-687 item 5: never a competitor.
+    if (!newestExisting || isMetaNewerOrEqual(meta, newestExisting)) newestExisting = meta;
+  }
+  // BUG-704 re-round 2 (P3 item 1): the caller supplied baseline(s) — it made
+  // a staleness judgement using them (the whole reason `extraExistingRaw` was
+  // passed) — but under this module's own acceptance domain (now shared with
+  // replay.ts's `isUsableSavepointFreshness`) NOT ONE of them parsed, and the
+  // target key's own contents gave no usable baseline either. This is a
+  // corrupt-data condition, not "nothing to compare against": silently
+  // treating it as the latter would fail OPEN exactly when the caller's own
+  // judgement cannot be independently confirmed here — reproduced: a stale
+  // write landed in the overflow slot unopposed because every occupied
+  // rotation slot was simultaneously valid JSON and freshness-unreadable.
+  // Recorded (GR#17 — a monitoring/verification gap is itself an error) and
+  // refused (fail CLOSED) rather than silently falling back to fail-open.
+  if (providedExtras.length > 0 && unparsableExtras === providedExtras.length && newestExisting === null) {
+    reportOnce(
+      'MET-V859',
+      `Durable savepoint freshness gate for ${key} received ${providedExtras.length} baseline(s), none of which parsed as a usable savepoint (valid JSON, but corrupt freshness metadata) - refusing the write rather than risk a stale overwrite that cannot be independently verified`,
+    );
+    return { ok: false, quota: false, degraded: false, error: 'refused: durable freshness baselines were unreadable (fail-closed, corrupt data)' };
+  }
+  if (newestExisting && incoming && !isMetaNewerOrEqual(incoming, newestExisting)) {
+    return { ok: false, quota: false, degraded: false, error: 'refused: an existing durable savepoint is fresher (BUG-469-style overwrite protection)' };
   }
   return store.setItem(key, value);
 }
@@ -611,15 +727,63 @@ export async function mirrorKeyFromLocalStorage(store: SaveStore, localStorage: 
  * lineage gets its own separate overflow slot.
  */
 function overflowKeyForLineage(lineageId?: string): string {
-  return !lineageId || lineageId === 'legacy' ? SAVEPOINT_OVERFLOW_KEY : `metropolis.savepoint.${lineageId}.idbOnly`;
+  // BUG-704 round REJECT (P3): compares against the IMPORTED constant, not a
+  // re-literalled `'legacy'` — a renamed/changed reserved-id definition in
+  // replay.ts must not be able to silently desync this key derivation from
+  // it (the same GR#3 concern `savepointKey`'s export addresses for
+  // store.tsx).
+  return !lineageId || lineageId === LEGACY_LINEAGE_ID ? SAVEPOINT_OVERFLOW_KEY : `metropolis.savepoint.${lineageId}.idbOnly`;
 }
 
-export async function mirrorSavepointDirect(store: SaveStore, encodedSavepoint: string, lineageId?: string): Promise<boolean> {
+/**
+ * BUG-704 re-round 2 (P3 item 2): the OLD boolean-only contract collapsed
+ * three very different failure shapes — a genuine freshness refusal (this
+ * savepoint IS older/corrupt-baseline-blocked), a real storage failure
+ * (quota exceeded, the durable store degraded to memory), and an unexpected
+ * throw — into a single `false`, and the caller (store.tsx) then reported
+ * EVERY one of them as "a fresher save already exists", which is simply
+ * false for the storage-error case (GR#1: an inaccurate error message is
+ * worse than none — it sends the player to fix the wrong thing). `reason`
+ * distinguishes the two buckets a caller can act on differently:
+ *   - `'stale'`: `guardedSavepointSetItem` itself refused the write (an
+ *     ordinary BUG-469-style overwrite refusal, OR the P3-item-1 fail-closed
+ *     refusal when every supplied baseline was corrupt) — recognisable by
+ *     its `error` always starting with `'refused:'`.
+ *   - `'storage-error'`: anything else — `store.setItem` itself failed
+ *     (quota, degraded backing store) or the whole call threw.
+ */
+export interface MirrorSavepointDirectResult {
+  ok: boolean;
+  reason?: 'stale' | 'storage-error';
+  /** The underlying detail string, when available — surfaced verbatim by the caller so the recorded message is accurate rather than a generic canned string. */
+  error?: string;
+}
+
+export async function mirrorSavepointDirect(
+  store: SaveStore,
+  encodedSavepoint: string,
+  lineageId?: string,
+  /**
+   * BUG-704: the OTHER current copies of this lineage's savepoint —
+   * typically its localStorage rotation slots' raw bytes, read by the
+   * caller AFTER `persistSavepointWithReason` made its own staleness
+   * decision — fed into the SAME freshness gate as the overflow key's own
+   * prior contents, so a savepoint localStorage just refused as stale
+   * cannot land unopposed in the durable store merely because the overflow
+   * slot itself was empty or older. Optional/omittable for every call site
+   * that has no such context (the memory-only unit-test shape, and any
+   * legacy caller) — omitting it degrades to the pre-fix single-key
+   * comparison, never a regression, never a thrown error.
+   */
+  extraExistingRaw: Array<string | null | undefined> = [],
+): Promise<MirrorSavepointDirectResult> {
   try {
-    const result = await guardedSavepointSetItem(store, overflowKeyForLineage(lineageId), encodedSavepoint);
-    return result.ok;
-  } catch {
-    return false;
+    const result = await guardedSavepointSetItem(store, overflowKeyForLineage(lineageId), encodedSavepoint, extraExistingRaw);
+    if (result.ok) return { ok: true };
+    const reason: 'stale' | 'storage-error' = result.error?.startsWith('refused:') ? 'stale' : 'storage-error';
+    return { ok: false, reason, error: result.error };
+  } catch (e) {
+    return { ok: false, reason: 'storage-error', error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -630,11 +794,13 @@ export async function mirrorSaveCheckpoint(
 ): Promise<{ savepointsOk: boolean; journalOk: boolean }> {
   let savepointsOk = true;
   for (let slot = 0; slot < opts.savepointSlots; slot++) {
-    // P0 RCA fix, item 2: mirrors replay.ts's own `savepointKey` convention
-    // exactly (legacy/undefined -> unnamespaced) so the IDB copy of a
-    // lineage's rotation slots lives at the SAME relative key shape as its
-    // localStorage original.
-    const key = !opts.lineageId || opts.lineageId === 'legacy' ? `metropolis.savepoint.${slot}` : `metropolis.savepoint.${opts.lineageId}.${slot}`;
+    // P0 RCA fix, item 2 / BUG-704 round REJECT (P1/P3): uses replay.ts's
+    // EXPORTED `savepointKey` directly (was a hand-rolled re-derivation of
+    // the same legacy/undefined -> unnamespaced scheme, with the reserved id
+    // re-literalled as `'legacy'`) so the IDB copy of a lineage's rotation
+    // slots lives at the SAME relative key shape as its localStorage
+    // original, with zero risk of the two derivations silently drifting.
+    const key = savepointKey(slot, opts.lineageId);
     const ok = await mirrorKeyFromLocalStorage(store, localStorage, key);
     savepointsOk = savepointsOk && ok;
   }

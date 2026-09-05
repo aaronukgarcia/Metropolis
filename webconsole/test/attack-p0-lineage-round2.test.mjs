@@ -118,8 +118,12 @@ test('R2-A2: THE BACK DOOR IS CLOSED BY CONSTRUCTION — every in-tree persist s
   assert.ok(persistCalls.length >= 4, `expected the known persist sites, found ${persistCalls.length}`);
 
   // applyLoadedSave: the pointer write MUST precede its persist (F1's fix).
+  // BUG-704 round REJECT (P2): this call site now goes through
+  // `persistSavepointWithReason` (need the reason for mirrorAfterPersist's
+  // gating) instead of the boolean `persistSavepoint` wrapper — same call,
+  // same ordering requirement, renamed literal.
   const pointerWrite = src.indexOf('writeCurrentLineageId(window.localStorage, normalizeLineageId(savepointToPersist.lineageId))');
-  const loadPersist = src.indexOf('persistSavepoint(window.localStorage, savepointToPersist)');
+  const loadPersist = src.indexOf('persistSavepointWithReason(window.localStorage, savepointToPersist)');
   pin(() => assert.ok(pointerWrite > 0, 'applyLoadedSave must normalise + write the pointer (F1 fix missing)'));
   pin(() =>
     assert.ok(

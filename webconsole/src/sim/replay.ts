@@ -202,7 +202,18 @@ export interface StorageLike {
  * (item 3) scoped-by-construction: two different lineages are never even
  * reading/writing the same key, so there is nothing to compare.
  */
-function savepointKey(slot: number, lineageId?: string): string {
+/**
+ * BUG-704 round REJECT (P1): exported so every OTHER call site that needs a
+ * rotation-slot key — store.tsx's `localSavepointBaselines` (the
+ * localStorage-side half of the cross-store freshness gate) chief among
+ * them — uses this SAME derivation instead of hand-re-deriving the
+ * legacy/namespaced scheme itself. A hand-rolled copy that silently drifts
+ * from this one (a renamed prefix, a changed legacy-id check) would make the
+ * baseline-gathering side quietly read the WRONG key and always see "nothing
+ * there", degrading BUG-704's fix back to fail-open with no error — a GR#3
+ * (Single Source of Truth) violation that is also a silent regression path.
+ */
+export function savepointKey(slot: number, lineageId?: string): string {
   if (!lineageId || lineageId === LEGACY_LINEAGE_ID) return `${SAVEPOINT_KEY_PREFIX}.${slot}`;
   return `${SAVEPOINT_KEY_PREFIX}.${lineageId}.${slot}`;
 }
@@ -297,6 +308,31 @@ export interface PersistSavepointResult {
  * exact comparison the RCA's own repro fixtures exercise (they never stamp
  * `saveSeq`), so this fallback is what keeps their assertions unchanged.
  */
+/**
+ * BUG-704 re-round 2 (P3 item 1): the SINGLE shared acceptance domain for
+ * "is this savepoint's freshness metadata trustworthy enough to compare
+ * against" — used HERE (deciding whether an occupied local rotation slot is
+ * a valid basis for the BUG-469 overwrite-protection comparison) AND by
+ * saveStore.ts's `parseSavepointFreshnessMeta` (deciding whether a raw
+ * durable-store baseline is usable). Before this, `readSlot`'s bare
+ * `JSON.parse` accepted ANY well-formed JSON as "occupied" with no field
+ * validation, while saveStore.ts additionally required a finite
+ * `snapshotTick` and non-empty `savedAt` — two different acceptance domains
+ * reading the SAME underlying bytes. The reproduced consequence: every
+ * occupied rotation slot simultaneously well-formed JSON yet
+ * freshness-unreadable (a finite-tick-shaped field holding `null`/`NaN`, say)
+ * made THIS function's caller treat the slot as occupied and refuse the
+ * local write as stale, while saveStore.ts's stricter parse rejected every
+ * one of those same slots as a baseline, leaving the durable gate with
+ * "nothing to compare against" and letting the stale write straight through
+ * — the two stores disagreeing about the exact bytes they both just read.
+ * Exported so both readers import the one predicate rather than maintaining
+ * independently-drifting copies.
+ */
+export function isUsableSavepointFreshness(sp: { snapshotTick?: unknown; savedAt?: unknown } | null | undefined): boolean {
+  return !!sp && typeof sp.snapshotTick === 'number' && Number.isFinite(sp.snapshotTick) && typeof sp.savedAt === 'string' && sp.savedAt.length > 0;
+}
+
 function isIncomingSavepointNewerOrEqual(incoming: Savepoint, existing: Savepoint): boolean {
   const incSeq = incoming.saveSeq;
   const exSeq = existing.saveSeq;
@@ -489,9 +525,22 @@ export function persistSavepointWithReason(
           ceiling = sp.saveSeq as number;
         }
       }
-    } else if (target.sp && !isIncomingSavepointNewerOrEqual(savepoint, target.sp)) {
+    } else if (
+      target.sp &&
+      isUsableSavepointFreshness(target.sp) &&
+      !isIncomingSavepointNewerOrEqual(savepoint, target.sp)
+    ) {
       // BUG-469 overwrite protection: reject the stale write outright.
       // The prior (fresher, SAME-lineage) savepoint in this slot is left intact.
+      //
+      // BUG-704 re-round 2 (P3 item 1): `isUsableSavepointFreshness(target.sp)`
+      // added — an occupied slot whose freshness fields are corrupt (valid
+      // JSON, but a non-finite `snapshotTick` or empty `savedAt`) can no
+      // longer authoritatively block this write. Matches this module's own
+      // fail-open-toward-availability posture elsewhere (a corrupt EXISTING
+      // value never blocks a write) and keeps this decision in the SAME
+      // acceptance domain saveStore.ts's durable gate uses on the identical
+      // bytes — see `isUsableSavepointFreshness`'s own doc comment.
       return { ok: false, reason: 'stale-overwrite' };
     }
 

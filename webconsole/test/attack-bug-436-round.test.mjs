@@ -294,11 +294,13 @@ describe('ATTACK 2: mirrorAfterPersist on the FAILURE path vs IDB-primary boot',
     // city genuinely reaches nowhere on a failed write.
   });
 
-  test('F4 (P2): on the stale-overwrite refusal, the IDB mirror BYPASSES the very gate that just refused the write — a savepoint rejected as too old in localStorage lands unopposed in the durable store', async () => {
-    // guardedSavepointSetItem only ever compares against the OVERFLOW key's own
-    // prior contents. It never sees the three localStorage/IDB SLOTS that
-    // caused the stale-overwrite refusal. So an empty overflow slot accepts
-    // anything.
+  test('F4 (P2, FIXED by BUG-704): on the stale-overwrite refusal, the IDB mirror no longer bypasses the gate that just refused the write — a savepoint rejected as too old in localStorage must ALSO be refused by the durable store when the caller feeds in localStorage\'s current rotation-slot bytes as baselines', async () => {
+    // Pre-BUG-704, guardedSavepointSetItem only ever compared against the
+    // OVERFLOW key's own prior contents and never saw the three
+    // localStorage/IDB SLOTS that caused the stale-overwrite refusal, so an
+    // empty overflow slot accepted anything. mirrorSavepointDirect now takes
+    // an optional 4th `extraExistingRaw` argument — the caller (store.tsx's
+    // `localSavepointBaselines`) feeds in exactly those slot bytes.
     const store = memSaveStore();
     const now = new Date(2026, 8, 4, 12);
     const storage = memStorage();
@@ -313,12 +315,29 @@ describe('ATTACK 2: mirrorAfterPersist on the FAILURE path vs IDB-primary boot',
     const r = persistSavepointWithReason(storage, rebuilt, now);
     assert.equal(r.reason, 'stale-overwrite', 'refused by the (saveSeq,tick) gate');
 
-    const mirrored = await mirrorSavepointDirect(store, JSON.stringify(rebuilt), undefined);
+    // The exact bytes localStorage currently holds for this (legacy) lineage's
+    // three rotation slots — what the fixed call site now threads through.
+    const baselines = storage._keys().map((k) => storage.getItem(k));
+
+    const mirroredWithoutBaselines = await mirrorSavepointDirect(store, JSON.stringify(rebuilt), undefined);
     assert.equal(
-      mirrored,
+      mirroredWithoutBaselines.ok,
       true,
-      'FINDING F4: the same savepoint the localStorage gate just rejected is accepted by the durable mirror without contest',
+      'omitting the baselines degrades to the pre-fix single-key comparison (documented, not a regression) — the overflow slot was empty so the write still lands',
     );
+
+    // Reset the store so the second call starts from the same empty overflow
+    // slot the first one did — the point being tested is the GATE, not
+    // whatever the previous call happened to leave behind.
+    store._map.clear();
+    const mirroredWithBaselines = await mirrorSavepointDirect(store, JSON.stringify(rebuilt), undefined, baselines);
+    assert.equal(
+      mirroredWithBaselines.ok,
+      false,
+      'FIXED F4/BUG-704: fed the same localStorage bytes that caused the stale-overwrite refusal, the durable mirror now refuses the write too',
+    );
+    assert.equal(mirroredWithBaselines.reason, 'stale', 'BUG-704 re-round 2 (P3 item 2): a freshness refusal must be reported as \'stale\', not a generic failure');
+    assert.equal(store._map.has('metropolis.savepoint.idbOnly'), false, 'the stale savepoint must not land in the durable overflow slot');
   });
 });
 
