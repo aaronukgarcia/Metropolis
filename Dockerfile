@@ -70,6 +70,14 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /out/metroserve \
     ./cmd/metroserve
 
+# Empty staging dir for the /data anonymous-volume ownership fix below
+# (BUG-693, REGRESSION CLASS: nonroot base image vs Docker's anonymous-
+# volume default ownership) — created here in the builder stage, which
+# still has a shell, so the runtime COPY --chown below has a real,
+# already-existing source directory to copy (COPY --chown works without
+# a shell, but mkdir does not exist in the shell-less runtime image).
+RUN mkdir -p /data-empty
+
 # ---- Runtime ----
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 
@@ -116,6 +124,30 @@ ENV METROPOLIS_ERRORS_PATH=/data-src/errors.json
 # config (not this Dockerfile) is what actually attaches the share. Kept
 # entirely separate from /data-src above -- persistence and the read-only
 # data catalogue must never share a mount point.
+#
+# REGRESSION CLASS (BUG-693, Azure Deploy run 33924081197 boot-proof
+# failure — nonroot base image vs anonymous-volume default ownership):
+# when nothing external is bind/volume-mounted at /data (exactly what the
+# workflow's boot-proof step does), Docker auto-creates an ANONYMOUS
+# volume, populated from whatever already exists in the image at that
+# path -- both its CONTENTS and its OWNERSHIP. With no COPY into /data,
+# that path did not exist in the image at all, so Docker's auto-create
+# defaulted the new volume to root:root 0755. This runtime stage's base
+# is gcr.io/distroless/static-debian12:nonroot (uid 65532, no shell, so
+# no `chown`/`mkdir` available here to fix it after the fact). metroserve
+# pre-creates the default city BEFORE binding HTTP (cmd/metroserve/
+# main.go's runHosted) and its persist write path hits os.MkdirAll under
+# /data (internal/persist/diskstore.go) -- which EACCES'd as non-root
+# against a root-owned directory, so main exited 1 and /health never
+# came up. In production this is masked entirely because Azure Files
+# always supplies an external mount that shadows /data, which is exactly
+# why the gate (nothing mounted) caught what production traffic never
+# would. FIX: seed /data from an empty directory already owned by
+# nonroot at COPY time -- COPY --chown works with no shell, unlike a
+# RUN chown/mkdir in this stage -- so Docker's anonymous-volume
+# auto-create inherits nonroot:nonroot ownership from the image path
+# instead of defaulting to root:root.
+COPY --from=builder --chown=nonroot:nonroot /data-empty /data
 VOLUME ["/data"]
 
 COPY --from=builder /out/metroserve /metroserve
