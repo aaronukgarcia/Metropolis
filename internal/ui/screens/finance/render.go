@@ -138,6 +138,27 @@ func RenderMoneyMode(buf *core.Buffer, rect core.Rect, unlimited bool, have bool
 	drawText(buf, rect, rect.X, rect.Y+1, "money is not a constraint (financial checks bypassed)", style.Italic(true))
 }
 
+// RenderPayrollShortfall (BUG-723, GR#17) draws the payroll-shortfall
+// status line: nothing while have is false (no signal published yet) or
+// while the amount is zero (the most recent month posted its full private
+// wage bill — the healthy, silent default), a single warning line
+// otherwise. Mirrors RenderMoneyMode's exact "guard on have, draw nothing
+// when there is nothing to say" shape — like every Render* function in
+// this package, it is NOT wired into an assembled TUI frame by any caller
+// today (none of RenderPL/RenderBalanceSheet/RenderMoneyMode/RenderLoans/
+// RenderSliders/RenderPublicPayroll/RenderSankey have a production caller
+// either — this package's Screen is fully wired to the live protocol
+// delta stream via ApplyDelta/PayrollShortfall(), but assembling an actual
+// TUI frame out of these Render* primitives is a separate, pre-existing,
+// package-wide gap this fix does not attempt to close).
+func RenderPayrollShortfall(buf *core.Buffer, rect core.Rect, p PayrollShortfallView, have bool, style tcell.Style) {
+	if buf == nil || rect.W <= 0 || rect.H <= 0 || !have || p.AmountMicropounds <= 0 {
+		return
+	}
+	line := fmt.Sprintf("PAYROLL SHORTFALL: %s (month %d, %d consecutive month(s))", formatPounds(p.AmountMicropounds), p.Month, p.Months)
+	drawText(buf, rect, rect.X, rect.Y, line, style.Bold(true))
+}
+
 func RenderLoans(buf *core.Buffer, rect core.Rect, loans []LoanState, rating int, history []float64, rejected string, have bool, style tcell.Style) {
 	if buf == nil || rect.W <= 0 || rect.H <= 0 {
 		return

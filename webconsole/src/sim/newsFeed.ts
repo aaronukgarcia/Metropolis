@@ -31,7 +31,7 @@ import { gameDate, fmtMoney } from './utils.ts';
 
 export type NewsSeverity = 'info' | 'success' | 'warning' | 'error';
 
-export type NewsSource = 'levelup' | 'milestone' | 'placeNotice' | 'consolidatorCapacityUnknown';
+export type NewsSource = 'levelup' | 'milestone' | 'placeNotice' | 'consolidatorCapacityUnknown' | 'payrollShortfall';
 
 export interface NewsEntry {
   /** Stable within one feed instance: `${source}-${seq}`. Not global/shared. */
@@ -72,6 +72,21 @@ export interface NewsFeedSources {
    */
   consolidatorLatestPass?: { id: number; skipped: ReadonlyArray<{ sectionKey: number; reason: string }> } | null;
   tick: number;
+  /** BUG-723: FinanceAPI.PayrollShortfall()/PayrollShortfallMonths(), read
+   *  through the f2.finance wire patch (wire.ts's FinancePayrollShortfallView) —
+   *  a caller sourcing this from the live protocol client, never from the
+   *  mock local sim (there is no local-engine equivalent).
+   *
+   *  null/undefined and a real object are NOT interchangeable (re-round
+   *  finding P1, opus-reround-bug723): null/undefined means "no live-engine
+   *  data right now" (no connection yet, or it just dropped — see
+   *  financeStatusTracker.ts's identical distinction) and causes NEITHER a
+   *  start nor a clear transition; only a real object with
+   *  amountMicropounds<=0 is a genuine "connected and reporting a clean
+   *  month" reading that clears an active shortfall. Collapsing the two
+   *  would fire the SAME clear-edge on a mid-starve disconnect as on an
+   *  actual recovery. */
+  payrollShortfall?: { amountMicropounds: number; months: number } | null;
 }
 
 /** Per-source "currently active value" memory. Caller owns one instance for the feed's lifetime. */
@@ -101,10 +116,23 @@ export interface NewsFeedTracker {
    */
   consolidatorCapacityUnknownKey: string | null;
   consolidatorCapacityUnknownMaxId: number;
+  /** BUG-723: true while the last-observed payrollShortfall source was
+   *  active (amountMicropounds > 0) — a plain boolean gate rather than a
+   *  remembered value, because the AMOUNT legitimately changes every
+   *  month a shortfall persists (unlike levelup/milestone's stable id) and
+   *  a value-equality check would wrongly re-fire on every such change. */
+  payrollShortfallActive: boolean;
 }
 
 export function createNewsFeedTracker(): NewsFeedTracker {
-  return { levelup: null, milestone: null, placeNotice: null, consolidatorCapacityUnknownKey: null, consolidatorCapacityUnknownMaxId: -Infinity };
+  return {
+    levelup: null,
+    milestone: null,
+    placeNotice: null,
+    consolidatorCapacityUnknownKey: null,
+    consolidatorCapacityUnknownMaxId: -Infinity,
+    payrollShortfallActive: false,
+  };
 }
 
 /** Caller-owned monotonic counter so NewsEntry.id is stable and collision-free
@@ -223,6 +251,56 @@ export function observeNews(
           ? `Consolidator skipped section ${sectionList}: capacity unknown (a corrupt capacityTier made it unrepresentable) — nothing was merged or lost.`
           : `Consolidator skipped ${capacityUnknownSections.length} sections (${sectionList}): capacity unknown — nothing was merged or lost.`;
       push('consolidatorCapacityUnknown', 'warning', text);
+    }
+  }
+
+  // BUG-723: one entry on the START of a payroll shortfall, one on its
+  // CLEAR — never one per month it merely persists (the boolean tracker
+  // gate, not a value-equality check, is what makes that hold even
+  // though amountMicropounds/months both change every month the streak
+  // continues).
+  //
+  // Re-round finding P1 (opus-reround-bug723): null is NOT the same as a
+  // real zero reading. null means "no live-engine data right now" —
+  // exactly what financeStatusTracker's own doc comment declares and
+  // exactly what LiveEngineBadge writes on unmount/disconnect
+  // (financeStatusTracker.reset()) and what a fresh mount starts at
+  // before any delta has ever arrived. A real `{amountMicropounds: 0,
+  // months: 0}` reading means the engine is CONNECTED and just published
+  // a genuinely clean month. Collapsing the two (the pre-fix
+  // `ps != null && ps.amountMicropounds > 0` check, which reads false
+  // for BOTH) meant a disconnect fired the exact same clear-edge as a
+  // real recovery — the feed would announce "recovered" for a city that
+  // is still starving, the moment its live-engine connection merely
+  // dropped. Fix: skip the whole transition check when ps is null (an
+  // "unknown" reading causes NEITHER a start nor a clear, and does not
+  // touch tracker.payrollShortfallActive at all) — only a real (non-null)
+  // object can ever flip the active flag in either direction.
+  const ps = sources.payrollShortfall;
+  if (ps != null) {
+    const psActive = ps.amountMicropounds > 0;
+    if (psActive && !tracker.payrollShortfallActive) {
+      tracker.payrollShortfallActive = true;
+      const monthsText = ps.months > 1 ? ` (${ps.months} months running)` : '';
+      // BUG-723 round finding F4/GR#3: the field is STILL NAMED
+      // "amountMicropounds" (finance_publish.go's wire tag, kept for
+      // backward JSON-shape compatibility) but the actual scale since
+      // BUG-452's 2026-09-01 rebase is 1,000 units per pound, not
+      // 1,000,000 — see internal/engine/finance/money.go's
+      // MicropoundsPerPound doc comment ("1 GBP = 1,000 units... was
+      // 1,000,000 pre-rebase"). fmtMoney/fmtSigned elsewhere in this file
+      // take plain pounds (see n.cash/m.cash above), so this divides by
+      // the CURRENT scale before formatting. (LiveEngineBadge.tsx's
+      // separate netWorthMicropounds / 1_000_000 display predates this
+      // discovery and is a pre-existing, pre-rebase-scale display bug —
+      // filed as BUG-723-followup rather than fixed here, out of this
+      // item's scope.)
+      const MICROPOUNDS_PER_POUND = 1_000;
+      const poundsText = fmtMoney(ps.amountMicropounds / MICROPOUNDS_PER_POUND);
+      push('payrollShortfall', 'warning', `Payroll shortfall: ${poundsText}${monthsText}. Treasury covering the gap.`);
+    } else if (!psActive && tracker.payrollShortfallActive) {
+      tracker.payrollShortfallActive = false;
+      push('payrollShortfall', 'success', 'Payroll shortfall recovered — private wages fully paid.');
     }
   }
 

@@ -302,15 +302,38 @@ export interface FinanceBalanceSheetView {
   netWorth: number;
 }
 
+/** Mirrors finance_publish.go's financePayrollShortfallView field-for-
+ * field (BUG-723: the built-but-not-wired gap where FinanceAPI.
+ * RecordPayrollShortfall (BUG-548) was set/cleared every month but
+ * nothing outside a Go test ever read it). amountMicropounds is the
+ * most recently recorded shortfall for `month` (0 means the most recent
+ * recorded month posted its full private wage bill); months is the
+ * current consecutive-shortfall streak — 0 exactly when
+ * amountMicropounds is 0, so a subscriber can tell "just cleared"
+ * (months drops to 0) from "still ongoing" (months keeps climbing). */
+export interface FinancePayrollShortfallView {
+  month: number;
+  amountMicropounds: number;
+  months: number;
+}
+
 /** Mirrors finance_publish.go's financeBalanceSheetWirePatch
- * field-for-field. Every field beyond balanceSheet is a documented
- * fast-follow on the Go side (PL/loans/creditRating/taxSliders/
- * publicPayroll/sankey) and is therefore optional here too — additive,
- * no schemaVersion bump needed when they land, mirroring the Go
- * comment's own claim exactly. */
+ * field-for-field. Every field beyond balanceSheet/payrollShortfall is a
+ * documented fast-follow on the Go side (PL/loans/creditRating/
+ * taxSliders/publicPayroll/sankey) and is therefore optional here too —
+ * additive, no schemaVersion bump needed when they land, mirroring the
+ * Go comment's own claim exactly. */
 export interface FinanceBalanceSheetPatch {
   schemaVersion: number;
   balanceSheet?: FinanceBalanceSheetView;
+  /** BUG-723 round finding F6: explicitly `| null` (not just optional) —
+   * the Go side's `*financePayrollShortfallView` with `omitempty` will
+   * never actually MARSHAL a literal JSON `null` (a nil pointer is
+   * omitted entirely, not sent as null), but this decode-boundary type
+   * describes arbitrary external JSON, not just today's one producer, so
+   * null is declared reachable here and isFinanceBalanceSheetPatch below
+   * treats it identically to "field absent" rather than rejecting it. */
+  payrollShortfall?: FinancePayrollShortfallView | null;
 }
 
 /** Runtime shape check for a decoded Delta.patch claiming to be
@@ -333,11 +356,35 @@ export function isFinanceBalanceSheetPatch(v: unknown): v is FinanceBalanceSheet
   const p = v as Record<string, unknown>;
   if (typeof p.schemaVersion !== 'number') return false;
   if (p.schemaVersion !== FINANCE_SCHEMA_VERSION) return false;
-  if (p.balanceSheet === undefined) return true; // valid: no sub-view populated this delta
-  const bs = p.balanceSheet as Record<string, unknown>;
-  if (!bs || typeof bs !== 'object') return false;
-  if (typeof bs.netWorth !== 'number') return false;
-  if (!Array.isArray(bs.assets) || !Array.isArray(bs.liabilities)) return false;
+  if (p.balanceSheet !== undefined) {
+    const bs = p.balanceSheet as Record<string, unknown>;
+    if (!bs || typeof bs !== 'object') return false;
+    if (typeof bs.netWorth !== 'number') return false;
+    if (!Array.isArray(bs.assets) || !Array.isArray(bs.liabilities)) return false;
+  }
+  // BUG-723 (GR#16: never trust the wire's claimed shape — coerce/reject
+  // at the boundary): payrollShortfall is optional (a pre-BUG-723 server
+  // build simply won't send it, same "no data this cycle" convention as
+  // every other optional section). Round finding F6: `null` is ALSO
+  // treated as "absent" here, not as a malformed shape — the TS type
+  // declares `| null` legal (see FinanceBalanceSheetPatch's doc comment),
+  // so undefined and null must decode identically rather than null
+  // rejecting the whole patch while undefined passes. Any OTHER
+  // non-object value, or an object missing/mistyping one of the three
+  // fields, still rejects the whole patch — never partially trusted,
+  // never silently coerced to NaN/undefined downstream in newsFeed.ts.
+  // (NaN/Infinity are unreachable here in practice: JSON.parse itself
+  // rejects the literals `NaN`/`Infinity` as invalid JSON syntax before
+  // this function ever runs, so a genuinely malformed number arrives as
+  // a wrong-typeof value, e.g. a string, which the typeof checks below
+  // already reject — not as a finite-but-non-finite JS number.)
+  if (p.payrollShortfall !== undefined && p.payrollShortfall !== null) {
+    const ps = p.payrollShortfall as Record<string, unknown>;
+    if (!ps || typeof ps !== 'object') return false;
+    if (typeof ps.month !== 'number') return false;
+    if (typeof ps.amountMicropounds !== 'number') return false;
+    if (typeof ps.months !== 'number') return false;
+  }
   return true;
 }
 

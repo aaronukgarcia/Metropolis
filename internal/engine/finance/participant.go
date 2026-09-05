@@ -433,6 +433,18 @@ func (f *FinanceAPI) resetForLoad() error {
 	f.backlog = 0
 	f.cremationShortfall = 0
 	f.lastCremationShortfallMonth = 0
+	// BUG-723 round finding F2: lastPayrollShortfall/lastPayrollShortfallMonth/
+	// payrollShortfallMonths are excluded from the save (participant_test.go's
+	// TestFinanceAPIFieldsAllClassified) because they are a transient
+	// this-month observability surface, not conservation-relevant ledger
+	// state — but "excluded from the save" must still mean "reset on Load",
+	// or a Load carries the PREVIOUS city's streak into the new one (a
+	// city loaded clean would report an inherited shortfall/streak from
+	// whatever the prior in-memory city was doing right up until
+	// financeHook next runs and overwrites it, up to a month later).
+	f.lastPayrollShortfall = 0
+	f.lastPayrollShortfallMonth = 0
+	f.payrollShortfallMonths = 0
 	return nil
 }
 

@@ -101,8 +101,15 @@ const (
 	// monthlyWagesFloor safety net is still guaranteed via a treasury
 	// top-up (compose.go's financeHook.ApplyEffect), so households are
 	// never left fully unpaid, but a real payroll shortfall occurred and
-	// must be USER-VISIBLE (GR#17) — compose.go surfaces this on the
-	// news/status feed, not just a log line.
+	// must be USER-VISIBLE (GR#17). Until BUG-723, this comment claimed
+	// compose.go surfaced it on the news/status feed when in fact
+	// nothing outside a test ever read RecordPayrollShortfall's state —
+	// BUG-723 closed that gap: compose's finance_publish.go now reads
+	// FinanceAPI.PayrollShortfall()/PayrollShortfallMonths() into the
+	// f2.finance wire patch's payrollShortfall field every publish tick,
+	// and the webconsole's newsFeed.ts observer turns its start/clear
+	// transitions into news entries — this MET-G217 log line is now one
+	// of two places the same failure is visible, not the only one.
 	ErrPrivateWagePayrollShortfall = "MET-G217"
 
 	// ErrModeGateFailed (FEAT-143 round finding P2-B): the injected

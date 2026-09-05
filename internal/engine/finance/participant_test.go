@@ -76,8 +76,9 @@ func TestFinanceAPIFieldsAllClassified(t *testing.T) {
 		"modeGate":                  "FEAT-143 injected Real-vs-Unlimited-Money ModeGate config (SetModeGate), wired by the composition root on load like gate -- a session's locked mode itself is feat.gameinit/feat.saveux's own save.Meta.GameMode concern (AC-4), never re-derived from this transient injected policy pointer",
 		"self":                      "SEC-020 copy-guard pointer, re-armed by NewFinanceAPI",
 		"opexCfg":                   "FEAT-094 injected OPEX balance config (SetOpexConfig/LoadOpexConfig), wired by the composition root on load like gate",
-		"lastPayrollShortfall":      "BUG-548 GR#17 status surface, transient this-month observability only (PayrollShortfall()) -- not conservation-relevant ledger state; a reload starting fresh (0, no shortfall) until financeHook next runs is an acceptable, self-correcting gap, unlike the ledger/loan/firm state this test otherwise guards",
-		"lastPayrollShortfallMonth": "BUG-548 GR#17 status surface, transient this-month observability only (PayrollShortfall()) -- see lastPayrollShortfall's exclusion reason",
+		"lastPayrollShortfall":      "BUG-548 GR#17 status surface, transient this-month observability only (PayrollShortfall()) -- not conservation-relevant ledger state, so it is not itself written to the save. BUG-723 round finding F2: this field is NOT simply left at whatever it held at save time either -- resetForLoad explicitly zeroes it (along with lastPayrollShortfallMonth/payrollShortfallMonths) BEFORE applyLoadRecord streams the saved ledger in, so a Load always starts this surface fresh (0, no shortfall) rather than carrying the PREVIOUS in-memory city's streak into the newly-loaded one. financeHook then re-derives the true value on its next run, same as before this fix -- what changed is that the gap between Load and that next run is now genuinely a fresh 0, not a stale inherited nonzero reading.",
+		"lastPayrollShortfallMonth": "BUG-548 GR#17 status surface, transient this-month observability only (PayrollShortfall()) -- see lastPayrollShortfall's exclusion reason (resetForLoad zeroes this too)",
+		"payrollShortfallMonths":    "BUG-723 GR#17 status surface, transient this-month observability only (PayrollShortfallMonths()) -- see lastPayrollShortfall's exclusion reason (resetForLoad zeroes this too)",
 		"lastModeGateErr":           "FEAT-143 round P2-B GR#17 status surface, transient observability only (ModeGateError()) -- mirrors lastPayrollShortfall's exclusion reason exactly: a reload starting fresh (nil, no recorded failure) until the next unlimitedLocked() check re-derives it is an acceptable, self-correcting gap, not conservation-relevant ledger state",
 	}
 	// Covered: serialized via financeMetaWire or a per-item record.
@@ -322,6 +323,47 @@ func TestFinanceParticipant_RoundTrip(t *testing.T) {
 	reloaded3.txns[0].Entries[0].Amount += gbp(1)
 	if reloaded3.RecomputeMoneyStock() == reloaded3.MoneyStock().Closing {
 		t.Fatalf("prove-can-fail: mutating a reloaded txn amount did not break RecomputeMoneyStock reconciliation")
+	}
+}
+
+// TestFinanceParticipant_LoadClearsPayrollShortfallStreak is BUG-723 round
+// finding F2's RED-PROOF: resetForLoad must zero lastPayrollShortfall/
+// lastPayrollShortfallMonth/payrollShortfallMonths, not just leave them at
+// whatever the pre-Load FinanceAPI instance happened to hold. Before the
+// fix (resetForLoad not touching these three fields), loading a saved
+// ledger into an ALREADY-STARVED FinanceAPI instance -- e.g. the
+// composition root reusing one *FinanceAPI across a "Load a different
+// city" action rather than always constructing fresh -- would carry the
+// PREVIOUS city's shortfall streak into the newly-loaded one, which the
+// f2.finance publish path (compose's buildFinanceBalanceSheetPatch) would
+// then report as belonging to a city that never had a payroll problem.
+func TestFinanceParticipant_LoadClearsPayrollShortfallStreak(t *testing.T) {
+	orig := NewFinanceAPI("orig")
+	driveFinance(t, orig)
+	root := saveInto(t, orig, "orig")
+
+	// Reuse ONE FinanceAPI instance across two Loads (not two freshly
+	// constructed ones) so this test actually exercises resetForLoad's
+	// clearing behaviour rather than relying on NewFinanceAPI's own
+	// zero-value fields to coincidentally pass.
+	target := NewFinanceAPI("target")
+	target.RecordPayrollShortfall(99, gbp(500))
+	if month, amount := target.PayrollShortfall(); amount != gbp(500) || month != 99 {
+		t.Fatalf("test setup: RecordPayrollShortfall did not stick — month=%d amount=%d", month, int64(amount))
+	}
+	if target.PayrollShortfallMonths() != 1 {
+		t.Fatalf("test setup: PayrollShortfallMonths() = %d, want 1", target.PayrollShortfallMonths())
+	}
+
+	mgr := save.NewManager(root, []save.Participant{NewSaveParticipant(target)}, "target")
+	_, _, err := mgr.Load(manualBundleDir(t, root))
+	ck(t, err)
+
+	if month, amount := target.PayrollShortfall(); amount != 0 || month != 0 {
+		t.Fatalf("BUG-723 F2 regression: after Load, PayrollShortfall() = (month %d, amount %d), want (0, 0) — the PREVIOUS instance's shortfall streak leaked across the Load instead of resetForLoad clearing it", month, int64(amount))
+	}
+	if got := target.PayrollShortfallMonths(); got != 0 {
+		t.Fatalf("BUG-723 F2 regression: after Load, PayrollShortfallMonths() = %d, want 0", got)
 	}
 }
 

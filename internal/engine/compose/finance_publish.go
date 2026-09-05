@@ -74,6 +74,36 @@ type financeBalanceSheetWirePatch struct {
 	// (never true after a successful Wire — wireGameInit either constructs
 	// gi or Wire itself fails).
 	UnlimitedMoney *bool `json:"unlimitedMoney,omitempty"`
+
+	// PayrollShortfall is BUG-723's fix: the built-but-not-wired gap
+	// where FinanceAPI.RecordPayrollShortfall (BUG-548) was set/cleared
+	// every month but nothing outside a test ever called
+	// FinanceAPI.PayrollShortfall()/PayrollShortfallMonths() to surface
+	// it. Mirrors the TS wire.ts FinancePayrollShortfallView copy (same
+	// GR#20-adjacent independent-duplication discipline every field on
+	// this patch follows). This function already assumes st.finance is
+	// non-nil (see AccountBalance/OutstandingDebt above, which would
+	// already have panicked otherwise), so this is populated every
+	// publish tick in production — the `omitempty` tag exists purely
+	// for wire-shape symmetry with the other optional sections.
+	PayrollShortfall *financePayrollShortfallView `json:"payrollShortfall,omitempty"`
+}
+
+// financePayrollShortfallView mirrors internal/ui/screens/finance/wire.go's
+// wirePayrollShortfallView field-for-field (BUG-723 round finding F3: this
+// comment used to claim that mirror type existed before it actually did —
+// it is now added there too, see that file). AmountMicropounds
+// is the most recently recorded shortfall for Month (0 means the most
+// recent recorded month posted its full private wage bill); Months is
+// the current consecutive-shortfall streak (FinanceAPI.
+// PayrollShortfallMonths) — 0 exactly when AmountMicropounds is 0, so a
+// subscriber can tell "just cleared" (Months drops to 0) from "still
+// ongoing" (Months keeps climbing) without re-deriving a streak from a
+// single snapshot amount.
+type financePayrollShortfallView struct {
+	Month             int64 `json:"month"`
+	AmountMicropounds int64 `json:"amountMicropounds"`
+	Months            int   `json:"months"`
 }
 
 // buildFinanceBalanceSheetPatch returns the "f2.finance" balanceSheet-only
@@ -158,9 +188,30 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 		}
 	}
 
+	// BUG-723: read FinanceAPI's monitorable payroll-shortfall surface
+	// (BUG-548's RecordPayrollShortfall) every publish tick, live, exactly
+	// like UnlimitedMoney above — never cached, so a shortfall recorded or
+	// cleared this month is reflected on the very next publish.
+	//
+	// Round finding F5: PayrollShortfallStatus() reads all three fields
+	// under ONE RLock acquisition — this publish path runs concurrently
+	// with tick-phase writes (RecordPayrollShortfall taking the write
+	// lock), so two SEPARATE calls (PayrollShortfall() then
+	// PayrollShortfallMonths()) could observe a torn snapshot if a clear
+	// landed exactly between them. See PayrollShortfallStatus's doc
+	// comment (insolvency.go) for the measured torn-read rate under
+	// concurrent load before this fix.
+	shortfallMonth, shortfallAmount, shortfallMonths := st.finance.PayrollShortfallStatus()
+	payrollShortfall := &financePayrollShortfallView{
+		Month:             shortfallMonth,
+		AmountMicropounds: int64(shortfallAmount),
+		Months:            shortfallMonths,
+	}
+
 	patch := financeBalanceSheetWirePatch{
-		SchemaVersion:  financeWireSchemaVersion,
-		UnlimitedMoney: unlimitedMoney,
+		SchemaVersion:    financeWireSchemaVersion,
+		UnlimitedMoney:   unlimitedMoney,
+		PayrollShortfall: payrollShortfall,
 		BalanceSheet: &financeBalanceSheetView{
 			Assets: []financeBalanceItem{
 				{Label: "Treasury", ValueMicropounds: int64(treasury)},

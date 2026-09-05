@@ -18,6 +18,7 @@ import {
 import { decodeFinanceBalanceSheetPatch, FINANCE_VIEW_NAME, type Delta } from '../sim/wire.ts';
 import { versionRaw } from '../sim/version.ts';
 import { isLiveEngineEnabled, resolveLiveEngineUrl } from '../sim/liveEngineFlag.ts';
+import { financeStatusTracker } from '../sim/financeStatusTracker.ts';
 
 export { LIVE_ENGINE_FLAG_KEY, LIVE_ENGINE_URL_KEY } from '../sim/liveEngineFlag.ts';
 
@@ -71,11 +72,27 @@ export function LiveEngineBadge() {
           tick: delta.tick,
           netWorthMicropounds: patch?.balanceSheet?.netWorth ?? null,
         });
+        // BUG-723 round finding F1: this badge is the ONLY current
+        // decoder of "f2.finance" patches, so it is the seam through
+        // which any other UI surface (NewsFeed.tsx) reaches live-engine
+        // finance data — mirrors queueDepth.ts's instrument-at-the-source
+        // convention. patch?.payrollShortfall ?? null covers both "no
+        // patch this cycle" (schema mismatch/decode failure) and "patch
+        // decoded but the server hasn't published this section yet".
+        financeStatusTracker.setPayrollShortfall(patch?.payrollShortfall ?? null);
       },
     });
     clientRef.current = client;
     client.connect();
-    return () => client.close();
+    // BUG-723: the tracker must not keep reporting a stale shortfall
+    // reading once this badge (the only current writer) unmounts or its
+    // connection is torn down — reset() marks "no live data" the same
+    // way the badge's own snapshot/connState fall back to their
+    // disconnected display.
+    return () => {
+      client.close();
+      financeStatusTracker.reset();
+    };
   }, [enabled]);
 
   // inc2: drives the FIRST real UI-issued command over the wire. Only

@@ -64,3 +64,14 @@ type SankeyBand struct {
 type FiscalCircuitView struct {
 	Bands []SankeyBand `json:"bands"`
 }
+
+// PayrollShortfallView is the player-facing payroll-shortfall status
+// surface (BUG-723, GR#17): the amount most recently recorded for Month
+// (0 means the most recent recorded month posted its full private wage
+// bill) and the current consecutive-shortfall streak in Months (0 exactly
+// when AmountMicropounds is 0).
+type PayrollShortfallView struct {
+	Month             int64
+	AmountMicropounds int64
+	Months            int
+}

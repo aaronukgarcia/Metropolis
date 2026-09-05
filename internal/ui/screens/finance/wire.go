@@ -48,6 +48,18 @@ type wireBalanceSheetView struct {
 	NetWorth    int64             `json:"netWorth"`
 }
 
+// wirePayrollShortfallView mirrors compose's finance_publish.go's
+// financePayrollShortfallView field-for-field (BUG-723). AmountMicropounds
+// is the most recently recorded shortfall for Month (0 means the most
+// recent recorded month posted its full private wage bill); Months is the
+// current consecutive-shortfall streak — 0 exactly when AmountMicropounds
+// is 0.
+type wirePayrollShortfallView struct {
+	Month             int64 `json:"month"`
+	AmountMicropounds int64 `json:"amountMicropounds"`
+	Months            int   `json:"months"`
+}
+
 // wireLoanState mirrors one loan's player-facing state: identity, remaining
 // principal, rate, term and the next payment due.
 type wireLoanState struct {
@@ -119,6 +131,13 @@ type wirePatch struct {
 	// gameinit.GameInit.Unlimited() (never re-derived locally; this UI
 	// package never imports internal/engine/gameinit, GR#20).
 	UnlimitedMoney *bool `json:"unlimitedMoney,omitempty"`
+
+	// PayrollShortfall is BUG-723's fix: mirrors compose's
+	// finance_publish.go's financeBalanceSheetWirePatch.PayrollShortfall
+	// field-for-field. nil (never sent, via omitempty) means "no shortfall
+	// signal this cycle" and clears the screen's have-flag exactly like
+	// every other optional section here.
+	PayrollShortfall *wirePayrollShortfallView `json:"payrollShortfall,omitempty"`
 }
 
 // decodeWirePatch validates the size and schema-version envelope, then

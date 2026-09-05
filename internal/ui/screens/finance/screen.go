@@ -66,6 +66,12 @@ type Screen struct {
 	unlimitedMoney     bool
 	haveUnlimitedMoney bool
 
+	// payrollShortfall/havePayrollShortfall (BUG-723): the GR#17 payroll-
+	// shortfall status surface, mirroring every other haveX-guarded
+	// optional section on this Screen.
+	payrollShortfall     *PayrollShortfallView
+	havePayrollShortfall bool
+
 	// engine is the diagrams layout cache, hoisted onto the Screen so it
 	// LIVES ACROSS FRAMES (BUG-316). The former per-frame diagrams.NewEngine()
 	// inside RenderSankey built a fresh empty cache every frame, so the cache
@@ -275,6 +281,17 @@ func (s *Screen) ApplyDelta(delta protocol.Delta) {
 	} else {
 		s.haveUnlimitedMoney = false
 	}
+
+	if p.PayrollShortfall != nil {
+		s.payrollShortfall = &PayrollShortfallView{
+			Month:             p.PayrollShortfall.Month,
+			AmountMicropounds: p.PayrollShortfall.AmountMicropounds,
+			Months:            p.PayrollShortfall.Months,
+		}
+		s.havePayrollShortfall = true
+	} else {
+		s.havePayrollShortfall = false
+	}
 }
 
 func (s *Screen) HaveData() bool {
@@ -444,6 +461,21 @@ func (s *Screen) UnlimitedMoney() (bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.unlimitedMoney, s.haveUnlimitedMoney
+}
+
+// PayrollShortfall returns the most recently published payroll-shortfall
+// status (BUG-723, GR#17) and whether a signal has been published at all —
+// mirrors UnlimitedMoney's have-flag contract exactly.
+func (s *Screen) PayrollShortfall() (PayrollShortfallView, bool) {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "PayrollShortfall"}); err != nil {
+		return PayrollShortfallView{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.havePayrollShortfall {
+		return PayrollShortfallView{}, false
+	}
+	return *s.payrollShortfall, true
 }
 
 func (s *Screen) BorrowLoan(send SendCommandFunc, amountMicropounds int64, termMonths int) error {

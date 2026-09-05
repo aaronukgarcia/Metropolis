@@ -107,6 +107,18 @@ type FinanceAPI struct {
 	cremationShortfall          Money
 	lastCremationShortfallMonth int64
 
+	// payrollShortfallMonths (BUG-723, 2026-09-05, GR#17): how many
+	// consecutive months (including the current one) have posted a
+	// non-zero payroll shortfall — RecordPayrollShortfall increments it
+	// on a shortfall and resets it to 0 the moment a month clears (the
+	// same clean/starved/recovered transitions lastPayrollShortfall
+	// tracks). Exists so the f2.finance publish path (compose's
+	// finance_publish.go) and the webconsole news feed can distinguish
+	// "just started" from "still ongoing" without re-deriving a streak
+	// from the single most-recent amount, which cannot tell those apart
+	// on its own. See PayrollShortfallMonths.
+	payrollShortfallMonths int
+
 	// lastModeGateErr (FEAT-143 round finding P2-B, GR#17): the
 	// USER-VISIBLE surface for the most recent modeGate.Unlimited failure
 	// -- set by unlimitedLocked (mode.go) every time the injected gate

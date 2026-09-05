@@ -95,12 +95,30 @@ func (f *FinanceAPI) AvailableCredit() Money {
 // instead. shortfall is the amount that failed to post from firms.
 // Passing a zero shortfall for the current month clears the surface (the
 // month posted its full private bill with no gap) — see PayrollShortfall.
+//
+// BUG-723 round finding F7: payrollShortfallMonths counts consecutive
+// MONTHS, not consecutive CALLS — a second call for the SAME month
+// (financeHook is only expected to call this once per month, but nothing
+// upstream enforces that, and a defensive re-post/retry path calling it
+// twice for one month must not double-count the streak) only advances
+// the counter the FIRST time that month is seen; a repeat call for a
+// month already reflected in the streak is a no-op on the counter
+// (though lastPayrollShortfall/lastPayrollShortfallMonth still take the
+// latest amount, matching the pre-existing "most recent wins" contract).
 func (f *FinanceAPI) RecordPayrollShortfall(month int64, shortfall Money) {
 	if err := f.checkNotCopied("RecordPayrollShortfall"); err != nil {
 		return
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if shortfall > 0 {
+		newMonth := f.payrollShortfallMonths == 0 || month != f.lastPayrollShortfallMonth
+		if newMonth {
+			f.payrollShortfallMonths++
+		}
+	} else {
+		f.payrollShortfallMonths = 0
+	}
 	f.lastPayrollShortfall = shortfall
 	f.lastPayrollShortfallMonth = month
 }
@@ -110,13 +128,63 @@ func (f *FinanceAPI) RecordPayrollShortfall(month int64, shortfall Money) {
 // the monitorable status surface a news feed or status line polls instead
 // of grepping the MET-G217 log line. A zero amount means the most recent
 // month posted its full private wage bill.
+//
+// BUG-723 round finding F5: delegates to PayrollShortfallStatus so the
+// month+amount pair this returns is read under the SAME RLock acquisition
+// as PayrollShortfallMonths would read the streak — see that method's
+// doc comment for why a caller needing more than one of these three
+// values together (finance_publish.go does) must call
+// PayrollShortfallStatus directly rather than composing this with
+// PayrollShortfallMonths().
 func (f *FinanceAPI) PayrollShortfall() (month int64, shortfall Money) {
 	if err := f.checkNotCopied("PayrollShortfall"); err != nil {
 		return 0, 0
 	}
+	month, shortfall, _ = f.PayrollShortfallStatus()
+	return month, shortfall
+}
+
+// PayrollShortfallMonths returns the current consecutive-months-in-
+// shortfall streak (BUG-723, GR#17): 0 means the most recent recorded
+// month cleared (or nothing has ever shortfallen); N>0 means the last N
+// consecutive DISTINCT months each carried a positive shortfall (see
+// RecordPayrollShortfall's F7 doc comment on why this is months, not
+// calls). Reset to 0 the instant a month clears, exactly like
+// PayrollShortfall's own amount.
+func (f *FinanceAPI) PayrollShortfallMonths() int {
+	if err := f.checkNotCopied("PayrollShortfallMonths"); err != nil {
+		return 0
+	}
+	_, _, months := f.PayrollShortfallStatus()
+	return months
+}
+
+// PayrollShortfallStatus (BUG-723 round finding F5) returns month, amount
+// AND the consecutive-months streak read under ONE RLock acquisition —
+// the atomic combined read finance_publish.go's publish path must use.
+// Before this existed, buildFinanceBalanceSheetPatch called
+// PayrollShortfall() and PayrollShortfallMonths() as two SEPARATE lock
+// acquisitions; the publish pump runs concurrently with tick-phase writes
+// (RecordPayrollShortfall taking the write lock in between), so a
+// shortfall clearing (RecordPayrollShortfall(month, 0)) exactly between
+// those two calls could publish a torn snapshot — a non-zero
+// lastPayrollShortfall amount from just before the clear paired with the
+// ALREADY-zeroed payrollShortfallMonths from just after it (or the
+// reverse on a fresh starve), a self-contradictory reading no real
+// FinanceAPI state ever holds (concurrent-attacker measurement: 459k/500k
+// paired reads torn under sustained concurrent RecordPayrollShortfall +
+// PayrollShortfallStatus traffic before this fix existed as a single
+// accessor). PayrollShortfall()/PayrollShortfallMonths() remain as
+// single-value convenience wrappers for callers (existing tests) that
+// only need one field and can tolerate the tiny window between two
+// separate calls.
+func (f *FinanceAPI) PayrollShortfallStatus() (month int64, shortfall Money, months int) {
+	if err := f.checkNotCopied("PayrollShortfallStatus"); err != nil {
+		return 0, 0, 0
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return f.lastPayrollShortfallMonth, f.lastPayrollShortfall
+	return f.lastPayrollShortfallMonth, f.lastPayrollShortfall, f.payrollShortfallMonths
 }
 
 // RecordCremationShortfall (BUG-733, GR#17) ACCRUES amount onto the

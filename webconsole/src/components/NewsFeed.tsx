@@ -36,6 +36,7 @@ import {
   type NewsEntry,
 } from '../sim/newsFeed';
 import { recordError } from '../sim/backend';
+import { financeStatusTracker, type FinanceStatusSnapshot } from '../sim/financeStatusTracker';
 
 const SEVERITY_LABEL: Record<NewsEntry['severity'], string> = {
   info: 'Info',
@@ -80,6 +81,20 @@ export function NewsFeed() {
     trackerRef.current = createNewsFeedTracker();
   }
 
+  // BUG-723 round finding F1: the live-Go-engine payroll-shortfall status,
+  // read from the SAME side-channel seam LiveEngineBadge.tsx already uses
+  // (financeStatusTracker.ts, mirroring queueDepth.ts's established
+  // subscribe-to-a-module-level-singleton pattern). Unlike
+  // notice/milestoneNotice/placeNotice below, this genuinely CANNOT be
+  // derived during render — it arrives asynchronously over a WebSocket,
+  // is null on the very first render (including SSR) regardless of what
+  // the live engine is doing, and there is no local mock-sim equivalent
+  // to read synchronously — so a useEffect subscription is the correct
+  // (and only) way to observe it, unlike the render-phase-derivable
+  // SimState fields.
+  const [financeStatus, setFinanceStatus] = useState<FinanceStatusSnapshot>(() => financeStatusTracker.snapshot());
+  useEffect(() => financeStatusTracker.subscribe(setFinanceStatus), []);
+
   // Deliberately a RENDER-PHASE state derivation (React's documented
   // "adjusting state when a prop changes" pattern — see "You Might Not Need
   // an Effect"), NOT a useEffect. Two reasons:
@@ -102,6 +117,7 @@ export function NewsFeed() {
     milestoneNotice: unknown;
     placeNotice: unknown;
     consolidatorLatestPass: unknown;
+    payrollShortfall: unknown;
   } | null>(null);
   // BUG-742 round P3: `state.consolidatorLog[0]` — the newest pass, which
   // may be a 'capacity unknown' skip-only entry — is journalled, plain
@@ -115,13 +131,15 @@ export function NewsFeed() {
     lastObservedRef.current.notice !== state.notice ||
     lastObservedRef.current.milestoneNotice !== state.milestoneNotice ||
     lastObservedRef.current.placeNotice !== state.placeNotice ||
-    lastObservedRef.current.consolidatorLatestPass !== consolidatorLatestPass;
+    lastObservedRef.current.consolidatorLatestPass !== consolidatorLatestPass ||
+    lastObservedRef.current.payrollShortfall !== financeStatus;
   if (sourcesChanged) {
     lastObservedRef.current = {
       notice: state.notice,
       milestoneNotice: state.milestoneNotice,
       placeNotice: state.placeNotice,
       consolidatorLatestPass,
+      payrollShortfall: financeStatus,
     };
     const nextRing = observeNews(
       {
@@ -130,6 +148,7 @@ export function NewsFeed() {
         placeNotice: state.placeNotice,
         consolidatorLatestPass,
         tick: state.tick,
+        payrollShortfall: financeStatus,
       },
       trackerRef.current,
       ring,
