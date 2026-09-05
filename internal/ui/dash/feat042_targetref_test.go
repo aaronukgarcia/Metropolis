@@ -9,16 +9,16 @@ import (
 )
 
 // TestDrillTargetFieldsMatchTargetRef is FEAT-042 AC-22's drift-prevention
-// check: dash.DrillTarget is its own independent struct rather than
-// embedding/wrapping protocol.TargetRef directly (drill.go's own doc
-// comment explains why -- DrillTarget predates TargetRef and needed its
-// own validation-carrying constructor), so this reflection-based
-// field-parity test, modeled directly on
-// TestHeaderWireFieldsMatchHeader (internal/foundation/serialize), proves
-// the two stay in lockstep field-for-field. Without this test, the two
-// structs could silently drift the next time either side adds a field --
-// exactly the shape int.serializer's Header/headerWire drift test
-// (ASM-096) exists to prevent, generalised here to a second boundary.
+// check, kept post-alias (FEAT-231/architect ruling 2026-09-05) as a
+// belt-and-braces field-parity proof even though dash.DrillTarget is now
+// a genuine type ALIAS for protocol.TargetRef (see drill_alias_test.go
+// for the identity proof) rather than the independent-but-parallel
+// struct this test originally guarded. Since an alias cannot drift from
+// its target by construction, this test is now trivially true by
+// reflection -- it stays in place so a future accidental re-fork of
+// DrillTarget into its own struct (which WOULD let the two drift) is
+// still caught here too, in addition to drill_alias_test.go's stricter
+// identity check.
 func TestDrillTargetFieldsMatchTargetRef(t *testing.T) {
 	drillType := reflect.TypeOf(dash.DrillTarget{})
 	refType := reflect.TypeOf(protocol.TargetRef{})
@@ -63,12 +63,10 @@ func TestDrillTargetFieldsMatchTargetRef(t *testing.T) {
 			t.Fatalf("dash.DrillTarget.%s has json wire name %q, want %q to match protocol.TargetRef.%s", df.Name, gotWireName, wantWireName, rf.Name)
 		}
 
-		// TargetRef.EntityID is protocol.EntityID (a defined string
-		// type); DrillTarget.EntityID is a plain string -- both are
-		// string-KINDED, which is the compatibility bar this test holds
-		// the two structs to (drill.go documents DrillTarget as expected
-		// to losslessly convert to/from TargetRef, not to share the
-		// exact same Go type for every field).
+		// Post-alias, DrillTarget.EntityID and TargetRef.EntityID are the
+		// SAME field (protocol.EntityID) by construction, not merely two
+		// string-kinded fields that happen to agree -- this check still
+		// holds trivially.
 		if df.Type.Kind() != reflect.String || rf.Type.Kind() != reflect.String {
 			t.Fatalf("dash.DrillTarget.%s (%s) and protocol.TargetRef.%s (%s) must both be string-kinded to stay losslessly convertible", df.Name, df.Type, rf.Name, rf.Type)
 		}

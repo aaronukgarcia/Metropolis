@@ -36,7 +36,7 @@ func TestDrillTargets_EveryFigureTracesToTheProjectionsView(t *testing.T) {
 		if dt.ViewName != ViewSubscriptionName {
 			t.Errorf("curve %q ViewName = %q, want %q", c.Key, dt.ViewName, ViewSubscriptionName)
 		}
-		if dt.EntityID != "curve."+c.Key {
+		if dt.EntityID != protocol.EntityID("curve."+c.Key) {
 			t.Errorf("curve %q EntityID = %q, want %q", c.Key, dt.EntityID, "curve."+c.Key)
 		}
 	}
@@ -46,7 +46,7 @@ func TestDrillTargets_EveryFigureTracesToTheProjectionsView(t *testing.T) {
 		if dt.ViewName != ViewSubscriptionName {
 			t.Errorf("crossing %q ViewName = %q, want %q", x.Key, dt.ViewName, ViewSubscriptionName)
 		}
-		if dt.EntityID != "crossing."+x.Key {
+		if dt.EntityID != protocol.EntityID("crossing."+x.Key) {
 			t.Errorf("crossing %q EntityID = %q, want %q", x.Key, dt.EntityID, "crossing."+x.Key)
 		}
 	}

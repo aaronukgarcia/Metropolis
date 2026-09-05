@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
@@ -23,7 +24,7 @@ func TestAuditDrillCoverage_ReachesTableRowsAndDiagramHits(t *testing.T) {
 	for i := range rows {
 		rows[i] = TableRow{
 			Cells: []string{string(rune('a' + i)), "100"},
-			Drill: DrillTarget{ViewName: "f2.ledger", EntityID: "line-" + strconv.Itoa(i)},
+			Drill: DrillTarget{ViewName: "f2.ledger", EntityID: protocol.EntityID("line-" + strconv.Itoa(i))},
 		}
 	}
 	tableTile, err := NewTableTile("tbl", ledger, TableSpec{
@@ -39,7 +40,7 @@ func TestAuditDrillCoverage_ReachesTableRowsAndDiagramHits(t *testing.T) {
 	for i := range hits {
 		hits[i] = DiagramHit{
 			SourceID: "E" + strconv.Itoa(i),
-			Drill:    DrillTarget{ViewName: "f2.ledger", EntityID: "edge-" + strconv.Itoa(i)},
+			Drill:    DrillTarget{ViewName: "f2.ledger", EntityID: protocol.EntityID("edge-" + strconv.Itoa(i))},
 		}
 	}
 	diagramTile, err := NewDiagramTile("dia", ledger, DiagramSpec{Hits: hits})

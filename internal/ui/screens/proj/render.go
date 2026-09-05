@@ -6,6 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
@@ -369,10 +370,10 @@ func RenderSlowFuse(buf *core.Buffer, rect core.Rect, consequence Consequence, p
 func DrillTargets(curves []Curve, crossings []Crossing) []dash.DrillTarget {
 	out := make([]dash.DrillTarget, 0, len(curves)+len(crossings)+1)
 	for _, c := range curves {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "curve." + c.Key})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("curve." + c.Key)})
 	}
 	for _, x := range crossings {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "crossing." + x.Key})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("crossing." + x.Key)})
 	}
 	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "rate"})
 	return out

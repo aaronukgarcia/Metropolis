@@ -49,3 +49,26 @@ func TestDrillTarget_ZeroValueIsInvalid(t *testing.T) {
 		t.Fatal("zero DrillTarget reported Valid, want false")
 	}
 }
+
+// TestNewDrillTarget_RejectsHostileEntityID closes the FEAT-042 round's P3
+// finding: NewDrillTarget validated ViewName but not EntityID, so a
+// malformed/hostile EntityID (whitespace, a control character, or a
+// leading separator the int.protocol EntityID grammar rejects) was
+// silently carried through into a DrillTarget instead of being caught at
+// construction time. protocol.ValidateEntityID is now wired into
+// NewDrillTarget (drill.go) for exactly this reason.
+func TestNewDrillTarget_RejectsHostileEntityID(t *testing.T) {
+	for _, bad := range []string{
+		" leading-space",
+		"trailing-space ",
+		"has space",
+		"\tcontrol-tab",
+		"\x00null-byte",
+		".leading-dot",
+		"-leading-dash",
+	} {
+		if _, err := dash.NewDrillTarget("f2.ledger", bad); err == nil {
+			t.Fatalf("NewDrillTarget(%q) returned nil error, want rejection of the hostile EntityID", bad)
+		}
+	}
+}

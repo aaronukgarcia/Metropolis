@@ -5,6 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
@@ -281,10 +282,10 @@ func RenderDemolition(buf *core.Buffer, rect core.Rect, dem DemolitionView, have
 func DrillTargets(orders []BuildOrder, entries []CatalogueEntry) []dash.DrillTarget {
 	var out []dash.DrillTarget
 	for _, o := range orders {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: fmt.Sprintf("queue.%d", o.ID)})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID(fmt.Sprintf("queue.%d", o.ID))})
 	}
 	for _, e := range entries {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "catalogue." + e.ID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("catalogue." + e.ID)})
 	}
 	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "landPrice"})
 	return out

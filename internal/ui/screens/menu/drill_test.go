@@ -109,7 +109,7 @@ func TestDrillTargets_SaveSlotResolvesToRegisteredViewport(t *testing.T) {
 	if slot.EntityID != "" {
 		t.Errorf("save slot EntityID = %q, want empty (whole f1.viewport view)", slot.EntityID)
 	}
-	if _, err := dash.NewDrillTarget(slot.ViewName, slot.EntityID); err != nil {
+	if _, err := dash.NewDrillTarget(slot.ViewName, string(slot.EntityID)); err != nil {
 		t.Errorf("save slot target (%q, %q) is not a valid dash.DrillTarget: %v", slot.ViewName, slot.EntityID, err)
 	}
 	res := dash.NewMapResolver()

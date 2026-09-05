@@ -3,6 +3,7 @@ package districts
 import (
 	"fmt"
 
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 	"github.com/gdamore/tcell/v2"
@@ -108,7 +109,7 @@ const financeJumpView = "f2.finance"
 // drill-through (the specific incidence entry) is separately blocked by
 // ASM-275 -- see AC-7/doc.go.
 func FinanceJumpTarget(districtID string) dash.DrillTarget {
-	return dash.DrillTarget{ViewName: financeJumpView, EntityID: "district." + districtID + ".tax-revenue"}
+	return dash.DrillTarget{ViewName: financeJumpView, EntityID: protocol.EntityID("district." + districtID + ".tax-revenue")}
 }
 
 // DrillTargets returns AC-7's whole-view drill-through source identities
@@ -123,7 +124,7 @@ func DrillTargets(settings []DistrictTaxSetting) []dash.DrillTarget {
 	var out []dash.DrillTarget
 	seenDistrict := make(map[string]bool)
 	for _, s := range settings {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "tax." + s.DistrictID + "." + s.InstrumentID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("tax." + s.DistrictID + "." + s.InstrumentID)})
 		if !seenDistrict[s.DistrictID] {
 			seenDistrict[s.DistrictID] = true
 			out = append(out, FinanceJumpTarget(s.DistrictID))

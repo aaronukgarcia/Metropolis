@@ -5,6 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 )
@@ -222,7 +223,7 @@ func DrillTargets(stories []Story) []dash.DrillTarget {
 	for _, st := range stories {
 		out = append(out, dash.DrillTarget{
 			ViewName: drillViewNewsEvent,
-			EntityID: st.EventID,
+			EntityID: protocol.EntityID(st.EventID),
 		})
 	}
 	return out

@@ -34,9 +34,9 @@ func TestDashRegistration_EveryFigureHasDrillTarget(t *testing.T) {
 		}
 		switch {
 		case len(tgt.EntityID) > 4 && tgt.EntityID[:4] == "kpi.":
-			seenKPI[tgt.EntityID[4:]] = true
+			seenKPI[string(tgt.EntityID[4:])] = true
 		case len(tgt.EntityID) > 4 && tgt.EntityID[:4] == "bio.":
-			seenFacet[tgt.EntityID] = true
+			seenFacet[string(tgt.EntityID)] = true
 		}
 	}
 	for _, k := range kpis {

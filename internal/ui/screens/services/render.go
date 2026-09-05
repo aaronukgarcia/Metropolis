@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
@@ -195,16 +196,16 @@ func RenderPublicServicePie(buf *core.Buffer, rect core.Rect, pie PublicServiceP
 func DrillTargets(sliders []ServiceSlider, cd []CapacityDemand, rt []ResponseTimeStat, wl []WaitingList) []dash.DrillTarget {
 	var out []dash.DrillTarget
 	for _, sl := range sliders {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "slider." + sl.ID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("slider." + sl.ID)})
 	}
 	for _, c := range cd {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "capacity." + c.ServiceID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("capacity." + c.ServiceID)})
 	}
 	for _, r := range rt {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "response." + r.ServiceID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("response." + r.ServiceID)})
 	}
 	for _, w := range wl {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "waiting." + w.ID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("waiting." + w.ID)})
 	}
 	return out
 }

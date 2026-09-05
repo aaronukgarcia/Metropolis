@@ -27,7 +27,7 @@ func TestFinanceJumpTarget_NamesARealRegisteredView(t *testing.T) {
 	if target.EntityID != "district.harbour.tax-revenue" {
 		t.Errorf("FinanceJumpTarget EntityID = %q, want %q", target.EntityID, "district.harbour.tax-revenue")
 	}
-	if _, err := dash.NewDrillTarget(target.ViewName, target.EntityID); err != nil {
+	if _, err := dash.NewDrillTarget(target.ViewName, string(target.EntityID)); err != nil {
 		t.Errorf("FinanceJumpTarget(%q) is not a valid dash.DrillTarget: %v", "harbour", err)
 	}
 }

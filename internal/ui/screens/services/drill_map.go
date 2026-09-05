@@ -1,6 +1,9 @@
 package services
 
-import "github.com/aaronukgarcia/Metropolis/internal/ui/dash"
+import (
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
+)
 
 // coverageJumpView is the drill-through destination view name SVC-3's
 // coverage-map jump names: the F1 map viewport ("f1.viewport"), the
@@ -34,5 +37,5 @@ const coverageJumpView = "f1.viewport"
 // Bill as a BUG-058-adjacent candidate: SVC-3 cannot be closed until
 // ui.screen.map's AC-3 lands.
 func CoverageJumpTarget(serviceID string) dash.DrillTarget {
-	return dash.DrillTarget{ViewName: coverageJumpView, EntityID: "coverage." + serviceID}
+	return dash.DrillTarget{ViewName: coverageJumpView, EntityID: protocol.EntityID("coverage." + serviceID)}
 }

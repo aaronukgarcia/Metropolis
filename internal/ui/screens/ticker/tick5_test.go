@@ -78,7 +78,7 @@ func TestTIK5_EveryRenderedStoryTracesToAnEventID(t *testing.T) {
 		t.Fatalf("DrillTargets produced %d targets for %d stories, want one each", len(targets), len(all))
 	}
 	for i, dt := range targets {
-		if dt.EntityID != all[i].EventID {
+		if dt.EntityID != protocol.EntityID(all[i].EventID) {
 			t.Errorf("DrillTarget %d EntityID = %q, want the story's event ID %q", i, dt.EntityID, all[i].EventID)
 		}
 		if err := protocol.ValidateViewName(dt.ViewName); err != nil {

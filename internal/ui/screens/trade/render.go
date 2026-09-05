@@ -6,6 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
@@ -362,29 +363,29 @@ func RenderSafety(buf *core.Buffer, rect core.Rect, corridors []SafetyCorridor, 
 func DrillTargets(contracts []ImportContract, junctions []JunctionQueue, warehouse []WarehouseCommodity, balance BalanceOfTradeView, safety []SafetyCorridor) []dash.DrillTarget {
 	var out []dash.DrillTarget
 	for _, c := range contracts {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "contract." + c.ID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("contract." + c.ID)})
 	}
 	for _, j := range junctions {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "junction." + j.JunctionID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("junction." + j.JunctionID)})
 	}
 	for _, w := range warehouse {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "warehouse." + w.Commodity})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("warehouse." + w.Commodity)})
 	}
 	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "port"})
 	for _, f := range balance.Imports.ByCommodity {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "import.commodity." + f.Key})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("import.commodity." + f.Key)})
 	}
 	for _, f := range balance.Imports.ByArtery {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "import.artery." + f.Key})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("import.artery." + f.Key)})
 	}
 	for _, f := range balance.Exports.ByCommodity {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "export.commodity." + f.Key})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("export.commodity." + f.Key)})
 	}
 	for _, f := range balance.Exports.ByArtery {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "export.artery." + f.Key})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("export.artery." + f.Key)})
 	}
 	for _, c := range safety {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "safety." + c.Corridor})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("safety." + c.Corridor)})
 	}
 	return out
 }

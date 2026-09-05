@@ -2,14 +2,28 @@ package viewgate
 
 // FEAT-231 increment V2 — the "one DrillTarget type" static gate.
 //
-// Doctrine (FEAT-042 SSOT): the drill-through carrier — a (ViewName,
+// Doctrine (FEAT-042 SSOT, moved to internal/protocol by the architect
+// ruling of 2026-09-05): the drill-through carrier — a (ViewName,
 // EntityID) pair naming "the thing Enter navigates to" — must exist as
-// exactly ONE type in the whole engine/UI tree: dash.DrillTarget, declared
-// in internal/ui/dash (drill.go). A second, locally-declared
-// (ViewName, EntityID) struct anywhere else silently fragments that SSOT:
-// two carriers drift apart, and a tile built around the rogue one is not
-// the tile the drill/audit machinery understands. This gate fails `go test`
-// the moment such a second carrier appears, before it can ship.
+// exactly ONE type in the whole engine/UI tree: protocol.TargetRef,
+// declared in internal/protocol (entity.go). ui.dash.DrillTarget is a
+// type ALIAS for protocol.TargetRef (`type DrillTarget =
+// protocol.TargetRef`, drill.go) — the same type under a second name,
+// not a second carrier, so it does not and must not itself appear as a
+// struct declaration for this scanner to find (an alias has no fields of
+// its own). A second, locally-declared (ViewName, EntityID) struct
+// anywhere else silently fragments that SSOT: two carriers drift apart,
+// and a tile built around the rogue one is not the tile the drill/audit
+// machinery understands. This gate fails `go test` the moment such a
+// second carrier appears, before it can ship.
+//
+// History: V2 originally sanctioned dash.DrillTarget itself as the one
+// true carrier (FEAT-042 landed protocol.TargetRef alongside it as a
+// second, wire-shaped carrier, which is what first tripped this gate).
+// The architect ruling moved the SSOT DOWN to the protocol layer instead
+// of leaving two structs to reconcile, and repointed dash.DrillTarget at
+// it via alias so every existing dash consumer keeps compiling
+// unchanged.
 //
 // Like V1 this is a pure SOURCE scanner (walkGoSourceFiles, shared with the
 // one-view-registry gate): it never imports dash or engine at runtime, so
@@ -34,10 +48,13 @@ package viewgate
 //     (`type NavTarget struct { ViewName string; Row int }`) that Rule A's
 //     both-fields test would miss.
 //
-// The ONE sanctioned declaration: a type named "DrillTarget" declared under
-// internal/ui/dash/. Anything else that matches Rule A or Rule B fails
-// closed. Note deliberate NON-matches that keep the gate from
-// false-positiving on legitimate neighbours:
+// The ONE sanctioned declaration: a type named "TargetRef" declared under
+// internal/protocol/. Anything else that matches Rule A or Rule B fails
+// closed — including a hypothetical struct (re-)declaration named
+// "DrillTarget", since the sanctioned dash name is now an alias, not a
+// struct, and does not itself match the scanner's shape at all. Note
+// deliberate NON-matches that keep the gate from false-positiving on
+// legitimate neighbours:
 //
 //   - protocol.SubscribePayload (ViewName + Params) — a view name but no
 //     entity id and not a *Target name: it is the wire command, not a
@@ -46,12 +63,6 @@ package viewgate
 //     name: engine-side source references, not drill carriers.
 //   - unlocks.ForceTarget (Tier + NodeID) — a *Target name but no view-name
 //     field: an unlock selector, not a drill carrier.
-//
-// TODO(FEAT-042): protocol.TargetRef is the intended future sanctioned
-// carrier. When it lands, add internal/protocol as a second sanctioned
-// location here (extend sanctionedDrillCarrier), and treat a "TargetRef"-
-// named struct there the way "DrillTarget" in dash is treated now. Do NOT
-// block V2 on FEAT-042 — today dash is the only sanctioned home.
 
 import (
 	"fmt"
@@ -166,15 +177,18 @@ func scanDrillCarriers(t testing.TB, repoRoot string, dirs ...string) []drillCar
 }
 
 // sanctionedDrillCarrier reports whether a matched carrier is THE one
-// blessed declaration: a type named "DrillTarget" under internal/ui/dash/.
+// blessed declaration: a type named "TargetRef" under internal/protocol/.
 // This is the doctrine constant (the single sanctioned home), not derived
 // data — analogous to V1 naming the single sanctioned registry.
 //
-// TODO(FEAT-042): add (TypeName=="TargetRef", under internal/protocol/)
-// here once protocol.TargetRef lands.
+// dash.DrillTarget is deliberately NOT named here: it is a type alias
+// (`type DrillTarget = protocol.TargetRef`), which has no field list of
+// its own, so scanDrillCarriers structurally cannot observe it as a
+// carrier in the first place — there is nothing for this predicate to
+// bless or reject at that name/location.
 func sanctionedDrillCarrier(c drillCarrier) bool {
-	return c.TypeName == "DrillTarget" &&
-		strings.HasPrefix(c.File, "internal/ui/dash/")
+	return c.TypeName == "TargetRef" &&
+		strings.HasPrefix(c.File, "internal/protocol/")
 }
 
 // verifyDrillCarriers is the pure check: given every matched carrier and
@@ -199,9 +213,10 @@ func verifyDrillCarriers(found []drillCarrier, sanctioned func(drillCarrier) boo
 		}
 		violations = append(violations, fmt.Sprintf(
 			"%s:%d: type %s %s — a second (ViewName, EntityID) drill carrier fragments the drill SSOT. "+
-				"There must be exactly one such type, dash.DrillTarget in internal/ui/dash (FEAT-042/FEAT-231 "+
-				"one-DrillTarget-type doctrine). Reuse dash.DrillTarget instead of declaring a local carrier; "+
-				"if this is a sanctioned new home (e.g. protocol.TargetRef), extend sanctionedDrillCarrier",
+				"There must be exactly one such type, protocol.TargetRef in internal/protocol (FEAT-042/FEAT-231 "+
+				"one-DrillTarget-type doctrine, home moved here by the 2026-09-05 architect ruling). Reuse "+
+				"protocol.TargetRef (or dash.DrillTarget, its alias) instead of declaring a local carrier; "+
+				"if this is a sanctioned new home, extend sanctionedDrillCarrier",
 			c.File, c.Line, c.TypeName, why))
 	}
 	return violations
@@ -211,12 +226,13 @@ func verifyDrillCarriers(found []drillCarrier, sanctioned func(drillCarrier) boo
 
 // TestNoSecondDrillTargetType is the FEAT-231 V2 gate: the only
 // (ViewName, EntityID) carrier type under internal/ or cmd/ is
-// dash.DrillTarget. Any other matching struct fails closed.
+// protocol.TargetRef (ui.dash.DrillTarget is its alias, not a second
+// carrier — see the file doc). Any other matching struct fails closed.
 func TestNoSecondDrillTargetType(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	found := scanDrillCarriers(t, repoRoot, "internal", "cmd")
 
-	// Non-vacuous: the scanner MUST observe the sanctioned dash.DrillTarget
+	// Non-vacuous: the scanner MUST observe the sanctioned protocol.TargetRef
 	// in the live tree. If it does not, the scanner is broken (walk paths,
 	// field detection, repoRoot) rather than the tree having no carrier —
 	// and a broken scanner that sees nothing would pass trivially.
@@ -228,7 +244,7 @@ func TestNoSecondDrillTargetType(t *testing.T) {
 		}
 	}
 	if !sawSanctioned {
-		t.Fatalf("scanDrillCarriers did not find dash.DrillTarget in the live tree — the scanner is broken, not that the carrier vanished; got %d carrier(s): %+v", len(found), found)
+		t.Fatalf("scanDrillCarriers did not find protocol.TargetRef in the live tree — the scanner is broken, not that the carrier vanished; got %d carrier(s): %+v", len(found), found)
 	}
 
 	violations := verifyDrillCarriers(found, sanctionedDrillCarrier)
@@ -242,12 +258,12 @@ func TestNoSecondDrillTargetType(t *testing.T) {
 // fixture source tree the scanner actually reads (BUG-230). ---
 
 // TestVerifyDrillCarriers_CatchesRogue proves the pure check flags an
-// unsanctioned carrier and passes the sanctioned dash one — i.e. the
+// unsanctioned carrier and passes the sanctioned protocol one — i.e. the
 // sanctioned predicate is load-bearing.
 func TestVerifyDrillCarriers_CatchesRogue(t *testing.T) {
-	sanctioned := []drillCarrier{{TypeName: "DrillTarget", File: "internal/ui/dash/drill.go", Line: 19, HasViewName: true, HasEntityID: true}}
+	sanctioned := []drillCarrier{{TypeName: "TargetRef", File: "internal/protocol/entity.go", Line: 76, HasViewName: true, HasEntityID: true}}
 	if v := verifyDrillCarriers(sanctioned, sanctionedDrillCarrier); len(v) != 0 {
-		t.Fatalf("expected the sanctioned dash.DrillTarget to pass, got: %v", v)
+		t.Fatalf("expected the sanctioned protocol.TargetRef to pass, got: %v", v)
 	}
 
 	rogue := []drillCarrier{{TypeName: "FakeDrill", File: "internal/engine/foo/bar.go", Line: 7, HasViewName: true, HasEntityID: true}}
@@ -261,11 +277,18 @@ func TestVerifyDrillCarriers_CatchesRogue(t *testing.T) {
 		}
 	}
 
-	// A DrillTarget name OUTSIDE dash is NOT sanctioned (the location, not
-	// just the name, is what blesses it).
-	elsewhere := []drillCarrier{{TypeName: "DrillTarget", File: "internal/engine/foo/drill.go", Line: 3, HasViewName: true, HasEntityID: true}}
+	// A TargetRef name OUTSIDE internal/protocol is NOT sanctioned (the
+	// location, not just the name, is what blesses it) — and, symmetrically,
+	// a struct literally named "DrillTarget" is now just an ordinary rogue
+	// name (dash's own DrillTarget is an alias with no fields, so it can
+	// never appear here as a scanned struct).
+	elsewhere := []drillCarrier{{TypeName: "TargetRef", File: "internal/engine/foo/drill.go", Line: 3, HasViewName: true, HasEntityID: true}}
 	if v := verifyDrillCarriers(elsewhere, sanctionedDrillCarrier); len(v) != 1 {
-		t.Fatalf("expected a DrillTarget outside dash to be flagged, got %d: %v", len(v), v)
+		t.Fatalf("expected a TargetRef outside internal/protocol to be flagged, got %d: %v", len(v), v)
+	}
+	reforkedDrillTarget := []drillCarrier{{TypeName: "DrillTarget", File: "internal/ui/dash/drill.go", Line: 19, HasViewName: true, HasEntityID: true}}
+	if v := verifyDrillCarriers(reforkedDrillTarget, sanctionedDrillCarrier); len(v) != 1 {
+		t.Fatalf("expected a struct literally named DrillTarget (a re-fork away from the alias) to be flagged, got %d: %v", len(v), v)
 	}
 }
 

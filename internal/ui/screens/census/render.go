@@ -3,6 +3,7 @@ package census
 import (
 	"fmt"
 
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
@@ -316,12 +317,12 @@ func RenderEducationCrimeLinkage(buf *core.Buffer, rect core.Rect, link Educatio
 func DrillTargets(kpis []KPITile, bio CitizenBio, haveBio bool) []dash.DrillTarget {
 	var out []dash.DrillTarget
 	for _, k := range kpis {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "kpi." + k.Key})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("kpi." + k.Key)})
 	}
 	if haveBio && bio.GUID != "" {
 		facets := []string{"education", "employment", "family", "retirement", "income"}
 		for _, f := range facets {
-			out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "bio." + bio.GUID + "." + f})
+			out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("bio." + bio.GUID + "." + f)})
 		}
 	}
 	return out

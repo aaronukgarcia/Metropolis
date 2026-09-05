@@ -117,7 +117,7 @@ func (m *MapResolver) Mark(target DrillTarget) {
 	if err := m.checkNotCopied(corr(), map[string]any{"method": "Mark"}); err != nil {
 		return
 	}
-	m.live[target.ViewName+"\x00"+target.EntityID] = true
+	m.live[target.ViewName+"\x00"+string(target.EntityID)] = true
 }
 
 // Resolve implements Resolver.
@@ -130,7 +130,7 @@ func (m *MapResolver) Resolve(target DrillTarget) bool {
 	if err := m.checkNotCopied(corr(), map[string]any{"method": "Resolve"}); err != nil {
 		return false
 	}
-	return m.live[target.ViewName+"\x00"+target.EntityID]
+	return m.live[target.ViewName+"\x00"+string(target.EntityID)]
 }
 
 // Dashboard is one screen's dashboard: a Layout plus the navigation and

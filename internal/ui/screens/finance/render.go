@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/diagrams"
@@ -251,29 +252,29 @@ func (s *Screen) RenderSankey(buf *core.Buffer, rect core.Rect, sankey FiscalCir
 func DrillTargets(pl PLView, bs BalanceSheetView, loans []LoanState, sliders []TaxSliderState, payroll PublicPayrollView, sankey FiscalCircuitView, rating int) []dash.DrillTarget {
 	var out []dash.DrillTarget
 	for _, r := range pl.Revenues {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "pl.revenue." + r.Label})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("pl.revenue." + r.Label)})
 	}
 	for _, e := range pl.Expenses {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "pl.expense." + e.Label})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("pl.expense." + e.Label)})
 	}
 	for _, a := range bs.Assets {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "balance.asset." + a.Label})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("balance.asset." + a.Label)})
 	}
 	for _, l := range bs.Liabilities {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "balance.liability." + l.Label})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("balance.liability." + l.Label)})
 	}
 	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "balance.net_worth"})
 	for _, l := range loans {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "loan." + l.ID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("loan." + l.ID)})
 	}
 	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "credit.rating"})
 	for _, s := range sliders {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "tax.slider." + s.ID})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("tax.slider." + s.ID)})
 	}
 	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "payroll.gross"})
 	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "payroll.clawback"})
 	for _, b := range sankey.Bands {
-		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "sankey." + b.Source + "." + b.Target})
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: protocol.EntityID("sankey." + b.Source + "." + b.Target)})
 	}
 	return out
 }

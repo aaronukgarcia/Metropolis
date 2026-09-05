@@ -10,47 +10,58 @@ import (
 // rule's carrier (AC-4/AC-5), a (ViewName, EntityID) pair as described
 // in the package doc.
 //
+// DrillTarget is a type ALIAS for protocol.TargetRef (FEAT-231 V2 /
+// architect ruling 2026-09-05): the SSOT carrier for the
+// (ViewName, EntityID) drill-through pair lives at the protocol layer
+// now, since FEAT-042 needed the same shape on the wire and a second,
+// structurally-identical carrier would fragment the one-DrillTarget-type
+// doctrine (viewgate's TestNoSecondDrillTargetType). An alias is the
+// exact same type as protocol.TargetRef — not a copy, not a convertible
+// sibling — so every existing dash consumer (New<Kind>Tile, Dashboard.Drill,
+// profile JSON round-trip) keeps working unchanged, and the two names can
+// never drift apart. See drill_alias_test.go for the compile-time /
+// reflect-identity proof nobody can quietly re-fork this.
+//
 // DrillTarget is deliberately a plain, exported value type (so it can
 // round-trip profile JSON and be compared with ==), but it is never
 // valid as its zero value: ViewName must be a non-empty, grammar-valid
 // protocol view name. Callers reach it through NewDrillTarget, which
 // validates, or through a New<Kind>Tile constructor, which validates it
 // again on the way into a Tile (AC-4).
-type DrillTarget struct {
-	// ViewName is an int.protocol view name (protocol.ValidateViewName).
-	// Whole-entity targets use the entity-scoped grammar
-	// (e.g. "junction.14.approaches"); a screen-scoped dashboard uses an
-	// F-screen key (e.g. "f1.viewport").
-	ViewName string `json:"viewName"`
-
-	// EntityID optionally names a sub-entity or row within ViewName's
-	// view (a ledger line, a diagram arrow). Empty means "the whole
-	// view". It is opaque and engine-defined; this package does not
-	// parse it beyond non-emptiness.
-	EntityID string `json:"entityId,omitempty"`
-}
+//
+// Field docs (see protocol.TargetRef for the canonical declaration):
+//   - ViewName is an int.protocol view name (protocol.ValidateViewName).
+//     Whole-entity targets use the entity-scoped grammar
+//     (e.g. "junction.14.approaches"); a screen-scoped dashboard uses an
+//     F-screen key (e.g. "f1.viewport").
+//   - EntityID optionally names a sub-entity or row within ViewName's
+//     view (a ledger line, a diagram arrow). Empty means "the whole
+//     view". It is a protocol.EntityID (opaque, engine-defined) rather
+//     than a plain string; this package validates it via
+//     protocol.ValidateEntityID when non-empty (AC-20 closeout).
+type DrillTarget = protocol.TargetRef
 
 // NewDrillTarget constructs a DrillTarget, validating viewName against
-// int.protocol's view-name grammar. entityID is optional (empty means
-// "whole view"); a non-empty entityID is carried through unchanged. A
-// zero/empty viewName, or one that fails grammar validation, returns a
-// registry-sourced error (MET-U602 / MET-U603) rather than a silently
-// unusable target.
+// int.protocol's view-name grammar and, when non-empty, entityID against
+// int.protocol's EntityID grammar (protocol.ValidateEntityID — FEAT-042
+// AC-20 closeout: a hostile/malformed entityID is rejected at
+// construction time rather than silently carried through). entityID is
+// optional (empty means "whole view"). A zero/empty viewName, or one
+// that fails grammar validation, returns a registry-sourced error
+// (MET-U602 / MET-U603); a non-empty entityID that fails
+// protocol.ValidateEntityID returns MET-P003 (protocol.ErrInvalidEntityID).
 func NewDrillTarget(viewName, entityID string) (DrillTarget, error) {
-	d := DrillTarget{ViewName: viewName, EntityID: entityID}
+	d := DrillTarget{ViewName: viewName, EntityID: protocol.EntityID(entityID)}
 	if err := requireDrill(d, nil); err != nil {
 		return DrillTarget{}, err
 	}
+	if entityID != "" {
+		if err := protocol.ValidateEntityID(d.EntityID); err != nil {
+			return DrillTarget{}, err
+		}
+	}
 	return d, nil
 }
-
-// Valid reports whether t is a resolvable drill target: it has a
-// non-empty ViewName. This is the lenient "is there something to resolve
-// at all" check AuditDrillCoverage uses — grammar strictness is
-// NewDrillTarget's/New<Kind>Tile's job at construction time, while a
-// zero-value target (e.g. one that slipped in via a corrupt profile
-// decode) is exactly the dead end the audit exists to surface.
-func (t DrillTarget) Valid() bool { return t.ViewName != "" }
 
 // requireDrill is the shared construction-time validation: a DrillTarget
 // must name a real view. Empty view name -> MET-U602; grammar failure ->

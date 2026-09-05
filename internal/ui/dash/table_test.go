@@ -48,7 +48,7 @@ func TestTableSortPreservesDrillTargets(t *testing.T) {
 	wantOrder := []string{"line-alpha", "line-bravo", "line-charlie", "line-delta"}
 	got := make([]string, 0, 4)
 	for _, idx := range order {
-		got = append(got, spec.Visible([]int{idx})[0].Drill.EntityID)
+		got = append(got, string(spec.Visible([]int{idx})[0].Drill.EntityID))
 	}
 	for i := range wantOrder {
 		if got[i] != wantOrder[i] {
@@ -72,7 +72,7 @@ func TestTableFilterPreservesDrillTargets(t *testing.T) {
 	// original DrillTarget — no row is rebuilt without its drill.
 	seen := map[string]bool{}
 	for _, row := range spec.Visible(filtered) {
-		seen[row.Drill.EntityID] = true
+		seen[string(row.Drill.EntityID)] = true
 	}
 	for _, want := range []string{"line-alpha", "line-bravo", "line-charlie", "line-delta"} {
 		if !seen[want] {

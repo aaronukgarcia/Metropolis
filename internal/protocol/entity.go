@@ -85,6 +85,21 @@ type TargetRef struct {
 	EntityID EntityID `json:"entityId,omitempty"`
 }
 
+// Valid reports whether t is a resolvable drill target: it has a
+// non-empty ViewName. This is the lenient "is there something to resolve
+// at all" check callers (ui.dash's AuditDrillCoverage, engine.social's
+// category/destination checks) use — grammar strictness is
+// ui.dash.NewDrillTarget's/New<Kind>Tile's job at construction time,
+// while a zero-value target (e.g. one that slipped in via a corrupt
+// profile decode) is exactly the dead end an audit exists to surface.
+//
+// Lives here (not in ui.dash) because ui.dash.DrillTarget is a type
+// ALIAS for TargetRef (FEAT-231 one-DrillTarget-type doctrine,
+// architect ruling 2026-09-05) — a method on an alias's target type must
+// be declared where the underlying type is defined, and the alias
+// automatically carries every method its target type has.
+func (t TargetRef) Valid() bool { return t.ViewName != "" }
+
 // Worked example (FEAT-042 AC-23): a view's patch schema wanting its
 // ledger lines individually drillable — UI-SPEC §4's "a cash figure
 // opens its ledger lines" — would embed a TargetRef{ViewName: "f2.ledger",

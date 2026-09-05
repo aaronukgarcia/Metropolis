@@ -27,7 +27,7 @@ func TestCoverageJumpTarget_NamesARealRegisteredView(t *testing.T) {
 	if target.EntityID != "coverage.police" {
 		t.Errorf("CoverageJumpTarget EntityID = %q, want %q", target.EntityID, "coverage.police")
 	}
-	if _, err := dash.NewDrillTarget(target.ViewName, target.EntityID); err != nil {
+	if _, err := dash.NewDrillTarget(target.ViewName, string(target.EntityID)); err != nil {
 		t.Errorf("CoverageJumpTarget(%q) is not a valid dash.DrillTarget: %v", "police", err)
 	}
 }
