@@ -291,17 +291,23 @@ jobs:
               --set-env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret"
           else
             echo "Container App does not exist — creating it (first inc1 deploy)."
-            # NOTE (review before first run): --azure-file-volume-* flags and
-            # --sticky-sessions are correct as of az cli's containerapp
-            # extension circa 2026-Q1; RE-VERIFY against
-            # `az containerapp create --help` on the actual runner's az cli
-            # version before the first real dispatch (az cli/extension flags
-            # for Container Apps have moved across versions).
+            # ACR PULL AUTH (BUG-717): the Container Apps runtime pulls the image
+            # from metropolisacr and the create step never passed registry creds,
+            # so the first real provision failed 'UNAUTHORIZED: authentication
+            # required'. Admin user is enabled on the registry (FEAT-2326609775),
+            # so read the admin cred at deploy time and pass it. (The cleaner
+            # --registry-identity system-managed-identity migration stays the
+            # tracked follow-up.)
+            ACR_USER="$(az acr credential show --name "${{ env.ACR_NAME }}" --query username -o tsv)"
+            ACR_PASS="$(az acr credential show --name "${{ env.ACR_NAME }}" --query 'passwords[0].value' -o tsv)"
             az containerapp create \
               --name "${{ env.CONTAINER_APP_NAME }}" \
               --resource-group "${{ env.RESOURCE_GROUP }}" \
               --environment "${{ env.CONTAINER_APP_ENV }}" \
               --image "$IMAGE" \
+              --registry-server "${{ env.ACR_LOGIN_SERVER }}" \
+              --registry-username "$ACR_USER" \
+              --registry-password "$ACR_PASS" \
               --cpu 0.5 --memory 1.0Gi \
               --min-replicas 0 --max-replicas 1 \
               --ingress external --target-port 8080 --transport auto \
