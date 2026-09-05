@@ -79,19 +79,35 @@ const (
 	// citizens.ErrNegativeDrainCapacity's WARNING-not-fatal stance.
 	ErrNegativeBudget = "MET-G5451"
 
-	// ErrCorruptHandoffCursor (BUG-689 round follow-up F6): a decoded
-	// deathservices.meta save record carried a negative handoffCursor. No
-	// code in this codebase ever WRITES one (snapshotForSave always mirrors
-	// d.handoffCursor, which only ever advances by len(deaths) in
-	// IntakeFromHandoff) -- this can only be a hand-edited or corrupt
-	// bundle, or a future format skew. applyLoadRecord clamps the installed
-	// value to 0 (never installs the negative verbatim) and logs this as a
-	// WARNING, not fatal (GR#17 diagnosability aid, mirrors
-	// ErrNegativeBudget/citizens.ErrNegativeDrainCapacity's stance): a
-	// clamped cursor of 0 re-delivers the whole handoff stream once, which
-	// IntakeFromHandoff's own duplicate-death guard renders safe, whereas
-	// installing the negative value verbatim left the module re-reading and
-	// silently discarding the entire stream every month forever (the F6
-	// finding this code closes).
+	// ErrCorruptHandoffCursor (BUG-689 round follow-up F6, BUG-720 P2
+	// follow-up, BUG-725): a decoded deathservices.meta save record carried
+	// an impossible handoffCursor -- either NEGATIVE or OVER-LENGTH
+	// (at-or-past the real citizens handoff stream's length, including
+	// math.MaxInt64). No code in this codebase ever WRITES either shape
+	// (snapshotForSave always mirrors d.handoffCursor, which only ever
+	// advances by len(deaths) in IntakeFromHandoff) -- this can only be a
+	// hand-edited or corrupt bundle, or a future format skew. This ONE code
+	// covers BOTH directions, logged with "direction" ("negative" or
+	// "over_length"), the original "handoffCursor" value, and the
+	// "clampedTo" value it was corrected to, never fatal (GR#17
+	// diagnosability aid, mirrors ErrNegativeBudget/
+	// citizens.ErrNegativeDrainCapacity's stance):
+	//
+	//   - negative: applyLoadRecord (participant.go) clamps the installed
+	//     value to 0 AT DECODE TIME (never installs the negative verbatim).
+	//     A clamped cursor of 0 re-delivers the whole handoff stream once,
+	//     which IntakeFromHandoff's own duplicate-death guard renders safe
+	//     -- self-corrects within one month (the F6 finding this closed).
+	//   - over-length: decode CANNOT correct this -- deathservices' decode
+	//     step never holds a citizens reference (GR#20), so it cannot learn
+	//     the real stream length "impossible relative to". Left verbatim at
+	//     decode, it is instead detected and clamped to 0 at the FIRST
+	//     intake call, in compose's intakeDeathServices (see that
+	//     function's doc comment for the full argument), which then
+	//     re-reads the full stream from 0 -- self-correcting in the SAME
+	//     driven month rather than being permanently wedged (the over-length
+	//     cursor otherwise makes DeathHandoffSince return empty forever, so
+	//     IntakeFromHandoff is never called and the cursor never advances --
+	//     the BUG-720/BUG-725 finding this direction closed).
 	ErrCorruptHandoffCursor = "MET-G5452"
 )

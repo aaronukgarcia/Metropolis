@@ -304,16 +304,28 @@ func (d *DeathServicesAPI) applyLoadRecord(rec serialize.Record, correlationID s
 		d.releasedTotal = w.ReleasedTotal
 		d.handoffCursor = w.HandoffCursor
 		if d.handoffCursor < 0 {
-			// BUG-689 round follow-up F6: a negative wire cursor is never
-			// installed verbatim -- see ErrCorruptHandoffCursor's doc for
-			// why an uncorrected negative base makes the module silently
-			// re-read and re-discard the whole handoff stream every month
-			// forever. Clamp to 0 (a safe, self-correcting re-delivery the
-			// duplicate-death guard absorbs) and log once as a WARNING
-			// (GR#17), never fatal -- a corrupt/hand-edited shard must
-			// still decode.
-			_ = errs.New(ErrCorruptHandoffCursor, correlationID, map[string]any{"handoffCursor": w.HandoffCursor})
-			d.handoffCursor = 0
+			// BUG-689 round follow-up F6 (BUG-725 detail added): a negative
+			// wire cursor is never installed verbatim -- see
+			// ErrCorruptHandoffCursor's doc for why an uncorrected negative
+			// base makes the module silently re-read and re-discard the
+			// whole handoff stream every month forever. Clamp to 0 (a safe,
+			// self-correcting re-delivery the duplicate-death guard
+			// absorbs) and log once as a WARNING (GR#17), never fatal -- a
+			// corrupt/hand-edited shard must still decode. This is the
+			// LOWER-bound half of the clamp; the UPPER-bound half (an
+			// over-length or MaxInt64 cursor) cannot be corrected here --
+			// decode never holds a citizens reference (GR#20) so it cannot
+			// learn the real handoff stream length -- and is instead
+			// clamped at the FIRST intake call, in compose's
+			// intakeDeathServices (see that function's doc comment), which
+			// logs this SAME code for that direction too.
+			clamped := int64(0)
+			_ = errs.New(ErrCorruptHandoffCursor, correlationID, map[string]any{
+				"direction":     "negative",
+				"handoffCursor": w.HandoffCursor,
+				"clampedTo":     clamped,
+			})
+			d.handoffCursor = clamped
 		}
 		d.negativeBudgetWarned = w.NegativeBudgetWarned
 		d.hearse.lastMonth = w.HearseLastMonth

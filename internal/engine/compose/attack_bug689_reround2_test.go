@@ -176,30 +176,46 @@ func TestAttackBUG689_RR2_ShardPresentLoadRestoresExactlyNoDoubleReset(t *testin
 	}
 }
 
-// TestAttackBUG689_RR2_FINDING_OverLengthCursorPermanentlyDropsDeaths is
-// attack angle C's real find, and this round's headline FINDING.
+// TestAttackBUG689_RR2_OverLengthCursorSelfCorrectsNoDroppedDeaths is
+// attack angle C's real find, this round's headline FINDING -- CLOSED by
+// BUG-720/BUG-725.
 //
 // F6 clamps a NEGATIVE decoded handoffCursor to 0 and logs MET-G5452. It
-// does NOT bound the cursor from ABOVE. A cursor greater than the restored
-// citizens handoff stream's length is exactly as impossible-a-state as a
-// negative one (nothing in this codebase ever writes either), arrives by
-// exactly the same route (a hand-edited / corrupt / format-skewed bundle),
-// and is STRICTLY WORSE in consequence:
+// does NOT bound the cursor from ABOVE at decode time. A cursor greater
+// than the restored citizens handoff stream's length is exactly as
+// impossible-a-state as a negative one (nothing in this codebase ever
+// writes either), arrives by exactly the same route (a hand-edited /
+// corrupt / format-skewed bundle), and WOULD BE strictly worse in
+// consequence if left unguarded:
 //
 //   - negative: DeathHandoffSince clamps to 0, one safe re-delivery the
 //     duplicate-death guard absorbs, then self-corrects within one month.
-//   - over-length: DeathHandoffSince returns EMPTY (being "caught up" is
-//     not an error), so IntakeFromHandoff is never called, so the cursor
-//     NEVER ADVANCES — the module is permanently wedged. Every death the
-//     city ever suffers from that point on is silently dropped: no body
+//   - over-length (unguarded): DeathHandoffSince returns EMPTY (being
+//     "caught up" is not an error), so IntakeFromHandoff is never called,
+//     so the cursor NEVER ADVANCES — the module would be permanently
+//     wedged, silently dropping every death from that point on: no body
 //     record, no backlog, no error, no registry code, forever. The AC-14
 //     conservation identity between citizens' realised deaths and
-//     deathservices' BodiesReleased is permanently broken with no signal.
+//     deathservices' BodiesReleased would desync from its own body map
+//     with no signal.
 //
-// This test pins the CURRENT (defective) behaviour so that closing the gap
-// — clamping/logging an over-length cursor the way F6 clamps a negative
-// one — fails this test and forces the pin to be re-read.
-func TestAttackBUG689_RR2_FINDING_OverLengthCursorPermanentlyDropsDeaths(t *testing.T) {
+// FIXED (BUG-720 P2 follow-up, detail added BUG-725): decode itself stays
+// unchanged (F6's clamp is negative-only -- decode never holds a citizens
+// reference, GR#20, so it cannot know the real stream length to bound
+// against). The correction instead lives at the composition root, the one
+// place with both APIs: compose's intakeDeathServices detects a decoded
+// cursor beyond the live handoff stream's length on its first call and
+// resets it via [deathservices.DeathServicesAPI.ResetHandoffCursor], then
+// re-reads the full stream from 0. This test now ASSERTS the fix rather
+// than pinning the defect: it drives a hostile arm alongside a control arm
+// over the SAME three months and requires the hostile arm to end up
+// bit-for-bit caught up with the control (cursor, BodiesReleased) -- i.e.
+// PROVES zero deaths are dropped, counted against the control's own
+// exactly-once figures, for both the over-length and math.MaxInt64 shapes.
+// If this test ever starts failing, the fix has regressed and the gap is
+// open again -- re-read this comment before touching either direction of
+// ErrCorruptHandoffCursor.
+func TestAttackBUG689_RR2_OverLengthCursorSelfCorrectsNoDroppedDeaths(t *testing.T) {
 	cid := errs.NewCorrelationID()
 
 	// A shared bundle both the control and the hostile arms load from.

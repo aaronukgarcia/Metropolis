@@ -306,6 +306,22 @@ func (d *DeathServicesAPI) IntakeFromHandoff(deaths []citizens.RealisedDeath, co
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// BUG-725 P3 follow-up: the cursor advance below is unconditional even
+	// though intakeLocked can return a non-nil err (ErrDuplicateDeath).
+	// This is deliberately correct, not an oversight -- intakeLocked's
+	// for-loop (below) has NO early return on any error path: every entry
+	// in deaths is always visited exactly once, either applied or skipped
+	// as a duplicate, before the loop completes and the call returns. So
+	// by the time execution reaches this line, len(deaths) records have
+	// always been fully consumed from the handoff stream regardless of
+	// dupErr -- there is no "partial intake" shape this method can
+	// observe. Advancing by the received count (not the applied count) is
+	// exactly what the doc above already requires: the cursor tracks how
+	// far this call PAGED THROUGH the stream, not what intakeLocked chose
+	// to do with each entry. If intakeLocked is ever changed to add a
+	// genuine early return (e.g. a hard failure mid-batch), this advance
+	// MUST move to only the actually-consumed prefix, or the exactly-once
+	// paging contract silently breaks.
 	applied, err := d.intakeLocked(deaths, correlationID)
 	d.handoffCursor += int64(len(deaths))
 	return applied, err
@@ -357,8 +373,35 @@ func (d *DeathServicesAPI) ResetHandoffCursor(correlationID string) error {
 // awaitingSortedLocked above) established double-check convention:
 // astgate's syntactic, no-call-graph scan cannot see that an unexported
 // helper is reached only through an already-guarded entry point.
+//
+// BUG-725 P3 follow-up: this redundant check now returns its error rather
+// than discarding it (a copied-struct call is caught earlier by both real
+// callers, so this branch is unreachable in practice -- but a silently
+// discarded error here would let a future third call site through the
+// astgate scan cannot see, exactly the hole the double-check convention
+// above exists to close).
+//
+// HAZARD for a future caller (BUG-725 re-round clarification): it is the
+// entry FOR-LOOP below, not this function as a whole, that has no early
+// return -- IntakeFromHandoff's own doc comment on its unconditional
+// `handoffCursor += len(deaths)` advance relies specifically on the LOOP
+// never bailing out mid-batch, not on intakeLocked being early-return-free
+// end to end. This function itself DOES now have one: the checkNotCopied
+// guard just below can return before the loop ever runs (0 of len(deaths)
+// entries consumed). That path is unreachable through Intake/
+// IntakeFromHandoff today, because both already check-and-return before
+// ever calling intakeLocked -- but if a future call site ever reached
+// intakeLocked directly, past its own checkNotCopied, hitting THIS guard
+// instead, IntakeFromHandoff's cursor arithmetic would advance by
+// len(deaths) while zero records were actually applied, a genuine
+// exactly-once violation. Any change that gives the for-loop itself a
+// real early return (see IntakeFromHandoff's own doc) carries the
+// identical hazard and must move the cursor advance to the
+// actually-consumed prefix.
 func (d *DeathServicesAPI) intakeLocked(deaths []citizens.RealisedDeath, correlationID string) ([]uint64, error) {
-	_ = d.checkNotCopied(correlationID, "intakeLocked")
+	if err := d.checkNotCopied(correlationID, "intakeLocked"); err != nil {
+		return nil, err
+	}
 	seenInBatch := make(map[uint64]bool, len(deaths))
 	out := make([]uint64, 0, len(deaths))
 	anyEmergency := false

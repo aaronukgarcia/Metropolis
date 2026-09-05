@@ -1665,6 +1665,38 @@ type simState struct {
 	// accessor) can reach the same instance.
 	deathServices *deathservices.DeathServicesAPI
 
+	// handoffCursorCheckDone / lastCheckedHandoffCursor (BUG-725 P2
+	// follow-up, refined after opus-round-bug725's re-round) together gate
+	// intakeDeathServices' full-citizens-handoff-stream over-length-cursor
+	// check (below) so it does NOT re-run on every subsequent caught-up
+	// month once a given cursor VALUE has already been confirmed in-range
+	// -- a long-lived, low-mortality city can otherwise spend one full
+	// O(stream) DeathHandoff copy per caught-up month for its entire life
+	// (24 caught-up months == 24 full copies, measured).
+	//
+	// This is deliberately keyed on the CURSOR VALUE, not a one-shot
+	// "checked since Load" latch: the round's own
+	// TestAttackBUG725_BoundaryLenVsLenPlusOne proves the cursor CAN move
+	// again after the first check without a fresh Load -- its len+1 case
+	// advances the cursor via a direct IntakeFromHandoff call (bypassing
+	// intakeDeathServices entirely), the same shape any future caller
+	// reaching IntakeFromHandoff outside the monthly hook would have. A
+	// one-shot "ever" latch would let that second, genuinely-impossible
+	// cursor value sail through unchecked for the rest of the load's
+	// lifetime -- worse than the original defect, because it would look
+	// fixed. Re-checking whenever the observed cursor differs from the
+	// last CONFIRMED-in-range value costs nothing extra in the common
+	// steady-state case (the cursor does not change while caught up) and
+	// re-verifies correctly the instant it does.
+	//
+	// Reset by Composition.Load (save_wire.go) on every successful load,
+	// so a freshly restored bundle's decoded cursor (never previously
+	// seen by this *simState) is always re-checked at least once,
+	// regardless of what value a PRIOR load on the same instance last
+	// confirmed.
+	handoffCursorCheckDone   bool
+	lastCheckedHandoffCursor int64
+
 	// MOD-034 (engine.wellbeing, compose_wellbeing.go): wellbeingAPI is the
 	// composed WellbeingAPI instance, wellbeingSeams is the fixed-order
 	// live/degraded report from wireWellbeing, and wellbeingStatus is the
@@ -2814,24 +2846,25 @@ func (st *simState) intakeDeathServices(month int64) error {
 	}
 	if len(deaths) == 0 {
 		// BUG-689 P2 follow-up (over-length cursor wedge --
-		// attack_bug689_reround2_test.go's pinned FINDING): deathservices'
-		// OWN decode-time clamp (participant.go's F6 fix, MET-G5452) can
-		// only ever guard a NEGATIVE cursor -- negative is unconditionally
-		// invalid regardless of the citizens handoff stream's length, so
-		// deathservices' decode step (which never holds a citizens
-		// reference, GR#20) can zero it unilaterally and safely. An
-		// OVER-LENGTH cursor is a different shape of invalid: "impossible"
-		// is defined only relative to the REAL stream length, which only
-		// the composition root can observe (it alone holds both APIs) --
-		// clamping it inside deathservices itself would mean either
-		// guessing an arbitrary ceiling (a real 100M-citizen city can
-		// legitimately reach a huge cursor -- GR#15 bans a hand-picked
-		// magic threshold) or leaving it unguarded, which is exactly the
-		// pinned FINDING: a cursor at or past the stream's length makes
-		// DeathHandoffSince return empty forever, so IntakeFromHandoff is
-		// never called, so the cursor never advances -- permanently
-		// wedged, strictly worse than the negative case, which
-		// self-corrects in one month.
+		// attack_bug689_reround2_test.go's pinned FINDING, now the fix
+		// TestAttackBUG689_RR2_OverLengthCursorSelfCorrectsNoDroppedDeaths
+		// asserts): deathservices' OWN decode-time clamp (participant.go's
+		// F6 fix, MET-G5452) can only ever guard a NEGATIVE cursor --
+		// negative is unconditionally invalid regardless of the citizens
+		// handoff stream's length, so deathservices' decode step (which
+		// never holds a citizens reference, GR#20) can zero it
+		// unilaterally and safely. An OVER-LENGTH cursor is a different
+		// shape of invalid: "impossible" is defined only relative to the
+		// REAL stream length, which only the composition root can observe
+		// (it alone holds both APIs) -- clamping it inside deathservices
+		// itself would mean either guessing an arbitrary ceiling (a real
+		// 100M-citizen city can legitimately reach a huge cursor -- GR#15
+		// bans a hand-picked magic threshold) or leaving it unguarded,
+		// which is exactly the pinned FINDING: a cursor at or past the
+		// stream's length makes DeathHandoffSince return empty forever, so
+		// IntakeFromHandoff is never called, so the cursor never advances
+		// -- permanently wedged, strictly worse than the negative case,
+		// which self-corrects in one month.
 		//
 		// Fixed HERE, the one place with enough information to make the
 		// correction principled rather than arbitrary:
@@ -2839,38 +2872,79 @@ func (st *simState) intakeDeathServices(month int64) error {
 		// non-negotiable upper bound a valid cursor can never exceed
 		// (DeathHandoffSince's own documented contract), so any cursor
 		// beyond it is unambiguously impossible, never a size judgement
-		// call. This full-stream read only runs on a month where the
-		// cheap DeathHandoffSince(cursor) call above already returned
-		// empty (the common "genuinely caught up, nothing died this
-		// month" case included) -- bounded cost, never the unconditional
-		// per-month O(stream) read a naive fix would add on the 100M-
-		// citizen path (Aaron's standing perf directive). Clamped to 0
-		// (mirroring F6's own negative treatment, MET-G5452) rather than
-		// to the stream's length, specifically so the very next
-		// IntakeFromHandoff call below is non-empty and therefore
-		// actually WRITES the corrected cursor back through the module's
-		// only real setter -- clamping to len(full) instead would leave
-		// deaths empty, skip IntakeFromHandoff entirely, and leave the
-		// poisoned value persisted forever, self-correcting nothing. Any
-		// already-consumed entries this re-read revisits are safely
-		// absorbed by Intake's own per-citizenID duplicate guard (H4
-		// policy (b), ErrDuplicateDeath handled below exactly as today).
-		if full, ferr := st.citizens.DeathHandoff(st.cid); ferr == nil && cursor > int64(len(full)) {
-			_ = errs.New(deathservices.ErrCorruptHandoffCursor, st.cid, map[string]any{"handoffCursor": cursor, "streamLength": len(full)})
-			// handoffCursor's only other mutator (IntakeFromHandoff) is
-			// additive-only -- re-deriving `deaths` from index 0 alone
-			// would leave the PERSISTED cursor at its original impossible
-			// value, and the next IntakeFromHandoff's `+= len(deaths)`
-			// would add on TOP of it (for math.MaxInt64, wrapping to a
-			// negative int64 -- an even worse corrupt state). Reset the
-			// persisted value first via the module's own explicit escape
-			// hatch (ResetHandoffCursor's doc comment).
-			if rerr := st.deathServices.ResetHandoffCursor(st.cid); rerr != nil {
-				return rerr
-			}
-			deaths, err = st.citizens.DeathHandoffSince(0, st.cid)
-			if err != nil {
-				return err
+		// call.
+		//
+		// BUG-725 round follow-up (P2, opus-round-bug725, refined in the
+		// re-round): re-running the full-stream read on every caught-up
+		// month re-verifies a cursor VALUE this composition has already
+		// confirmed in-range, for no additional safety -- the earlier
+		// revision's claim of "bounded cost" was true per-call but not
+		// true in aggregate (e.g. 24 caught-up months in a save's life
+		// meant 24 full-stream copies, not one). st.lastCheckedHandoffCursor
+		// / st.handoffCursorCheckDone (reset by Composition.Load,
+		// save_wire.go) skip the read only when the CURRENT cursor is the
+		// exact value last confirmed in-range -- NOT a one-shot "checked
+		// once, ever" latch, because the cursor CAN move again without a
+		// fresh Load (a direct IntakeFromHandoff call from outside this
+		// monthly hook is exactly that shape --
+		// TestAttackBUG725_BoundaryLenVsLenPlusOne's len+1 case proves it),
+		// and an unconditional "already checked" latch would let that
+		// SECOND, genuinely-impossible cursor value sail through unchecked
+		// for the rest of the load's lifetime -- worse than the original
+		// defect because it would look fixed.
+		if !st.handoffCursorCheckDone || st.lastCheckedHandoffCursor != cursor {
+			st.handoffCursorCheckDone = true
+			st.lastCheckedHandoffCursor = cursor
+			full, ferr := st.citizens.DeathHandoff(st.cid)
+			if ferr != nil {
+				// BUG-725 P3: a failed full-stream read must never be a
+				// SILENT no-op -- discarding ferr here would leave a
+				// genuinely over-length cursor permanently unguarded with
+				// zero signal, exactly the class of silent wedge this
+				// whole fix exists to close. Not fatal (a transient
+				// citizens-side fault must not abort the monthly intake
+				// hook), but registry-logged so it is observable via
+				// errs.Recent -- mirrors this function's own nil-wiring
+				// fail-safe stance.
+				_ = errs.Wrap(ErrModuleFailed, st.cid, ferr, map[string]any{
+					"module":        "citizens",
+					"step":          "death-handoff-read-for-cursor-check",
+					"handoffCursor": cursor,
+				})
+			} else if cursor > int64(len(full)) {
+				_ = errs.New(deathservices.ErrCorruptHandoffCursor, st.cid, map[string]any{
+					"direction":     "over_length",
+					"handoffCursor": cursor,
+					"streamLength":  len(full),
+					"clampedTo":     int64(0),
+				})
+				// handoffCursor's only other mutator (IntakeFromHandoff) is
+				// additive-only -- re-deriving `deaths` from index 0 alone
+				// would leave the PERSISTED cursor at its original impossible
+				// value, and the next IntakeFromHandoff's `+= len(deaths)`
+				// would add on TOP of it (for math.MaxInt64, wrapping to a
+				// negative int64 -- an even worse corrupt state). Reset the
+				// persisted value first via the module's own explicit escape
+				// hatch (ResetHandoffCursor's doc comment).
+				if rerr := st.deathServices.ResetHandoffCursor(st.cid); rerr != nil {
+					return rerr
+				}
+				deaths, err = st.citizens.DeathHandoffSince(0, st.cid)
+				if err != nil {
+					return err
+				}
+				// Clamped to 0 (mirroring F6's own negative treatment,
+				// MET-G5452) rather than to the stream's length,
+				// specifically so the IntakeFromHandoff call below is
+				// non-empty and therefore actually WRITES the corrected
+				// cursor back through the module's only real setter --
+				// clamping to len(full) instead would leave deaths empty,
+				// skip IntakeFromHandoff entirely, and leave the poisoned
+				// value persisted forever, self-correcting nothing. Any
+				// already-consumed entries this re-read revisits are
+				// safely absorbed by Intake's own per-citizenID duplicate
+				// guard (H4 policy (b), ErrDuplicateDeath handled below
+				// exactly as today).
 			}
 		}
 		if len(deaths) == 0 {

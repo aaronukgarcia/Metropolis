@@ -247,6 +247,21 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 			return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "deathservices", "step": "reset-for-load"})
 		}
 	}
+	// BUG-725 P2 follow-up: every successful Load forces the very next
+	// caught-up month to re-verify the handoffCursor against the real
+	// stream length (compose.go's intakeDeathServices doc comment) -- a
+	// freshly decoded shard (or a shard-less reset just above, whose
+	// ResetForLoad zeroes the cursor) may carry a value this
+	// *Composition instance has never confirmed in-range, regardless of
+	// what an earlier Load on the SAME instance last checked. Clearing
+	// handoffCursorCheckDone (rather than relying on
+	// lastCheckedHandoffCursor alone) is what forces that re-check even in
+	// the edge case where the newly decoded cursor happens to equal the
+	// value a PRIOR load already confirmed. Reset unconditionally here,
+	// after mgr.Load has actually succeeded (a refused load must not flip
+	// this at all -- it leaves deathservices untouched, so forcing a
+	// recheck would be wasted, though harmless).
+	c.state.handoffCursorCheckDone = false
 	// FEAT-1972079943 — recompute the DERIVED compose-owned ledgers from the
 	// now-restored modules. treasury/citizenWealth are publish-mirrors of the
 	// finance ledger (AcctTreasury / AcctHouseholds); the compose ledger
