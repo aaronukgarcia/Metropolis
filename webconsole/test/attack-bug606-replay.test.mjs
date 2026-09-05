@@ -132,18 +132,48 @@ test('ATTACK: isStateAffecting classifies resolveDemandAll as journaled', () => 
  *  below will say so explicitly (not a silent pass). */
 const CAP_FIXTURE_CALIBRATION_BLOCKS = 800;
 const CAP_FIXTURE_CALIBRATION_TICKS = 250;
-const CAP_FIXTURE_CALIBRATION_UNITS = 1731; // measured at the block/tick counts above, post-BUG-477 wind repricing
 const CAP_FIXTURE_TARGET_MARGIN = 1.3; // aim ~30% clear of the cap, not right at its edge
-const CAP_FIXTURE_BLOCK_COUNT = Math.ceil(
-  (CAP_FIXTURE_CALIBRATION_BLOCKS * RESOLVE_DEMAND_ALL_MAX_UNITS * CAP_FIXTURE_TARGET_MARGIN) /
-    CAP_FIXTURE_CALIBRATION_UNITS
-);
+const CAP_FIXTURE_MAX_DOUBLINGS = 4;
+
+/* The planned-unit yield per residential block is a property of the live
+ * catalogue and the demand planner (a pinned 1731 went stale the moment the
+ * civic-tier family split changed what largest-first chooses), so it is
+ * MEASURED here at the calibration size and scaled, then re-measured and
+ * doubled (bounded) until the plan genuinely clears the cap. GR#15: the
+ * fixture derives from the runtime, never from a remembered number. */
+function plannedUnitsFor(blockCount) {
+  const genesis = initialState();
+  const pre = capTriggerScriptFor(blockCount)
+    .slice(0, -1 - 5)
+    .reduce((s, a) => reducer(s, a), genesis);
+  return orderedDemandFixPlan(pre).reduce((sum, item) => sum + item.count, 0);
+}
+
+let capFixtureBlockCountMemo = null;
+function capFixtureBlockCount() {
+  if (capFixtureBlockCountMemo !== null) return capFixtureBlockCountMemo;
+  const calibrationUnits = plannedUnitsFor(CAP_FIXTURE_CALIBRATION_BLOCKS);
+  assert.ok(calibrationUnits > 0, `calibration run planned ${calibrationUnits} units — the demand planner produced nothing to scale from`);
+  let blocks = Math.ceil(
+    (CAP_FIXTURE_CALIBRATION_BLOCKS * RESOLVE_DEMAND_ALL_MAX_UNITS * CAP_FIXTURE_TARGET_MARGIN) / calibrationUnits
+  );
+  for (let i = 0; i < CAP_FIXTURE_MAX_DOUBLINGS; i++) {
+    if (plannedUnitsFor(blocks) > RESOLVE_DEMAND_ALL_MAX_UNITS) break;
+    blocks *= 2;
+  }
+  capFixtureBlockCountMemo = blocks;
+  return blocks;
+}
 
 function capTriggerScript() {
+  return capTriggerScriptFor(capFixtureBlockCount());
+}
+
+function capTriggerScriptFor(blockCount) {
   const tiles = [];
   let x = 5;
   let y = 5;
-  for (let i = 0; i < CAP_FIXTURE_BLOCK_COUNT; i++) {
+  for (let i = 0; i < blockCount; i++) {
     tiles.push({ x, y });
     x += 3;
     if (x > 430) {
