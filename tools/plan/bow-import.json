@@ -1143,6 +1143,26 @@
       ]
     },
     {
+      "mkey": "feat.gameinit",
+      "type": "feature",
+      "title": "FEAT-143: Game Initialization Modes — Real vs Unlimited Money",
+      "desc": "New-game start chooses exactly one of two mutually-exclusive modes — Unlimited Money (sandbox: engine.finance placement/OPEX/payroll checks bypassed, insolvency/debt-rating triggers inert, un-depletable reserve) or Real (finite starting capital, full engine.finance failure loop active) — locked at initialization and immutable for the session (no settings toggle, no dev-console flip, no re-serialization change). The mode is declared in feat.saveux's save Meta on every save and enforced fail-closed on load (a mismatched or absent mode rejects the load with a registry-sourced typed error, never silently re-modes or defaults to unlimited). ui.screen.finance renders the mode honestly: an infinite/unlimited indicator in Unlimited, full P&L/balance/budget surfaces in Real. Starting capital is a data-file-sourced placeholder pending Aaron's balance pass — no hardcoded literal. [spec: FEAT-143] [path: internal/engine/gameinit/]",
+      "seq": 455,
+      "sprint": null,
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "FEAT-143",
+      "guid": "939179db-288c-42d4-8dc0-4ba794acfda5",
+      "guidIn": "828a958d-df24-4d6c-8108-7ced7c9af7d7",
+      "guidOut": "6263d83f-7d7b-4705-937b-7561a9d9250d",
+      "deps": [
+        "engine.finance",
+        "feat.saveux",
+        "ui.screen.finance"
+      ]
+    },
+    {
       "mkey": "feat.disasters",
       "type": "feature",
       "title": "Disasters-lite: event pressure on JIT",

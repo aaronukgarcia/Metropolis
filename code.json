@@ -556,7 +556,7 @@
       "note": "Noise level — airport noiseLevelDBA, mining blight noiseRadius dBA."
     }
   ],
-  "moduleCount": 171,
+  "moduleCount": 172,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -4164,6 +4164,10 @@
             "outboundGuid": "2c711338-b95f-48e1-b179-1671eb211f41"
           },
           {
+            "key": "feat.gameinit",
+            "outboundGuid": "6263d83f-7d7b-4705-937b-7561a9d9250d"
+          },
+          {
             "key": "ui.screen.finance",
             "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
           }
@@ -5828,6 +5832,10 @@
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
+            "key": "feat.gameinit",
+            "outboundGuid": "6263d83f-7d7b-4705-937b-7561a9d9250d"
+          },
+          {
             "key": "foundation.integration",
             "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
           }
@@ -5845,6 +5853,47 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "939179db-288c-42d4-8dc0-4ba794acfda5",
+      "key": "feat.gameinit",
+      "bowType": "feature",
+      "seq": 455,
+      "sprint": null,
+      "title": "FEAT-143: Game Initialization Modes — Real vs Unlimited Money",
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "FEAT-143",
+      "path": "internal/engine/gameinit/",
+      "inbound": {
+        "guid": "828a958d-df24-4d6c-8108-7ced7c9af7d7",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "6263d83f-7d7b-4705-937b-7561a9d9250d",
+        "calls": [
+          {
+            "key": "engine.finance",
+            "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
+            "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
+          },
+          {
+            "key": "feat.saveux",
+            "moduleGuid": "d50904e1-5eda-42b6-bdc7-e075d4648e20",
+            "inboundGuid": "20c48d83-347b-434c-902f-b61aeef16711"
+          },
+          {
+            "key": "ui.screen.finance",
+            "moduleGuid": "237d6c7a-77af-405f-a2b7-e6164210ab83",
+            "inboundGuid": "d7978dd2-7f40-48cf-97f8-3f6ab17b1b6a"
           }
         ]
       },
@@ -6155,6 +6204,10 @@
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
+            "key": "feat.gameinit",
+            "outboundGuid": "6263d83f-7d7b-4705-937b-7561a9d9250d"
           },
           {
             "key": "feat.skeleton",
