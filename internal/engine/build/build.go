@@ -3,6 +3,7 @@ package build
 import (
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -79,6 +80,13 @@ type buildOrder struct {
 	labourRemaining    int64 // worker-days not yet satisfied
 	leadTimeRemaining  int64 // effective lead time (simulation days)
 	complete           bool
+	// completionSeq is BUG-734 F1's fix: a monotonic sequence number stamped
+	// on the order at the MOMENT complete becomes true (never at submission).
+	// Zero means "never completed". Completion order is NOT submission-id
+	// order (differing lead times let a low-id order complete after a
+	// high-id one), so CompletedBuildings' cursor is keyed on this field,
+	// never on id — see CompletedBuildings' doc comment.
+	completionSeq BuildOrderID
 }
 
 // status derives the order's queue state. Materials-pending takes
@@ -105,6 +113,8 @@ func (o *buildOrder) snapshot() BuildOrder {
 		Tile:               o.tile,
 		Local:              o.local,
 		Zone:               o.zone,
+		BuildingID:         o.buildingID,
+		CompletionSeq:      uint64(o.completionSeq),
 		MaterialsBillTotal: o.materialsTotal,
 		MaterialsDrawn:     o.materialsDrawn,
 		MaterialsRemaining: o.materialsRemaining,
@@ -118,10 +128,41 @@ func (o *buildOrder) snapshot() BuildOrder {
 // visible"). Every field is derived from the internal buildOrder under the
 // API's lock — a consumer can never write back through it.
 type BuildOrder struct {
-	ID                 BuildOrderID
-	Tile               world.TileCoord
-	Local              world.CellLocal
-	Zone               ZoneType
+	ID    BuildOrderID
+	Tile  world.TileCoord
+	Local world.CellLocal
+	Zone  ZoneType
+	// BuildingID is the optional data/buildings.json catalogue entry id this
+	// order builds (BUG-734): empty for a plain §34 zone order, non-empty
+	// when the caller named a specific catalogue building at submission
+	// (BuildCommand.BuildingID, FEAT-build-services-bridge-2026-09-02).
+	// Exposed here — the missing half of BUG-734's defect — so a consumer
+	// (compose) can discover WHICH catalogue building a completed order is,
+	// not just that some zone/structure landed. ID (above) is the completed
+	// structure's own deterministic identity (BUG-734): it is minted at
+	// SubmitBuildCommand time from BuildAPI's monotonic nextOrder counter —
+	// never wall-clock, never a map key — and that counter round-trips
+	// through this package's own save.Participant (participant.go's
+	// build.meta record), so ids issued after a load never collide with
+	// ones issued before it, and a given completed structure keeps the SAME
+	// ID across a save/restore. A consumer wanting a per-structure identity
+	// distinct from the order/queue mechanics can use ID directly — there is
+	// no separate "BuildingID counter" to invent, since ID already satisfies
+	// every determinism/persistence requirement a second counter would only
+	// duplicate (GR#3).
+	BuildingID string
+	// CompletionSeq is BUG-734 F1's monotonic completion-order stamp,
+	// exposed as its OWN field (lead ruling, round follow-up: ID must mean
+	// the real submission BuildOrderID in EVERY accessor — Queue() and
+	// CompletedBuildings() alike — never overloaded with a different
+	// numbering in one projection, since a consumer joining
+	// CompletedBuildings records back to Queue() rows by ID would
+	// otherwise silently mis-join, exactly the identity-confusion class
+	// GR#3/SSOT exists to prevent). 0 means "never completed" (every real
+	// completionSeq is >= 1). [BuildAPI.CompletedBuildings] filters and
+	// sorts on THIS field, never on ID; a consumer's cursor is the MAXIMUM
+	// CompletionSeq it has seen, never ID.
+	CompletionSeq      uint64
 	MaterialsBillTotal int64
 	MaterialsDrawn     int64
 	MaterialsRemaining int64
@@ -214,7 +255,14 @@ type BuildAPI struct {
 	structures map[cellKey]BuildOrderID
 	queue      []*buildOrder
 	nextOrder  BuildOrderID
-	demand     map[ZoneType]DemandInput
+	// nextCompletionSeq is BUG-734 F1's monotonic completion-order counter,
+	// distinct from nextOrder (the submission-order counter): incremented
+	// exactly once per order transitioning to complete, in Tick's completion
+	// step and in registerCompletedServicesLocked's restore re-drive path
+	// (a legacy-saved complete order that never got a completionSeq stamped
+	// before this fix existed). Persisted beside nextOrder in build.meta.
+	nextCompletionSeq BuildOrderID
+	demand            map[ZoneType]DemandInput
 	// serviceByOrder tracks which completed orders registered a service
 	// with engine.services, keyed by the completing order's id — the
 	// index SubmitDemolishCommand consults to deregister the matching
@@ -828,6 +876,13 @@ func (b *BuildAPI) Tick(month int64) error {
 			}
 
 			order.complete = true
+			// BUG-734 F1: stamp completionSeq at the EXACT moment complete
+			// becomes true — never at submission (nextOrder is a DIFFERENT
+			// counter) — so CompletedBuildings can key its cursor on
+			// completion order, not submission-id order (see that method's
+			// doc for why submission order is the wrong axis).
+			b.nextCompletionSeq++
+			order.completionSeq = b.nextCompletionSeq
 			// BUG-586 F1 remedy: record serviceByOrder HERE, immediately
 			// after order.complete = true and BEFORE zoneState/structures/
 			// SetStructure below, not after SetStructure succeeds. A
@@ -996,6 +1051,28 @@ func (b *BuildAPI) registerServiceLocked(order *buildOrder, entry data.BuildingE
 // the order-dependent-fold class GR#21 guards against (mirrors
 // IndustryAndFarmsPresent's own order-independent map range).
 func (b *BuildAPI) registerCompletedServicesLocked() error {
+	// BUG-734 F1 backfill: a save written before completionSeq existed (or
+	// one written by this fixed code, then loaded, where a legacy record's
+	// omitted field decoded to the zero value) can bring back complete
+	// orders with completionSeq==0 — indistinguishable, on decode alone,
+	// from "never completed" or "genuinely first to ever complete". Stamp
+	// any such order NOW, in the SAME deterministic b.queue (insertion)
+	// order Tick itself uses (GR#21 — never a map range), so every complete
+	// order ends up with a real, non-zero, monotonic completionSeq exactly
+	// once. This runs from the same gated (servicesSweepDirty) entry points
+	// as the service re-drive below: resetForLoad (every load) and
+	// SetServices — see servicesSweepDirty's own field doc for the
+	// exhaustive trigger list. A freshly-completed order (this same Tick's
+	// own completion step) already has a non-zero completionSeq by the time
+	// this sweep can ever run, so this loop is a strict no-op for a build
+	// that has never been through a legacy load.
+	for _, order := range b.queue {
+		if order.complete && order.completionSeq == 0 {
+			b.nextCompletionSeq++
+			order.completionSeq = b.nextCompletionSeq
+		}
+	}
+
 	standing := make(map[BuildOrderID]bool, len(b.structures))
 	for _, oid := range b.structures {
 		standing[oid] = true
@@ -1068,6 +1145,116 @@ func (b *BuildAPI) Queue() []BuildOrder {
 	defer b.mu.RUnlock()
 	out := make([]BuildOrder, 0, len(b.queue))
 	for _, o := range b.queue {
+		out = append(out, o.snapshot())
+	}
+	return out
+}
+
+// CompletedBuildings returns every STANDING (never demolished), COMPLETE
+// order that names a catalogue building (BuildingID != "") whose
+// CompletionSeq is strictly greater than sinceCompletionSeq, in ascending
+// COMPLETION order (BUG-734: the completion feed a consumer like the
+// composition root needs to discover which named buildings have finished
+// since it last looked, without engine.build having to push events or the
+// consumer having to diff two Queue() snapshots itself).
+//
+// # BuildOrder.ID always means the submission identity — CompletionSeq is
+// its OWN field (F1, round REJECT + lead ruling on the round's follow-up)
+//
+// BuildOrder.ID means EXACTLY THE SAME THING in every accessor on this
+// type — [Queue] and CompletedBuildings alike — the real,
+// SubmitBuildCommand-minted submission id, NEVER overloaded with a
+// different numbering in one projection. An earlier revision of this method
+// returned the order's completionSeq AS the ID field; the lead rejected
+// that design outright: a consumer that later joins CompletedBuildings
+// records back to Queue() rows by ID would silently mis-join two different
+// numbering spaces — precisely the identity-confusion class GR#3/SSOT
+// exists to prevent. The fix instead exposes completion order as its own,
+// separately-named field, [BuildOrder.CompletionSeq] (0 means "never
+// completed" — every real completionSeq is >= 1) — this method filters and
+// sorts on THAT field, and a caller's cursor is the MAXIMUM CompletionSeq it
+// has seen so far, NEVER the ID field.
+//
+// # Why raw BuildOrderID cannot be the cursor axis (the original defect)
+//
+// BuildOrderID is a SUBMISSION-order identity (minted at SubmitBuildCommand
+// time), and completion order is NOT submission order whenever lead times
+// differ (a heavy-industry order submitted FIRST can still complete AFTER a
+// farming order submitted second). An independent destructive round proved
+// that filtering (or cursoring) by the raw submission id permanently loses a
+// low-id order that completes after a high-id one has already advanced the
+// consumer's cursor (TestAttackBUG734_OutOfOrderCompletionStillAscending's
+// original reproduction: "slow(1) delivered 0 times") — a real submission id
+// simply cannot serve as a monotonic "how much of the completion timeline
+// have I consumed" cursor, because nothing about it tracks completion order.
+//
+// The fix stamps a SEPARATE monotonic completionSeq on each order at the
+// exact moment it transitions to complete (never at submission — see
+// buildOrder.completionSeq's doc and the Tick completion step) and filters
+// by it directly: sinceCompletionSeq is compared against every order's OWN
+// completionSeq, and every order whose completionSeq is STRICTLY GREATER
+// than that threshold is returned. Because completionSeq only ever increases
+// and is a stable fact once set, "track the maximum CompletionSeq this
+// method has ever returned" is a CORRECT, sufficient cursor — with no
+// lookup, no id-based set/range arithmetic, and no way for the
+// id-vs-completion-order mismatch to reopen. (The round's own
+// TestAttackBUG734_OutOfOrderCompletionStillAscending and
+// TestAttackBUG734_ExactlyOnceLedgerOverLongRun were updated, per the lead's
+// explicit direction, to track CompletionSeq as their cursor instead of ID —
+// adapting the test to the corrected API, not weakening either test: every
+// other assertion, including the ID-based identity checks, is unchanged.)
+//
+// # F2 (round REJECT, fixed): demolished completions are excluded
+//
+// A demolished order stays in b.queue FOREVER with complete==true and its
+// buildingID intact (there is no queue-eviction on demolish) —
+// registerCompletedServicesLocked already filters exactly this shape via
+// b.structures membership (see its doc for the full reasoning: a demolished
+// order is "complete" but no longer "standing"). This method applies the
+// SAME standing check, so a consumer polling after a build-then-demolish
+// never re-discovers (and re-registers) a structure that no longer exists.
+//
+// This is a CURSOR query, mirroring the DeathHandoffSince idiom
+// (engine.deathservices' own handoff-cursor pattern, BUG-689): the caller
+// persists the highest CompletionSeq this method has returned it and passes
+// it back in as sinceCompletionSeq next time. Calling it twice with the SAME
+// cursor against unchanged state is idempotent — it returns the identical
+// result both times (a pure function of state and cursor, GR#21 — no hidden
+// per-call consumption or global watermark).
+//
+// A zone order with no BuildingID is never returned — the plain §34
+// zone-order case this package has always supported, unrelated to the
+// catalogue-building completion feed BUG-734 concerns.
+func (b *BuildAPI) CompletedBuildings(sinceCompletionSeq BuildOrderID) []BuildOrder {
+	if err := b.checkNotCopied("CompletedBuildings"); err != nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	standing := make(map[BuildOrderID]bool, len(b.structures))
+	for _, oid := range b.structures {
+		standing[oid] = true
+	}
+
+	matches := make([]*buildOrder, 0)
+	for _, o := range b.queue {
+		if !o.complete || o.buildingID == "" || o.completionSeq <= sinceCompletionSeq || !standing[o.id] {
+			continue
+		}
+		matches = append(matches, o)
+	}
+	// Sort by completionSeq ascending (GR#21: a plain, order-independent
+	// comparison sort over an already-collected slice, not a map range).
+	sort.Slice(matches, func(i, j int) bool { return matches[i].completionSeq < matches[j].completionSeq })
+
+	out := make([]BuildOrder, 0, len(matches))
+	for _, o := range matches {
+		// snapshot() already carries the real submission ID (unchanged —
+		// lead ruling: ID means the same thing in every accessor) AND the
+		// exported CompletionSeq field this method actually filters/sorts
+		// on. No override here: unlike an earlier version of this method,
+		// .ID is NEVER repurposed.
 		out = append(out, o.snapshot())
 	}
 	return out

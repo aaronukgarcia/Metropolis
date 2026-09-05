@@ -62,7 +62,7 @@ func TestBuildAPIFieldsAllClassified(t *testing.T) {
 	// (queue -> build.order, zoneState -> build.zone, structures ->
 	// build.structure, demand -> build.demand).
 	covered := map[string]bool{
-		"district": true, "nextOrder": true, "queue": true,
+		"district": true, "nextOrder": true, "nextCompletionSeq": true, "queue": true,
 		"zoneState": true, "structures": true, "demand": true,
 	}
 	bt := reflect.TypeOf((*BuildAPI)(nil)).Elem()
@@ -87,8 +87,9 @@ func TestBuildMetaWireFieldsMatchScalars(t *testing.T) {
 		wire string
 		kind reflect.Kind
 	}{
-		"district":  {"District", reflect.String},
-		"nextOrder": {"NextOrder", reflect.Uint64}, // BuildOrderID is uint64
+		"district":          {"District", reflect.String},
+		"nextOrder":         {"NextOrder", reflect.Uint64},         // BuildOrderID is uint64
+		"nextCompletionSeq": {"NextCompletionSeq", reflect.Uint64}, // BuildOrderID is uint64
 	}
 	mw := reflect.TypeOf((*buildMetaWire)(nil)).Elem()
 	if mw.NumField() != len(want) {
@@ -123,6 +124,7 @@ func TestBuildOrderWireCoversEveryMutableOrderField(t *testing.T) {
 		"labourRemaining":    "LabourRemaining",
 		"leadTimeRemaining":  "LeadTimeRemaining",
 		"complete":           "Complete",
+		"completionSeq":      "CompletionSeq",
 	}
 	ot := reflect.TypeOf((*buildOrder)(nil)).Elem()
 	if ot.NumField() != len(want) {
@@ -216,6 +218,9 @@ func compareBuild(t *testing.T, a, b *BuildAPI, label string) {
 	}
 	if a.nextOrder != b.nextOrder {
 		t.Fatalf("%s: nextOrder %d != %d", label, a.nextOrder, b.nextOrder)
+	}
+	if a.nextCompletionSeq != b.nextCompletionSeq {
+		t.Fatalf("%s: nextCompletionSeq %d != %d", label, a.nextCompletionSeq, b.nextCompletionSeq)
 	}
 	qa, qb := a.Queue(), b.Queue()
 	if !reflect.DeepEqual(qa, qb) {

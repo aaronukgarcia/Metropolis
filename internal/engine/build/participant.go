@@ -29,9 +29,12 @@ import (
 // load (world/season/logistics), or the SEC-020 copy-guard pointer:
 //
 //   - scalars (a single "build.meta" record): district (the materials-draw
-//     district set via SetDistrict) and nextOrder (the monotonic build-order
+//     district set via SetDistrict), nextOrder (the monotonic build-order
 //     id counter — MUST round-trip so ids issued after a load never collide
-//     with saved ones);
+//     with saved ones), and nextCompletionSeq (BUG-734 F1's monotonic
+//     completion-order counter — the SAME round-trip requirement, a
+//     separate counter from nextOrder because completion order is not
+//     submission order);
 //   - one "build.order" record per queue entry, emitted in SLICE order
 //     (insertion / order-id order, the queue's own deterministic order —
 //     GR#21). Each carries the FULL in-flight construction state: id, world
@@ -80,6 +83,18 @@ const (
 type buildMetaWire struct {
 	District  string       `json:"district"`
 	NextOrder BuildOrderID `json:"nextOrder"`
+	// NextCompletionSeq is BUG-734 F1's monotonic completion-order counter
+	// (buildOrder.completionSeq's source), persisted BESIDE NextOrder —
+	// distinct counter, same additive-field precedent this participant
+	// already used for BuildingID (FEAT-build-services-bridge-2026-09-02):
+	// omitted from a save written before this fix existed, decoding to the
+	// zero value on an old bundle, which registerCompletedServicesLocked's
+	// backfill pass (its own doc) then repairs deterministically on the
+	// next Tick/RegisterCompletedServices call rather than ever installing
+	// a wrong non-zero value. MUST round-trip so a completionSeq minted
+	// after a load never collides with one minted before it (the exact
+	// NextOrder precedent, mirrored for the second counter).
+	NextCompletionSeq BuildOrderID `json:"nextCompletionSeq,omitempty"`
 }
 
 // buildOrderWire is one queue entry on the wire — the full mutable
@@ -102,6 +117,14 @@ type buildOrderWire struct {
 	LabourRemaining    int64  `json:"labourRemaining"`
 	LeadTimeRemaining  int64  `json:"leadTimeRemaining"`
 	Complete           bool   `json:"complete"`
+	// CompletionSeq is BUG-734 F1's monotonic completion-order stamp (see
+	// buildOrder.completionSeq's doc): 0 for a never-completed order (the
+	// common in-flight case — omitted on the wire), and for a complete
+	// order saved before this fix existed (decodes to 0, backfilled
+	// deterministically by registerCompletedServicesLocked rather than
+	// ever treated as a real "first ever completion" fact learned from the
+	// wire).
+	CompletionSeq BuildOrderID `json:"completionSeq,omitempty"`
 }
 
 // buildZoneWire is one zoneState entry on the wire: the cell's world
@@ -215,8 +238,9 @@ func (b *BuildAPI) snapshotForSave() (buildSnapshot, error) {
 
 	snap := buildSnapshot{
 		meta: buildMetaWire{
-			District:  b.district,
-			NextOrder: b.nextOrder,
+			District:          b.district,
+			NextOrder:         b.nextOrder,
+			NextCompletionSeq: b.nextCompletionSeq,
 		},
 	}
 
@@ -236,6 +260,7 @@ func (b *BuildAPI) snapshotForSave() (buildSnapshot, error) {
 			LabourRemaining:    o.labourRemaining,
 			LeadTimeRemaining:  o.leadTimeRemaining,
 			Complete:           o.complete,
+			CompletionSeq:      o.completionSeq,
 		})
 	}
 
@@ -299,6 +324,7 @@ func (b *BuildAPI) resetForLoad() error {
 	defer b.mu.Unlock()
 	b.district = DefaultDistrict
 	b.nextOrder = 0
+	b.nextCompletionSeq = 0
 	b.queue = nil
 	b.zoneState = make(map[cellKey]ZoneType)
 	b.structures = make(map[cellKey]BuildOrderID)
@@ -340,6 +366,7 @@ func (b *BuildAPI) applyLoadRecord(rec serialize.Record) error {
 		}
 		b.district = m.District
 		b.nextOrder = m.NextOrder
+		b.nextCompletionSeq = m.NextCompletionSeq
 
 	case recBuildOrder:
 		var w buildOrderWire
@@ -358,6 +385,7 @@ func (b *BuildAPI) applyLoadRecord(rec serialize.Record) error {
 			labourRemaining:    w.LabourRemaining,
 			leadTimeRemaining:  w.LeadTimeRemaining,
 			complete:           w.Complete,
+			completionSeq:      w.CompletionSeq,
 		})
 
 	case recBuildZone:

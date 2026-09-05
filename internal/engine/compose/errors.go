@@ -159,4 +159,18 @@ const (
 	// TestRenderGate_WholeTreeHasNoLiteralTokens (the whole-tree render
 	// gate) exists to catch, and did.
 	ErrSeedResidentIDRangeCollides = "MET-G814"
+
+	// ErrUnknownDeathServiceBuildingKind (BUG-734 F3, round finding, GR#17):
+	// registerCompletedServiceBuildings encountered a completed order whose
+	// BuildingID is non-empty but names neither serviceBuildingCemetery nor
+	// serviceBuildingCrematorium — a renamed/typo'd data/buildings.json id,
+	// or a future catalogue entry this helper does not yet know. NEVER
+	// returned to the caller (a single unrecognised id must not abort the
+	// whole batch — every OTHER recognised completion in the same call still
+	// registers): recorded via `_ = errs.New(...)` at the skip site (GR#17's
+	// "every monitoring failure also writes a registry error" — the
+	// independent round's own finding was that the prior version dropped
+	// this with ZERO observable trace at all, no error, no counter, no skip
+	// list).
+	ErrUnknownDeathServiceBuildingKind = "MET-G815"
 )

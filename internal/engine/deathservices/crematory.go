@@ -72,6 +72,66 @@ func (d *DeathServicesAPI) registerCrematoriumServiceLocked(correlationID string
 	return err
 }
 
+// UnregisterCrematorium removes a registered crematorium (BUG-734: the
+// bulldoze seam DeathServicesAPI never had). Rejects an unknown id with
+// [ErrUnknownCrematorium] — not idempotent-as-success, the same stance
+// [DeathServicesAPI.UnregisterCemetery] takes and for the same reason
+// (GR#1: unregistering an id you do not hold a live building for is a
+// programming error worth surfacing, not silently swallowing).
+//
+// Semantics:
+//
+//   - bodies already cremated at crematoriumID are UNTOUCHED — a Body record
+//     only ever carries crematoriumID BY VALUE (Cremate's commit loop sets
+//     it once, on the terminal BodyCremated transition) and is never looked
+//     up back through the live crematoriumState, so removing the
+//     registration cannot retroactively un-cremate anyone or disturb AC-14's
+//     conservation identity;
+//   - future cremation stops — a subsequent Cremate call against the removed
+//     id gets [ErrUnknownCrematorium], identical to naming an id that was
+//     never registered (AC-5/AC-17);
+//   - capacity accounting adjusts automatically — draincapacity.go's
+//     MonthlyDrainCapacity multiplies the per-body daily throughput by
+//     len(d.crematoria), so a removed crematorium stops contributing to
+//     city-wide cremation capacity the moment this call returns.
+//
+// CrematoriumServiceID (AC-6's engine.services registration) is a SINGLE
+// shared id across every crematorium instance (crematory.go's own doc:
+// "the kind constant... reserved... for exactly this module" — it is not
+// per-instance), so it is only deregistered from engine.services once the
+// LAST crematorium is removed; deregistering it while other crematoria
+// still stand would zero out the whole city's deathcare staffing/coverage
+// contribution for buildings that are still standing. The engine.services
+// call is best-effort exactly like build.go's own demolish mirror
+// (SubmitDemolishCommand's doc): a nil/never-wired servicesAPI, or the
+// service already gone (ErrServiceNotRegistered — e.g. a prior
+// UnregisterCrematorium already cleared it, or engine.services was reset
+// independently), is not an error here — this call's own contract is about
+// deathservices' registration bookkeeping, not engine.services' internal
+// state machine.
+func (d *DeathServicesAPI) UnregisterCrematorium(crematoriumID string, correlationID string) error {
+	if err := d.checkNotCopied(correlationID, "UnregisterCrematorium"); err != nil {
+		return err
+	}
+	if crematoriumID == "" {
+		return errs.New(ErrUnknownCrematorium, correlationID, map[string]any{"crematoriumId": crematoriumID})
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.crematoria[crematoriumID]; !ok {
+		return errs.New(ErrUnknownCrematorium, correlationID, map[string]any{"crematoriumId": crematoriumID})
+	}
+	delete(d.crematoria, crematoriumID)
+	if len(d.crematoria) == 0 && d.servicesAPI != nil {
+		if err := d.servicesAPI.UnregisterService(CrematoriumServiceID); err != nil {
+			if e, ok := err.(*errs.E); !ok || e.Code != services.ErrServiceNotRegistered {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // DailyThroughput returns the configured crematorium daily cremation cap
 // (AC-5, spec seed 12/d).
 func (d *DeathServicesAPI) DailyThroughput(correlationID string) (int64, error) {

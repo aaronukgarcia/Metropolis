@@ -95,6 +95,50 @@ func (d *DeathServicesAPI) RegisterCemeteryWithCapacity(cemeteryID string, capac
 	return nil
 }
 
+// UnregisterCemetery removes a registered cemetery (BUG-734: the bulldoze
+// seam DeathServicesAPI never had — engine.build's SubmitDemolishCommand
+// mirror for the engine.services edge (UnregisterService) has no
+// engine.deathservices equivalent to call). Semantics, mirroring
+// engine.services.UnregisterService's own documented demolition contract:
+//
+//   - bodies already buried in cemeteryID are UNTOUCHED — a Body record only
+//     ever carries cemeteryID BY VALUE (buryLocked sets b.cemeteryID once,
+//     on the terminal BodyBuried transition) and is never looked up back
+//     through the live cemeteryState, so deleting the cemetery cannot
+//     retroactively un-bury anyone or corrupt AC-14's conservation identity;
+//   - future placement stops — a subsequent Bury/buryLocked call against the
+//     removed id gets [ErrUnknownCemetery], exactly like naming an id that
+//     was never registered at all (AC-2/AC-17 — no special "deleted vs never
+//     existed" distinction, the caller-visible contract is identical);
+//   - capacity accounting adjusts automatically — draincapacity.go's
+//     MonthlyDrainCapacity sums cemetery plot totals by ranging d.cemeteries
+//     directly (no separately-maintained aggregate to also decrement), so a
+//     removed cemetery's plots stop counting toward city-wide capacity the
+//     moment this call returns, with no second bookkeeping step required.
+//
+// Unlike RegisterCemetery, this is NOT idempotent-as-success: naming an id
+// that is not currently registered (never registered, or already
+// unregistered) returns [ErrUnknownCemetery] rather than silently
+// succeeding — a caller unregistering an id it does not actually hold a
+// live building for is a programming error worth surfacing (GR#1), the same
+// stance engine.services.UnregisterService takes for its own unknown-id
+// case.
+func (d *DeathServicesAPI) UnregisterCemetery(cemeteryID string, correlationID string) error {
+	if err := d.checkNotCopied(correlationID, "UnregisterCemetery"); err != nil {
+		return err
+	}
+	if cemeteryID == "" {
+		return errs.New(ErrUnknownCemetery, correlationID, map[string]any{"cemeteryId": cemeteryID})
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.cemeteries[cemeteryID]; !ok {
+		return errs.New(ErrUnknownCemetery, correlationID, map[string]any{"cemeteryId": cemeteryID})
+	}
+	delete(d.cemeteries, cemeteryID)
+	return nil
+}
+
 // isNoPlotAvailable reports whether err is [ErrNoPlotAvailable] (AC-4/H6),
 // the ONE burial-rejection reason a batch caller (hearse.go's
 // RunHearseTransport) treats as "skip and keep going" rather than an

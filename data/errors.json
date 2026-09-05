@@ -2495,6 +2495,12 @@
       "message": "compose.Deps.SeedResidentIDBase/SeedResidentIDCount is invalid: {reason}",
       "remedy": "The externally-seeded resident id range [SeedResidentIDBase+1, SeedResidentIDBase+SeedResidentIDCount] must stay strictly disjoint from compose's own [1, seedCitizenCount] founder range and below engine.attract.MigrantIDBase and engine.citizens.FertilityChildIDBase. Adjust the caller's SeedResidentIDBase/SeedResidentIDCount so the range no longer collides."
     },
+    "MET-G815": {
+      "severity": "warn",
+      "module": "feat.compositionroot",
+      "message": "registerCompletedServiceBuildings skipped a completed building whose catalogue id {buildingID} (order {orderID}) is neither a known cemetery nor crematorium entry -- a renamed/typo'd data/buildings.json id would otherwise silently stop that building from ever registering",
+      "remedy": "verify data/buildings.json's id against compose_buildregistry.go's serviceBuildingCemetery/serviceBuildingCrematorium constants; update one side"
+    },
     "MET-G900": {
       "severity": "error",
       "module": "engine.unlocks",

@@ -78,6 +78,28 @@
 // tracked structure, so a demolished service's capacity/coverage
 // contribution disappears from the next CoverageSummary read.
 //
+// # Completed-building identity and discovery (BUG-734)
+//
+// A completed order's BuildOrderID IS the completed structure's
+// deterministic identity: minted at SubmitBuildCommand time from the
+// monotonic nextOrder counter (never wall-clock, never a map key), and that
+// counter round-trips through this package's own save.Participant
+// (participant.go), so a structure keeps the same ID across a save/restore
+// and an id issued after a load never collides with one issued before it.
+// BuildOrder.BuildingID (exported on the Queue()/CompletedBuildings()
+// snapshot) names WHICH data/buildings.json catalogue entry a completed
+// order built, so a consumer knows both "which structure" (ID) and "what it
+// is" (BuildingID) without reaching into build internals. CompletedBuildings
+// is the cursor-based discovery query — mirroring engine.deathservices'
+// DeathHandoffSince idiom — a consumer (the composition root) uses to find
+// newly-completed named buildings without diffing two Queue() calls itself;
+// see its doc comment for the cursor contract. This is the missing half of
+// FEAT-build-services-bridge-2026-09-02's own contract: that bridge already
+// lets a serviceKind-declaring building register with engine.services at
+// completion, but until BUG-734 nothing outside this package could discover
+// a completion at all for modules (engine.deathservices' cemeteries/
+// crematoria) that are NOT engine.services consumers.
+//
 // # Numeric safety (GR#16, FEAT-086)
 //
 // Every Money/int64 quantity in this package — materials quantities,
