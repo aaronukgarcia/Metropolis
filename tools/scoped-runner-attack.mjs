@@ -32,6 +32,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, readdirSyn
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileWritesIntoSrc } from './scoped-src-write-trace.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const RUNNER = join(REPO, 'tools', 'test', 'scoped.mjs');
@@ -228,62 +229,23 @@ test('serial: the concurrency injection exists and is gated on the allowlist', (
 // spawned child process, one written through a raw stream/fd API, or a path
 // built by string concatenation this regex can't parse. It falls behind
 // exactly as far as the shapes it doesn't grep for.
+//
+// BUG-744 (P2, 2026-09-05): the tracer used to be duplicated inline here and
+// in the R3 fixture test below — both copies truncated a write call's target
+// argument at the first comma, so an INLINE multi-argument
+// `path.join(ROOT, 'src', 'sim', 'data.ts')` (as opposed to the same
+// expression first assigned to a const, which the declaration-RHS capture
+// already took whole) and an object-property holder (`paths.engine`) both
+// sailed through undetected. Extracted to tools/scoped-src-write-trace.mjs
+// (fileWritesIntoSrc) with a balanced-paren argument scan and object-literal
+// property tracing so both call sites share one fix. See that module's
+// header for the full shape list.
 test('forbidden: NO test writes into webconsole/src [F1, superseded by BUG-739]', () => {
   const testDir = join(REPO, 'webconsole', 'test');
   const offenders = [];
-  const usesHelper = /(?:from\s+['"]|import\(\s*['"])\.\.\/testsupport\/mutant\.mjs['"]/;
-  const mutatingApiCall = /(?:writeFileSync|writeFile|copyFileSync)\s*\(\s*([^,)]+)/g;
-  // Tolerate both contiguous paths (src/sim/data.ts) and path.join-style
-  // comma/quote-separated segments (path.join('src', 'sim', 'data.ts')) — a
-  // handful of stray separator characters between segments either way.
-  const srcPath = /src[\\/'",\s]{0,5}(?:sim|components)[\\/'",\s]{0,5}[\w.-]+\.tsx?|_TS_PATH|engineTsPath|dataTsPath/i;
-  // A declaration whose RHS looks like a src path: `const X = ...src/sim/...`
-  const declPattern = /(?:const|let|var)\s+(\w+)\s*=\s*([^;\n]+)/g;
-
   for (const f of readdirSync(testDir).filter((n) => /\.test\.(mjs|tsx)$/.test(n))) {
     const src = readFileSync(join(testDir, f), 'utf8');
-    if (usesHelper.test(src)) continue; // trusts the helper's own internal shadow-copy safety net
-
-    // Build the traced-alias set: any variable whose OWN declaration's RHS
-    // is a src-like path, resolved through up to a few rounds of
-    // alias-of-an-alias (`const a = REAL_PATH; const b = a;`).
-    const srcVars = new Set();
-    const decls = [...src.matchAll(declPattern)];
-    for (let round = 0; round < 4; round++) {
-      let changed = false;
-      for (const [, name, rhs] of decls) {
-        if (srcVars.has(name)) continue;
-        const rhsIsDirectSrcPath = srcPath.test(rhs);
-        const rhsIsAlias = /^\s*(\w+)\s*$/.test(rhs) && srcVars.has(rhs.trim());
-        if (rhsIsDirectSrcPath || rhsIsAlias) {
-          srcVars.add(name);
-          changed = true;
-        }
-      }
-      if (!changed) break;
-    }
-
-    let flagged = false;
-    for (const m of src.matchAll(mutatingApiCall)) {
-      const target = m[1].trim();
-      if (srcPath.test(target) || srcVars.has(target)) {
-        flagged = true;
-        break;
-      }
-    }
-    // copyFileSync + renameSync in-place swap (a real second shape this
-    // repo's RED-proofs used to use): renameSync's own DESTINATION argument
-    // is the same target-expression check, traced the same way.
-    if (!flagged) {
-      for (const m of src.matchAll(/renameSync\s*\(\s*[^,]+,\s*([^,)]+)/g)) {
-        const target = m[1].trim();
-        if (srcPath.test(target) || srcVars.has(target)) {
-          flagged = true;
-          break;
-        }
-      }
-    }
-    if (flagged) offenders.push(f);
+    if (fileWritesIntoSrc(src)) offenders.push(f);
   }
   assert.deepEqual(
     offenders,
@@ -313,22 +275,342 @@ test('R3: the F1 target-expression trace actually catches an aliased-path-with-a
     'writeFileSync(ENGINE_ALIAS, original.replace("a", "b"), "utf8");',
   ].join('\n');
 
-  const usesHelper = /(?:from\s+['"]|import\(\s*['"])\.\.\/testsupport\/mutant\.mjs['"]/;
-  const mutatingApiCall = /(?:writeFileSync|writeFile|copyFileSync)\s*\(\s*([^,)]+)/g;
-  const srcPath = /src[\\/'",\s]{0,5}(?:sim|components)[\\/'",\s]{0,5}[\w.-]+\.tsx?|_TS_PATH|engineTsPath|dataTsPath/i;
-  const declPattern = /(?:const|let|var)\s+(\w+)\s*=\s*([^;\n]+)/g;
+  assert.ok(fileWritesIntoSrc(fixtureSrc), 'the aliased-path-with-comment-gap fixture must be flagged by the SAME target-expression trace F1 uses');
+});
 
-  assert.ok(!usesHelper.test(fixtureSrc), 'fixture sanity: must not accidentally import the helper (would exempt it)');
-  const srcVars = new Set();
-  for (const [, name, rhs] of fixtureSrc.matchAll(declPattern)) {
-    if (srcPath.test(rhs)) srcVars.add(name);
-  }
-  assert.ok(srcVars.has('ENGINE_ALIAS'), 'fixture sanity: ENGINE_ALIAS must be traced as a src-path variable');
-  let flagged = false;
-  for (const m of fixtureSrc.matchAll(mutatingApiCall)) {
-    if (srcPath.test(m[1].trim()) || srcVars.has(m[1].trim())) flagged = true;
-  }
-  assert.ok(flagged, 'the aliased-path-with-comment-gap fixture must be flagged by the SAME target-expression trace F1 uses');
+// BUG-744 (P2, re-round #2 finding on BUG-739's fix): the trace above still
+// truncated a write call's TARGET ARGUMENT at the first comma, so it missed
+// two real shapes and one it should NOT flag. All fed through the SAME
+// shared tracer (tools/scoped-src-write-trace.mjs) F1 uses, on synthetic
+// fixture text only — nothing here touches a real file.
+test('BUG-744: catches an INLINE multi-argument path.join(...) as the write call target', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "const ROOT = '..';",
+    "writeFileSync(path.join(ROOT, 'src', 'sim', 'data.ts'), 'sabotaged');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'an inline multi-argument path.join(ROOT, "src", "sim", "data.ts") write target must be flagged, ' +
+    'not just the same expression assigned to a const first');
+});
+
+test('BUG-744: catches an inline path.resolve(...) write call target too', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "writeFileSync(path.resolve(__dirname, '..', 'src', 'components', 'demandFixUi.ts'), 'x');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc), 'an inline path.resolve(...) src write target must be flagged');
+});
+
+test('BUG-744: catches an object-property path holder (obj.prop, not just a bare identifier)', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "const paths = { engine: '../src/sim/engine.ts', other: 'unrelated.txt' };",
+    'writeFileSync(paths.engine, "sabotaged");',
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc), 'a write through an object-property path holder (paths.engine) must be flagged');
+});
+
+test('BUG-744: an object property NOT pointing at src is not flagged (no over-eager false positive)', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "const paths = { engine: '../src/sim/engine.ts', scratch: 'tmp/probe.txt' };",
+    'writeFileSync(paths.scratch, "fine");',
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(fixtureSrc), 'a write to an unrelated object property must NOT be flagged');
+});
+
+test('BUG-744: catches a template literal whose literal quasi contains a src segment', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "const ROOT = '..';",
+    'writeFileSync(`${ROOT}/src/sim/data.ts`, "sabotaged");',
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc), 'a template-literal write target with a literal src/sim segment must be flagged');
+});
+
+// BUG-744 round REJECT (opus-round-bug744): the balanced-paren fix above
+// itself over-flagged the repo's own sanctioned shadow-copy idiom (a join
+// rooted at a temp/shadow dir), and got copyFileSync's argument direction
+// wrong. Fixed in tools/scoped-src-write-trace.mjs (temp/shadow-root
+// exemption on join/resolve calls; copyFileSync/cpSync destination is
+// argument 1, matching renameSync).
+test('BUG-744 P1 negative: a join rooted at an mkdtempSync shadow dir is NOT a src write (webconsole/testsupport/mutant.mjs idiom)', () => {
+  const fixtureSrc = [
+    "import { writeFileSync, mkdtempSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import path from 'node:path';",
+    "const shadowRoot = mkdtempSync(path.join(tmpdir(), 'metropolis-mutant-webconsole-'));",
+    "writeFileSync(path.join(shadowRoot, 'src', 'sim', 'engine.ts'), 'mutated');",
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(fixtureSrc),
+    'a write into a temp/shadow-rooted join (webconsole/testsupport/mutant.mjs\'s own idiom) must not be flagged as a real src write');
+});
+
+// BUG-744 RE-ROUND REJECT (opus-reround-bug744, same session): the P1 fix
+// above was ITSELF fail-open — exempting anything merely NAMED tmp*/shadow*
+// let a real src write hide behind a temp-sounding name/alias. Narrowed:
+// only a name resolved into tempRootVars via a GENUINE temp binding
+// (mkdtempSync/tmpdir()) — or a temp-hinted name whose RHS is neither a real
+// src path nor a repo-root binding — is exempt. Everything below (e1-e7) was
+// previously a FALSE NEGATIVE (returned false) and must now be flagged true.
+test('BUG-744 re-round e7: an UNDECLARED bare tmp*/shadow*-named base is NOT exempt (name-only bypass closed)', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "function writeShadow(shadowDir) {",
+    "  writeFileSync(path.join(shadowDir, 'src', 'sim', 'engine.ts'), 'mutated');",
+    "}",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'a join base merely NAMED shadow*/tmp* but never bound via mkdtempSync/tmpdir() must NOT be exempt — only a verified temp binding is');
+});
+
+test('BUG-744 re-round e1: a tmp-named var actually holding a REAL src path is flagged, not exempted by its name', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "const tmpEnginePath = path.join(__dirname, '..', 'src', 'sim', 'engine.ts');",
+    "writeFileSync(tmpEnginePath, 'mutated');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'a "tmp"-named variable whose RHS is a genuine repo-rooted src path must be flagged — the name hint must not override the RHS');
+});
+
+test('BUG-744 re-round e2: a shadow-named var holding a REAL src path literal is flagged', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "const shadowEngine = '../src/sim/engine.ts';",
+    "writeFileSync(shadowEngine, 'mutated');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'a "shadow"-named variable whose RHS is a genuine src path literal must be flagged');
+});
+
+test('BUG-744 re-round e3: a tmp-named var aliased to the repo ROOT (not a real temp dir) still flags a joined src write', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "const REPO_ROOT = path.join(__dirname, '..');",
+    "const tmpRoot = REPO_ROOT;",
+    "writeFileSync(path.join(tmpRoot, 'src', 'sim', 'engine.ts'), 'mutated');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    '`tmpRoot = REPO_ROOT` is a repo root wearing a temp-sounding name, not a real scratch dir — must still be flagged');
+});
+
+test('BUG-744 re-round e5: shadowRoot literally BOUND to the repo root (not mkdtempSync) still flags a joined src write', () => {
+  const fixtureSrc = [
+    "import { cpSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "const shadowRoot = path.join(__dirname, '..');",
+    "cpSync(fixtureDir, path.join(shadowRoot, 'src', 'sim', 'engine.ts'));",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'shadowRoot bound to __dirname/.. (the REAL repo root, not an mkdtempSync scratch dir) must still be flagged — name alone must not exempt it');
+});
+
+test('BUG-744 re-round d3: a block-comment-wrapped mutant.mjs import does NOT exempt the file', () => {
+  const fixtureSrc = [
+    '/*',
+    "import { runWithMutant } from '../testsupport/mutant.mjs';",
+    '*/',
+    "import { writeFileSync } from 'node:fs';",
+    "writeFileSync('../src/sim/engine.ts', 'x');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'an import statement sitting inside a /* ... */ block comment is not a real import and must not exempt the file');
+});
+
+test('BUG-744 re-round: the genuine mkdtempSync shadow idiom (a1) and a synthetic fixture repo under mkdtemp (a2) remain exempt', () => {
+  const shadowIdiom = [
+    "import { writeFileSync, mkdtempSync, cpSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import path from 'node:path';",
+    "const shadowRoot = mkdtempSync(path.join(tmpdir(), 'shadow-'));",
+    "cpSync(SRC_ROOT, path.join(shadowRoot, 'src'), { recursive: true });",
+    "writeFileSync(path.join(shadowRoot, 'src', 'sim', 'engine.ts'), 'mutated', 'utf8');",
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(shadowIdiom), 'the real mutant.mjs shadow-copy idiom must remain exempt');
+
+  const fixtureRepo = [
+    "import { writeFileSync, mkdtempSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "const tmp = mkdtempSync('fake-repo-');",
+    "writeFileSync(path.join(tmp, 'src', 'sim', 'data.ts'), 'export const x = 1;');",
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(fixtureRepo), 'a synthetic fixture repo rooted under a genuine mkdtempSync dir must remain exempt');
+});
+
+// BUG-744 RE-ROUND 3 REJECT (opus-reround3-bug744, same session): the
+// re-round-2 fix's fallback ("name hints temp AND rhs isn't ROOT/REPO_ROOT/
+// __dirname-shaped") was a TOKEN BLOCKLIST, trivially defeated by any
+// repo-root expression that doesn't spell one of those tokens. Lead ruling:
+// delete the name-hint branch of tempRootVars entirely — a name is a temp
+// root IFF its RHS is a genuine temp binding (mkdtempSync/tmpdir/os.tmpdir)
+// or derives transitively from one via join(tempRoot, ...). f1-f5 below were
+// all FALSE NEGATIVES under the token-blocklist version; g1-g3 prove the
+// derivation is not fooled by a SECOND, unrelated alias re-pointing at the
+// repo root even when a genuine temp root is ALSO declared in the same file.
+test('BUG-744 re-round 3 f1: tmpBase = path.resolve("..") (no ROOT/REPO_ROOT/__dirname token) is not exempt', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import path, { join } from 'node:path';",
+    "const tmpBase = path.resolve('..');",
+    "writeFileSync(join(tmpBase, 'src', 'sim', 'engine.ts'), 'mutated');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc), 'path.resolve(\'..\') is a real repo-root expression with no blocklisted token — must not be exempt');
+});
+
+test('BUG-744 re-round 3 f3: tmpRoot = process.cwd() is not exempt', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import { join } from 'node:path';",
+    "const tmpRoot = process.cwd();",
+    "writeFileSync(join(tmpRoot, 'src', 'sim', 'engine.ts'), 'mutated');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc), 'process.cwd() is a real repo-root expression — must not be exempt merely because the var is named tmpRoot');
+});
+
+test('BUG-744 re-round 3 f4: shadowDir = fileURLToPath(new URL("..", import.meta.url)) is not exempt', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import { join } from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    "const shadowDir = fileURLToPath(new URL('..', import.meta.url));",
+    "writeFileSync(join(shadowDir, 'src', 'sim', 'engine.ts'), 'mutated');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc), 'a fileURLToPath/import.meta.url repo-root expression must not be exempt merely because the var is named shadowDir');
+});
+
+test('BUG-744 re-round 3 f5: tmpBase = "../" (bare relative literal, no genuine temp binding) is not exempt', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import { join } from 'node:path';",
+    "const tmpBase = '../';",
+    "writeFileSync(join(tmpBase, 'src', 'sim', 'engine.ts'), 'mutated');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc), 'a bare relative-path literal is not a genuine temp binding regardless of the variable name');
+});
+
+test('BUG-744 re-round 3 g1: a REAL temp root is declared, but the write joins an UNRELATED repo-rooted var', () => {
+  const fixtureSrc = [
+    "import { writeFileSync, mkdtempSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import { join } from 'node:path';",
+    "const shadowRoot = mkdtempSync(join(tmpdir(), 's-'));",
+    "const target = ROOT;",
+    "writeFileSync(join(target, 'src', 'sim', 'engine.ts'), 'mutated');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'a genuine mkdtempSync binding existing SOMEWHERE in the file must not launder an unrelated repo-rooted write target (target = ROOT)');
+});
+
+test('BUG-744 re-round 3 g3: a real temp root is aliased, then RE-aliased to the repo root, before the write', () => {
+  const fixtureSrc = [
+    "import { cpSync, mkdtempSync } from 'node:fs';",
+    "import { join } from 'node:path';",
+    "const tmpDir = mkdtempSync('x');",
+    "const tmpAlias = process.cwd();",
+    "cpSync(fixture, join(tmpAlias, 'src', 'sim', 'engine.ts'));",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'tmpAlias re-points at process.cwd() (the repo root), breaking the derivation chain from the real tmpDir — must still be flagged');
+});
+
+test('BUG-744 re-round 3 h4: tmpOut = join(tmpDir, "out") DERIVED from a real temp root remains exempt (transitive derivation)', () => {
+  const fixtureSrc = [
+    "import { writeFileSync, mkdtempSync } from 'node:fs';",
+    "import { join } from 'node:path';",
+    "const tmpDir = mkdtempSync('x');",
+    "const tmpOut = join(tmpDir, 'out');",
+    "writeFileSync(join(tmpOut, 'src', 'sim', 'data.ts'), 'x');",
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(fixtureSrc),
+    'tmpOut derives transitively from tmpDir (a genuine mkdtempSync root) via join — must remain exempt, not just a direct mkdtempSync binding');
+});
+
+test('BUG-744 re-round 3: h1-h3 legitimate negatives (mutant.mjs idiom, mkdtemp fixture repo, inline tmpdir()) still survive', () => {
+  const h1 = [
+    "import { writeFileSync, mkdtempSync, cpSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import { join } from 'node:path';",
+    "const shadowRoot = mkdtempSync(join(tmpdir(), 'shadow-'));",
+    "cpSync(SRC_ROOT, join(shadowRoot, 'src'), { recursive: true });",
+    "writeFileSync(join(shadowRoot, 'src', 'sim', 'engine.ts'), 'mutated', 'utf8');",
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(h1), 'h1: genuine mkdtemp shadow (mutant idiom) must remain exempt');
+
+  const h2 = [
+    "import { writeFileSync, mkdtempSync } from 'node:fs';",
+    "import { join } from 'node:path';",
+    "const tmp = mkdtempSync('fake-');",
+    "writeFileSync(join(tmp, 'src', 'sim', 'data.ts'), 'x');",
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(h2), 'h2: tmp = mkdtempSync fixture repo must remain exempt');
+
+  const h3 = [
+    "import { writeFileSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import { join } from 'node:path';",
+    "writeFileSync(join(tmpdir(), 'src', 'sim', 'data.ts'), 'x');",
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(h3), 'h3: inline tmpdir() base must remain exempt');
+});
+
+test('BUG-744 P1 positive: a repo-rooted join (ROOT/__dirname-style, not temp/shadow) is still flagged', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "const ROOT = path.join(__dirname, '..');",
+    "writeFileSync(path.join(ROOT, 'src', 'sim', 'engine.ts'), 'sabotaged');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'a genuinely repo-rooted join (ROOT, not a temp/shadow dir) must still be flagged — the temp-root exemption must not swallow real writes');
+});
+
+test('BUG-744 P2: copyFileSync destination (argument 1) being src IS flagged', () => {
+  const fixtureSrc = [
+    "import { copyFileSync } from 'node:fs';",
+    "const sabotaged = '/tmp/sabotaged-payload.ts';",
+    "copyFileSync(sabotaged, '../src/sim/engine.ts');",
+  ].join('\n');
+  assert.ok(fileWritesIntoSrc(fixtureSrc),
+    'copyFileSync(source, destination) with destination pointing at src must be flagged — destination is argument 1, same as renameSync');
+});
+
+test('BUG-744 P2: copyFileSync SOURCE being src (destination is a harmless backup) is NOT flagged', () => {
+  const fixtureSrc = [
+    "import { copyFileSync } from 'node:fs';",
+    "const backupInTmp = '/tmp/engine-backup.ts';",
+    "copyFileSync('../src/sim/engine.ts', backupInTmp);",
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(fixtureSrc),
+    'copyFileSync(source, destination) reading FROM src into a harmless backup destination must not be flagged');
+});
+
+test('BUG-744 negative: a write under test/ or testsupport/ (not webconsole/src) is not flagged', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "writeFileSync(path.join(__dirname, 'test', 'fixtures', 'scratch.json'), '{}');",
+    "writeFileSync(path.join(__dirname, '..', 'testsupport', 'tmp-shadow.mjs'), '// scratch');",
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(fixtureSrc), 'writes confined to test/ or testsupport/ paths must not be flagged');
+});
+
+test('BUG-744 negative: a mutant-shadow write via testsupport/mutant.mjs is exempted, even using the new shapes', () => {
+  const fixtureSrc = [
+    "import { writeFileSync } from 'node:fs';",
+    "import path from 'node:path';",
+    "import { runWithMutant } from '../testsupport/mutant.mjs';",
+    "const paths = { engine: path.join('src', 'sim', 'engine.ts') };",
+    'writeFileSync(paths.engine, "would be flagged if not for the helper import");',
+  ].join('\n');
+  assert.ok(!fileWritesIntoSrc(fixtureSrc),
+    'a file that imports testsupport/mutant.mjs is trusted to route mutation through its own shadow-copy safety net');
 });
 
 // B5 (was RED, now fixed by the re-work): the partition itself used to be
