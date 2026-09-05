@@ -45,6 +45,7 @@ export function DemandDock() {
   // plan item's `count` units of `specId` in ONE dispatch — gate the plan's
   // AGGREGATE wage bill, not a per-unit figure (the finding: this button was
   // one of the paths bypassing round r3's single-placement-only gate).
+  // BUG-685: gate plan.mix (the real largest-first batch), not a monoculture.
   function runResolveDemand(serviceKey: string) {
     const plan = fixPlanByService.get(serviceKey);
     const commit = () => run(() => dispatch({ type: 'resolveDemand', serviceKey }));
@@ -52,7 +53,7 @@ export function DemandDock() {
       commit();
       return;
     }
-    const gate = evaluatePlacementBatch(state, Array(plan.count).fill(plan.specId), commit);
+    const gate = evaluatePlacementBatch(state, plan.mix.flatMap((m) => Array(m.count).fill(m.specId)), commit);
     if (gate) setPendingAfford(gate);
     else commit();
   }
@@ -65,10 +66,12 @@ export function DemandDock() {
   // BUG-652 follow-up, ROUND r4: 'Fix All' builds EVERY shown shortfall's
   // whole plan in ONE dispatch — gate the SUM across every plan item as one
   // aggregate confirmation, never per-service.
+  // BUG-685: expand every service's REAL mix (largest-first, possibly
+  // multi-spec), not a monoculture of each plan's primary spec.
   function runFixAll() {
     if (fixAllOrder.length === 0) return;
     const commit = () => run(() => dispatch({ type: 'resolveDemandAll' }));
-    const specIds = fixAllOrder.flatMap((p) => Array(p.count).fill(p.specId));
+    const specIds = fixAllOrder.flatMap((p) => p.mix.flatMap((m) => Array(m.count).fill(m.specId)));
     const gate = evaluatePlacementBatch(state, specIds, commit);
     if (gate) setPendingAfford(gate);
     else commit();

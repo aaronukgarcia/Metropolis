@@ -159,7 +159,29 @@ test('BUG-606 (b): Fix All renders in the Demand panel header and dispatches res
       await new Promise((resolve) => setTimeout(resolve, 80));
     });
 
-    assert.equal(calls.length, 1, 'clicking Fix All must dispatch exactly one action');
+    // RETUNE (this session, post-BUG-685 largest-first landing): this
+    // fixture's Fix All batch now genuinely expands to a real multi-service,
+    // multi-spec mix (data.ts largestFirstFill()) whose aggregate marginal
+    // wage bill trips placementGate.ts's own pre-existing (BUG-652 round r4)
+    // recurring-cost confirm — a correct consequence of the mix now being
+    // fully/honestly expanded (DemandDock.tsx's own BUG-685 comment: "expand
+    // every service's REAL mix ... not a monoculture"), not a regression in
+    // this fix. Drive the SAME real flow a player would: confirm through the
+    // "Big commitment" dialog before asserting the dispatch landed.
+    let dialog = container.querySelector('[role="dialog"]');
+    if (dialog) {
+      assert.equal(calls.length, 0, 'the gate must not dispatch before the player confirms');
+      const buildAnywayBtn = Array.from(dialog.querySelectorAll('button')).find(
+        (b: any) => /build anyway/i.test(b.textContent ?? '')
+      ) as any;
+      assert.ok(buildAnywayBtn, 'a real recurring-cost confirm must offer a "Build anyway" button');
+      await act(async () => {
+        buildAnywayBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      });
+    }
+
+    assert.equal(calls.length, 1, 'clicking Fix All (confirming the recurring-cost gate if one appears) must dispatch exactly one action');
     assert.deepEqual(calls[0], { type: 'resolveDemandAll' }, 'Fix All must dispatch the single batched resolveDemandAll action');
 
     await act(async () => {

@@ -132,20 +132,22 @@ test('FEAT-2326609728 inc2 (a): advisor shows "place N <building>s" with the cor
     // fire/cleanwater/waste) ties on raw gap (need-have = 13,000), and
     // 'cleanwater' wins the alphabetical tie-break. SUPERSEDED 2026-09-03:
     // AUTO_BUILD_DEMAND_FRACTION is now 1.5 (was 0.5) — demandFixPlan() sizes
-    // to 1.5 * that gap = a fixAmount of 19,500, so the "1 dam not 20 towers"
-    // spec choice is unchanged: optimalProvider() picks Water Works
-    // (wat_clean, served 20,000, the cheapest total plan among the units that
-    // can singlehandedly clear 19,500) over Water Tower — a single unit,
-    // count 1. (Population re-derived from the pre-superseding-ruling 16,800
-    // so a single unit still clears the NEW, larger fixAmount.)
+    // to 1.5 * that gap = a fixAmount of 19,500.
+    // RETUNE (this session, post-BUG-685 largest-first landing): the picker
+    // is now largestFirstFill() — biggest CREDITED capacity leads, not the
+    // cheapest total plan (optimalProvider()'s old contract). Reservoir
+    // (wat_reservoir, credited 60,000) one-shots the 19,500 fixAmount and
+    // now wins over Water Works (wat_clean, credited 20,000, the old
+    // cheapest-total-plan pick) — a single unit, count 1. Measured directly
+    // via demandFixPlan() rather than re-guessed.
     const state = shortfallState(initialState, 13_000);
     const plan = demandFixPlan(state);
     const top = expectedWorstFix(plan);
     assert.ok(top, 'precondition: population 13,000 with zero service buildings must yield a real shortfall');
     assert.equal(top.serviceKey, 'cleanwater', 'precondition: cleanwater must win the deterministic tie-break at this population');
-    assert.equal(top.count, 1, 'precondition: one Water Works (served 20,000) clears the 19,500 fixAmount in a single unit');
+    assert.equal(top.count, 1, 'precondition: one Reservoir (credited 60,000) clears the 19,500 fixAmount in a single unit');
     const spName = SPECS[top.specId].name;
-    assert.equal(spName, 'Water Works');
+    assert.equal(spName, 'Reservoir');
 
     const { ctx, calls } = makeCtx(state);
     const { container, root, act } = await mountReal(MapView, ctx);
@@ -154,14 +156,15 @@ test('FEAT-2326609728 inc2 (a): advisor shows "place N <building>s" with the cor
     assert.ok(advisor, 'precondition: the advisor element must render');
     const text = advisor!.textContent ?? '';
     // BUG-587: "N x <Name>" (formatBuildingCount), not the old English
-    // pluraliser's bare "N <Name+s/es>" — Water Works is itself the hazard
-    // case (already ends in -s) that the old rule mangled into "Water
-    // Workses"; assert BOTH the correct shape and the absence of the bug.
+    // pluraliser's bare "N <Name+s/es>" — Water Works was the -s hazard case
+    // this originally targeted; Reservoir (the new largest-first pick at
+    // this fixture) has no such hazard, but the format assertion still
+    // covers the general "N x <Name>" shape.
     assert.ok(
-      text.includes(`place ${top.count} x Water Works`),
-      `advisor text must quantify the fix as "place ${top.count} x Water Works", got: "${text}"`,
+      text.includes(`place ${top.count} x Reservoir`),
+      `advisor text must quantify the fix as "place ${top.count} x Reservoir", got: "${text}"`,
     );
-    assert.ok(!/Water Workses/.test(text), `advisor text must not double-pluralise "Water Works": "${text}"`);
+    assert.ok(!/Reservoirs\b/.test(text), `advisor text must not pluralise "Reservoir" with an English suffix: "${text}"`);
     assert.ok(text.includes('clean water'), 'advisor text must name the service the fix clears');
     assert.ok(container.querySelector('.advisor.clickable'), 'the advisor must be clickable when a fix is offered');
 
@@ -202,11 +205,12 @@ test('FEAT-2326609728 inc2 (b): a DEMAND-panel row in shortfall shows a "Fix (N)
     const plan = demandFixPlan(state);
     const water = plan.find((p: any) => p.serviceKey === 'cleanwater');
     assert.ok(water, 'precondition: cleanwater must be in the plan (row-lookup key must actually exist — a typo would silently show zero buttons)');
-    // FEAT-demanddock-overhaul / BUG-601 (SUPERSEDED 2026-09-03, fraction now
-    // 1.5): at pop 13,000 (fixAmount 19,500) optimalProvider() picks Water
-    // Works (1 unit clears the 19,500 fixAmount) over Water Tower — see (a).
+    // RETUNE (this session, post-BUG-685 largest-first landing): the picker
+    // is now largestFirstFill() — see (a)'s comment. At pop 13,000
+    // (fixAmount 19,500), Reservoir (credited 60,000) one-shots the
+    // shortfall and wins over Water Works.
     assert.equal(water.count, 1);
-    assert.equal(SPECS[water.specId].name, 'Water Works');
+    assert.equal(SPECS[water.specId].name, 'Reservoir');
 
     const { ctx, calls } = makeCtx(state);
     const { container, root, act } = await mountReal(DemandDock, ctx);
@@ -217,15 +221,15 @@ test('FEAT-2326609728 inc2 (b): a DEMAND-panel row in shortfall shows a "Fix (N)
     // "Fix (1)" (cleanwater AND hosp both clear in one unit) — disambiguate by
     // the button's title, which names the specific spec (fixTitle embeds
     // SPECS[fix.specId].name), not just the count.
-    const waterBtn = buttons.find((b) => /Fix \(1\)/.test(b.textContent ?? '') && /Water Works/.test(b.title ?? ''));
+    const waterBtn = buttons.find((b) => /Fix \(1\)/.test(b.textContent ?? '') && /Reservoir/.test(b.title ?? ''));
     assert.ok(
       waterBtn,
-      `expected a "Fix (1)" Water Works button for the clean-water row among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`
+      `expected a "Fix (1)" Reservoir button for the clean-water row among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`
     );
-    // BUG-587: the title must read "1 x Water Works" (formatBuildingCount),
-    // never the old English pluraliser's mangled "Water Workses".
-    assert.ok(/1 x Water Works/.test(waterBtn!.title ?? ''), `Fix button title must read "1 x Water Works", got: "${waterBtn!.title}"`);
-    assert.ok(!/Water Workses/.test(waterBtn!.title ?? ''), `Fix button title must not double-pluralise "Water Works": "${waterBtn!.title}"`);
+    // BUG-587: the title must read "1 x Reservoir" (formatBuildingCount),
+    // never a mangled English-pluraliser suffix.
+    assert.ok(/1 x Reservoir/.test(waterBtn!.title ?? ''), `Fix button title must read "1 x Reservoir", got: "${waterBtn!.title}"`);
+    assert.ok(!/Reservoirs\b/.test(waterBtn!.title ?? ''), `Fix button title must not pluralise "Reservoir" with an English suffix: "${waterBtn!.title}"`);
 
     await act(async () => {
       waterBtn!.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -314,35 +318,43 @@ test('FEAT-2326609728 inc2 (c): no shortfall -> the advisor offers no fix-prompt
 // old implementation and re-running this test.
 // ---------------------------------------------------------------------------
 
-test('BUG-587 (d): "Water Works" x2 renders as "2 x Water Works" (never "Water Workses") on both the MapView advisor and the DemandDock Fix button', async () => {
+test('BUG-587 (d): "Water Works" x4 renders as "4 x Water Works" (never "Water Workses") on both the MapView advisor and the DemandDock Fix button', async () => {
   const dom: any = await installJsdom();
   try {
-    const { initialState } = await import('../src/sim/engine.ts');
+    const { initialState, levelOf, xpForLevel } = await import('../src/sim/engine.ts');
     const { demandFixPlan, SPECS } = await import('../src/sim/data.ts');
     const { MapView } = await import('../src/components/MapView.tsx');
     const { DemandDock } = await import('../src/components/left/DemandDock.tsx');
 
-    // Population 20,000: SUPERSEDED 2026-09-03 (AUTO_BUILD_DEMAND_FRACTION
-    // 0.5 -> 1.5) fixAmount (30,000) needs 2x Water Works (served
-    // 20,000/unit) — and cleanwater independently wins the worst-gap ranking.
-    // Verified by direct exploration of demandFixPlan() at this population
-    // during development; re-verified here as a precondition so a future
-    // SPECS/optimalProvider() rebalance that changes the winning service or
-    // count fails LOUD rather than silently making this test vacuous.
-    const state = shortfallState(initialState, 20_000);
+    // RETUNE (this session, post-BUG-685 largest-first landing): the old
+    // pop-20,000/unlockedAll fixture no longer picks Water Works at all —
+    // largestFirstFill() now one-shots this shortfall with Reservoir
+    // (credited 60,000), which has no "-s" pluralisation hazard, making the
+    // original repro vacuous for the bug this test targets. Locking the
+    // unlock tier to level 3 (wat_tower + wat_clean unlocked, wat_reservoir's
+    // level-9 gate still shut — mirrors bug606-demand-fix-message.test.tsx's
+    // locked-tier RED-PROOF pattern) keeps a REAL Water Works-headed mix in
+    // play: Water Works (credited 20,000) one-shots what it can, Water Tower
+    // fills the rest, and demandFixPlan()'s "count" total (the headline
+    // reader's total-across-mix contract, engine.ts's own doc comment) comes
+    // out to 4 — still exercising the exact -s hazard this test exists for.
+    // Verified directly against demandFixPlan() rather than re-guessed.
+    const base = initialState();
+    const state = { ...base, population: 20_000, unlockedAll: false, xp: xpForLevel(3), funds: 1_000_000_000, administrationState: null };
+    assert.equal(levelOf(state.xp), 3, 'precondition: level 3 unlocks wat_tower + wat_clean but not wat_reservoir (level 9)');
     const plan = demandFixPlan(state);
     const top = expectedWorstFix(plan);
     assert.ok(top, 'precondition: population 20,000 must yield a real shortfall');
     assert.equal(top.serviceKey, 'cleanwater', 'precondition: cleanwater must win the worst-gap ranking at this population');
-    assert.equal(top.count, 2, 'precondition: 2x Water Works must be needed to clear the 30,000 fixAmount (AUTO_BUILD_DEMAND_FRACTION of the 20,000 shortfall)');
+    assert.equal(top.count, 4, 'precondition: the Water-Works-headed mix (wat_clean + wat_tower fallback) totals 4 units at this shortfall');
     assert.equal(SPECS[top.specId].name, 'Water Works');
 
     const { ctx: mapCtx } = makeCtx(state);
     const map = await mountReal(MapView, mapCtx);
     const advisorText = map.container.querySelector('.advisor')?.textContent ?? '';
     assert.ok(
-      advisorText.includes('place 2 x Water Works'),
-      `advisor text must read "place 2 x Water Works", got: "${advisorText}"`,
+      advisorText.includes('place 4 x Water Works'),
+      `advisor text must read "place 4 x Water Works", got: "${advisorText}"`,
     );
     assert.ok(!/Water Workses/.test(advisorText), `advisor text must not double-pluralise "Water Works": "${advisorText}"`);
     await map.act(async () => {
@@ -352,12 +364,12 @@ test('BUG-587 (d): "Water Works" x2 renders as "2 x Water Works" (never "Water W
     const { ctx: dockCtx } = makeCtx(state);
     const dock = await mountReal(DemandDock, dockCtx);
     const buttons = Array.from(dock.container.querySelectorAll('.demand-fix-btn')) as any[];
-    const waterBtn = buttons.find((b) => /Fix \(2\)/.test(b.textContent ?? '') && /Water Works/.test(b.title ?? ''));
+    const waterBtn = buttons.find((b) => /Fix \(4\)/.test(b.textContent ?? '') && /Water Works/.test(b.title ?? ''));
     assert.ok(
       waterBtn,
-      `expected a "Fix (2)" Water Works button among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`,
+      `expected a "Fix (4)" Water Works button among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`,
     );
-    assert.ok(/2 x Water Works/.test(waterBtn!.title ?? ''), `Fix button title must read "2 x Water Works", got: "${waterBtn!.title}"`);
+    assert.ok(/4 x Water Works/.test(waterBtn!.title ?? ''), `Fix button title must read "4 x Water Works", got: "${waterBtn!.title}"`);
     assert.ok(!/Water Workses/.test(waterBtn!.title ?? ''), `Fix button title must not double-pluralise "Water Works": "${waterBtn!.title}"`);
     await dock.act(async () => {
       dock.root.unmount();

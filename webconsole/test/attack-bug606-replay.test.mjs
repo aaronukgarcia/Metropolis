@@ -106,10 +106,10 @@ test('ATTACK: isStateAffecting classifies resolveDemandAll as journaled', () => 
 
 /** Grows a real, journal-reachable city big enough that a SINGLE
  *  resolveDemandAll batch plans well over RESOLVE_DEMAND_ALL_MAX_UNITS units
- *  — one 'placeMany' of high-capacity res_estate blocks (one journaled
- *  action) followed by enough ticks for population to actually fill the new
- *  capacity (residentsCapacity only grows the BUILT capacity; population
- *  fills it in gradually via the real growth simulation, not instantly).
+ *  — one 'placeMany' of high-capacity blocks (one journaled action) followed
+ *  by enough ticks for population to actually fill the new capacity
+ *  (residentsCapacity only grows the BUILT capacity; population fills it in
+ *  gradually via the real growth simulation, not instantly).
  *  BUG-646 (cap 250 -> 2000, Aaron 2026-09-03): scaled from the original 50
  *  blocks/200 ticks (which planned 353 units, no longer enough to exceed the
  *  new 2000 cap) up to 800 blocks/250 ticks (measured 2,255 planned units at
@@ -175,18 +175,18 @@ function capTriggerScriptFor(blockCount) {
   let y = 5;
   for (let i = 0; i < blockCount; i++) {
     tiles.push({ x, y });
-    x += 3;
+    x += 8;
     if (x > 430) {
       x = 5;
-      y += 3;
+      y += 8;
     }
   }
   return [
-    { type: 'debugFunds', amount: 5_000_000_000 },
+    { type: 'debugFunds', amount: 100_000_000_000 },
     { type: 'unlockAll' },
     { type: 'placeMany', spec: 'res_estate', tiles },
     ...ticks(CAP_FIXTURE_CALIBRATION_TICKS),
-    { type: 'debugFunds', amount: -5_000_000_000 },
+    { type: 'debugFunds', amount: -100_000_000_000 },
     { type: 'debugFunds', amount: 1_000_000_000_000 },
     { type: 'resolveDemandAll' },
     ...ticks(5),

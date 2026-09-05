@@ -190,6 +190,12 @@ const FILE_MUTATING_TEST_BASENAMES = new Set([
   // demandFixUi.ts in place. Listed here so needsSerialExecution/
   // partitionMutatingPaired (below) also serialise the tsx group it lands in.
   'attack-bug641-round2.test.tsx', // mutates src/components/demandFixUi.ts
+  // FEAT-2326609772 largest-first rebase, round 4 mechanical finding: three
+  // more tests do the same cp/writeFileSync-mutate/restore RED-PROOF dance
+  // against shared src/sim files and were missing from this list.
+  'bug685-686-largest-first.test.mjs', // mutates src/sim/data.ts
+  'attack-largest-first-reround.test.mjs', // mutates src/sim/data.ts and src/sim/engine.ts
+  'bug606-fix-all.test.mjs', // mutates src/sim/engine.ts
 ]);
 
 // Basename -> the real source file basename it mutates in place. Used only
@@ -204,6 +210,14 @@ const FILE_MUTATING_TEST_TARGET_BASENAME = new Map([
   ['bug-509-tiered-population-ceiling.test.mjs', 'engine.ts'],
   ['feat-dynamic-bailout.test.mjs', 'engine.ts'],
   ['attack-bug641-round2.test.tsx', 'demandFixUi.ts'],
+  // FEAT-2326609772 largest-first rebase, round 4 finding — see the matching
+  // FILE_MUTATING_TEST_BASENAMES entries above. reround's own two mutation
+  // proofs (RR-8/RR-9) hit BOTH data.ts and engine.ts; this map only carries
+  // one value per test (reporting-only, per this map's own doc comment
+  // above), so data.ts is listed as the primary/first-hit target.
+  ['bug685-686-largest-first.test.mjs', 'data.ts'],
+  ['attack-largest-first-reround.test.mjs', 'data.ts'],
+  ['bug606-fix-all.test.mjs', 'engine.ts'],
 ]);
 
 // BUG-708: a killed/timed-out mutating test (the watchdog above SIGKILLs at

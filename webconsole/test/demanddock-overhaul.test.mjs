@@ -41,6 +41,16 @@ function forceOnline(state) {
   return { ...state, buildings: state.buildings.map((b) => ({ ...b, builtTick: null })) };
 }
 
+/** BUG-685: count placements of EVERY spec in a (possibly mixed) plan, not
+ *  just the primary/largest one — a largestFirstFill() mix places several
+ *  specs, so a single-specId filter undercounts. Mirrors demand-fix.test.mjs's
+ *  identical helper. */
+function countMixPlaced(before, after, mix) {
+  const ids = new Set(mix.map((m) => m.specId));
+  const countOf = (bs) => bs.filter((b) => ids.has(b.spec)).length;
+  return countOf(after) - countOf(before);
+}
+
 // ---------------------------------------------------------------------------
 // AC-7/AC-8 — optimalProvider(): "1 dam not 20 towers".
 // ---------------------------------------------------------------------------
@@ -123,15 +133,26 @@ test('attacker case: strictly-dominated pick eliminated — shortfall 2,000 (1 u
   assert.equal(sp.id, 'wat_tower', 'equal unit count must go to the cheaper spec, never the pricier one');
 });
 
-test('attacker case: pop 8,000 power picks the cheaper multi-turbine plan, not a single £225M Offshore Wind Array', () => {
+// SUPERSEDED 2026-09-04 (BUG-685, Aaron's largest-first ruling): this test
+// used to prove demandFixPlan() picked the cheaper multi-turbine plan over a
+// single big unit — that is EXACTLY the "carpets the map with the smallest
+// unit" defect BUG-685 was filed to close (Aaron's real save: 10,033 6MW
+// turbines and ZERO nukes/CCGT/offshore for a 51.7GW city). demandFixPlan()'s
+// BUILD plan now goes through largestFirstFill(), not optimalProvider()'s
+// cheapest-total-plan scorer (still exercised, unchanged, by the
+// optimalProvider()-based tests above this one) — the biggest unlocked spec
+// wins a one-unit clear regardless of cost.
+test('BUG-685: pop 8,000 power picks the BIGGEST unlocked spec that one-shot-clears the shortfall, not a multi-turbine monoculture', () => {
   const s = shortfallState(8_000);
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'power');
   assert.ok(plan, 'a power shortfall must exist at pop 8,000');
-  assert.notEqual(plan.specId, 'pow_offshore', 'RED-PROOF: the REJECTed draft recommended a single £225M Offshore Wind Array here');
-  const sp = SPECS[plan.specId];
-  const planTotal = plan.count * sp.cost;
-  const offshoreTotal = SPECS.pow_offshore.cost; // 1 unit clears any shortfall this small
-  assert.ok(planTotal < offshoreTotal, `the chosen plan (£${planTotal}) must actually cost less than the 1-unit Offshore Wind Array (£${offshoreTotal})`);
+  assert.equal(plan.mix.length, 1, 'precondition: the biggest unlocked power spec alone clears this small shortfall in one unit');
+
+  const biggestPowerSpec = Object.values(SPECS)
+    .filter((sp) => sp.kind === 'power' && (sp.mw ?? 0) > 0)
+    .reduce((best, sp) => ((sp.mw ?? 0) > (best.mw ?? 0) ? sp : best));
+  assert.equal(plan.specId, biggestPowerSpec.id, 'BUG-685: the biggest unlocked power spec must win, even though it costs far more than a turbine');
+  assert.notEqual(plan.specId, 'pow_wind', 'must never be the smallest (6 MW) turbine when bigger unlocked plants exist');
 });
 
 test('AC-12: optimalProvider returns null when nothing is unlocked for the service', () => {
@@ -285,14 +306,20 @@ test('AC-10: resolveDemand for fire respects affordability — places only what 
   assert.ok(limitedFunds > 0);
   const limited = { ...s, funds: limitedFunds };
 
+  // BUG-685: recompute the plan against `limited` — largestFirstFill() is
+  // unlock/allowance-aware but not itself budget-gated (BUG-601's own
+  // convention), so the mix SHAPE is unaffected by the lower budget; only
+  // how much of it gets placed is capped downstream.
+  const limitedPlan = demandFixPlan(limited).find((p) => p.serviceKey === 'fire');
+  assert.ok(limitedPlan, 'a fire shortfall (and a provider) must still exist at the reduced budget');
+
   const result = reducer(limited, { type: 'resolveDemand', serviceKey: 'fire' });
-  const placedCount = result.buildings.filter((b) => b.spec === plan.specId).length -
-    limited.buildings.filter((b) => b.spec === plan.specId).length;
-  assert.ok(placedCount > 0 && placedCount < plan.count, `expected a strictly partial fire placement, got ${placedCount} of ${plan.count}`);
+  const placedCount = countMixPlaced(limited.buildings, result.buildings, limitedPlan.mix);
+  assert.ok(placedCount > 0 && placedCount < limitedPlan.count, `expected a strictly partial fire placement, got ${placedCount} of ${limitedPlan.count}`);
   assert.ok(result.funds >= 0, 'funds never went negative from the bulk fire placement');
   assert.ok(result.placeNotice && /insufficient funds/i.test(result.placeNotice));
   assert.ok(
-    result.placeNotice.includes(String(placedCount)) && result.placeNotice.includes(String(plan.count)),
+    result.placeNotice.includes(String(placedCount)) && result.placeNotice.includes(String(limitedPlan.count)),
     'placeNotice reports both placed count and wanted count'
   );
 });

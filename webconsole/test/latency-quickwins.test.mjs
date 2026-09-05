@@ -17,7 +17,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { recordAction, isStateAffecting } from '../src/sim/journal.ts';
-import { SPECS, occupiedSet, computeRoadConnectivity, demandFixPlan } from '../src/sim/data.ts';
+import { SPECS, occupiedSet, computeRoadConnectivity, demandFixPlan, largestFirstFill, AUTO_BUILD_DEMAND_FRACTION } from '../src/sim/data.ts';
 
 /** Mirrors test/demand-fix.test.mjs's shortfallState(): a real population, no
  *  service buildings, all specs unlocked, ample treasury — guarantees a
@@ -253,13 +253,32 @@ test('BUG-566: resolveDemand aggregates the road-topology flag across its WHOLE 
   // even when only ONE power unit was placed (a single unit can still need a
   // multi-tile road connector). Count placements of the PLAN's own spec
   // specifically — that is what "a multi-unit batch" actually means.
+  //
+  // RETUNE (this session, post-BUG-685-MONEY landing): demandFixPlan()'s own
+  // `plan`/`plan.mix` is PURE capacity-driven (largestFirstFill() with no
+  // budget) — at pop 10,000 that is a single Three Gorges Dam (£5bn), count
+  // 1, regardless of this fixture's £100M treasury. The REAL build path
+  // (placePlanItem, engine.ts) self-heals a wholly-unaffordable pure plan by
+  // retrying with a fresh, funds-aware mix (largestFirstFill's own optional
+  // budget param) — mirror that exact fallback here to derive the REAL
+  // multi-unit expectation this test needs, rather than asserting on the
+  // now-stale (funds-agnostic) plan.count.
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'power');
-  assert.ok(plan && plan.count > 1, 'precondition: the power demand-fix plan itself must call for 2+ units');
+  assert.ok(plan, 'precondition: a real power shortfall must exist at this population');
+  assert.ok(
+    SPECS[plan.specId].cost > s.funds,
+    'precondition: the pure plan\'s primary spec must be genuinely unaffordable at this treasury, so the funds-aware fallback actually fires'
+  );
+  const fixAmount = (plan.need - plan.have) * AUTO_BUILD_DEMAND_FRACTION;
+  const affordableMix = largestFirstFill(s, 'power', fixAmount, s.funds);
+  const affordableCount = affordableMix.reduce((sum, m) => sum + m.count, 0);
+  assert.ok(affordableCount > 1, 'precondition: the funds-aware fallback mix itself must call for 2+ units');
 
   const after = reducer(s, { type: 'resolveDemand', serviceKey: 'power' });
 
-  const placedUnits = after.buildings.filter((b) => b.spec === plan.specId).length -
-    s.buildings.filter((b) => b.spec === plan.specId).length;
+  const mixSpecIds = new Set([...plan.mix, ...affordableMix].map((m) => m.specId));
+  const placedUnits = after.buildings.filter((b) => mixSpecIds.has(b.spec)).length -
+    s.buildings.filter((b) => mixSpecIds.has(b.spec)).length;
   assert.ok(placedUnits > 1, `precondition: resolveDemand placed multiple power UNITS (not just connector tiles), got ${placedUnits}`);
 
   // RED PROOF (verified live during this fix): reverting the aggregation in

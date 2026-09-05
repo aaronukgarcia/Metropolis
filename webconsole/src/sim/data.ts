@@ -17,6 +17,16 @@ import { feederTrafficWeight, trafficActivity } from './engine.ts';
 // crime<->wellbeing feedback loop acyclic within a single tick (see the long
 // comment on crimeRateOf below for the full argument).
 import { wellbeingCoreOf } from './engine.ts';
+// FEAT-2326609772 (largest-first rebase fix, 2026-09-05): largestFirstFill's
+// right-sized-one-shot rule (see its doc comment) needs to know whether two
+// candidates are the SAME consolidator family (e.g. edu_nursery next to its
+// own civic-tier successor edu_nursery_city) — familyKeyOf lives in
+// consolidator.ts, which itself imports SPECS/canEnterSim/etc from data.ts,
+// so this is the SAME function-only (call-time) cyclic import pattern as
+// specUnlocked above: familyKeyOf is a plain function declaration, never
+// invoked at either module's eval time, so the live ESM binding resolves
+// safely.
+import { familyKeyOf } from './consolidator.ts';
 // FEAT-159: DEBUG-ONLY per-class fast-build override (off by default).
 import { scaleConstructionTicks } from './debugBuildSpeed.ts';
 // FEAT-2326609711 inc1: fiscal.ts is a leaf module (imports only ./types.ts),
@@ -527,6 +537,42 @@ function childrenAtTier(sp: Spec, tier: number): number {
  */
 function servedAtTier(sp: Spec, tier: number): number {
   return sp.capacityTiers && sp.capacityTiers.length > 0 ? capacityAtTier(sp, tier) : (sp.served ?? 0);
+}
+
+/**
+ * BUG-685/686 (Aaron ruling, 2026-09-04, "wind turbines can not produce the
+ * power thats needed and 20,000 kindergartens is nuts") — the capacity
+ * credited to a FRESH placement of `sp` for the demand-fix PICKER
+ * (largestFirstFill(), below), as distinct from childrenAtTier()/
+ * servedAtTier() above (BUG-662), which correctly read an EXISTING
+ * building's CURRENT capacityTier. A brand-new unit is placed at tier 0 and
+ * only grows toward its ladder's top tier over its lifetime, one step at a
+ * time, via evaluateBuildingMonitors' auto-scale pass (engine.ts) — pricing
+ * every future placement off tier-0 forever is exactly the toy-monoculture
+ * defect BUG-686 named (edu_nursery: 30 children at tier 0 vs a ladder built
+ * to reach a real early-years-campus scale, so a 253k shortfall priced off
+ * 30 proposed 12,654 buildings).
+ *
+ * Credited capacity = LADDER_CREDIT_FRACTION of the ladder's TOP tier — a
+ * documented, derived (never hand-picked-per-spec) mid-lifetime estimate:
+ * never the untouched tier-0 base (undercounts every laddered spec's real
+ * eventual capacity, the BUG-686 defect), and never the fully-matured top
+ * tier either (assumes every fresh placement instantly auto-scales all the
+ * way, which the per-tier BUILDING_AUTO_SCALE_COST_FRACTION charge means it
+ * has not yet paid for). ⚠ PLACEHOLDER-balance (Balance Number Regime) — the
+ * 50% figure is directional, pending Aaron's row-by-row pass; it is applied
+ * as ONE constant across every laddered spec (GR#3 SSOT), never re-derived
+ * per call site. Specs with no capacityTiers ladder (col_sixth/uni-class,
+ * waste_depot) fall straight through to `base`, unchanged — same fallback
+ * shape childrenAtTier()/servedAtTier() already use.
+ */
+export const LADDER_CREDIT_FRACTION = 0.5;
+
+export function creditedUnitCapacity(sp: Spec, base: number): number {
+  const tiers = sp.capacityTiers;
+  if (!tiers || tiers.length === 0) return base;
+  const top = tiers[tiers.length - 1];
+  return Math.max(base, Math.round(top * LADDER_CREDIT_FRACTION));
 }
 
 /**
@@ -1337,6 +1383,30 @@ function reactorLadder(base: number, n = 6): number[] {
 }
 
 /**
+ * BUG-686 (Aaron ruling, 2026-09-04, "20,000 kindergartens is nuts"): a
+ * "campus" ladder for a spec whose top tier represents genuinely much bigger
+ * FACILITY (extra classroom blocks/wings added over time), not the ~10%-per-
+ * tier efficiency-only growth tierLadder() models. edu_nursery's old
+ * tierLadder(30) topped out at 71 — a toy figure next to hea_teaching's
+ * 120,000 base — so a 10%-compound curve cannot reach a realistic large
+ * early-years-campus scale in 10 tiers without breaking the "tier[0] ==
+ * base" contract every other ladder shares. campusLadder keeps that SAME
+ * geometric shape (tier[0] == base exactly, tier[i] = round(base * r^i)) but
+ * SOLVES the ratio `r` so the LAST tier lands exactly on `top`, instead of
+ * fixing `r` at 10% — the reactorLadder() precedent for "this one spec needs
+ * its own growth curve, not the generic one" (GR#3: one generator per growth
+ * SHAPE, reused wherever that shape applies, rather than a bespoke literal
+ * array). ⚠ PLACEHOLDER-balance (Balance Number Regime) — `top` is
+ * directional (Aaron's row-by-row pass may retune), not a researched figure.
+ */
+function campusLadder(base: number, top: number, n = 10): number[] {
+  const ratio = Math.pow(top / base, 1 / (n - 1));
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(Math.round(base * Math.pow(ratio, i)));
+  return out;
+}
+
+/**
  * FEAT-2326609740 §2/Aaron Q100083 (2026-09-03): "height-limit table APPROVED
  * as placeholder" — per-spec storey caps enforced structurally by
  * evaluateBuildingMonitors (an UP tier step that would exceed the cap is
@@ -1859,7 +1929,11 @@ export const SPECS: Record<string, Spec> = {
   hea_hospital: P('hea_hospital', 'health', 'General Hospital', 'Serves 40,000', 2, 2, 28800000, 1600, '#d95f57', 'services', 4, { served: 40000, capacityTiers: tierLadder(40000), careTier: 'regional' }),
   pol_station: P('pol_station', 'police', 'Police Station', 'Covers 10,000', 2, 1, 4680000, 260, '#6e7bd9', 'services', 3, { served: 10000, capacityTiers: tierLadder(10000) }),
 
-  edu_nursery: P('edu_nursery', 'school', 'Kindergarten', '30 places · ages 0–4', 1, 1, 2160000, 120, '#ffd166', 'services', 2, { children: 30, stage: 'nursery', capacityTiers: tierLadder(30) }),
+  // BUG-686: capacityTiers extended from tierLadder(30) (topped at a toy 71)
+  // to campusLadder(30, 2000) — a fully-expanded Kindergarten becomes a real
+  // early-years campus (≈2,000 places), not a slightly-bigger single hut. See
+  // campusLadder()'s own doc comment for why this spec needs its own curve.
+  edu_nursery: P('edu_nursery', 'school', 'Kindergarten', '30 places · ages 0–4', 1, 1, 2160000, 120, '#ffd166', 'services', 2, { children: 30, stage: 'nursery', capacityTiers: campusLadder(30, 2000) }),
   // FEAT-2326609761 (Aaron, 2026-09-05, dogfood gap): "ONE city kindergarten
   // doing 1000 children, not 40 kindergartens" — his own consolidation
   // example, and the catalogue had NO same-stage successor for edu_nursery
@@ -5689,28 +5763,41 @@ export const RESOLVE_DEMAND_ALL_MAX_UNITS = 2000;
 export interface DemandFixPlanItem {
   /** serviceCoverageOf() id, or 'refuse' for the wasteStatsOf() collection service. */
   serviceKey: string;
-  /** The canonical buildable spec id chosen for this service (cheapest unlocked). */
+  /** BUG-685: the PRIMARY (largest-capacity) spec `mix[0]` chose — the
+   *  "headline" pick for any caller that only wants one name. */
   specId: string;
-  /** Capacity ONE unit of specId contributes to this service (children/served/mw/tonnes). */
+  /** Credited capacity (creditedUnitCapacity()) ONE unit of `specId` (mix[0])
+   *  contributes — see largestFirstFill()'s own doc comment for why this is
+   *  the ladder-grown credit, not a fresh unit's tier-0 base. */
   unitCapacity: number;
   /** Current demand/required quantity for the service. */
   need: number;
   /** Current online capacity/coverage for the service. */
   have: number;
-  /** Units to place to close AUTO_BUILD_DEMAND_FRACTION of the (need-have) gap
-   *  (BUG-601) — always > 0 when this item is present. */
+  /** BUG-685: TOTAL units across the whole `mix` needed to close
+   *  AUTO_BUILD_DEMAND_FRACTION of the (need-have) gap (BUG-601) — always > 0
+   *  when this item is present. Was single-spec before BUG-685; a mixed plan
+   *  now sums every mix entry's count. */
   count: number;
-  /** BUG-606: total cost (`count` * specId's placementCost) of the CHOSEN plan
-   *  — the same total-plan-cost optimalProvider()/rankedProviders() scored
-   *  this pick against, exposed so a demand notice can show a real £ figure
-   *  without re-deriving it. */
+  /** BUG-685: TOTAL cost across the whole `mix` (sum of every entry's
+   *  planCost) — what a demand notice's real £ figure should show. Was
+   *  single-spec (`count * specId's placementCost`) before BUG-685. */
   planCost: number;
-  /** BUG-606 ("is this one hypermarket or 50?") — the next-best scored
-   *  provider for the SAME fixAmount (rankedProviders()'s runner-up), so a
-   *  demand notice can show a concrete alternative ("N x <Name> or M x
-   *  <OtherName>") alongside the cheapest pick, agreement-by-construction
-   *  (never re-derived independently by the UI). Null only when a single
-   *  unlocked provider exists for this service. */
+  /** BUG-685 (Aaron, 2026-09-04, "largest-first, not toy monocultures"): the
+   *  full LARGEST-FIRST build plan from largestFirstFill() — one entry per
+   *  spec actually used, ordered largest-credited-capacity-first. Always at
+   *  least one entry (mix[0] === the specId/unitCapacity pair above);
+   *  placePlanItem() (engine.ts) walks every entry to place the REAL mixed
+   *  batch, never just `specId`/`count` alone. */
+  mix: MixEntry[];
+  /** BUG-606 ("is this one hypermarket or 50?"), re-scoped by BUG-685: when
+   *  the mix used more than one spec, this is the NEXT-LARGEST spec ALSO
+   *  used in this SAME composed plan (mix[1]) — informational context on
+   *  what else this plan is building, not a competing alternative plan.
+   *  When the mix used only one spec, this falls back to the old semantics
+   *  (rankedProviders()' runner-up: a genuine competing "or M x B instead"
+   *  single-spec plan for the SAME fixAmount). Null only when no runner-up
+   *  exists either way (a single unlocked provider for this service). */
   alternative: { specId: string; count: number; planCost: number } | null;
 }
 
@@ -5896,6 +5983,270 @@ export function optimalProvider(s: SimState, serviceKey: string, budget: number,
   return rankedProviders(s, serviceKey, budget, shortfall)[0]?.sp ?? null;
 }
 
+/** One spec's slice of a largestFirstFill() mixed plan — see DemandFixPlanItem.mix. */
+export interface MixEntry {
+  specId: string;
+  /** Credited unit capacity (creditedUnitCapacity()) THIS spec was sized against. */
+  unitCapacity: number;
+  count: number;
+  planCost: number;
+}
+
+/**
+ * BUG-685 (Aaron ruling, 2026-09-04, "wind turbines can not produce the
+ * power thats needed" — a 51.7GW city carpeted with 10,033 6MW turbines and
+ * ZERO nukes/CCGT/offshore despite all being unlocked): the demand-fix
+ * PICKER. Replaces "pick the single cheapest-total-plan spec" (rankedProviders,
+ * still used unchanged for the informational fire/parks/refuse recommended-
+ * spec labels in serviceCoverageOf, which show ONE suggested name, not a
+ * buildable plan) with Aaron's explicit rule for the thing that actually gets
+ * BUILT: fill the shortfall with the BIGGEST unlocked, capacity-available
+ * spec first, and only reach for smaller specs to cover what the biggest
+ * one(s) cannot (either because they'd overshoot, or because a maxPerCity
+ * cap/lock has run out of them).
+ *
+ * ALGORITHM: candidates for `serviceKey` (same match()/canEnterSim/
+ * specUnlocked/remainingAllowance gates rankedProviders() uses — unlock-aware,
+ * dam-cap-aware) sorted by CREDITED capacity (creditedUnitCapacity() —
+ * BUG-686: a fresh unit's ladder-grown capacity, never its tier-0 base)
+ * descending, cost ascending / id ascending tie-break (GR#21 determinism).
+ * Walk largest-to-smallest, at each step:
+ *   - if THIS spec's capacity alone can clear whatever remains, take exactly
+ *     ONE unit of it and stop — a shortfall smaller than the biggest
+ *     available unit still gets built as ONE building of the biggest spec
+ *     that fits it, never deferred down to a monoculture of the smallest
+ *     spec just because the big one "doesn't divide evenly" (a hamlet's
+ *     40-child nursery shortfall gets ONE Kindergarten; a 18,000-shortfall
+ *     fire gap with fire_station (served 20,000) unlocked gets ONE Fire
+ *     Station, never 5x Fire Post);
+ *   - otherwise take floor(remaining / capacity) WHOLE units (never round up
+ *     here — that would let a huge spec overshoot by nearly its own
+ *     capacity for no reason when smaller specs can absorb the remainder)
+ *     capped at that spec's remainingAllowance(), and move to the
+ *     next-smaller spec with whatever remains, exactly as if the exhausted
+ *     capacity had never existed;
+ *   - the LAST (smallest) candidate always rounds UP (ceil) if anything
+ *     still remains once every other candidate has been tried, since there
+ *     is no smaller spec left to hand a remainder to.
+ *
+ * OVERSHOOT BOUNDARY (Aaron's 150% target, AUTO_BUILD_DEMAND_FRACTION,
+ * remains the caller's job — this function just fills whatever `shortfall`
+ * it is handed): the only two ways this function itself ever rounds UP are
+ * the "one unit clears it" branch and the final-candidate closing ceil —
+ * both push the total past `shortfall` by strictly LESS than the capacity of
+ * the specific unit used, which (sort order) is always <= mix[0]'s (the
+ * largest used spec's) capacity. So the whole plan can never overshoot the
+ * requested `shortfall` by as much as one largest-candidate-sized unit,
+ * satisfying Aaron's rule.
+ *
+ * Affordability: by DEFAULT (no `budget` argument — every existing caller
+ * that never passed one, and every direct test of this function's pure
+ * capacity-based sizing) this stays exactly as documented above and always
+ * has: NOT enforced, mirroring rankedProviders() budget=s.funds convention
+ * at the call site and BUG-601's own doc comment (the downstream
+ * resolveDemand/resolveDemandAll reducer places at most `count` units and
+ * stops the moment funds run out) — the whole capacity-sized mix is offered
+ * and the reducer's own funds gate does the real capping.
+ *
+ * BUG-685-MONEY (the round's LEAD DEFECT, Aaron/independent-round
+ * 2026-09-04): when a caller DOES pass `budget` (demandFixPlan() does, with
+ * s.funds), affordability now gates candidate selection too — the one-shot
+ * branch's own doc-comment promise ("take exactly one unit and stop") is
+ * only honoured for a candidate that can actually be BOUGHT. A candidate
+ * that cannot afford even ONE unit at the current running funds pool
+ * contributes NOTHING and is skipped entirely (`remaining` untouched), so
+ * the walk falls through to the next-SMALLER candidate exactly like an
+ * exhausted maxPerCity/remainingAllowance cap already does (same `continue`
+ * path) — never leaving the mix stranded on a single unaffordable pick with
+ * no smaller fallback ever offered (the pre-fix defect: a GBP5bn dam alone
+ * in the mix against a GBP1bn treasury placed ZERO buildings even though a
+ * GBP3.6M wind turbine was unlocked, affordable, and simply never reached).
+ * A candidate that CAN afford some but not all of its capacity-sized `units`
+ * is clamped down to what it can afford (never above the capacity-derived
+ * figure — the overshoot boundary above is untouched), and the walk
+ * continues to the next-smaller candidate with whatever of `remaining` is
+ * left, same as the existing allowance-cap fall-through. This is orthogonal
+ * to the DemandDock recurring-cost CONFIRM dialog (a UI gate on an
+ * affordable-but-notable ongoing cost) — that stays exactly as-is.
+ *
+ * RIGHT-SIZED ONE-SHOT (FEAT-2326609772 rebase fix, 2026-09-05, after the
+ * civic-tier consolidator landed edu_nursery_city as a same-stage, much
+ * BIGGER successor to edu_nursery): the one-shot branch above ("this spec
+ * alone clears the remainder — take exactly one unit and stop") used to mean
+ * "the CURRENT (biggest-not-yet-tried) candidate", because a single spec was
+ * never both a hamlet-scale AND a city-scale candidate for the same service
+ * at once. That stopped being true the moment a service family gained TWO
+ * one-shot-capable specs of very different scale (edu_nursery credits 1,000
+ * children, edu_nursery_city credits 1,179 — both comfortably clear a
+ * 40-child hamlet shortfall), and walking strictly biggest-first meant the
+ * £40M City Kindergarten always won a 40-child shortfall the £2.16M
+ * Kindergarten was completely capable of clearing — the exact "1,000
+ * kindergartens is nuts" over-build BUG-685/686 already rejected, just
+ * inverted (now an over-BUY instead of an over-COUNT). Aaron's ruling stays
+ * intact for a shortfall genuinely bigger than the small spec's one-shot
+ * reach (nothing here changes the floor/ceil walk below, which is exactly
+ * how a large shortfall still reaches for edu_nursery_city or bigger), AND
+ * for every OTHER service family, which is why this is scoped to the
+ * consolidator's OWN family key (familyKeyOf: kind|capacityField|tag|stage|
+ * careTier — the exact discriminator that already keeps wat_clean separate
+ * from wat_waste and hea_clinic separate from hea_hospital), never applied
+ * globally: among untried candidates SHARING THE LEADING CANDIDATE'S FAMILY
+ * that could SINGLE-HANDEDLY clear whatever is left (capacity >= remaining),
+ * pick the SMALLEST such capacity — the least overshoot — not the biggest;
+ * tie-break cheaper unit cost then id ascending (same GR#21 total order as
+ * the existing sort), then apply the SAME allowance/affordability clamp as
+ * every other pick. A candidate outside the family (e.g. pow_nuke sitting
+ * next to pow_hydro — different `tag`, so a different family) can NEVER
+ * demote the leader this way.
+ *
+ * FAMILY MEMBERSHIP ALONE IS NOT ENOUGH, THOUGH (round-2 finding on this
+ * same fix): wat_tower/wat_clean/wat_reservoir are ALL one `cleanwater`
+ * family (kind:'water'+tag:'clean', no stage) — structurally identical in
+ * shape to edu_nursery/edu_nursery_city — yet Aaron's OWN pinned test
+ * ("BUG-685 LARGEST-FIRST — the biggest unlocked spec wins a one-unit clear
+ * even when it costs more") requires wat_reservoir (£81M, served 60,000) to
+ * win a ~3,150-shortfall one-shot over wat_tower (£2.7M, served 4,000) —
+ * the water family's OWN hamlet-vs-city moment, ruled the OPPOSITE way. The
+ * two cases are distinguished by exactly one derivable number: how far
+ * apart the candidates' CREDITED capacities sit. edu_nursery (1,000) and
+ * edu_nursery_city (1,179) are barely 18% apart — practically the same rung,
+ * so paying 18.5x the price (£40M vs £2.16M) for a sliver more headroom is
+ * the "1,000 kindergartens is nuts" defect in reverse. wat_tower (4,000) and
+ * wat_reservoir (60,000) are 15x apart — genuinely different INFRASTRUCTURE
+ * CLASSES (a tower vs a valley dam), where paying more for the big one is
+ * exactly RR-5c's DENSITY-FIRST point. ONE_SHOT_SIBLING_RATIO_BOUND (below)
+ * is this derived cutoff: a same-family sibling only demotes the leader when
+ * the leader's own credited capacity is within that multiple of the
+ * sibling's (1.18x for nursery, comfortably under; 15x/16.7x for
+ * water/power, comfortably over) — PLACEHOLDER-balance (directional, pending
+ * Aaron's row-by-row pass) like every other constant in this file's Balance
+ * Number Regime. Only when NO same-family, ratio-bounded candidate can
+ * one-shot it does the walk fall through to the original biggest-first
+ * floor/ceil behaviour, unchanged.
+ */
+/** PLACEHOLDER-balance (see largestFirstFill's "FAMILY MEMBERSHIP ALONE IS
+ *  NOT ENOUGH" doc comment above): the credited-capacity ratio under which
+ *  two same-family one-shot candidates are treated as near-equal rungs of
+ *  the SAME infrastructure (right-size to the smaller/cheaper one) rather
+ *  than genuinely different infrastructure classes (biggest-first stands).
+ *  2x comfortably separates the nursery case (1.18x apart) from every
+ *  currently-accepted biggest-wins case (water 15x, power 16.7x+) — derived
+ *  from the catalogue's own numbers, not chosen to hit a specific test. */
+export const ONE_SHOT_SIBLING_RATIO_BOUND = 2;
+export function largestFirstFill(
+  s: SimState,
+  serviceKey: string,
+  shortfall: number,
+  budget: number = Infinity
+): MixEntry[] {
+  const rule = DEMAND_FIX_PROVIDERS[serviceKey];
+  if (!rule || shortfall <= 0) return [];
+
+  const candidates: { sp: Spec; capacity: number; unitCost: number }[] = [];
+  for (const sp of Object.values(SPECS)) {
+    if (!canEnterSim(sp) || !specUnlocked(s, sp)) continue;
+    if (remainingAllowance(s, sp) <= 0) continue;
+    if (!rule.match(sp)) continue;
+    const capacity = creditedUnitCapacity(sp, rule.unitCapacity(sp));
+    if (capacity <= 0) continue;
+    candidates.push({ sp, capacity, unitCost: placementCost(sp) });
+  }
+  if (candidates.length === 0) return [];
+
+  // LARGEST-FIRST: biggest credited capacity leads; ties broken by cheaper
+  // unit cost, then id ascending (GR#21 — deterministic, no coincidental
+  // Object.values() iteration-order dependence).
+  candidates.sort((a, b) => {
+    if (a.capacity !== b.capacity) return b.capacity - a.capacity;
+    if (a.unitCost !== b.unitCost) return a.unitCost - b.unitCost;
+    return a.sp.id < b.sp.id ? -1 : a.sp.id > b.sp.id ? 1 : 0;
+  });
+
+  const mix: MixEntry[] = [];
+  let remaining = shortfall;
+  // BUG-685-MONEY: the running funds pool this whole walk draws against —
+  // see the doc comment above. Stays at Infinity (never binds) for every
+  // caller that omits `budget`, so the pure capacity-sized behaviour this
+  // function has always had is untouched by default.
+  let fundsRemaining = budget;
+  const used = new Set<string>(); // spec ids already consumed by this walk
+
+  while (remaining > 0) {
+    const untried = candidates.filter((c) => !used.has(c.sp.id));
+    if (untried.length === 0) break;
+
+    // `untried` stays sorted descending (a filtered copy of `candidates`,
+    // whose order Array.prototype.filter preserves), so untried[0] is the
+    // biggest-remaining candidate — the walk's default pick, exactly as
+    // before.
+    let c = untried[0];
+
+    if (c.capacity >= remaining) {
+      // ONE-SHOT branch: `c` alone can clear whatever remains.
+      //
+      // RIGHT-SIZED ONE-SHOT (see doc comment above): before committing to
+      // the globally-biggest candidate, check for a SMALLER SAME-FAMILY
+      // sibling (consolidator familyKeyOf — e.g. edu_nursery next to its own
+      // civic-tier successor edu_nursery_city) that can ALSO one-shot
+      // `remaining` AND is a near-equal RUNG of the same infrastructure
+      // (credited capacity within ONE_SHOT_SIBLING_RATIO_BOUND of the
+      // leader's — see the constant's own doc comment for why this bound is
+      // what keeps RR-5c's DENSITY-FIRST ruling intact for water/power,
+      // whose family-mates are genuinely different scales of infrastructure,
+      // while still fixing edu_nursery/edu_nursery_city, whose credited
+      // capacities sit within 18% of each other). A candidate from a
+      // DIFFERENT family (e.g. a different power plant entirely), or one far
+      // enough below the leader to be a genuinely smaller infrastructure
+      // class (e.g. pow_offshore under pow_hydro, wat_tower under
+      // wat_reservoir), never demotes the leader.
+      const family = familyKeyOf(c.sp);
+      const siblingCoverers = untried.filter(
+        (x) => familyKeyOf(x.sp) === family && x.capacity >= remaining && c.capacity <= x.capacity * ONE_SHOT_SIBLING_RATIO_BOUND
+      );
+      siblingCoverers.sort((a, b) => {
+        if (a.capacity !== b.capacity) return a.capacity - b.capacity; // smallest coverer first
+        if (a.unitCost !== b.unitCost) return a.unitCost - b.unitCost;
+        return a.sp.id < b.sp.id ? -1 : a.sp.id > b.sp.id ? 1 : 0;
+      });
+      c = siblingCoverers[0]; // always includes the original leader, so never empty
+
+      const allowance = remainingAllowance(s, c.sp); // > 0, checked above (Infinity when uncapped)
+      const maxAffordable = c.unitCost > 0 ? Math.floor(fundsRemaining / c.unitCost) : Infinity;
+      const units = Math.min(1, allowance, maxAffordable);
+      used.add(c.sp.id);
+      if (units <= 0) continue; // this pick can't actually be bought/allowed — let the next iteration try another
+      mix.push({ specId: c.sp.id, unitCapacity: c.capacity, count: units, planCost: units * c.unitCost });
+      remaining -= units * c.capacity;
+      fundsRemaining -= units * c.unitCost;
+      continue;
+    }
+
+    // No candidate can one-shot the remainder: the original biggest-first
+    // floor/ceil walk, one step at a time.
+    const isLast = untried.length === 1;
+    const allowance = remainingAllowance(s, c.sp); // > 0, checked above (Infinity when uncapped)
+    let units: number;
+    if (isLast) {
+      units = Math.ceil(remaining / c.capacity); // no smaller spec left — must close the gap
+    } else {
+      units = Math.floor(remaining / c.capacity); // never overshoot on a spec too small to one-shot it
+    }
+    // BUG-685-MONEY: clamp to what the running funds pool can actually buy —
+    // never MORE than the capacity-derived figure above (the overshoot
+    // boundary is untouched), only ever less. A candidate that can't afford
+    // even one unit clamps to 0 and falls through to the next-smaller
+    // candidate, never silently stranded.
+    const maxAffordable = c.unitCost > 0 ? Math.floor(fundsRemaining / c.unitCost) : Infinity;
+    units = Math.min(units, allowance, maxAffordable);
+    used.add(c.sp.id); // this spec's slot in the walk is spent either way
+    if (units <= 0) continue; // capped at 0 allowance/funds, or a floor()==0 remainder — defer to the next-smaller spec
+    mix.push({ specId: c.sp.id, unitCapacity: c.capacity, count: units, planCost: units * c.unitCost });
+    remaining -= units * c.capacity;
+    fundsRemaining -= units * c.unitCost;
+  }
+  return mix;
+}
+
 /**
  * Pure demand-fix plan (FEAT-2326609728): one entry per service currently in
  * shortfall (need > have) that has an unlocked provider. No mutation, no
@@ -5908,13 +6259,22 @@ export function optimalProvider(s: SimState, serviceKey: string, budget: number,
  * one press. `have` (the row's CURRENT capacity, unaffected by the fraction)
  * still gates whether a row appears at all: any real deficit (need > have)
  * yields an entry, derived straight from the coverage functions (GR#15),
- * never a hand-picked threshold. optimalProvider's shortfall/budget
- * arguments below are this SAME 50%-of-gap amount, so the chosen spec's
- * total-plan-cost comparison (its own doc comment) is scored against the
- * actual quantity this action will build, not the whole deficit — funds
- * capping beyond that still happens downstream in the resolveDemand reducer
- * (engine.ts), which places at most `count` units and stops early if funds
- * run out.
+ * never a hand-picked threshold.
+ *
+ * BUG-685 (2026-09-04): the actual BUILD plan (`mix`) now comes from
+ * largestFirstFill() — biggest unlocked spec first, smaller specs only for
+ * the remainder — not from rankedProviders()' single-cheapest-plan pick.
+ * `specId`/`unitCapacity`/`count`/`planCost` mirror `mix[0]` (the primary,
+ * LARGEST spec used) so every existing "headline" reader (a demand notice's
+ * "N x <Name>") keeps reading the biggest, most-representative pick; a
+ * caller that needs the FULL build (placePlanItem, engine.ts) walks `mix`.
+ * `alternative`: when the mix used more than one spec, this is the
+ * next-largest spec ALSO used in this SAME composed plan (mix[1]) — no
+ * longer a competing single-spec plan (that only existed because the old
+ * picker chose exactly one spec for the whole shortfall); when the mix used
+ * only one spec, this falls back to rankedProviders()' runner-up (a genuine
+ * "or you could use M x B instead" competing pick), preserving that
+ * informational case unchanged.
  */
 export function demandFixPlan(s: SimState): DemandFixPlanItem[] {
   const waste = wasteStatsOf(s);
@@ -5929,28 +6289,40 @@ export function demandFixPlan(s: SimState): DemandFixPlanItem[] {
     const shortfall = row.need - row.have;
     if (shortfall <= 0) continue; // already at/above need — nothing to fix
     const fixAmount = shortfall * AUTO_BUILD_DEMAND_FRACTION;
-    // BUG-606: rankedProviders() (not the bare optimalProvider() Spec-only
-    // return) so the runner-up candidate is available for the `alternative`
-    // field below — SAME scoring/tie-break optimalProvider() uses, this is
-    // its top pick by construction (ranked[0]).
-    const ranked = rankedProviders(s, row.serviceKey, s.funds, fixAmount);
-    if (ranked.length === 0) continue; // no unlocked provider yet — omit (needs-unlock)
-    const chosen = ranked[0];
-    const rule = DEMAND_FIX_PROVIDERS[row.serviceKey];
-    const unitCapacity = rule.unitCapacity(chosen.sp);
-    if (unitCapacity <= 0) continue;
-    const count = chosen.units;
+    // BUG-685-MONEY (Aaron/independent-round 2026-09-04): demandFixPlan()'s
+    // own mix/specId/count stay PURE capacity-driven — no `budget` argument
+    // here — so the informational "headline" pick (a demand notice's "N x
+    // <Name>", the pop-8,000 "biggest unlocked spec wins even though it
+    // costs far more than a turbine" contract) never silently downgrades to
+    // a cheaper spec just because today's treasury cannot yet afford it.
+    // The real fall-through for an UNAFFORDABLE primary pick lives at BUILD
+    // time in placePlanItem() (engine.ts) — see largestFirstFill()'s own doc
+    // comment for the full defect/fix writeup and why the two layers must
+    // stay decoupled.
+    const mix = largestFirstFill(s, row.serviceKey, fixAmount);
+    if (mix.length === 0) continue; // no unlocked provider yet — omit (needs-unlock)
+    const primary = mix[0];
+    const count = mix.reduce((sum, m) => sum + m.count, 0);
+    const planCost = mix.reduce((sum, m) => sum + m.planCost, 0);
     if (count <= 0) continue;
-    const alt = ranked.find((c) => c.sp.id !== chosen.sp.id) ?? null;
+    let alternative: { specId: string; count: number; planCost: number } | null = null;
+    if (mix.length > 1) {
+      alternative = { specId: mix[1].specId, count: mix[1].count, planCost: mix[1].planCost };
+    } else {
+      const ranked = rankedProviders(s, row.serviceKey, s.funds, fixAmount);
+      const alt = ranked.find((c) => c.sp.id !== primary.specId) ?? null;
+      alternative = alt ? { specId: alt.sp.id, count: alt.units, planCost: alt.planCost } : null;
+    }
     plan.push({
       serviceKey: row.serviceKey,
-      specId: chosen.sp.id,
-      unitCapacity,
+      specId: primary.specId,
+      unitCapacity: primary.unitCapacity,
       need: row.need,
       have: row.have,
       count,
-      planCost: chosen.planCost,
-      alternative: alt ? { specId: alt.sp.id, count: alt.units, planCost: alt.planCost } : null,
+      planCost,
+      mix,
+      alternative,
     });
   }
   return plan;

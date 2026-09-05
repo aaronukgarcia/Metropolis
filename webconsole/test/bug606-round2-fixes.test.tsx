@@ -19,6 +19,27 @@ function shortfallState(population: number, fundsOverride = 1_000_000_000): SimS
   return { ...base, population, unlockedAll: true, funds: fundsOverride, administrationState: null };
 }
 
+// RETUNE (this session, post-BUG-685 largest-first landing): the original
+// pop-400,000 M1-cross-check fixtures planned 359 units — well UNDER the
+// 2,000 cap, so the "must genuinely need MORE than the cap" precondition
+// started failing (largest-first needs far fewer buildings to clear the
+// same shortfall than the old picker this literal was tuned against).
+// Rather than re-guess another literal, the population is DERIVED from
+// RESOLVE_DEMAND_ALL_MAX_UNITS: `UNITS_PER_POP_MEASURED` is the
+// 359-units-from-400,000-population ratio measured on this exact fixture
+// (unlockedAll, funds=20B, administrationState=null), and the population
+// used is whatever comfortably clears the cap by a 20% margin at that
+// ratio — self-adjusting if the cap is ever retuned again.
+const UNITS_PER_POP_MEASURED = 359 / 400_000; // measured on this fixture at pop 400,000
+const CAP_CROSS_CHECK_POPULATION = Math.ceil((RESOLVE_DEMAND_ALL_MAX_UNITS * 1.2) / UNITS_PER_POP_MEASURED);
+// The scaled-up population's full plan costs real money too (measured
+// ~£56.4bn at CAP_CROSS_CHECK_POPULATION) — these cross-checks must be
+// UNIT-cap-limited, never funds-limited (that is the sibling M1 test's own
+// scenario), so funds are set to a comfortable multiple of that measured
+// figure rather than a re-guessed literal.
+const CAP_CROSS_CHECK_FULL_PLAN_COST_MEASURED = 56_385_620_000; // measured full-plan cost at CAP_CROSS_CHECK_POPULATION
+const CAP_CROSS_CHECK_FUNDS = CAP_CROSS_CHECK_FULL_PLAN_COST_MEASURED * 5;
+
 function specCounts(s: SimState): Map<string, number> {
   const m = new Map<string, number>();
   for (const b of s.buildings) m.set(b.spec, (m.get(b.spec) ?? 0) + 1);
@@ -36,7 +57,7 @@ function specCounts(s: SimState): Map<string, number> {
 // when the REAL remaining budget can only ever afford a fire_post batch.
 // ---------------------------------------------------------------------------
 
-test('M1: resolveDemandAll re-derives demandFixPlan against the depleted treasury — fire must resolve to fire_post, never the STALE fire_hq an upfront (frozen-state) plan recommends', () => {
+test('M1: resolveDemandAll re-derives demandFixPlan against the depleted treasury — fire is placed PARTIALLY, never fully at the STALE ample-funds count', () => {
   // Aaron's own repro figures (2026-09-03): pop 400,000. Funds re-derived
   // for the NEW AUTO_BUILD_DEMAND_FRACTION=1.5 superseding ruling (the
   // original £400M repro no longer reaches fire in the priority order at
@@ -45,6 +66,19 @@ test('M1: resolveDemandAll re-derives demandFixPlan against the depleted treasur
   // higher-priority services beforehand that the fire choice is forced to
   // re-derive against a smaller real budget than the STALE £1.2B figure
   // demandFixPlan(state) would have used throughout).
+  //
+  // RETUNE (this session, post-BUG-685-MONEY landing): demandFixPlan()'s own
+  // mix/specId is now PURE capacity-driven (largestFirstFill(), no funds
+  // argument — Aaron/independent-round ruling: the informational "biggest
+  // unlocked spec wins" pick must never silently downgrade just because
+  // today's treasury is tight, see data.ts largestFirstFill()'s own doc
+  // comment) — so demandFixPlan(s) and demandFixPlan(cur) now pick the SAME
+  // fire_hq-headed mix regardless of funds; a `demandFixPlan(state)`
+  // regression can no longer be caught by a DIFFERENT spec choice. What it
+  // CAN still be caught by: the REAL build only ever affords as much of that
+  // mix as `cur`'s ACTUAL (already-depleted-by-Health) funds allow, never
+  // the full stale count a frozen, ample-funds `state` would have paid for
+  // in one go — a genuine per-iteration re-derivation signal.
   const s = shortfallState(400_000, 1_200_000_000);
   const order = orderedDemandFixPlan(s);
   assert.ok(order.some((p) => p.serviceKey === 'fire'), 'precondition: a fire shortfall must exist in the batch');
@@ -54,19 +88,23 @@ test('M1: resolveDemandAll re-derives demandFixPlan against the depleted treasur
   // for EVERY iteration, ignoring how much earlier services actually spent.
   const staleFire = demandFixPlan(s).find((p) => p.serviceKey === 'fire');
   assert.ok(staleFire);
-  assert.equal(staleFire.specId, 'fire_hq', 'precondition: the STALE upfront plan must pick fire_hq (ample-funds "1 dam" scoring) — proves this scenario has real state-sensitivity');
+  assert.equal(staleFire.specId, 'fire_hq', 'precondition: the STALE upfront plan must pick fire_hq (largest-first, capacity-driven)');
+  const staleMixSpecIds = new Set(staleFire.mix.map((m) => m.specId));
 
   const before = specCounts(s);
   const result = reducer(s, { type: 'resolveDemandAll' });
   const after = specCounts(result);
 
-  const postDelta = (after.get('fire_post') ?? 0) - (before.get('fire_post') ?? 0);
-  const hqDelta = (after.get('fire_hq') ?? 0) - (before.get('fire_hq') ?? 0);
-  const stationDelta = (after.get('fire_station') ?? 0) - (before.get('fire_station') ?? 0);
+  let firePlaced = 0;
+  for (const specId of staleMixSpecIds) {
+    firePlaced += (after.get(specId) ?? 0) - (before.get(specId) ?? 0);
+  }
 
-  assert.ok(postDelta > 0, `fire_post (the cur-based, funds-depleted pick) must actually be placed — got 0`);
-  assert.equal(hqDelta, 0, 'fire_hq (the STALE, ample-funds pick) must NOT be placed — proves resolveDemandAll re-derives against cur, not the frozen state');
-  assert.equal(stationDelta, 0, 'fire_station must not be placed either — the real, depleted-treasury winner is fire_post');
+  assert.ok(firePlaced > 0, 'fire (the cur-based, funds-depleted batch) must actually place SOMETHING — got 0');
+  assert.ok(
+    firePlaced < staleFire.count,
+    `fire must be placed PARTIALLY (${firePlaced} of the stale ${staleFire.count}) — a full ${staleFire.count} would mean resolveDemandAll used the FROZEN, ample-funds \`state\` plan instead of re-deriving against \`cur\`'s genuinely depleted treasury`
+  );
   assert.ok(result.funds >= 0, 'funds must never go negative');
 });
 
@@ -86,7 +124,7 @@ test('M1: resolveDemandAll re-derives demandFixPlan against the depleted treasur
 // whole point is exercising the UNIT cap) needs enough funds that it
 // genuinely reaches and is stopped BY the cap, not by money.
 test('M1 cross-check: resolveDemandAll never exceeds RESOLVE_DEMAND_ALL_MAX_UNITS in total, even when the real plan needs vastly more (perf cap, independent round r2)', () => {
-  const s = shortfallState(400_000, 20_000_000_000);
+  const s = shortfallState(CAP_CROSS_CHECK_POPULATION, CAP_CROSS_CHECK_FUNDS);
   const order = orderedDemandFixPlan(s);
   const totalPlanned = order.reduce((sum, item) => sum + item.count, 0);
   assert.ok(
@@ -120,7 +158,7 @@ test('M1 cross-check (RED-PROOF live): with the SAME repro state, N sequential r
   // BUG-646: same funds bump as the sibling M1 cross-check above, and for
   // the same reason — this scenario needs to be UNIT-cap-limited, not
   // funds-limited, at the new 2000-unit cap.
-  const s = shortfallState(400_000, 20_000_000_000);
+  const s = shortfallState(CAP_CROSS_CHECK_POPULATION, CAP_CROSS_CHECK_FUNDS);
   const order = orderedDemandFixPlan(s);
   const all = reducer(s, { type: 'resolveDemandAll' });
   const allMatch = /^Fix All: built (\d+) of \d+ planned/.exec(all.placeNotice ?? '');
@@ -231,8 +269,14 @@ test('M7: demandFixMessage price agrees with plan.planCost for every service in 
   assert.ok(plan.some((p) => placementCost(SPECS[p.specId]) === 0), 'precondition: at least one free-zone entry (parks) in this plan');
   assert.ok(plan.some((p) => placementCost(SPECS[p.specId]) > 0), 'precondition: at least one paid entry in this plan');
   for (const item of plan) {
-    const realCost = item.count * placementCost(SPECS[item.specId]);
-    assert.equal(item.planCost, realCost, `${item.serviceKey}: planCost=${item.planCost} must equal count*placementCost=${realCost}`);
+    // RETUNE (this session, post-BUG-685 largest-first landing): item.count/
+    // item.planCost are now TOTALS across the whole `mix` (data.ts
+    // DemandFixPlanItem doc comment) — item.specId is only mix[0], the
+    // PRIMARY spec, so `count * placementCost(specId)` under-/over-counts
+    // whenever the mix used more than one spec at a different unit cost.
+    // The honest real-cost oracle sums each mix entry against its OWN spec.
+    const realCost = item.mix.reduce((sum, m) => sum + m.count * placementCost(SPECS[m.specId]), 0);
+    assert.equal(item.planCost, realCost, `${item.serviceKey}: planCost=${item.planCost} must equal sum(mix entry count*placementCost)=${realCost}`);
     const msg = demandFixMessage(item);
     const expectedFragment = realCost === 0 ? '£0' : `£${realCost.toLocaleString('en-GB')}`;
     assert.ok(msg.includes(expectedFragment), `${item.serviceKey}: message must show the real charge ${expectedFragment}, got: ${msg}`);
@@ -289,6 +333,7 @@ test('D3 r2: a sub-0.05 gap renders "<1 short", never a misleading "0"/"0.0" (th
     have: 1000, // gap = 0.046 — the exact attacker repro figure
     count: 1,
     planCost: SPECS.wat_tower.cost,
+    mix: [{ specId: 'wat_tower', unitCapacity: SPECS.wat_tower.served ?? 0, count: 1, planCost: SPECS.wat_tower.cost }],
     alternative: null,
   };
   const msg = demandFixMessage(item);
@@ -305,6 +350,7 @@ test('D3 r2: a 0.05<=gap<1 gap renders 2 significant figures, never a bare trunc
     have: 1000, // gap = 0.46
     count: 1,
     planCost: SPECS.wat_tower.cost,
+    mix: [{ specId: 'wat_tower', unitCapacity: SPECS.wat_tower.served ?? 0, count: 1, planCost: SPECS.wat_tower.cost }],
     alternative: null,
   };
   const msg = demandFixMessage(item);
@@ -321,6 +367,7 @@ test('D3 r2: gaps >= 1 are unaffected (still the normal thousands-separated inte
     have: 0,
     count: 4,
     planCost: 4 * SPECS.wat_tower.cost,
+    mix: [{ specId: 'wat_tower', unitCapacity: SPECS.wat_tower.served ?? 0, count: 4, planCost: 4 * SPECS.wat_tower.cost }],
     alternative: null,
   };
   const msg = demandFixMessage(item);

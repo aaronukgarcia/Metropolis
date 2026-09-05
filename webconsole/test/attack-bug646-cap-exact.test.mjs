@@ -22,6 +22,15 @@ function parksCountAt(population) {
   return plan ? plan.count : 0;
 }
 
+/** BUG-685: count placements of EVERY spec in a (possibly mixed) plan, not
+ *  just the primary/largest one — a largestFirstFill() mix places several
+ *  specs, so a single-specId filter undercounts. */
+function countMixPlaced(before, after, mix) {
+  const ids = new Set(mix.map((m) => m.specId));
+  const countOf = (bs) => bs.filter((b) => ids.has(b.spec)).length;
+  return countOf(after) - countOf(before);
+}
+
 /**
  * GR#15 (validators derive from data, never a hardcoded constant): rather
  * than hand-pick a population that HAPPENED to produce parks.count===target
@@ -49,11 +58,10 @@ test('BUG-646 EXACT CAP: a plan of EXACTLY RESOLVE_DEMAND_ALL_MAX_UNITS units co
   assert.ok(plan, 'precondition: a parks shortfall must exist');
   assert.equal(plan.count, RESOLVE_DEMAND_ALL_MAX_UNITS, `precondition: parks plan must be EXACTLY the cap (got ${plan.count})`);
 
-  const before = s.buildings.filter((b) => b.spec === plan.specId).length;
   const result = reducer(s, { type: 'resolveDemand', serviceKey: 'parks' });
-  const after = result.buildings.filter((b) => b.spec === plan.specId).length;
+  const placed = countMixPlaced(s.buildings, result.buildings, plan.mix);
 
-  assert.equal(after - before, RESOLVE_DEMAND_ALL_MAX_UNITS, 'must place exactly the cap when the plan needs exactly the cap');
+  assert.equal(placed, RESOLVE_DEMAND_ALL_MAX_UNITS, 'must place exactly the cap when the plan needs exactly the cap');
   assert.equal(result.placeNotice, null, `a fully-cleared shortfall must NOT report a leftover/cap-limit notice, got: ${result.placeNotice}`);
   assert.ok(result.funds >= 0, 'funds must never go negative');
 });
@@ -65,11 +73,10 @@ test('BUG-646 OVER CAP: a plan of RESOLVE_DEMAND_ALL_MAX_UNITS + 1 places exactl
   assert.ok(plan, 'precondition: a parks shortfall must exist');
   assert.ok(plan.count > RESOLVE_DEMAND_ALL_MAX_UNITS, `precondition: parks plan (${plan.count}) must exceed the cap`);
 
-  const before = s.buildings.filter((b) => b.spec === plan.specId).length;
   const result = reducer(s, { type: 'resolveDemand', serviceKey: 'parks' });
-  const after = result.buildings.filter((b) => b.spec === plan.specId).length;
+  const placed = countMixPlaced(s.buildings, result.buildings, plan.mix);
 
-  assert.equal(after - before, RESOLVE_DEMAND_ALL_MAX_UNITS, 'a plan of cap+1 must place EXACTLY the cap, never more');
+  assert.equal(placed, RESOLVE_DEMAND_ALL_MAX_UNITS, 'a plan of cap+1 must place EXACTLY the cap, never more');
   assert.match(
     result.placeNotice ?? '',
     new RegExp(`reached the ${RESOLVE_DEMAND_ALL_MAX_UNITS}-unit per-click build limit — click Fix again for the rest`),
@@ -93,10 +100,8 @@ test('BUG-646 FUNDS-LIMITED: a plan that exceeds the cap but has LESS money than
   const funds = Math.floor(unitCost * (affordableUnits + 0.5)); // enough for 5, not 6
 
   const s = bigState(pop, funds);
-  const before = s.buildings.filter((b) => b.spec === plan.specId).length;
   const result = reducer(s, { type: 'resolveDemand', serviceKey: 'gp' });
-  const after = result.buildings.filter((b) => b.spec === plan.specId).length;
-  const placed = after - before;
+  const placed = countMixPlaced(s.buildings, result.buildings, plan.mix);
 
   assert.ok(placed > 0, `precondition: at least one unit must be affordable (placed ${placed})`);
   assert.ok(placed < RESOLVE_DEMAND_ALL_MAX_UNITS, `placed (${placed}) must stop well short of the cap — this is a FUNDS-limited scenario`);

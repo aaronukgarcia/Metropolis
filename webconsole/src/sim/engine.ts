@@ -61,6 +61,8 @@ import {
   demandFixPlan,
   orderedDemandFixPlan,
   RESOLVE_DEMAND_ALL_MAX_UNITS,
+  largestFirstFill,
+  AUTO_BUILD_DEMAND_FRACTION,
   createSpotSearchContext,
   noBuildableSiteReason,
   crimeRateOf,
@@ -4705,6 +4707,63 @@ function formatPlacedCount(count: number, specName: string): string {
 }
 
 /**
+ * BUG-685: a demandFixPlan() item's total build described honestly — a
+ * single-spec plan (still the common case: nursery only ever has one
+ * candidate, a small shortfall only ever needs one biggest spec) reads
+ * exactly as formatPlacedCount() always has; a LARGEST-FIRST mixed plan
+ * (data.ts largestFirstFill()) spells out every spec actually used instead
+ * of attributing the whole batch to just the primary/largest one, which
+ * would misreport what got built once smaller specs closed the remainder.
+ */
+function planLabel(item: DemandFixPlanItem): string {
+  if (item.mix.length <= 1) {
+    return formatPlacedCount(item.count, SPECS[item.specId]?.name ?? item.specId);
+  }
+  return item.mix.map((m) => formatPlacedCount(m.count, SPECS[m.specId]?.name ?? m.specId)).join(' + ');
+}
+
+/**
+ * BUG-685: the "of Y" half of a 'resolveDemand' placeNotice — always leads
+ * with the honest TOTAL unit count (`item.count`, matching what an earlier
+ * dispatch's caller already computed/compared against), with planLabel()'s
+ * per-spec breakdown appended in parentheses for a mixed plan (a single-spec
+ * plan's breakdown IS just "N x Name", so it is not repeated twice).
+ */
+function planCountLabel(item: DemandFixPlanItem): string {
+  return item.mix.length <= 1 ? planLabel(item) : `${item.count} units (${planLabel(item)})`;
+}
+
+/**
+ * RR-1/RR-2 (independent re-round, 2026-09-05): describes the mix ACTUALLY
+ * WALKED (walkMix()'s `builtMix` — see its doc comment) the same way
+ * planLabel() describes a plan's `mix`, so "what we promised" and "what we
+ * built" read in the identical format and can be compared/shown side by
+ * side. Never call this with an empty array (callers only reach it when
+ * `placed > 0`, which walkMix() guarantees leaves >= 1 builtMix entry).
+ */
+function builtMixLabel(builtMix: { specId: string; count: number }[]): string {
+  return builtMix.map((m) => formatPlacedCount(m.count, SPECS[m.specId]?.name ?? m.specId)).join(' + ');
+}
+
+/**
+ * RR-1/RR-2: true only when the mix ACTUALLY WALKED is spec-for-spec,
+ * count-for-count identical to the plan's own `mix` — i.e. genuinely no
+ * substitution and no partial fall-through happened, not merely "the same
+ * total unit count came out the other end" (that count-only equivalence is
+ * exactly the bug both rounds found: a 5-plant self-heal satisfying a
+ * 1-dam plan's `count`). Order-sensitive because both walkMix() and
+ * largestFirstFill() are deterministic largest-first walks (GR#21), so a
+ * genuine match preserves entry order too.
+ */
+function builtMixMatchesPlan(
+  planMix: DemandFixPlanItem['mix'],
+  builtMix: { specId: string; count: number }[]
+): boolean {
+  if (planMix.length !== builtMix.length) return false;
+  return planMix.every((m, i) => builtMix[i].specId === m.specId && builtMix[i].count === m.count);
+}
+
+/**
  * D2 (BUG-606 independent round REJECT, Aaron 2026-09-03): the true reason a
  * demandFixPlan() item's placement stopped short — 'resolveDemand' and
  * 'resolveDemandAll' both used to skip straight to noBuildableSiteReason()
@@ -4794,65 +4853,166 @@ function shortfallReason(state: SimState, sp: Spec, specId: string): string {
  * 'placeMany' (drag-paint) and 'stampRegion' never pass batchBoard, so their
  * behaviour and cost are completely unchanged by this fix.
  */
+/**
+ * BUG-685: walks the FULL largest-first `item.mix` (data.ts largestFirstFill()),
+ * largest spec first, placing each entry's `count` in turn through the SAME
+ * per-tile 'place' path every other placement uses — never a second placement
+ * mechanism (GR#3 SSOT). Pre-BUG-685 this placed a single spec (`item.specId`
+ * `item.count` times); a mixed plan now walks `item.mix` entry by entry,
+ * sharing ONE running `target` (the WHOLE item's unit budget, `unitCap`) and
+ * ONE running funds/administration gate across every spec in the mix, so
+ * "place as many as affordable and STOP" still means the whole batch, not
+ * per-spec. A spot-search context + batch connectivity board (BUG-646/660,
+ * doc comments preserved below) are rebuilt once PER MIX ENTRY (not once per
+ * unit) since each spec has its own footprint — still O(mix.length) rebuilds
+ * for the whole call, not O(units).
+ */
 function placePlanItem(
   cur: SimState,
   item: DemandFixPlanItem,
   unitCap: number = Infinity
-): { state: SimState; placed: number; roadTopologyChange: boolean; cappedByUnitLimit: boolean } {
-  const sp = SPECS[item.specId];
-  if (!canEnterSim(sp) || !specUnlocked(cur, sp)) {
-    return { state: cur, placed: 0, roadTopologyChange: false, cappedByUnitLimit: false };
+): {
+  state: SimState;
+  placed: number;
+  roadTopologyChange: boolean;
+  cappedByUnitLimit: boolean;
+  builtMix: { specId: string; count: number }[];
+  /** RR-1/RR-2: true when the RETURNED result came from the self-heal retry
+   *  (a fresh, affordability-budgeted mix), not the original `item.mix` walk
+   *  — i.e. the plan's PRIMARY/headline spec never placed and something else
+   *  was substituted for it. A caller MUST treat this as "not what was
+   *  planned" regardless of whether the substituted count happens to reach
+   *  `item.count` (that count-only comparison is exactly RR-1/RR-2's bug). */
+  substituted: boolean;
+} {
+  const result = walkMix(cur, item.mix, item.count, unitCap);
+  // BUG-685-MONEY (Aaron/independent-round 2026-09-04, "the mix has no
+  // fallback and Fix places ZERO"): item.mix is data.ts largestFirstFill()'s
+  // PURE capacity-driven pick — deliberately NOT affordability-aware (its
+  // own doc comment, and demandFixPlan()'s: the headline "biggest unlocked
+  // spec wins even though it costs far more than a turbine" contract must
+  // never silently downgrade just because today's treasury is short). When
+  // that pure mix places LITERALLY NOTHING (the sole/leading candidate was
+  // unaffordable and, pre-fix, there was no smaller entry in `item.mix` to
+  // fall through to), self-heal ONCE: recompute a fresh mix for the SAME
+  // underlying shortfall, this time WITH `cur.funds` as largestFirstFill()'s
+  // affordability budget (its own optional 4th param), and retry the exact
+  // same walk against it. Never a second placement mechanism — same
+  // walkMix()/reduceCore() path either way, just a different candidate list.
+  // Skipped when administration mode already blocked every cost>0 spec (a
+  // real, funds-independent lockdown a smaller spec cannot escape either) or
+  // the retry has already run (affordable mixes are marked below), so this
+  // can only ever add ONE extra attempt, never loop.
+  if (result.placed > 0 || (cur.administrationState && item.mix.some((m) => placementCost(SPECS[m.specId]) > 0))) {
+    return { ...result, substituted: false };
   }
-  const cost = placementCost(sp);
+  const fixAmount = (item.need - item.have) * AUTO_BUILD_DEMAND_FRACTION;
+  if (fixAmount <= 0) return { ...result, substituted: false };
+  const affordableMix = largestFirstFill(cur, item.serviceKey, fixAmount, cur.funds);
+  if (affordableMix.length === 0) return { ...result, substituted: false };
+  const affordableCount = affordableMix.reduce((sum, m) => sum + m.count, 0);
+  if (affordableCount <= 0) return { ...result, substituted: false };
+  const healed = walkMix(cur, affordableMix, affordableCount, unitCap);
+  // RR-1/RR-2: this branch only runs when the pure plan placed literally
+  // nothing, so ANY unit healed here is, by definition, standing in for the
+  // plan's own headline spec — always substituted when healed.placed > 0.
+  return { ...healed, substituted: healed.placed > 0 };
+}
+
+function walkMix(
+  cur: SimState,
+  mix: DemandFixPlanItem['mix'],
+  itemCount: number,
+  unitCap: number
+): {
+  state: SimState;
+  placed: number;
+  roadTopologyChange: boolean;
+  cappedByUnitLimit: boolean;
+  /** RR-1/RR-2 (independent re-round, 2026-09-05): the mix ACTUALLY WALKED,
+   *  one entry per spec that placed >= 1 unit, in the same order `mix` was
+   *  walked — never the caller's pre-self-heal `mix` verbatim. This is what
+   *  a placeNotice must be built from: `mix`/`item.mix` is the PLAN (what
+   *  was asked for), `builtMix` is the TRUTH (what actually landed on the
+   *  map). A caller comparing bare unit counts against `item.count` cannot
+   *  tell a full plan success from a substituted mix that happens to sum to
+   *  the same count — that gap is exactly RR-1 (a self-healed 5-plant swap
+   *  reported as "1 x Three Gorges Dam") and RR-2 (a substitution reported
+   *  as silent, unqualified success). Entries with zero placed are omitted.
+   */
+  builtMix: { specId: string; count: number }[];
+} {
   let s2 = cur;
   let placed = 0;
-  // See BUG-566 FIX note (originally on 'resolveDemand', preserved here
-  // verbatim): aggregate the shared roadTopologyMayHaveChanged hazard with OR
-  // across every placement in this item's batch, not just the last iteration.
-  let anyRoadTopologyChange = isRoadOrTrunkSpec(sp);
-  const target = Math.min(item.count, unitCap);
-  // BUG-646 (Aaron, 2026-09-03, raising the cap 250 -> 2000): a batched
-  // spot-search context (data.ts createSpotSearchContext) replaces the
-  // per-unit findSpot(s2, ...) call here — findSpot() itself recomputes
-  // occupiedSet(s2)/tagged/resList from s2.buildings on EVERY call, an
-  // O(buildings) cost that used to be paid AGAIN for every single unit
-  // because s2.buildings is a new array reference after each placement
-  // (measured: 68ms/unit at 29,831 buildings, dominated by that rebuild, not
-  // by the O(window) scanWindow() search itself). The context instead builds
-  // occ/tagged/resList ONCE from `cur` and updates them incrementally via
-  // occupy() with exactly the buildings 'place' actually added (the target
-  // unit AND any auto-connector tiles), so every subsequent findNext() call
-  // sees the true, up-to-date occupied set without re-scanning the whole
-  // buildings array — collapsing the per-unit cost to O(window), matching
-  // scanWindow()'s own bound. See createSpotSearchContext()'s doc comment
-  // (data.ts) for the full measurement and the one assumption (never a
-  // residential spec) this depends on.
-  const spotCtx = createSpotSearchContext(s2, item.specId);
-  // BUG-660: the shared, mutated-in-place connectivity board for THIS whole
-  // batch — see this function's own doc comment above. Seeded from `cur`
-  // (occupiedSet/roadTileSetOf are themselves memoised, so this is a cache
-  // hit whenever `cur` was already touched this tick, and at worst a single
-  // O(buildings) rebuild for the WHOLE batch rather than one per unit).
-  const batchBoard = { occupied: new Set(occupiedSet(s2)), roads: new Set(roadTileSetOf(s2)) };
-  for (let i = 0; i < target; i++) {
-    if (cost > 0 && s2.administrationState) break;
-    if (cost > 0 && s2.funds < cost) break;
-    const spot = spotCtx.findNext();
-    if (!spot) break; // findSpot() widened its search to the whole map (BUG-593) and still found nothing
-    const beforeLen = s2.buildings.length;
-    const next = reduceCore(s2, { type: 'place', spec: item.specId, x: spot.x, y: spot.y }, batchBoard);
-    if (next === s2) break; // defensive: 'place' declined for a reason not checked above
-    if (next.buildings.length > beforeLen + 1) anyRoadTopologyChange = true;
-    spotCtx.occupy(next.buildings.slice(beforeLen)); // sync ctx with what 'place' ACTUALLY added
-    s2 = next;
-    placed++;
+  let anyRoadTopologyChange = false;
+  const target = Math.min(itemCount, unitCap);
+  const builtMix: { specId: string; count: number }[] = [];
+
+  entries: for (const entry of mix) {
+    if (placed >= target) break;
+    const sp = SPECS[entry.specId];
+    if (!canEnterSim(sp) || !specUnlocked(s2, sp)) continue; // a mix entry that became unlocked/allowed-out since planning — skip to the next spec
+    const cost = placementCost(sp);
+    let entryPlaced = 0;
+    // See BUG-566 FIX note (originally on 'resolveDemand', preserved here
+    // verbatim): aggregate the shared roadTopologyMayHaveChanged hazard with OR
+    // across every placement in this item's batch, not just the last iteration.
+    if (isRoadOrTrunkSpec(sp)) anyRoadTopologyChange = true;
+    const wantForThisEntry = Math.min(entry.count, target - placed);
+    // BUG-646 (Aaron, 2026-09-03, raising the cap 250 -> 2000): a batched
+    // spot-search context (data.ts createSpotSearchContext) replaces the
+    // per-unit findSpot(s2, ...) call here — findSpot() itself recomputes
+    // occupiedSet(s2)/tagged/resList from s2.buildings on EVERY call, an
+    // O(buildings) cost that used to be paid AGAIN for every single unit
+    // because s2.buildings is a new array reference after each placement
+    // (measured: 68ms/unit at 29,831 buildings, dominated by that rebuild, not
+    // by the O(window) scanWindow() search itself). The context instead builds
+    // occ/tagged/resList ONCE from `cur` and updates them incrementally via
+    // occupy() with exactly the buildings 'place' actually added (the target
+    // unit AND any auto-connector tiles), so every subsequent findNext() call
+    // sees the true, up-to-date occupied set without re-scanning the whole
+    // buildings array — collapsing the per-unit cost to O(window), matching
+    // scanWindow()'s own bound. See createSpotSearchContext()'s doc comment
+    // (data.ts) for the full measurement and the one assumption (never a
+    // residential spec) this depends on.
+    const spotCtx = createSpotSearchContext(s2, entry.specId);
+    // BUG-660: the shared, mutated-in-place connectivity board for THIS whole
+    // batch — see this function's own doc comment above. Seeded from `cur`
+    // (occupiedSet/roadTileSetOf are themselves memoised, so this is a cache
+    // hit whenever `cur` was already touched this tick, and at worst a single
+    // O(buildings) rebuild for the WHOLE batch rather than one per unit).
+    const batchBoard = { occupied: new Set(occupiedSet(s2)), roads: new Set(roadTileSetOf(s2)) };
+    for (let i = 0; i < wantForThisEntry; i++) {
+      // Administration Mode blocks EVERY cost>0 spec, not just this one — a
+      // genuine total stop, so it breaks the WHOLE batch (`entries`).
+      if (cost > 0 && s2.administrationState) break entries;
+      // BUG-685: insufficient funds for THIS (possibly biggest/priciest)
+      // entry is NOT a whole-batch stop — a mixed plan's smaller, cheaper
+      // specs further down `item.mix` may still be affordable even when the
+      // primary/largest one is not, so only this entry's inner loop breaks,
+      // letting the `entries` loop try the next-smaller spec with whatever
+      // funds remain (mirrors the pre-BUG-685 single-spec contract exactly
+      // when mix.length === 1 — there is no "next entry" to fall through to).
+      if (cost > 0 && s2.funds < cost) break;
+      const spot = spotCtx.findNext();
+      if (!spot) break; // findSpot() widened its search to the whole map (BUG-593) and still found nothing for THIS spec — try the next-smaller one
+      const beforeLen = s2.buildings.length;
+      const next = reduceCore(s2, { type: 'place', spec: entry.specId, x: spot.x, y: spot.y }, batchBoard);
+      if (next === s2) break; // defensive: 'place' declined for a reason not checked above
+      if (next.buildings.length > beforeLen + 1) anyRoadTopologyChange = true;
+      spotCtx.occupy(next.buildings.slice(beforeLen)); // sync ctx with what 'place' ACTUALLY added
+      s2 = next;
+      placed++;
+      entryPlaced++;
+    }
+    if (entryPlaced > 0) builtMix.push({ specId: entry.specId, count: entryPlaced });
   }
   // Placed EVERY attempted unit (none of the funds/administration/no-site
-  // guards fired) AND there is genuinely more of `item.count` left to do ->
+  // guards fired) AND there is genuinely more of `itemCount` left to do ->
   // the cap itself, not any of those other reasons, is what stopped this
   // call. If placed < unitCap, some OTHER guard broke the loop first.
-  const cappedByUnitLimit = placed === unitCap && placed < item.count;
-  return { state: s2, placed, roadTopologyChange: anyRoadTopologyChange, cappedByUnitLimit };
+  const cappedByUnitLimit = placed === unitCap && placed < itemCount;
+  return { state: s2, placed, roadTopologyChange: anyRoadTopologyChange, cappedByUnitLimit, builtMix };
 }
 
 function reduceCore(
@@ -5242,7 +5402,43 @@ function reduceCore(
       const result = placePlanItem(state, plan, RESOLVE_DEMAND_ALL_MAX_UNITS);
       roadTopologyMayHaveChanged = result.roadTopologyChange;
 
-      if (result.placed >= plan.count) return result.state; // full shortfall cleared — 'place' already cleared placeNotice
+      // RR-1/RR-2 (independent re-round, 2026-09-05): reaching plan.count is
+      // NOT the same as clearing the plan — a self-heal substitution (or any
+      // fall-through that landed a different mix) can satisfy the bare unit
+      // COUNT while building something else entirely. Only a mix that is
+      // spec-for-spec identical to what was planned is a true silent success;
+      // everything else MUST surface an honest notice (GR#17), never a null
+      // one, regardless of how close the substituted count got to plan.count.
+      const matchesPlan = builtMixMatchesPlan(plan.mix, result.builtMix);
+      if (result.placed >= plan.count && matchesPlan) {
+        return result.state; // full shortfall cleared EXACTLY as planned — 'place' already cleared placeNotice
+      }
+      // The per-click unit cap is its OWN honest, actionable reason (checked
+      // BEFORE the substitution branch below) — a mix legitimately truncated
+      // by RESOLVE_DEMAND_ALL_MAX_UNITS is not a "substitution", it is the
+      // SAME planned mix stopped partway through, so it must keep reporting
+      // the cap message, not be misread as a self-heal just because it also
+      // failed the builtMix-equals-plan.mix check (a truncated mix is never
+      // spec-for-spec identical to the full plan either).
+      if (!result.cappedByUnitLimit && result.substituted) {
+        // A REAL substitution happened (placePlanItem's own accurate verdict
+        // — self-heal, or a fall-through mix that differs from the plan) —
+        // say exactly what was built instead of the plan's headline, and the
+        // TRUE reason via shortfallReason() (RR2-1 FIX, independent re-round
+        // 2, 2026-09-05): the old `|| (placed > 0 && !matchesPlan)` disjunct
+        // caught every partial build that merely fell short of the full
+        // count — including a build blocked by "no free site" on a
+        // funds-rich city — and hardcoded "insufficient funds for <plan>"
+        // regardless of the real cause. Using `result.substituted` alone
+        // (RR2-2 FIX) also stops a plan-for-itself partial build (e.g. 3 of
+        // 9 planned Kindergartens) from being misreported as a substitution.
+        const short = result.placed >= plan.count ? '' : `, ${result.placed} of ${plan.count} units total`;
+        return {
+          ...result.state,
+          placeNotice: `Fix (${planCountLabel(plan)}): substituted ${builtMixLabel(result.builtMix)}${short} — ${shortfallReason(result.state, sp, plan.specId)}`,
+        };
+      }
+      if (result.placed >= plan.count) return result.state; // matchesPlan already true here; kept for clarity of the fall-through order
       // D2 FIX: shortfallReason() distinguishes administration-blocked from a
       // real funds shortfall from a real site shortage — see its doc comment.
       // The per-action unit cap is a FOURTH, distinct reason (never blamed on
@@ -5253,7 +5449,7 @@ function reduceCore(
         : shortfallReason(result.state, sp, plan.specId);
       return {
         ...result.state,
-        placeNotice: `Placed ${result.placed} of ${formatPlacedCount(plan.count, sp.name)} — ${shortBy}`,
+        placeNotice: `Placed ${result.placed} of ${planCountLabel(plan)} — ${shortBy}`,
       };
     }
 
@@ -5285,6 +5481,13 @@ function reduceCore(
       // batch that failed for ONE reason across many services still reads as
       // one reason, not the same sentence N times.
       const reasons = new Set<string>();
+      // RR-1 (independent re-round, 2026-09-05): true once ANY service's
+      // build substituted for its planned mix — used only to decide whether
+      // the summary shows `reasons` even when nothing was technically
+      // "skipped" (a substitution that reached the full count never touches
+      // `skippedCount` below, but the player still needs to know why the
+      // built list doesn't match what Fix All promised).
+      let anySubstituted = false;
 
       // PERF CAP (independent round r2, Aaron 2026-09-03): a GLOBAL unit
       // budget shared across the WHOLE batch, walked in the SAME Health-first
@@ -5324,7 +5527,27 @@ function reduceCore(
         anyRoadTopologyChange = anyRoadTopologyChange || result.roadTopologyChange;
         totalPlaced += result.placed;
         remainingUnitBudget -= result.placed;
-        if (result.placed > 0) built.push(formatPlacedCount(result.placed, sp.name));
+        // RR-1 (independent re-round, 2026-09-05, LEAD DEFECT FIX): describe
+        // what was ACTUALLY WALKED (result.builtMix), never the plan's own
+        // `mix`, unless the two are spec-for-spec, count-for-count identical
+        // (builtMixMatchesPlan). Pre-fix this compared bare unit COUNTS
+        // (`result.placed >= plan.count`), so a self-heal that swapped one
+        // £5bn dam for five small plants satisfied 5>=1 and reported "built
+        // ... 1 x Three Gorges Dam" with zero dams on the map — the notice
+        // must never name a spec that was not actually placed.
+        const matchesPlan = builtMixMatchesPlan(plan.mix, result.builtMix);
+        if (result.placed > 0) {
+          built.push(matchesPlan && result.placed >= plan.count ? planLabel(plan) : builtMixLabel(result.builtMix));
+          // RR2-2 FIX (independent re-round 2, 2026-09-05): only a REAL
+          // substitution (placePlanItem's own accurate verdict) should ever
+          // claim "a costlier planned spec was unaffordable — a cheaper mix
+          // was substituted". The old `!matchesPlan` test also fired for a
+          // plain partial build of the SAME spec (e.g. 3 of 9 planned
+          // Kindergartens truncated by a real site/funds shortfall), which
+          // is not a substitution at all — that case is already covered
+          // honestly by shortfallReason() below via `reasons`.
+          if (result.substituted) anySubstituted = true;
+        }
         if (result.placed < plan.count) {
           skippedCount++;
           if (result.cappedByUnitLimit) {
@@ -5347,13 +5570,21 @@ function reduceCore(
         };
       }
 
+      // RR-1: a substitution that reached the full planned COUNT never sets
+      // skippedCount (nothing was "skipped" — it all got built, just as a
+      // different mix), so a substitution-only reason is added here rather
+      // than being folded into the funds/admin/site reasons above.
+      if (anySubstituted) reasons.add('a costlier planned spec was unaffordable — a cheaper mix was substituted');
       const reasonSummary = [...reasons].join('; ');
       if (built.length === 0) {
         return { ...cur, placeNotice: `Fix All: nothing built — ${reasonSummary || 'insufficient funds'}` };
       }
-      const summary = skippedCount > 0
-        ? `Fix All: built ${built.join(', ')} — ${skippedCount} service(s) skipped or partial (${reasonSummary})`
-        : `Fix All: built ${built.join(', ')}`;
+      let summary = `Fix All: built ${built.join(', ')}`;
+      if (skippedCount > 0) {
+        summary += ` — ${skippedCount} service(s) skipped or partial (${reasonSummary})`;
+      } else if (anySubstituted) {
+        summary += ` — (${reasonSummary})`;
+      }
       return { ...cur, placeNotice: summary };
     }
 

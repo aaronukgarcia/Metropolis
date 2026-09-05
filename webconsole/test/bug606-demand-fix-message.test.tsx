@@ -27,6 +27,7 @@ import {
   orderedDemandFixPlan,
   rankedProviders,
   optimalProvider,
+  largestFirstFill,
   SPECS,
   AUTO_BUILD_DEMAND_FRACTION,
   AUTO_BUILD_DEMAND_PERCENT,
@@ -59,6 +60,7 @@ test('BUG-606: demandFixMessage renders label/shortfall/chosen-cost/alternative-
     have: 7_600,
     count: 1,
     planCost: SPECS.wat_clean.cost,
+    mix: [{ specId: 'wat_clean', unitCapacity: SPECS.wat_clean.served ?? 0, count: 1, planCost: SPECS.wat_clean.cost }],
     alternative: { specId: 'wat_tower', count: 4, planCost: 4 * SPECS.wat_tower.cost },
   };
 
@@ -97,6 +99,7 @@ test('BUG-606: demandFixMessage omits the alternative clause entirely when the p
     have: 0,
     count: 2,
     planCost: 2 * SPECS.fire_post.cost,
+    mix: [{ specId: 'fire_post', unitCapacity: 4_000, count: 2, planCost: 2 * SPECS.fire_post.cost }],
     alternative: null,
   };
   const msg = demandFixMessage(item);
@@ -134,13 +137,31 @@ test('BUG-606: demandFixPlan.alternative is the genuine rankedProviders() runner
   assert.ok(plan.alternative, 'a genuine alternative must exist when multiple cleanwater specs are unlocked');
   assert.notEqual(plan.alternative.specId, plan.specId, 'the alternative must be a DIFFERENT spec from the chosen one');
 
+  // RETUNE (this session, post-BUG-685 largest-first landing): demandFixPlan()'s
+  // `specId`/`mix`/`planCost` now come from largestFirstFill() (biggest
+  // credited-capacity spec first), NOT rankedProviders()' single-cheapest-
+  // total-plan winner — see demandFixPlan()'s own doc comment. `plan.specId`
+  // must match largestFirstFill()'s mix[0], and `plan.alternative` is mix[1]
+  // when the mix used more than one spec, falling back to rankedProviders()'
+  // runner-up only when the mix is single-spec (the ORIGINAL informational
+  // case this test predates, still correctly exercised when it applies).
   const fixAmount60 = (plan.need - plan.have) * AUTO_BUILD_DEMAND_FRACTION;
-  const ranked60 = rankedProviders(s60, 'cleanwater', s60.funds, fixAmount60);
-  assert.equal(ranked60[0].sp.id, plan.specId, 'plan.specId must be the ranked winner');
-  assert.equal(ranked60[1].sp.id, plan.alternative.specId, 'plan.alternative must be the ranked runner-up');
-  assert.equal(plan.alternative.count, ranked60[1].units);
-  assert.equal(plan.alternative.planCost, ranked60[1].planCost);
-  assert.equal(plan.planCost, ranked60[0].planCost, 'plan.planCost must be the CHOSEN candidate\'s total plan cost');
+  const mix60 = largestFirstFill(s60, 'cleanwater', fixAmount60, s60.funds);
+  assert.ok(mix60.length > 0, 'precondition: a real largest-first mix exists for this fixture');
+  assert.equal(mix60[0].specId, plan.specId, 'plan.specId must be the largest-first PRIMARY (mix[0]) pick');
+  assert.equal(plan.planCost, mix60.reduce((sum, m) => sum + m.planCost, 0), 'plan.planCost must be the sum of the WHOLE mix');
+  if (mix60.length > 1) {
+    assert.equal(mix60[1].specId, plan.alternative.specId, 'plan.alternative must be the largest-first mix[1] entry');
+    assert.equal(plan.alternative.count, mix60[1].count);
+    assert.equal(plan.alternative.planCost, mix60[1].planCost);
+  } else {
+    const ranked60 = rankedProviders(s60, 'cleanwater', s60.funds, fixAmount60);
+    const alt = ranked60.find((c) => c.sp.id !== plan.specId);
+    assert.ok(alt, 'a single-spec mix must still fall back to a genuine rankedProviders() runner-up');
+    assert.equal(alt.sp.id, plan.alternative.specId, 'plan.alternative must be the ranked runner-up when the mix is single-spec');
+    assert.equal(plan.alternative.count, alt.units);
+    assert.equal(plan.alternative.planCost, alt.planCost);
+  }
 });
 
 test('BUG-606: demandFixPlan.alternative is null when only ONE unlocked provider exists for the service (RED-PROOF via a locked-tier fixture)', () => {

@@ -49,11 +49,13 @@ function forceOnline(state) {
   return { ...state, buildings: state.buildings.map((b) => ({ ...b, builtTick: null })) };
 }
 
-test('demandFixPlan: clean-water count = ceil((need-have)*AUTO_BUILD_DEMAND_FRACTION / unitCapacity) (BUG-601)', () => {
-  // 60,000 chosen deliberately (FEAT-demanddock-overhaul / optimalProvider,
-  // re-scored to a TOTAL-PLAN-COST comparison after the independent round's
-  // REJECT of the original clears-in-one-only draft) — see the sibling tests
-  // below for the total-plan-cost comparisons at other populations.
+test('demandFixPlan: clean-water LARGEST-FIRST mix clears AUTO_BUILD_DEMAND_FRACTION of the shortfall, biggest unlocked spec leading (BUG-685)', () => {
+  // 60,000 chosen deliberately (FEAT-demanddock-overhaul / optimalProvider) —
+  // big enough that wat_reservoir (served 60,000, the biggest cleanwater
+  // spec) cannot alone close the 1.5x-overshot fixAmount, so the LARGEST-FIRST
+  // picker (BUG-685) must fall through to wat_clean/wat_tower for the
+  // remainder — a genuine multi-spec `mix`, not the single-spec plan the
+  // pre-BUG-685 cheapest-total-plan scorer produced here.
   const s = shortfallState(60_000);
   const plan = demandFixPlan(s);
   const water = plan.find((p) => p.serviceKey === 'cleanwater');
@@ -65,49 +67,76 @@ test('demandFixPlan: clean-water count = ceil((need-have)*AUTO_BUILD_DEMAND_FRAC
   const row = serviceCoverageOf(s).find((c) => c.id === 'cleanwater');
   assert.equal(water.need, row.need);
   assert.equal(water.have, row.cap);
-
-  const sp = SPECS[water.specId];
-  assert.equal(water.unitCapacity, sp.served, 'unitCapacity is the chosen spec\'s served field');
-
-  const expectedCount = Math.ceil((water.need - water.have) * AUTO_BUILD_DEMAND_FRACTION / water.unitCapacity);
-  assert.equal(water.count, expectedCount);
   assert.ok(water.count > 0, 'a real shortfall always yields count > 0');
 
-  // RED-PROOF (BUG-601, direction flipped by the 2026-09-03 superseding
-  // ruling): recompute using the FULL (unfractioned) shortfall and show the
-  // actual count is strictly LARGER — AUTO_BUILD_DEMAND_FRACTION is now 1.5
-  // (>1), so a single Fix/Auto-build action deliberately OVERSHOOTS the
-  // outstanding gap to build real headroom, rather than the original
-  // ruling's "leave a residual shortfall for next time" (fraction < 1). The
-  // comparison is derived from AUTO_BUILD_DEMAND_FRACTION's own value (>1 or
-  // <1), never a hardcoded assumption of which ruling is currently live.
-  const countFullShortfall = Math.ceil((water.need - water.have) / water.unitCapacity);
-  if (AUTO_BUILD_DEMAND_FRACTION > 1) {
+  // BUG-685 RED-PROOF: the biggest unlocked cleanwater spec (wat_reservoir,
+  // served 60,000 — bigger than wat_clean's 20,000 and wat_tower's 4,000)
+  // must lead the plan. The pre-BUG-685 cheapest-TOTAL-PLAN scorer picked
+  // wat_reservoir here too by coincidence of cost, so the real discriminator
+  // is the MIX shape below, not just this line — but a revert to a picker
+  // that scores per-capacity efficiency (rather than sheer size) could still
+  // legitimately fail this assertion for a different reason, so it stays.
+  const biggestCleanwaterSpec = Object.values(SPECS)
+    .filter((sp) => sp.kind === 'water' && sp.tag === 'clean')
+    .reduce((best, sp) => ((sp.served ?? 0) > (best.served ?? 0) ? sp : best));
+  assert.equal(water.specId, biggestCleanwaterSpec.id, 'the LARGEST unlocked provider must lead the plan (BUG-685)');
+  assert.equal(water.unitCapacity, biggestCleanwaterSpec.served, "unitCapacity is the PRIMARY (largest) chosen spec's served field");
+
+  // LARGEST-FIRST ordering: mix entries are sorted by capacity strictly
+  // non-increasing (BUG-685's own contract).
+  assert.ok(water.mix.length > 1, 'precondition: pop 60,000 needs more than the biggest spec alone can close in whole units');
+  for (let i = 1; i < water.mix.length; i++) {
     assert.ok(
-      water.count > countFullShortfall,
-      `AUTO_BUILD_DEMAND_FRACTION > 1 must OVERSHOOT above the full-shortfall figure (got ${water.count} vs ${countFullShortfall})`
-    );
-  } else {
-    assert.ok(
-      water.count < countFullShortfall,
-      `AUTO_BUILD_DEMAND_FRACTION < 1 must reduce the count below the full-shortfall figure (got ${water.count} vs ${countFullShortfall})`
+      water.mix[i - 1].unitCapacity >= water.mix[i].unitCapacity,
+      `mix must be ordered largest-capacity-first, got ${JSON.stringify(water.mix)}`
     );
   }
+
+  // The mix actually clears AUTO_BUILD_DEMAND_FRACTION of the gap, with
+  // overshoot bounded by the LARGEST mix entry's own capacity (Aaron's
+  // "never overshoot by more than one largest unit" boundary — BUG-685).
+  const fixAmount = (water.need - water.have) * AUTO_BUILD_DEMAND_FRACTION;
+  const delivered = water.mix.reduce((sum, m) => sum + m.count * m.unitCapacity, 0);
+  const count = water.mix.reduce((sum, m) => sum + m.count, 0);
+  const planCost = water.mix.reduce((sum, m) => sum + m.planCost, 0);
+  assert.equal(water.count, count, 'count is the TOTAL across the whole mix');
+  assert.equal(water.planCost, planCost, 'planCost is the TOTAL across the whole mix');
+  assert.ok(delivered >= fixAmount, `the mix must clear the whole fixAmount (${delivered} < ${fixAmount})`);
+  assert.ok(
+    delivered - fixAmount < water.mix[0].unitCapacity,
+    `overshoot (${delivered - fixAmount}) must stay under the largest mix entry's own capacity (${water.mix[0].unitCapacity})`
+  );
+
+  // RED-PROOF (monoculture-of-the-smallest-unit): the pre-BUG-685 toy-scale
+  // defect this whole fix exists to close would have priced this shortfall
+  // off the SMALLEST available unit (wat_tower, served 4,000) alone —
+  // strictly more buildings than the LARGEST-FIRST mix actually needs.
+  const smallestCleanwaterSpec = Object.values(SPECS)
+    .filter((sp) => sp.kind === 'water' && sp.tag === 'clean')
+    .reduce((worst, sp) => ((sp.served ?? 0) < (worst.served ?? 0) ? sp : worst));
+  const monocultureCount = Math.ceil(fixAmount / smallestCleanwaterSpec.served);
+  assert.ok(
+    water.count < monocultureCount,
+    `LARGEST-FIRST must need strictly fewer buildings than an all-${smallestCleanwaterSpec.id} monoculture (got ${water.count} vs ${monocultureCount})`
+  );
 });
 
-test('demandFixPlan: a dominated multi-unit plan never wins — same unit count must go to the cheaper spec (wat_tower over wat_clean at pop 2,000)', () => {
-  // FEAT-demanddock-overhaul re-score: optimalProvider() picks the cheapest
-  // TOTAL PLAN cost, not per-capacity efficiency. At pop 2,000 (shortfall
-  // 2,100) BOTH wat_tower (served 4,000) and wat_clean (served 20,000) clear
-  // the shortfall in exactly 1 unit — with the unit count tied, the cheaper
-  // spec must win (wat_tower £2.7M < wat_clean £4.68M), never the pricier one
-  // just because it has better cost-per-capacity in the abstract.
+test('demandFixPlan: BUG-685 LARGEST-FIRST — the biggest unlocked spec wins a one-unit clear even when it costs more (wat_reservoir over wat_tower/wat_clean at pop 2,000)', () => {
+  // SUPERSEDED 2026-09-04 (BUG-685, Aaron's largest-first ruling replaces the
+  // pre-existing cheapest-TOTAL-PLAN scorer for the actual BUILD plan): at
+  // pop 2,000 (shortfall 2,100, fixAmount 2,100*AUTO_BUILD_DEMAND_FRACTION),
+  // wat_reservoir (served 60,000 — the BIGGEST cleanwater spec) alone clears
+  // the whole fixAmount in exactly ONE unit (largestFirstFill()'s "a shortfall
+  // smaller than the biggest available unit still gets ONE building of the
+  // biggest spec" rule) — it must win even though it costs far more per-unit
+  // than wat_tower/wat_clean, the opposite of the OLD cheapest-plan ruling
+  // this test used to assert.
   const s = shortfallState(2_000);
   const plan = demandFixPlan(s);
   const water = plan.find((p) => p.serviceKey === 'cleanwater');
   assert.ok(water);
-  assert.equal(water.count, 1, 'precondition: both candidate specs clear this shortfall in exactly 1 unit');
-  assert.equal(water.specId, 'wat_tower', 'a strictly dominated (same units, higher cost) pick must never win');
+  assert.equal(water.count, 1, 'precondition: the biggest spec alone clears this shortfall in exactly 1 unit');
+  assert.equal(water.specId, 'wat_reservoir', 'BUG-685: the BIGGEST unlocked provider must win a one-unit clear, regardless of cost');
 });
 
 test('demandFixPlan: no shortfall (population 0) returns an empty plan', () => {
@@ -166,11 +195,19 @@ test('resolveDemand: one action sizes to AUTO_BUILD_DEMAND_FRACTION of the short
   assert.equal(placedCount, plan.count, 'placed exactly the planned count');
 });
 
+/** BUG-685: count placements of EVERY spec in a (possibly mixed) plan, not
+ *  just the primary/largest one — a largestFirstFill() mix places several
+ *  specs, so a single-specId filter undercounts. */
+function countMixPlaced(before, after, mix) {
+  const ids = new Set(mix.map((m) => m.specId));
+  const countOf = (bs) => bs.filter((b) => ids.has(b.spec)).length;
+  return countOf(after) - countOf(before);
+}
+
 test('resolveDemand: affordability cap places only what is affordable and reports the shortfall (no negative funds)', () => {
-  // 60,000 gives a plan.count safely >= 2 (BUG-601: wat_clean x2 covering 50%
-  // of the 60,000 shortfall, the cheapest total plan at this size — see the
-  // fractioned-count test above), unlike a smaller population where the "1
-  // dam not 20 towers" scoring would plan exactly 1 (large) unit.
+  // 60,000 gives a plan.count safely >= 2 (BUG-685: a multi-spec LARGEST-FIRST
+  // mix at this size — see the sibling mix test above), unlike a smaller
+  // population where the shortfall closes with exactly 1 (large) unit.
   const s = shortfallState(60_000);
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'cleanwater');
   assert.ok(plan && plan.count >= 2, 'need a plan needing 2+ units to prove a partial cap');
@@ -187,18 +224,18 @@ test('resolveDemand: affordability cap places only what is affordable and report
   assert.ok(limitedFunds > 0);
   const limited = { ...s, funds: limitedFunds };
 
-  // optimalProvider() is budget-sensitive (a whole plan must fit the budget
-  // to win outright, else it falls back to the cheapest single-unit-affordable
-  // spec) — at this LOWER budget the plan may legitimately pick a DIFFERENT,
-  // cheaper spec than the ample-funds run did. Recompute the plan against the
-  // actual `limited` state rather than assuming continuity with `plan`.
+  // largestFirstFill() is unlock/allowance-aware but NOT itself budget-gated
+  // (BUG-601's own convention: affordability capping happens downstream, in
+  // the resolveDemand reducer) — at this LOWER budget the mix is the SAME
+  // shape, just partially affordable. Recompute against `limited` anyway so
+  // this test tracks whatever demandFixPlan actually offers at that funds
+  // level, rather than assuming continuity with `plan`.
   const limitedPlan = demandFixPlan(limited).find((p) => p.serviceKey === 'cleanwater');
   assert.ok(limitedPlan, 'a clean-water shortfall (and a provider) must still exist at the reduced budget');
 
   const result = reducer(limited, { type: 'resolveDemand', serviceKey: 'cleanwater' });
 
-  const placedCount = result.buildings.filter((b) => b.spec === limitedPlan.specId).length -
-    limited.buildings.filter((b) => b.spec === limitedPlan.specId).length;
+  const placedCount = countMixPlaced(limited.buildings, result.buildings, limitedPlan.mix);
   assert.ok(placedCount > 0 && placedCount < limitedPlan.count, `expected a strictly partial placement, got ${placedCount} of ${limitedPlan.count}`);
   assert.ok(result.funds >= 0, 'funds never went negative from the bulk placement');
   assert.ok(

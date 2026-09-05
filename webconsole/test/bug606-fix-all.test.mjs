@@ -22,8 +22,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { demandFixPlan, orderedDemandFixPlan, SPECS, placementCost } from '../src/sim/data.ts';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ENGINE_PATH = path.join(__dirname, '..', 'src', 'sim', 'engine.ts');
 
 function shortfallState(population, fundsOverride = 1_000_000_000) {
   const base = initialState();
@@ -34,6 +41,14 @@ function countOf(state, specId) {
   return state.buildings.filter((b) => b.spec === specId).length;
 }
 
+/** BUG-685: count placements of EVERY spec in a (possibly mixed) plan, not
+ *  just the primary/largest one — a largestFirstFill() mix places several
+ *  specs, so a single-specId filter undercounts. */
+function countMixOf(state, mix) {
+  const ids = new Set(mix.map((m) => m.specId));
+  return state.buildings.filter((b) => ids.has(b.spec)).length;
+}
+
 test('resolveDemandAll: no shortfall anywhere is a true no-op', () => {
   const s = shortfallState(0);
   assert.equal(orderedDemandFixPlan(s).length, 0, 'precondition: zero population means zero real demand');
@@ -42,7 +57,16 @@ test('resolveDemandAll: no shortfall anywhere is a true no-op', () => {
 });
 
 test('resolveDemandAll: ample funds fully clears EVERY service in the plan, in one action', () => {
-  const s = shortfallState(20_000);
+  // RETUNE (this session, post-BUG-685 largest-first landing): shortfallState()'s
+  // default £1bn is no longer genuinely "ample" for every service — the
+  // largest-first picker (data.ts largestFirstFill()) can pick a spec whose
+  // real cost dwarfs the old cheapest-total-plan pick (Three Gorges Dam,
+  // £5bn, for power) regardless of price. An explicit, truly-ample override
+  // keeps this test's actual point (a well-funded city clears its WHOLE
+  // batch with nothing skipped) genuine rather than accidentally exercising
+  // the BUG-685-MONEY affordability fallback this file's RED-PROOF test
+  // below targets on purpose.
+  const s = shortfallState(20_000, 1_000_000_000_000);
   const order = orderedDemandFixPlan(s);
   assert.ok(order.length >= 5, 'precondition: a real multi-service shortfall must exist at this population');
 
@@ -53,8 +77,8 @@ test('resolveDemandAll: ample funds fully clears EVERY service in the plan, in o
   for (const item of order) {
     const plan = demandFixPlan(s).find((p) => p.serviceKey === item.serviceKey);
     assert.ok(plan, `precondition: ${item.serviceKey} must still have a demandFixPlan entry`);
-    const placed = countOf(result, plan.specId) - countOf(s, plan.specId);
-    assert.equal(placed, plan.count, `${item.serviceKey} must be FULLY placed (${plan.count} x ${plan.specId}) under ample funds`);
+    const placed = countMixOf(result, plan.mix) - countMixOf(s, plan.mix);
+    assert.equal(placed, plan.count, `${item.serviceKey} must be FULLY placed (${plan.count} units across its mix) under ample funds`);
   }
 
   assert.ok(result.placeNotice && result.placeNotice.startsWith('Fix All: built'), `expected a "Fix All: built ..." notice, got: ${result.placeNotice}`);
@@ -102,8 +126,8 @@ test('resolveDemandAll (RED-PROOF for priority order): a funds cap sized to JUST
   // skipped) would be the first thing to fail under array-order instead of
   // priority-order, since serviceCoverageOf()'s array order is NOT
   // Health-first (see data.ts: nursery/primary/college precede gp/hosp).
-  const placedFirst = countOf(result, planFirst.specId) - countOf(limited, planFirst.specId);
-  const placedSecond = countOf(result, planSecond.specId) - countOf(limited, planSecond.specId);
+  const placedFirst = countMixOf(result, planFirst.mix) - countMixOf(limited, planFirst.mix);
+  const placedSecond = countMixOf(result, planSecond.mix) - countMixOf(limited, planSecond.mix);
   assert.equal(placedFirst, planFirst.count, `${order[0].serviceKey} (priority 1) must be FULLY placed even under a tight funds cap`);
   assert.equal(placedSecond, planSecond.count, `${order[1].serviceKey} (priority 2) must be FULLY placed even under a tight funds cap`);
 
@@ -120,7 +144,7 @@ test('resolveDemandAll (RED-PROOF for priority order): a funds cap sized to JUST
     const plan = demandFixPlan(s).find((p) => p.serviceKey === item.serviceKey);
     if (!plan) continue;
     if (placementCost(SPECS[plan.specId]) <= 0) continue; // a free zone — funds cap does not apply
-    const placed = countOf(result, plan.specId) - countOf(limited, plan.specId);
+    const placed = countMixOf(result, plan.mix) - countMixOf(limited, plan.mix);
     assert.equal(placed, 0, `${item.serviceKey} (lower priority, real cost) must be skipped once Health exhausts the funds cap`);
     assertedAtLeastOneSkip = true;
   }
@@ -152,6 +176,88 @@ test('resolveDemandAll: with £1 in the treasury, no REAL-COST building is place
   assert.ok(result.placeNotice);
 });
 
+// BUG-685-MONEY (the round's LEAD DEFECT, item 1): the exact end-to-end
+// reproduction the independent round demanded — a real 'resolveDemand'
+// dispatch (not a bare largestFirstFill() call) against a state whose power
+// demandFixPlan mix is a SINGLE unaffordable entry (pow_hydro, £5bn — the
+// sole credited-largest power candidate at this small a shortfall) with a
+// treasury that cannot afford it but CAN afford the next-cheaper/denser
+// unlocked spec (pow_wind, £3.6M). Pre-fix, placePlanItem() had no fallback
+// once its one-shot mix[0] failed the funds gate and placed ZERO buildings
+// even though a real, affordable candidate existed. Population sized so
+// power's fixAmount stays well under pow_hydro's ~5,000 MW credited capacity
+// (no capacityTiers ladder on power specs generally, so credited == mw) —
+// the one-shot branch's own condition (capacity >= remaining) — guaranteeing
+// mix.length === 1 (see largestFirstFill()'s own doc comment).
+test('resolveDemand (BUG-685-MONEY end-to-end): a single-entry unaffordable primary spec falls through to an affordable candidate, never places ZERO', () => {
+  const s = shortfallState(10_000, 1_000_000_000); // £1bn: > pow_wind's £3.6M, < pow_hydro's £5bn
+  const plan = demandFixPlan(s).find((p) => p.serviceKey === 'power');
+  assert.ok(plan, 'precondition: a power shortfall must exist at this population');
+  assert.equal(plan.mix.length, 1, 'precondition: the natural mix must be a SINGLE entry (the one-shot branch)');
+  assert.equal(plan.specId, 'pow_hydro', 'precondition: pow_hydro must be the sole (unaffordable) candidate');
+  assert.ok(SPECS.pow_hydro.cost > s.funds, 'precondition: pow_hydro must be unaffordable at this treasury');
+  assert.ok(SPECS.pow_wind.cost < s.funds, 'precondition: a real, cheap, unlocked fallback (pow_wind) must be affordable');
+
+  const before = s.buildings.length;
+  const result = reducer(s, { type: 'resolveDemand', serviceKey: 'power' });
+
+  assert.ok(result.buildings.length > before, 'BUG-685-MONEY: the fallback must place at least one building, never zero');
+  const placedPower = result.buildings.slice(before).filter((b) => SPECS[b.spec]?.kind === 'power' || b.spec === 'pow_wind');
+  assert.ok(placedPower.some((b) => b.spec !== 'pow_hydro'), 'the placed building(s) must be the FALLBACK spec, not the unaffordable pow_hydro');
+  assert.equal(result.buildings.filter((b) => b.spec === 'pow_hydro').length, 0, 'pow_hydro itself must never have been placed (it was never affordable)');
+  assert.ok(result.funds >= 0, 'funds must never go negative');
+  assert.ok(!/Placed 0 of/.test(result.placeNotice ?? ''), `placeNotice must not report zero progress, got: ${result.placeNotice}`);
+});
+
+test('RED-PROOF (source revert, GR#24 scratch-copy — never git): disabling placePlanItem\'s self-heal fallback reddens the BUG-685-MONEY end-to-end test', () => {
+  const original = fs.readFileSync(ENGINE_PATH, 'utf8');
+  const fixedLine =
+    'if (result.placed > 0 || (cur.administrationState && item.mix.some((m) => placementCost(SPECS[m.specId]) > 0))) {';
+  assert.ok(original.includes(fixedLine), 'precondition: the self-heal guard is present in engine.ts');
+
+  // Force the guard to always short-circuit — exactly the pre-BUG-685-MONEY
+  // shape (a one-shot unaffordable mix places 0 and NOTHING retries).
+  const buggyLine = 'if (true) {';
+  const reverted = original.replace(fixedLine, buggyLine);
+  assert.notEqual(reverted, original, 'precondition: the textual swap actually changed the file');
+
+  const backupPath = ENGINE_PATH + '.bug685-money-red-proof.bak';
+  fs.copyFileSync(ENGINE_PATH, backupPath); // scratch copy, per GR#24 — never git for revert
+  try {
+    fs.writeFileSync(ENGINE_PATH, reverted, 'utf8');
+
+    const nodeExe = process.execPath;
+    const childEnv = { ...process.env };
+    delete childEnv.NODE_TEST_CONTEXT; // BUG-509/BUG-662 precedent: required or the child silently IPCs to the outer runner instead of exiting non-zero
+    let failed = false;
+    let output = '';
+    try {
+      output = execFileSync(
+        nodeExe,
+        [
+          '--test',
+          '--test-name-pattern=BUG-685-MONEY end-to-end',
+          fileURLToPath(import.meta.url),
+        ],
+        { cwd: path.join(__dirname, '..'), encoding: 'utf8', stdio: 'pipe', env: childEnv }
+      );
+    } catch (err) {
+      failed = true;
+      output = (err.stdout || '') + (err.stderr || '');
+    }
+
+    assert.ok(failed, 'the BUG-685-MONEY end-to-end test must FAIL against a self-heal-disabled revert — proves the test can fail');
+    assert.match(output, /not ok|fail/i, 'child test run output reports a failure against the disabled-fallback revert');
+  } finally {
+    // Restore the fixed file — scratch copy only, never git (GR#24).
+    fs.copyFileSync(backupPath, ENGINE_PATH);
+    fs.unlinkSync(backupPath);
+  }
+
+  const restored = fs.readFileSync(ENGINE_PATH, 'utf8');
+  assert.equal(restored, original, 'engine.ts is restored byte-identical to the fixed version after the RED proof');
+});
+
 test('resolveDemandAll: determinism — dispatched twice from the same state yields byte-identical results', () => {
   const s = shortfallState(15_000);
   const r1 = reducer(s, { type: 'resolveDemandAll' });
@@ -170,7 +276,11 @@ test('resolveDemandAll: determinism — dispatched twice from the same state yie
 // consecutive dispatches) lives in attack/atk-replay.test.mjs, kept green and
 // not duplicated here.
 test('resolveDemandAll: pure reducer (no input mutation) — every plan item\'s count is fully realised under ample funds', () => {
-  const s = shortfallState(12_000);
+  // RETUNE (this session, post-BUG-685 largest-first landing): see the
+  // sibling "ample funds" test's comment above — the default £1bn is no
+  // longer genuinely ample against a largest-first pick like Three Gorges
+  // Dam (£5bn).
+  const s = shortfallState(12_000, 1_000_000_000_000);
   const before = JSON.stringify(s);
   const result = reducer(s, { type: 'resolveDemandAll' });
   assert.equal(JSON.stringify(s), before, 'reducer must not mutate its input');
@@ -182,9 +292,8 @@ test('resolveDemandAll: pure reducer (no input mutation) — every plan item\'s 
   // connector tiles (autoConnect/autoBranchRail) when a site needs one, an
   // existing, unrelated side effect of the shared 'place' path.
   for (const item of orderedDemandFixPlan(s)) {
-    const before = s.buildings.filter((b) => b.spec === item.specId).length;
-    const after = result.buildings.filter((b) => b.spec === item.specId).length;
-    assert.equal(after - before, item.count, `${item.serviceKey}'s spec must be placed exactly ${item.count} times under ample funds`);
+    const placed = countMixOf(result, item.mix) - countMixOf(s, item.mix);
+    assert.equal(placed, item.count, `${item.serviceKey}'s mix must be placed exactly ${item.count} units under ample funds`);
     assert.ok(SPECS[item.specId], 'plan spec must be a real catalogue entry');
   }
 });

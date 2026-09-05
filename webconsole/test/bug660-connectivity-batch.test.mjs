@@ -149,7 +149,17 @@ function setsEqual(a, b) {
 
 const BACKDROP_N = 3000; // 6,000 buildings total (3,000 res_lowrise + 3,000 road)
 const SERVICE_KEY = 'cleanwater';
-const SPEC_ID = 'wat_clean';
+// RETUNE (this session, post-BUG-685 largest-first landing): largestFirstFill()
+// now picks the biggest CREDITED-capacity unlocked spec first (data.ts) —
+// Reservoir (wat_reservoir, credited 60,000), not Water Works (wat_clean,
+// credited 20,000, the old cheapest-total-plan optimalProvider() pick), wins
+// the cleanwater shortfall at every population this file uses (verified
+// directly: the mix stays single-spec wat_reservoir at every fixture size
+// below, with no wat_clean fallback entry ever needed). This file's whole
+// point is exercising placePlanItem()'s batch mechanics (board/connectivity/
+// perf), not which specific spec gets chosen, so the constant is simply
+// updated to the new real pick.
+const SPEC_ID = 'wat_reservoir';
 // Population sized to guarantee a real, sizeable cleanwater shortfall
 // (same order of magnitude as attack-bug646-round.test.mjs's own trigger).
 const POP = 3_000_000;
@@ -274,26 +284,36 @@ describe('BUG-660 (B): SAME-RUN scale invariance', () => {
   //   both gets a clean, low-noise signal AND proves (B2) fires independently
   //   of (B1)/batchBoard (confirmed: disabling batchBoard alone leaves (B2)'s
   //   ratio at ~1x — the two asserts are provably orthogonal).
-  const SPEC_TAG_ID = SPEC_ID; // 'wat_clean', tag: 'clean' — SSOT, see data.ts SPECS
+  const SPEC_TAG_ID = SPEC_ID; // 'wat_reservoir', tag: 'clean' — SSOT, see data.ts SPECS
 
   describe('(B1) batchBoard: per-unit cost must not grow with city size', () => {
     const SIZE_RATIO = 5;
     const SMALL_N = 250; // 500 backdrop buildings (250 res_lowrise + 250 road)
     const LARGE_N = SMALL_N * SIZE_RATIO; // 1,250 -> 2,500 backdrop buildings
     // Population scales WITH the backdrop (demandFixPlan()'s count is exactly
-    // linear in population — verified directly: pop 1.2M -> 90 units, pop 6M
-    // -> 450 units, 5x pop = 5x count) so the batch's OWN target size grows
-    // in step with the city, keeping the (buildings-in-city / units-in-batch)
-    // ratio constant across fixtures. Without this, a FIXED target count on a
-    // 5x-larger city dilutes across a fixed-size batch differently at each
-    // size purely from demandFixPlan()/createSpotSearchContext()'s own
+    // linear in population — RETUNE (this session, post-BUG-685 largest-first
+    // landing): re-verified directly against the new wat_reservoir pick
+    // (credited 60,000, not wat_clean's old 20,000): pop 2.4M -> 60 units,
+    // pop 12M -> 300 units, 5x pop = 5x count, single-spec mix at both sizes)
+    // so the batch's OWN target size grows in step with the city, keeping the
+    // (buildings-in-city / units-in-batch) ratio constant across fixtures.
+    // Without this, a FIXED target count on a 5x-larger city dilutes across a
+    // fixed-size batch differently at each size purely from
+    // demandFixPlan()/createSpotSearchContext()'s own
     // ONE-TIME O(city) per-batch setup cost (buildScoringContext() walks
     // every building once) amortizing over a fixed unit count — a real but
     // UNRELATED-TO-BUG-660 cost that swamped the signal in development
     // (measured: even the FIXED, correct code showed a spurious ~3-4x ratio
     // at fixed target counts once backdrops got large, purely from this
     // amortization artifact) and would have forced a needlessly loose K.
-    const SMALL_POP = 1_200_000;
+    // RETUNE (this session, post-BUG-685 largest-first landing): the old
+    // 1.2M/6M pair placed only 30/150 wat_reservoir units (below the
+    // precondition's own 50-unit sizeable-batch bar — wat_reservoir's bigger
+    // 60,000 credited capacity needs a bigger shortfall than wat_clean's old
+    // 20,000 to reach the same unit count). Bumped to keep the exact 5x
+    // scaling AND clear the 50-unit bar (verified: 60 -> 300 units, still a
+    // clean single-spec mix at both sizes).
+    const SMALL_POP = 2_400_000;
     const LARGE_POP = SMALL_POP * SIZE_RATIO;
 
     /** Runs the cleanwater resolveDemand batch on a backdrop of size n /
@@ -384,6 +404,13 @@ describe('BUG-660 (B): SAME-RUN scale invariance', () => {
     const SIZE_RATIO = 10;
     const SMALL_M = 200; // "this batch has already added 200 same-tagged points"
     const LARGE_M = SMALL_M * SIZE_RATIO; // 2,000
+    // This block is independent of demandFixPlan()/largestFirstFill() entirely
+    // (it drives createSpotSearchContext() directly) and its synthetic prior-
+    // placement grid below is spaced for a 2x2 footprint — kept as its OWN
+    // local constant (never SPEC_ID/SPEC_TAG_ID from the outer scope, which
+    // is now wat_reservoir's 4x4) so a future SPEC_ID retune up there can
+    // never silently corrupt this grid's spacing assumption.
+    const B2_SPEC_ID = 'wat_clean';
 
     /** Primes a fresh createSpotSearchContext() (bypassing placePlanItem,
      *  autoConnect and the road-BFS entirely — the WHOLE POINT is to isolate
@@ -396,12 +423,12 @@ describe('BUG-660 (B): SAME-RUN scale invariance', () => {
      *  without disturbing the real candidate window's occupancy. */
     function primeContext(priorCount) {
       const state = { ...initialState(), funds: 1e13, unlockedAll: true, administrationState: null };
-      const ctx = createSpotSearchContext(state, SPEC_TAG_ID);
+      const ctx = createSpotSearchContext(state, B2_SPEC_ID);
       ctx.findNext(); // force the initial scanAllCore() cache build
       for (let i = 0; i < priorCount; i++) {
         const x = 400 + (i % 10) * 2;
         const y = 2 + Math.floor(i / 10) * 2;
-        ctx.occupy([{ id: 100_000 + i, spec: SPEC_TAG_ID, x, y, builtTick: 0 }]);
+        ctx.occupy([{ id: 100_000 + i, spec: B2_SPEC_ID, x, y, builtTick: 0 }]);
       }
       return ctx;
     }
@@ -416,8 +443,8 @@ describe('BUG-660 (B): SAME-RUN scale invariance', () => {
       const ctx = primeContext(priorCount);
       const t0 = performance.now();
       const spot = ctx.findNext();
-      assert.ok(spot, `precondition: a free ${SPEC_TAG_ID} site must exist after ${priorCount} synthetic prior placements`);
-      ctx.occupy([{ id: 999_999, spec: SPEC_TAG_ID, x: spot.x, y: spot.y, builtTick: 0 }]);
+      assert.ok(spot, `precondition: a free ${B2_SPEC_ID} site must exist after ${priorCount} synthetic prior placements`);
+      ctx.occupy([{ id: 999_999, spec: B2_SPEC_ID, x: spot.x, y: spot.y, builtTick: 0 }]);
       const t1 = performance.now();
       return t1 - t0;
     }
