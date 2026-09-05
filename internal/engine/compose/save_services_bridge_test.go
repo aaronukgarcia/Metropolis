@@ -140,7 +140,15 @@ func TestServicesBridge_OldSaveWithoutServicesShard_SweepRebuilds(t *testing.T) 
 	}
 	dir := t.TempDir()
 	mgr := save.NewManager(dir, oldParticipants, comp.state.cid)
-	ctx := save.Context{WorldSeed: int64(comp.state.seed), CreatedAtTick: clock.Tick(), GameMonth: clock.Month(), AppVersion: "old-format-test"}
+	// BUG-737: GameMode must match freshComp's own locked mode ("real",
+	// the Deps.GameMode-unset default) — freshComp.Load now ALWAYS passes
+	// save.WithExpectedGameMode (AC-5), so a hand-rolled ctx that omits
+	// GameMode would trip ErrGameModeMismatch and mask this test's actual
+	// subject (the pre-existing services-shard migration path) behind an
+	// unrelated FEAT-143 refusal. This bundle still omits the "services"
+	// participant/shard exactly as before; only the mode field, unrelated
+	// to that migration, is filled in.
+	ctx := save.Context{WorldSeed: int64(comp.state.seed), CreatedAtTick: clock.Tick(), GameMonth: clock.Month(), AppVersion: "old-format-test", GameMode: "real"}
 	if err := mgr.SaveManual(ctx, "composition"); err != nil {
 		t.Fatalf("old-format SaveManual: %v", err)
 	}

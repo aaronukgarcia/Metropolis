@@ -477,6 +477,25 @@ var bootSecondsPerMonthAt1x = enginecore.LoadDefaultSecondsPerMonthAt1x
 // returns a partially-started skeletonWiring on error (any goroutines it
 // already started are stopped and waited on before returning).
 func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, error) {
+	return bootCoreWithGameMode(correlationID, reg, "")
+}
+
+// bootCoreWithGameMode is bootCore plus BUG-737's FEAT-143 wiring seam:
+// gameMode is a plain wire STRING ("real"/"unlimited"/"", gameinit.Mode's
+// own String() values), threaded straight into compose.Deps.GameMode.
+// cmd/metropolis (feat.skeleton) has NO registered code.json edge to
+// feat.gameinit (checked directly: feat.gameinit's inbound.consumers does
+// not list feat.skeleton) — so this package must never import
+// internal/engine/gameinit itself; it only ever forwards the string
+// compose.Wire (which DOES hold that edge) resolves into a real
+// *gameinit.GameInit. Empty (bootCore's own default, every existing test
+// call site) reproduces prior behaviour byte-for-byte: compose.Wire
+// resolves "" to gameinit.ModeReal internally. An unrecognised non-empty
+// value is never silently coerced — it propagates up through
+// compose.Wire's own ErrModuleFailed/ErrUnknownGameMode as a loud,
+// registry-sourced boot failure (AC-1's fail-closed contract), exactly
+// like any other module construction failure this function already wraps.
+func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode string) (*skeletonWiring, error) {
 	if err := registerSkeletonModules(reg, correlationID); err != nil {
 		return nil, err
 	}
@@ -529,7 +548,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		enginecore.WithSpeed8xGate(dbgState.AllowSpeed8x),
 		enginecore.WithSecondsPerMonthAt1x(secondsPerMonthAt1x),
 	)
-	if _, err := compose.Wire(engine, nil); err != nil {
+	if _, err := compose.Wire(engine, &compose.Deps{GameMode: gameMode}); err != nil {
 		cancel()
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{

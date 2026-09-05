@@ -88,7 +88,7 @@ func TestChromeView_EndToEnd_FirstDeltaCarriesRealFigures(t *testing.T) {
 		t.Errorf("Figures.Population = %d, want the live seeded citizen count (>0) — a zero population is exactly the plausible-looking-zero this fix refuses to publish", fig.Population)
 	}
 	if fig.Money <= 0 {
-		t.Errorf("Figures.Money = %d, want the live treasury in whole pounds (>0 at baseline: initialTreasury is %d micropounds)", fig.Money, initialTreasury)
+		t.Errorf("Figures.Money = %d, want the live treasury in whole pounds (>0 at baseline: the data-sourced opening treasury is %d micropounds)", fig.Money, testInitialTreasury(t))
 	}
 	if fig.Rating == "" || !strings.HasSuffix(fig.Rating, "/1000") {
 		t.Errorf("Figures.Rating = %q, want engine.finance's real 0..1000 credit score rendered on its own declared scale", fig.Rating)
@@ -229,8 +229,9 @@ func TestBUG324_TreasuryMirrorTracksEveryWriter_ThroughTheRealComposition(t *tes
 	// (1) The seed. Wire must seed THROUGH setTreasury, or the bar reads
 	// zero until the first write.
 	assertTreasuryMirror(t, st, "immediately after Wire (the seed)")
-	if st.treasuryPub.Load() != initialTreasury {
-		t.Fatalf("treasuryPub after Wire = %d, want the seeded %d — the mirror was not primed by the seed", st.treasuryPub.Load(), initialTreasury)
+	wantTreasury := testInitialTreasury(t)
+	if st.treasuryPub.Load() != wantTreasury {
+		t.Fatalf("treasuryPub after Wire = %d, want the seeded %d — the mirror was not primed by the seed", st.treasuryPub.Load(), wantTreasury)
 	}
 
 	// (2) Ticks across a month boundary, so financeHook's wage/tax

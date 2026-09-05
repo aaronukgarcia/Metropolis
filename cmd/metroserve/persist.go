@@ -96,9 +96,21 @@ func (g *rehydrateGuardStore) AppendJournal(ctx context.Context, city persist.Ci
 // errors — the caller exits non-zero. A corrupt journal is FATAL by design:
 // silently starting a fresh city over a persisted one would be the very
 // data-loss this epic exists to prevent.
-func setUpPersistence(e *core.Engine, persistDir, cityID string, stdout io.Writer) (*compose.Composition, persist.Store, error) {
+// gameMode is BUG-737's FEAT-143 wiring seam, appended as a trailing
+// variadic argument (mirroring CityHostOption's own "appended at the
+// END, existing call sites keep compiling unchanged" precedent, this
+// file's own doc comment on that pattern) so every one of this
+// function's many pre-existing test call sites keeps compiling and
+// behaving identically (gameMode omitted == ""). See
+// wireAndRehydrate's doc comment below for what happens to it on the
+// persist-on path.
+func setUpPersistence(e *core.Engine, persistDir, cityID string, stdout io.Writer, gameMode ...string) (*compose.Composition, persist.Store, error) {
+	mode := ""
+	if len(gameMode) > 0 {
+		mode = gameMode[0]
+	}
 	if persistDir == "" {
-		comp, err := compose.Wire(e, nil)
+		comp, err := compose.Wire(e, &compose.Deps{GameMode: mode})
 		if err != nil {
 			return nil, nil, fmt.Errorf("compose.Wire failed: %w", err)
 		}
@@ -111,7 +123,7 @@ func setUpPersistence(e *core.Engine, persistDir, cityID string, stdout io.Write
 	}
 	city := persist.CityKey{TenantID: persistTenantID, CityID: cityID}
 
-	comp, err := wireAndRehydrate(context.Background(), e, disk, city, stdout)
+	comp, err := wireAndRehydrate(context.Background(), e, disk, city, stdout, mode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -145,7 +157,32 @@ func setUpPersistence(e *core.Engine, persistDir, cityID string, stdout io.Write
 // epic exists to prevent. On any error the engine is left partly wired but
 // the caller discards it (CityHost registers nothing; run() exits non-zero),
 // so no half-live city escapes.
-func wireAndRehydrate(ctx context.Context, e *core.Engine, store persist.Store, city persist.CityKey, stdout io.Writer) (*compose.Composition, error) {
+// gameMode (BUG-737, trailing variadic — see setUpPersistence's identical
+// doc comment on why) is the requested FEAT-143 mode, forwarded VERBATIM
+// into compose.Deps.GameMode — this function never touches
+// store.SetGameModeIfAbsent itself (round finding P1-3/P3): the durable
+// stamp lives INSIDE compose.Wire now, right next to its existing
+// BUG-488 world-seed stamp, so it only ever runs AFTER Wire's own
+// gameinit.ParseMode validation has already succeeded (an invalid mode
+// string never reaches a stamp at all, closing the "a boot with 'bogus'
+// permanently poisons gamemode.json" defect the pre-fix code that used
+// to stamp HERE, before Wire validated anything, had). The cross-restart
+// REFUSAL on a genuine mismatch against whatever is already durably on
+// record (AC-3: "a restart must not be able to re-mode") is enforced by
+// compose.go's own checkGameMode, called from INSIDE Wire (compose.go)
+// immediately BEFORE either of its own stamps — NOT from
+// RestoreLatestSnapshotOrGenesis (stale as of the round-2 lead ruling,
+// 2026-09-05: checkGameMode's own doc comment, internal/engine/compose/
+// snapshot.go, explains why it had to move earlier than
+// checkWorldSeed's own call site) — mirroring checkWorldSeed's refusal
+// shape, never a silent overrule. This function's own call to
+// compose.Wire below is therefore where that refusal actually surfaces.
+func wireAndRehydrate(ctx context.Context, e *core.Engine, store persist.Store, city persist.CityKey, stdout io.Writer, gameMode ...string) (*compose.Composition, error) {
+	mode := ""
+	if len(gameMode) > 0 {
+		mode = gameMode[0]
+	}
+
 	// Wire with the guard interposed so replayed commands are NOT re-appended.
 	// The guard flag is flipped back to false ONLY after restore fully
 	// completes below, before any loop/pump goroutine is started by the
@@ -153,7 +190,7 @@ func wireAndRehydrate(ctx context.Context, e *core.Engine, store persist.Store, 
 	// code observed, unchanged by this increment.
 	guard := &rehydrateGuardStore{Store: store}
 	guard.replaying.Store(true)
-	comp, err := compose.Wire(e, &compose.Deps{PersistStore: guard, PersistCity: city})
+	comp, err := compose.Wire(e, &compose.Deps{PersistStore: guard, PersistCity: city, GameMode: mode})
 	if err != nil {
 		return nil, fmt.Errorf("compose.Wire failed: %w", err)
 	}

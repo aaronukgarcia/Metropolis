@@ -1,5 +1,5 @@
 {
-  "$comment": "FEAT-143 (mkey feat.gameinit): Game Initialization Modes -- Real vs Unlimited Money. The starting treasury balance for `real` mode is data-sourced (never a hardcoded Go literal, per AC-6/GR#15). Spec refs: FEAT-143's own Desc (Real vs Unlimited Money, lock-in on startup, immutable save metadata); docs/METROPOLIS-MASTER-v2.1.md §7 finance/insolvency (line 212); §13 line 12 ('The player starts with money'); §39. The 5,000,000-micropound figure carried in FEAT-143's Desc is a player-felt balance number and is NOT pinned here -- per the standing balance-number regime (Vestige metropolis-balance-number-regime) this file ships a disclosed placeholder pending Aaron's row-by-row approval; AC-6 checks only that real mode starts with a finite POSITIVE capital and unlimited mode is un-depletable, never this magnitude.",
+  "$comment": "FEAT-143 (mkey feat.gameinit): Game Initialization Modes -- Real vs Unlimited Money. The starting treasury balance for `real` mode is data-sourced (never a hardcoded Go literal, per AC-6/GR#15). Spec refs: FEAT-143's own Desc (Real vs Unlimited Money, lock-in on startup, immutable save metadata); docs/METROPOLIS-MASTER-v2.1.md §7 finance/insolvency (line 212); §13 line 12 ('The player starts with money'); §39. The 5,000,000-micropound figure carried in FEAT-143's Desc is a player-felt balance number and is NOT pinned here. BUG-737 (compose wiring) set this figure to £1,500,000 -- matching compose.go's own pre-existing initialTreasury constant (BUG-452's Aaron-ruled dogfood grant) exactly, rather than the earlier 5,000,000 draft placeholder -- so wiring Real mode's opening treasury from this data file reproduces every existing composed-engine test's expectation byte-for-byte (GR#15: never let a data-sourcing refactor silently change player-felt behaviour). Still a disclosed placeholder pending Aaron's row-by-row balance pass; AC-6 checks only that real mode starts with a finite POSITIVE capital and unlimited mode is un-depletable, never this magnitude.",
   "version": 1,
   "meta": {
     "module": "feat.gameinit",
@@ -9,11 +9,11 @@
   },
   "params": {
     "startingCapitalMicropounds": {
-      "value": 5000000000,
-      "unit": "micro-pounds (£5,000,000 placeholder; MicropoundsPerPound=1,000 per foundation/det/money.go)",
+      "value": 1500000000,
+      "unit": "micro-pounds (£1,500,000 placeholder, matching compose.go's pre-existing initialTreasury/BUG-452 grant; MicropoundsPerPound=1,000 per foundation/det/money.go)",
       "placeholder": true,
-      "specRef": "FEAT-143 Desc's 5,000,000-figure proposal",
-      "disclosure": "PLACEHOLDER pending Aaron's balance pass (feat.gameinit.md Escalations: 'the 5,000,000 micropounds figure ... is a player-felt number ... AC-6 pins no value'). AC-6 checks only that real mode's starting balance is finite and strictly positive, and that unlimited mode is a genuine bypass, not a huge finite number -- never this magnitude."
+      "specRef": "BUG-737 wiring: aligned to compose.go's initialTreasury (BUG-452's £1,500,000 dogfood grant) rather than FEAT-143 Desc's original 5,000,000-figure proposal",
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (feat.gameinit.md Escalations: 'the 5,000,000 micropounds figure ... is a player-felt number ... AC-6 pins no value'). AC-6 checks only that real mode's starting balance is finite and strictly positive, and that unlimited mode is a genuine bypass, not a huge finite number -- never this magnitude. Value set to match the pre-wiring compose.go literal exactly so BUG-737's data-sourcing switch is behaviour-preserving for every existing composed-engine test."
     }
   }
 }

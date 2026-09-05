@@ -37,10 +37,13 @@ type loadOptions struct {
 	// gameinit.GameInit.Mode() string, only meaningful when
 	// checkGameMode is true. There is deliberately no
 	// AllowGameModeMismatch escape hatch mirroring AllowSeedMismatch:
-	// AC-5 requires a mode mismatch (or an absent mode on a
-	// mode-bearing build) to ALWAYS fail closed, with no re-mode-on-load
-	// path at all -- re-moding a session is a new-game decision, never a
-	// load-time one.
+	// AC-5 requires a genuine mode mismatch to ALWAYS fail closed, with
+	// no re-mode-on-load path at all -- re-moding a session is a
+	// new-game decision, never a load-time one. A bundle with NO
+	// recorded mode is NOT automatically a mismatch, though -- see
+	// WithExpectedGameMode's own doc comment below for the round-2 lead
+	// ruling (2026-09-05) that replaced the original blanket-rejection
+	// rule with a real migration path for pre-FEAT-143 saves.
 	expectedGameMode string
 }
 
@@ -101,15 +104,27 @@ func AllowSeedMismatch() LoadOption {
 // enforces this. Pass the loading session's own gameinit.GameInit.Mode()
 // string (via GameModeWire()) as mode.
 //
-// On mismatch, Load returns ErrGameModeMismatch (carrying both mode
-// strings). A bundle whose Meta predates FEAT-143 (or was otherwise
-// written with no mode recorded) decodes GameMode as the empty string,
-// which this check treats as a mismatch against ANY non-empty expected
-// mode -- there is no default-to-"unlimited" fallback (AC-5's explicit
-// false-pass-risk: silently treating an absent mode as unlimited would
-// let an old save silently unlock money). There is deliberately no
-// AllowGameModeMismatch escape hatch: unlike a world-seed reseed, a
-// deliberate re-mode is a new-game decision, never a load-time opt-in.
+// On a genuine mismatch (both sides non-empty and different), Load
+// returns ErrGameModeMismatch (carrying both mode strings). There is
+// deliberately no AllowGameModeMismatch escape hatch: unlike a
+// world-seed reseed, a deliberate re-mode is a new-game decision, never
+// a load-time opt-in.
+//
+// BUG-737 round-2 lead ruling (2026-09-05, REPLACING the original
+// "absent mode is always rejected" text): a bundle whose Meta predates
+// FEAT-143 (or was otherwise written with no mode recorded) decodes
+// GameMode as the empty string. The original design treated that as a
+// mismatch against ANY expected mode, which broke every save bundle
+// written before FEAT-143 shipped with no migration path at all. The
+// corrected rule: an empty bundle GameMode loads ONLY when mode ==
+// "real" (the conservative default) -- see load.go's own doc comment
+// for the exact three-way split, and ErrLegacyGameModeAssumedReal
+// (errors.go) for the non-fatal WARN this path raises. Loading the same
+// empty-mode bundle against mode == "unlimited" (or any other non-empty,
+// non-"real" value) still refuses -- an absent mode is never treated as
+// "matches unlimited" (the original false-pass-risk note: silently
+// treating an absent mode as unlimited would let an old save silently
+// unlock money -- this survives intact for that one direction).
 //
 // mode == "" is ALSO always refused (FEAT-143 round finding P2-A) --
 // even against a bundle whose own recorded GameMode is itself "". This

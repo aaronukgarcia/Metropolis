@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
@@ -117,6 +118,186 @@ func TestSetUpPersistence_RestartRoundTrip(t *testing.T) {
 	if compGenesis.StateDigest() == digestA {
 		t.Fatal("a never-rehydrated genesis engine matched the persisted digest — the round-trip check cannot detect divergence (false-pass)")
 	}
+}
+
+// TestSetUpPersistence_GameModeRestartRefusesOnMismatch is BUG-737's round
+// finding P1-4 headline scenario, made executable exactly as the round's
+// own wording specified: "boot unlimited on a fresh persist dir, stop,
+// reboot real". Engine A boots -game-mode "unlimited" against a fresh
+// persist dir (durably stamping "unlimited" as the city's ORIGINATING
+// mode via compose.Wire's own SetGameModeIfAbsent call). Engine B then
+// attempts to boot the SAME city with "real" — this must REFUSE with a
+// registry error naming BOTH modes (checkGameMode, snapshot.go), never
+// silently proceed in either mode (the round's named P2: "a silent
+// overrule").
+func TestSetUpPersistence_GameModeRestartRefusesOnMismatch(t *testing.T) {
+	dir := t.TempDir()
+
+	eA := newEngine()
+	compA, storeA, err := setUpPersistence(eA, dir, "modecity", &bytes.Buffer{}, "unlimited")
+	if err != nil {
+		t.Fatalf("setUpPersistence (A, unlimited): %v", err)
+	}
+	if got := compA.GameMode(); got != "unlimited" {
+		t.Fatalf("compA.GameMode() = %q, want %q", got, "unlimited")
+	}
+	// Drive at least one real command so this city has genuine durable
+	// history, not merely a mode/seed sidecar — the realistic "stop"
+	// half of the scenario.
+	submitAll(t, eA, rtCommands())
+
+	city := persist.CityKey{TenantID: persistTenantID, CityID: "modecity"}
+	recordedMode, ok, err := storeA.GameMode(context.Background(), city)
+	if err != nil || !ok || recordedMode != "unlimited" {
+		t.Fatalf("precondition: durable GameMode = (%q, %v, %v), want (\"unlimited\", true, nil)", recordedMode, ok, err)
+	}
+
+	eB := newEngine()
+	_, _, err = setUpPersistence(eB, dir, "modecity", &bytes.Buffer{}, "real")
+	if err == nil {
+		t.Fatal("setUpPersistence (B, real) succeeded against a durably-unlimited city, want a refusal naming both modes")
+	}
+	msg := err.Error()
+	if !containsAll(msg, "unlimited", "real") {
+		t.Fatalf("mismatch error = %q, want it to name BOTH the recorded mode (unlimited) and the requested one (real)", msg)
+	}
+
+	// The durable record itself must be UNCHANGED by the refused attempt
+	// — a silent overrule would have left "real" on record instead.
+	recordedMode2, ok2, err := storeA.GameMode(context.Background(), city)
+	if err != nil || !ok2 || recordedMode2 != "unlimited" {
+		t.Fatalf("durable GameMode after the refused reboot = (%q, %v, %v), want unchanged (\"unlimited\", true, nil)", recordedMode2, ok2, err)
+	}
+}
+
+// TestSetUpPersistence_GameModeDeletedSidecarRefusesNotRemode is BUG-737's
+// round finding P1-4's second named scenario: deleting gamemode.json
+// between boots on a city that was already Wired (has a recorded world
+// seed) must REFUSE the next boot, never silently (re-)stamp whatever
+// mode that boot happens to request.
+func TestSetUpPersistence_GameModeDeletedSidecarRefusesNotRemode(t *testing.T) {
+	dir := t.TempDir()
+
+	eA := newEngine()
+	_, storeA, err := setUpPersistence(eA, dir, "delcity", &bytes.Buffer{}, "unlimited")
+	if err != nil {
+		t.Fatalf("setUpPersistence (A, unlimited): %v", err)
+	}
+	submitAll(t, eA, rtCommands())
+
+	city := persist.CityKey{TenantID: persistTenantID, CityID: "delcity"}
+	disk, ok := storeA.(*persist.DiskStore)
+	if !ok {
+		t.Fatalf("storeA is %T, want *persist.DiskStore (setUpPersistence with a non-empty persistDir)", storeA)
+	}
+	sidecar := disk.GameModeSidecarPath(city)
+	if _, err := os.Stat(sidecar); err != nil {
+		t.Fatalf("gamemode.json sidecar missing before deletion: %v", err)
+	}
+	if err := os.Remove(sidecar); err != nil {
+		t.Fatalf("delete gamemode.json: %v", err)
+	}
+
+	eB := newEngine()
+	_, _, err = setUpPersistence(eB, dir, "delcity", &bytes.Buffer{}, "real")
+	if err == nil {
+		t.Fatal("setUpPersistence (B, real) succeeded against a city with a deleted gamemode.json sidecar, want a refusal — a missing sidecar on an already-Wired city must never be silently re-stamped")
+	}
+}
+
+// TestSetUpPersistence_LegacyPersistDirMigratesWithWarning is the
+// round-2 lead ruling's headline fix (2026-09-05): the LIVE Azure
+// dogfood city scenario — a persist dir with a durably recorded world
+// seed and real journal history, but NO gamemode.json and no epoch
+// marker at all, because it was created before FEAT-143 existed. This
+// simulates that dir by hand, going straight through the real
+// *persist.DiskStore (never a test-only shortcut), and proves the
+// FIRST post-upgrade boot succeeds (never MET-E820's "(missing)"
+// refusal the original P1-4 design produced), while a SECOND boot with
+// a genuinely different mode NOW correctly refuses — the city is fully
+// migrated from its first touch onward.
+func TestSetUpPersistence_LegacyPersistDirMigratesWithWarning(t *testing.T) {
+	dir := t.TempDir()
+	disk, err := persist.NewDiskStore(dir)
+	if err != nil {
+		t.Fatalf("NewDiskStore: %v", err)
+	}
+	city := persist.CityKey{TenantID: persistTenantID, CityID: "legacycity"}
+
+	// Simulate the pre-FEAT-143 world: SetWorldSeedIfAbsent (BUG-488)
+	// and a real journal record, exactly what a genuine dogfood city
+	// would have — never SetGameModeIfAbsent/SetGameModeEpoch, since
+	// those concepts did not exist when this hypothetical city was
+	// created.
+	if _, err := disk.SetWorldSeedIfAbsent(context.Background(), city, inc4Seed); err != nil {
+		t.Fatalf("SetWorldSeedIfAbsent (simulate legacy): %v", err)
+	}
+	legacyCmd := protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.CorrelationID("legacy-pre-feat143"),
+		Kind:            protocol.KindAdvanceTicks,
+		Payload:         protocol.AdvanceTicksPayload{N: 1},
+	}
+	legacyRecord, err := protocol.EncodeCommand(legacyCmd)
+	if err != nil {
+		t.Fatalf("EncodeCommand (simulate legacy): %v", err)
+	}
+	if err := disk.AppendJournal(context.Background(), city, legacyRecord); err != nil {
+		t.Fatalf("AppendJournal (simulate legacy): %v", err)
+	}
+	if _, ok, err := disk.GameMode(context.Background(), city); err != nil || ok {
+		t.Fatalf("precondition: GameMode = (_, %v, %v), want ok=false (no mode ever recorded)", ok, err)
+	}
+	if has, err := disk.HasGameModeEpoch(context.Background(), city); err != nil || has {
+		t.Fatalf("precondition: HasGameModeEpoch = (%v, %v), want false (never touched by mode-aware code)", has, err)
+	}
+
+	// First post-upgrade boot: real binary path (setUpPersistence),
+	// requesting "unlimited". Must SUCCEED — the round-2 fix's entire
+	// point — not refuse with MET-E820's "(missing)" mismatch the
+	// original design produced against exactly this shape of dir.
+	eA := newEngine()
+	compA, _, err := setUpPersistence(eA, dir, "legacycity", &bytes.Buffer{}, "unlimited")
+	if err != nil {
+		t.Fatalf("setUpPersistence (legacy city, first post-upgrade boot) refused, want the one-time migration to succeed: %v", err)
+	}
+	if got := compA.GameMode(); got != "unlimited" {
+		t.Fatalf("compA.GameMode() = %q, want %q", got, "unlimited")
+	}
+
+	// The migration must have durably stamped BOTH the mode and the
+	// epoch, so this city is fully governed by the normal match/
+	// mismatch rule from here on.
+	recordedMode, ok, err := disk.GameMode(context.Background(), city)
+	if err != nil || !ok || recordedMode != "unlimited" {
+		t.Fatalf("after migration: GameMode = (%q, %v, %v), want (\"unlimited\", true, nil)", recordedMode, ok, err)
+	}
+	if has, err := disk.HasGameModeEpoch(context.Background(), city); err != nil || !has {
+		t.Fatalf("after migration: HasGameModeEpoch = (%v, %v), want (true, nil)", has, err)
+	}
+
+	// Second boot, a genuinely DIFFERENT mode: now correctly refuses —
+	// this city is no longer "legacy", it is "already migrated".
+	eB := newEngine()
+	_, _, err = setUpPersistence(eB, dir, "legacycity", &bytes.Buffer{}, "real")
+	if err == nil {
+		t.Fatal("setUpPersistence (legacy city, second boot, different mode) succeeded, want a refusal — the migration must be a ONE-TIME event, never a standing bypass")
+	}
+	if !containsAll(err.Error(), "unlimited", "real") {
+		t.Fatalf("mismatch error = %q, want it to name both the migrated mode (unlimited) and the requested one (real)", err)
+	}
+}
+
+// containsAll reports whether hay contains every one of needles as a
+// substring (small local helper — this file has no existing multi-needle
+// contains check to reuse).
+func containsAll(hay string, needles ...string) bool {
+	for _, n := range needles {
+		if !strings.Contains(hay, n) {
+			return false
+		}
+	}
+	return true
 }
 
 // TestSetUpPersistence_DefaultOff proves persistDir "" takes the compose.Wire(e,

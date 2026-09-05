@@ -63,6 +63,17 @@ type financeBalanceSheetView struct {
 type financeBalanceSheetWirePatch struct {
 	SchemaVersion int                      `json:"schemaVersion"`
 	BalanceSheet  *financeBalanceSheetView `json:"balanceSheet,omitempty"`
+
+	// UnlimitedMoney is BUG-737's FEAT-143 AC-7 wiring: mirrors
+	// internal/ui/screens/finance/wire.go's wirePatch.UnlimitedMoney
+	// field-for-field (same JSON tag, same *bool pointer semantics — GR#20's
+	// engine-never-imports-ui half of the seam, this file's own doc comment
+	// above). A non-nil pointer is the real gi.Unlimited() value read every
+	// publish tick; nil (never sent, via the UI side's own omitempty) means
+	// "not yet known" and is only reachable if gameinit were somehow unwired
+	// (never true after a successful Wire — wireGameInit either constructs
+	// gi or Wire itself fails).
+	UnlimitedMoney *bool `json:"unlimitedMoney,omitempty"`
 }
 
 // buildFinanceBalanceSheetPatch returns the "f2.finance" balanceSheet-only
@@ -127,8 +138,29 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 	// rather than duplicating the adapter).
 	netWorth := num.SatSub(num.SatAdd(int64(treasury), int64(reserves)), int64(debt))
 
+	// BUG-737 (FEAT-143 AC-7): the infinite/unlimited indicator, read
+	// live from the composed *gameinit.GameInit every publish tick
+	// (never cached — a session's mode never changes post-Wire, AC-3, but
+	// this stays a live read rather than a Wire-time snapshot so it can
+	// never silently drift from finance's own mode gate). st.gameInit is
+	// never nil after a successful Wire (wireGameInit, compose_gameinit.go)
+	// -- it CAN be nil in a test that hand-constructs a bare &simState{}
+	// without going through Wire (e.g. bug308_test.go), so this guards
+	// against that the same way DeathServicesRunStatus guards
+	// st.deathServices == nil: omit the field (nil pointer, omitempty)
+	// rather than publish a wrong true/false value or panic. The SEC-020
+	// copy-guard's impossible-in-production error path takes the same
+	// omit-the-field branch.
+	var unlimitedMoney *bool
+	if st.gameInit != nil {
+		if unlimited, uerr := st.gameInit.Unlimited(st.cid); uerr == nil {
+			unlimitedMoney = &unlimited
+		}
+	}
+
 	patch := financeBalanceSheetWirePatch{
-		SchemaVersion: financeWireSchemaVersion,
+		SchemaVersion:  financeWireSchemaVersion,
+		UnlimitedMoney: unlimitedMoney,
 		BalanceSheet: &financeBalanceSheetView{
 			Assets: []financeBalanceItem{
 				{Label: "Treasury", ValueMicropounds: int64(treasury)},

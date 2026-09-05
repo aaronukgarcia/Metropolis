@@ -133,8 +133,9 @@
       "V857-V857": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V864-V864": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "G5410-G5419": "reserved for feat.gameinit (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
-      "V867-V867": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\" -- renumbered from V865 to V867 after a collision with another lane's concurrent claim on V865/V866 from the same HEAD)"
-
+      "V867-V867": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\" -- renumbered from V865 to V867 after a collision with another lane's concurrent claim on V865/V866 from the same HEAD)",
+      "G5420-G5423": "reserved for feat.gameinit (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "E1000-E1001": "reserved for feat.saveux (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"E\")"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -5574,6 +5575,24 @@
       "module": "ui.webconsole",
       "message": "Debug sink at {url} returned a 2xx without a valid ack (expected sink={sink} id={id}) -- commit remains queued locally instead of being trusted as sunk",
       "remedy": "Check that the real metropolis-debugsink server (tools/debugsink/server.js) is the process listening on 127.0.0.1:8642, not another local tool sharing the port"
+    },
+    "MET-G5420": {
+      "severity": "warn",
+      "module": "feat.gameinit",
+      "message": "persist city {city} predates FEAT-143 (no gamemode.json, existing world seed on record): stamping mode {mode} for the first time",
+      "remedy": "This is a one-time migration accepted for a city created before game-init modes existed. Verify {mode} is the mode this city's operator actually intends -- once stamped it is immutable (AC-3) and every LATER boot with a different mode refuses (MET-E820)."
+    },
+    "MET-G5421": {
+      "severity": "warn",
+      "module": "feat.gameinit",
+      "message": "save bundle at {path} predates FEAT-143 (no GameMode field): loading into the REAL session only, assumed mode 'real'",
+      "remedy": "A pre-FEAT-143 save carries no locked-mode declaration. Per the lead ruling (feat.gameinit.md AC-5), such a bundle loads ONLY into a real-mode session (the conservative default) and is re-stamped with GameMode='real' on its next save. An unlimited session refuses this bundle outright (MET-E820)."
+    },
+    "MET-E1000": {
+      "severity": "warn",
+      "module": "feat.saveux",
+      "message": "save bundle at {path} predates FEAT-143 (no GameMode field recorded): loading into the current real-mode session only, mode assumed 'real'",
+      "remedy": "Per the lead ruling (feat.gameinit.md AC-5, 2026-09-05), a pre-FEAT-143 bundle with no recorded mode loads ONLY into a real-mode session (the conservative default) and is re-stamped with GameMode='real' on its next save. An unlimited session refuses this same bundle outright (MET-E820)."
     }
   }
 }

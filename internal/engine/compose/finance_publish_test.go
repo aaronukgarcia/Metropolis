@@ -84,11 +84,12 @@ func TestFinanceView_EndToEnd_DeltaMatchesLiveState(t *testing.T) {
 	if !have {
 		t.Fatal("ui.screen.finance BalanceSheet() reported have=false after ApplyDelta")
 	}
+	wantTreasury := testInitialTreasury(t)
 	if len(bs.Assets) != 2 {
 		t.Fatalf("len(Assets) = %d, want 2 (Treasury, Reserves)", len(bs.Assets))
 	}
-	if bs.Assets[0].Label != "Treasury" || bs.Assets[0].ValueMicropounds != initialTreasury {
-		t.Errorf("Assets[0] = %+v, want {Treasury %d} (BUG-355 opening grant)", bs.Assets[0], initialTreasury)
+	if bs.Assets[0].Label != "Treasury" || bs.Assets[0].ValueMicropounds != wantTreasury {
+		t.Errorf("Assets[0] = %+v, want {Treasury %d} (BUG-355 opening grant)", bs.Assets[0], wantTreasury)
 	}
 	if bs.Assets[1].Label != "Reserves" || bs.Assets[1].ValueMicropounds != 0 {
 		t.Errorf("Assets[1] = %+v, want {Reserves 0} (no reserve allocation yet)", bs.Assets[1])
@@ -96,8 +97,8 @@ func TestFinanceView_EndToEnd_DeltaMatchesLiveState(t *testing.T) {
 	if len(bs.Liabilities) != 1 || bs.Liabilities[0].Label != "Outstanding Debt" || bs.Liabilities[0].ValueMicropounds != 0 {
 		t.Errorf("Liabilities = %+v, want [{Outstanding Debt 0}] (no loans outstanding)", bs.Liabilities)
 	}
-	if bs.NetWorth != initialTreasury {
-		t.Errorf("NetWorth = %d, want %d (treasury+0-0)", bs.NetWorth, initialTreasury)
+	if bs.NetWorth != wantTreasury {
+		t.Errorf("NetWorth = %d, want %d (treasury+0-0)", bs.NetWorth, wantTreasury)
 	}
 
 	// AdvanceTicks also signals the pump; driving one more tick and

@@ -232,6 +232,24 @@ type CityHost struct {
 	// no in-flight eviction races Close's own teardown (AC-5, no double stop).
 	evictorDone chan struct{}
 
+	// gameMode is BUG-737's FEAT-143 wiring seam: the plain wire STRING
+	// ("real"/"unlimited"/"") every city THIS host builds (buildCity)
+	// requests via compose.Deps.GameMode. cmd/metroserve has NO registered
+	// code.json edge to feat.gameinit (checked directly against
+	// feat.gameinit's inbound.consumers), so this package never imports
+	// internal/engine/gameinit and never validates the string itself —
+	// only compose.Wire (which DOES hold that edge) turns it into a real
+	// *gameinit.GameInit. Fixed at construction (WithGameMode), never
+	// reassigned, so no lock is needed to read it — mirrors health's own
+	// doc comment above. This is a HOST-WIDE default, not a per-city
+	// choice: there is no live "create city with mode X" command surface
+	// yet (a separate, larger gap — see this package's own doc comment
+	// on buildCity), so every city this host builds requests the SAME
+	// mode; a real per-city chooser is future work layered on top of the
+	// SetGameModeIfAbsent/GameMode persistence (persist/store.go) this fix
+	// adds, which is already keyed per-CityKey and ready for it.
+	gameMode string
+
 	// health is FEAT-2326609775 inc1's /health registry: one cityHealthState
 	// per currently-live city, registered by buildCity and unregistered by
 	// stop() so a /health snapshot never lists an evicted/shut-down city.
@@ -275,6 +293,22 @@ func WithSnapshotEvery(ticks int64) CityHostOption {
 			return
 		}
 		h.snapshotEvery = ticks
+	}
+}
+
+// WithGameMode sets the FEAT-143 new-game initialization mode
+// ("real"/"unlimited", gameinit.Mode's own wire strings — this package
+// never imports internal/engine/gameinit, see the gameMode field's own
+// doc comment) every city this host subsequently builds requests via
+// compose.Deps.GameMode. Empty (the default, every pre-BUG-737
+// construction call) reproduces prior behaviour byte-for-byte: real
+// mode. Mirrors WithSnapshotEvery's SEC-020 discipline exactly.
+func WithGameMode(mode string) CityHostOption {
+	return func(h *CityHost) {
+		if err := h.checkNotCopied(); err != nil {
+			return
+		}
+		h.gameMode = mode
 	}
 }
 
@@ -419,7 +453,7 @@ func (h *CityHost) GetOrCreate(ctx context.Context, cityKey persist.CityKey) (*r
 		h.onBuildStart()
 	}
 
-	city, err := buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.snapshotEvery, h.engineOpts, h.logw, h.health)
+	city, err := buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.snapshotEvery, h.engineOpts, h.logw, h.health, h.gameMode)
 	if err != nil {
 		// Register NOTHING on failure: remove the claim before signalling, so
 		// no half-built city is ever observable in the map, and a later
@@ -643,7 +677,7 @@ func (h *CityHost) evictIdle() {
 // nothing. It is a free function (not a *CityHost method) deliberately: it
 // takes no candidate-typed value, so it carries no SEC-020 copy-guard
 // obligation.
-func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persist.CityKey, tickInterval time.Duration, snapshotEvery int64, engineOpts []core.Option, logw io.Writer, healthReg *healthRegistry) (*runningCity, error) {
+func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persist.CityKey, tickInterval time.Duration, snapshotEvery int64, engineOpts []core.Option, logw io.Writer, healthReg *healthRegistry, gameMode string) (*runningCity, error) {
 	opts := make([]core.Option, 0, 1+len(engineOpts))
 	opts = append(opts, core.WithWorldSeed(seedForCity(key)))
 	opts = append(opts, engineOpts...)
@@ -654,16 +688,25 @@ func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persi
 		err  error
 	)
 	if store == nil {
-		// No-persist mode: exactly compose.Wire(e, nil), same default-off path
-		// as inc4's persistDir "".
-		comp, err = compose.Wire(e, nil)
+		// No-persist mode: compose.Wire(e, &compose.Deps{GameMode: gameMode})
+		// -- BUG-737's only change to this branch; gameMode=="" (every
+		// pre-BUG-737 caller) reproduces the old compose.Wire(e, nil) path
+		// byte-for-byte (compose.Wire treats a zero-value *Deps identically
+		// to nil). A no-persist city has no Store to durably record its
+		// mode in (SetGameModeIfAbsent below is persist-only), so nothing
+		// enforces immutability across restarts here -- unsurprising, since
+		// a no-persist city has no "restart" concept at all (it never
+		// survives process exit either).
+		comp, err = compose.Wire(e, &compose.Deps{GameMode: gameMode})
 		if err != nil {
 			return nil, fmt.Errorf("compose.Wire failed: %w", err)
 		}
 	} else {
 		// Persist on: reuse persist.go's single-sourced guarded rehydrate so
-		// the double-append guard is never re-implemented (GR#3).
-		comp, err = wireAndRehydrate(buildCtx, e, store, key, logw)
+		// the double-append guard is never re-implemented (GR#3). gameMode
+		// is forwarded so wireAndRehydrate can durably record it (AC-3: a
+		// restart must not be able to re-mode a persisted city).
+		comp, err = wireAndRehydrate(buildCtx, e, store, key, logw, gameMode)
 		if err != nil {
 			return nil, err
 		}

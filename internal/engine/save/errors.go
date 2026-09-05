@@ -195,4 +195,22 @@ const (
 	// AllowGameModeMismatch escape hatch: a deliberate re-mode is a
 	// new-game decision, never a load-time one.
 	ErrGameModeMismatch = "MET-E820"
+
+	// ErrLegacyGameModeAssumedReal (BUG-737 round-2 lead ruling,
+	// 2026-09-05): a WARN-severity, non-fatal registry event -- raised
+	// (constructed, never returned as an error) when Load accepts a
+	// bundle with NO recorded GameMode at all (a genuine pre-FEAT-143
+	// save) into a REAL-mode session specifically, the one case the
+	// original AC-5 "absent mode is always rejected" rule did not
+	// survive contact with a real save estate: every save bundle
+	// written before FEAT-143 shipped has no GameMode field, and
+	// refusing all of them outright left no migration path at all. See
+	// load.go's own doc comment on WithExpectedGameMode's check for the
+	// exact three-way rule this WARN sits inside (match / mismatch-
+	// refuse / absent-into-real-with-warning / absent-into-unlimited-
+	// refuse). This package cannot import internal/engine/gameinit (no
+	// feat.saveux -> feat.gameinit reverse edge is registered), so this
+	// code -- not gameinit's reserved-but-unused MET-G5421 -- is the one
+	// feat.saveux itself raises.
+	ErrLegacyGameModeAssumedReal = "MET-E1000"
 )

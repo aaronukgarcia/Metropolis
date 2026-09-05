@@ -3,6 +3,7 @@ package persist
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,5 +276,157 @@ func TestNewDiskStoreCreatesRootIfMissing(t *testing.T) {
 	// Sanity: the store is actually usable.
 	if err := s.AppendJournal(context.Background(), CityKey{TenantID: "t", CityID: "c"}, []byte("x")); err != nil {
 		t.Fatalf("AppendJournal on freshly created root: %v", err)
+	}
+}
+
+// TestGameModeCorruptSidecarFailsClosed is BUG-737's round finding P1-4
+// (c): a hand-corrupted gamemode.json (invalid JSON, simulating a torn
+// write or on-disk tamper) must surface as a real error from BOTH
+// GameMode and SetGameModeIfAbsent — never silently treated as "absent"
+// (which would let a corrupted city quietly re-mode) and never panic.
+// Mirrors the discipline readCityGameModeLocked's own doc comment
+// states: only a MISSING file is ok=false/nil-error; anything else that
+// fails to decode is a real, surfaced error.
+func TestGameModeCorruptSidecarFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewDiskStore(root)
+	if err != nil {
+		t.Fatalf("NewDiskStore: %v", err)
+	}
+	city := CityKey{TenantID: "t", CityID: "corrupt-mode"}
+
+	// Establish the sidecar for real first, then corrupt it in place —
+	// proves this is a genuine on-disk corruption case, not merely a
+	// missing file.
+	if _, err := s.SetGameModeIfAbsent(context.Background(), city, "real"); err != nil {
+		t.Fatalf("SetGameModeIfAbsent (establish): %v", err)
+	}
+	dir := s.cityDir(city)
+	if err := os.WriteFile(filepath.Join(dir, gameModeFileName), []byte("{not valid json"), filePerm); err != nil {
+		t.Fatalf("corrupt gamemode.json: %v", err)
+	}
+
+	if _, ok, err := s.GameMode(context.Background(), city); err == nil {
+		t.Fatalf("GameMode over a corrupt sidecar succeeded (ok=%v), want a decode error", ok)
+	}
+	if _, err := s.SetGameModeIfAbsent(context.Background(), city, "unlimited"); err == nil {
+		t.Fatal("SetGameModeIfAbsent over a corrupt sidecar succeeded, want a decode error (never silently re-stamp over unreadable state)")
+	}
+}
+
+// TestGameModeEmptyNeverStamped_WriteSideGuard is BUG-737's round-2
+// finding P3: the read-side guard (readCityGameModeLocked/GameMode
+// treating a stored "" as absent) MASKS a removed write-side guard --
+// GameMode still reports ok=false either way, so
+// store_conformance_test.go's game_mode_empty_never_stamped sub-test
+// cannot tell "the write-side guard correctly no-op'd" apart from "the
+// write-side guard was removed and wrote an empty-string record that
+// the read side happens to hide". This test checks the ONE observable
+// the read-side guard does NOT mask: whether the on-disk sidecar FILE
+// itself was ever created at all. If SetGameModeIfAbsent(ctx, city, "")
+// is ever changed to skip its own early "mode == \"\"" guard, this
+// reds even though GameMode() would still (wrongly) look fine.
+func TestGameModeEmptyNeverStamped_WriteSideGuard(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewDiskStore(root)
+	if err != nil {
+		t.Fatalf("NewDiskStore: %v", err)
+	}
+	city := CityKey{TenantID: "t", CityID: "empty-write-side"}
+
+	if _, err := s.SetGameModeIfAbsent(context.Background(), city, ""); err != nil {
+		t.Fatalf("SetGameModeIfAbsent(\"\"): %v", err)
+	}
+	sidecar := s.GameModeSidecarPath(city)
+	if _, statErr := os.Stat(sidecar); !os.IsNotExist(statErr) {
+		t.Fatalf("gamemode.json exists after an empty SetGameModeIfAbsent call (stat err=%v) — the write-side guard did not prevent the write; the read-side guard elsewhere would mask this from GameMode() alone", statErr)
+	}
+}
+
+// TestGameModeEmptyNeverStamped_MemStoreWriteSideGuard is
+// TestGameModeEmptyNeverStamped_WriteSideGuard's MemStore mirror: the
+// observable the read-side guard does not mask, for MemStore, is
+// whether a map ENTRY was ever created for city at all (getOrCreate's
+// own side effect) -- white-box, package-internal, since MemStore has
+// no file to stat.
+func TestGameModeEmptyNeverStamped_MemStoreWriteSideGuard(t *testing.T) {
+	s := NewMemStore()
+	city := CityKey{TenantID: "t", CityID: "empty-write-side-mem"}
+
+	if _, err := s.SetGameModeIfAbsent(context.Background(), city, ""); err != nil {
+		t.Fatalf("SetGameModeIfAbsent(\"\"): %v", err)
+	}
+	s.mu.Lock()
+	_, ok := s.cities[cityMapKey(city)]
+	s.mu.Unlock()
+	if ok {
+		t.Fatal("MemStore created a city entry for an empty SetGameModeIfAbsent call — the write-side guard did not prevent the write; GameMode() alone would not catch this since it also treats a stored empty mode as absent")
+	}
+}
+
+// TestSetGameModeEpoch_PreservesUnknownSeedFields is BUG-737 re-round-3
+// finding P2-2: SetGameModeEpoch merges the "mode_epoch" key into
+// seed.json's raw field set (readCitySeedRawFieldsLocked) rather than
+// decoding into and re-marshalling the closed citySeed struct, which
+// this package only knows "world_seed" and "mode_epoch" about. A field
+// this package's own struct does NOT declare (simulating a future
+// increment, an Azure-side migration tool, or a hand-edit adding e.g.
+// "lineage_id"/"created_by") must survive byte-for-byte across a
+// SetGameModeEpoch call that never touches it.
+func TestSetGameModeEpoch_PreservesUnknownSeedFields(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewDiskStore(root)
+	if err != nil {
+		t.Fatalf("NewDiskStore: %v", err)
+	}
+	city := CityKey{TenantID: "t", CityID: "preserve-unknown-fields"}
+
+	if _, err := s.SetWorldSeedIfAbsent(context.Background(), city, 4242); err != nil {
+		t.Fatalf("SetWorldSeedIfAbsent: %v", err)
+	}
+
+	// Hand-inject fields this package's own citySeed struct does not
+	// declare, exactly the shape a future writer might leave behind.
+	sidecar := filepath.Join(s.cityDir(city), seedFileName)
+	const unknownFieldsJSON = `{"world_seed":4242,"lineage_id":"az-replica-7f3c","created_by":{"tool":"migrate-v2","ts":1999999999}}`
+	if err := os.WriteFile(sidecar, []byte(unknownFieldsJSON), filePerm); err != nil {
+		t.Fatalf("hand-inject unknown fields: %v", err)
+	}
+
+	if err := s.SetGameModeEpoch(context.Background(), city); err != nil {
+		t.Fatalf("SetGameModeEpoch: %v", err)
+	}
+
+	after, err := os.ReadFile(sidecar)
+	if err != nil {
+		t.Fatalf("read seed.json after SetGameModeEpoch: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(after, &fields); err != nil {
+		t.Fatalf("decode seed.json after SetGameModeEpoch: %v", err)
+	}
+
+	wantByteForByte := map[string]string{
+		"lineage_id": `"az-replica-7f3c"`,
+		"created_by": `{"tool":"migrate-v2","ts":1999999999}`,
+	}
+	for key, want := range wantByteForByte {
+		got, ok := fields[key]
+		if !ok {
+			t.Fatalf("unknown field %q was DROPPED by SetGameModeEpoch's merge — seed.json is no longer field-preserving", key)
+		}
+		if string(got) != want {
+			t.Fatalf("unknown field %q = %s, want byte-for-byte %s — the merge re-encoded it instead of preserving the raw bytes", key, got, want)
+		}
+	}
+
+	// Sanity: the fields this package DOES know about were still updated
+	// correctly, not just left inert alongside the preserved unknowns.
+	if string(fields["world_seed"]) != "4242" {
+		t.Fatalf("world_seed = %s, want 4242 (must survive the merge too)", fields["world_seed"])
+	}
+	var epoch bool
+	if err := json.Unmarshal(fields["mode_epoch"], &epoch); err != nil || !epoch {
+		t.Fatalf("mode_epoch = %s (err=%v), want true", fields["mode_epoch"], err)
 	}
 }

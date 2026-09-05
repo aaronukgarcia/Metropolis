@@ -26,6 +26,9 @@ type memCity struct {
 	seqs         []int64
 	worldSeed    uint64
 	worldSeedSet bool
+	gameMode     string // BUG-737
+	gameModeSet  bool   // BUG-737
+	modeEpoch    bool   // BUG-737 round-2 lead ruling, 2026-09-05
 }
 
 var _ Store = (*MemStore)(nil)
@@ -278,4 +281,106 @@ func (s *MemStore) WorldSeed(ctx context.Context, city CityKey) (uint64, bool, e
 		return 0, false, nil
 	}
 	return c.worldSeed, true, nil
+}
+
+// SetGameModeIfAbsent implements Store (BUG-737, mirroring
+// SetWorldSeedIfAbsent above exactly).
+func (s *MemStore) SetGameModeIfAbsent(ctx context.Context, city CityKey, mode string) (string, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// BUG-737 P1-2 (round finding): never stamp an empty mode -- mirrors
+	// DiskStore.SetGameModeIfAbsent's identical guard exactly. Report
+	// whatever (if anything) is already on record without creating a map
+	// entry as a side effect of a no-op call.
+	if mode == "" {
+		if c, ok := s.cities[cityMapKey(city)]; ok && c.gameModeSet && c.gameMode != "" {
+			return c.gameMode, nil
+		}
+		return "", nil
+	}
+
+	c := s.getOrCreate(city)
+	if !c.gameModeSet || c.gameMode == "" {
+		c.gameMode = mode
+		c.gameModeSet = true
+	}
+	return c.gameMode, nil
+}
+
+// GameMode implements Store (BUG-737, mirroring WorldSeed above exactly).
+func (s *MemStore) GameMode(ctx context.Context, city CityKey) (string, bool, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return "", false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.cities[cityMapKey(city)]
+	// BUG-737 P1-2 (round finding): a stored EMPTY mode reads back as
+	// absent too -- defensive-in-depth mirroring DiskStore's identical
+	// read-side guard.
+	if !ok || !c.gameModeSet || c.gameMode == "" {
+		return "", false, nil
+	}
+	return c.gameMode, true, nil
+}
+
+// SetGameModeEpoch implements Store (BUG-737 round-2 lead ruling,
+// 2026-09-05, mirroring DiskStore's identical seed.json-embedded flag
+// exactly): idempotent, a no-op once already marked for city.
+func (s *MemStore) SetGameModeEpoch(ctx context.Context, city CityKey) error {
+	if err := s.checkNotCopied(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// BUG-737 re-round-3 finding P2-1: requires a durably recorded world
+	// seed, mirroring DiskStore's identical guard exactly (see
+	// ErrGameModeEpochWithoutSeed's doc comment) — MemStore's own
+	// in-memory representation was never at risk of the seedless-0-seed
+	// bug (worldSeedSet is a genuinely separate bool from worldSeed's
+	// value, unlike DiskStore's pre-fix seed.json which had no way to
+	// represent "no seed" other than omitting the whole file), but the
+	// Store CONTRACT must reject the same caller ordering identically on
+	// both implementations, not just whichever one happened to be safe
+	// by accident. Deliberately does NOT call getOrCreate on the refusal
+	// path — no side effect on a rejected call, matching every other
+	// refusal in this file.
+	c, ok := s.cities[cityMapKey(city)]
+	if !ok || !c.worldSeedSet {
+		return ErrGameModeEpochWithoutSeed
+	}
+	c.modeEpoch = true
+	return nil
+}
+
+// HasGameModeEpoch implements Store (BUG-737 round-2 lead ruling,
+// 2026-09-05).
+func (s *MemStore) HasGameModeEpoch(ctx context.Context, city CityKey) (bool, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.cities[cityMapKey(city)]
+	if !ok {
+		return false, nil
+	}
+	return c.modeEpoch, nil
 }

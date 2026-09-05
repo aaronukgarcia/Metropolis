@@ -23,10 +23,28 @@ var ErrNotFound = errors.New("persist: not found")
 // always be used via the pointer returned by its constructor.
 var ErrStoreCopied = errors.New("persist: store used after being copied")
 
+// ErrGameModeEpochWithoutSeed is returned by SetGameModeEpoch when city
+// has no durably recorded world seed yet (BUG-737 re-round-3 finding
+// P2-1): SetGameModeEpoch requires SetWorldSeedIfAbsent to have already
+// run for the SAME city. Without this guard, DiskStore's original
+// implementation wrote a seedless epoch-only seed.json record with an
+// explicit world_seed:0 (the field has no omitempty — the zero value is
+// a genuine seed, not "absent"), which WorldSeed then read back as
+// ok=true, seed=0 — bricking the city: a later, correct
+// SetWorldSeedIfAbsent(realSeed) would see "already recorded" (seed 0)
+// and refuse to ever record the real one (BUG-488's own first-write-wins
+// contract, now poisoned). compose.go's Wire never triggers this in
+// practice (it always calls SetWorldSeedIfAbsent before SetGameModeEpoch
+// for the same city, in that order, every time PersistStore is set), but
+// the Store contract itself must not permit constructing this state via
+// any other call order — see Store.SetGameModeEpoch's own doc comment.
+var ErrGameModeEpochWithoutSeed = errors.New("persist: SetGameModeEpoch called before any world seed recorded for city")
+
 const (
 	journalFileName   = "journal.dat"
 	metaFileName      = "meta.json"
-	seedFileName      = "seed.json" // BUG-488: originating world-seed sidecar
+	seedFileName      = "seed.json"     // BUG-488: originating world-seed sidecar
+	gameModeFileName  = "gamemode.json" // BUG-737: originating gameinit mode sidecar
 	snapshotsDirName  = "snapshots"
 	snapshotSuffix    = ".bin"
 	snapshotTmpPrefix = ".tmp-"
@@ -43,6 +61,30 @@ const (
 // case relies on the file's mere absence, never a zero-value field.
 type citySeed struct {
 	WorldSeed uint64 `json:"world_seed"`
+
+	// ModeEpoch (BUG-737 round-2 lead ruling, 2026-09-05) is true once
+	// FEAT-143-aware code (compose.go's Wire) has processed this city's
+	// game-mode record at least once — see Store.SetGameModeEpoch's own
+	// doc comment for the full rationale. Deliberately stored in THIS
+	// sidecar (seed.json), not gamemode.json: the scenario this field
+	// exists to detect is gamemode.json itself going missing between
+	// boots, so the marker must live somewhere that scenario does not
+	// touch. omitempty keeps every pre-BUG-737 seed.json's on-disk shape
+	// unchanged until a mode-aware Wire call actually runs against it.
+	ModeEpoch bool `json:"mode_epoch,omitempty"`
+}
+
+// cityGameMode is the sidecar BUG-737 writes once per city directory, the
+// first time SetGameModeIfAbsent is ever called for it: the FEAT-143
+// gameinit mode ("real"/"unlimited", gameinit.Mode's own wire string —
+// this package never imports internal/engine/gameinit, mirroring
+// citySeed's own opaque-value discipline) the city's journal was
+// ORIGINATING replayed under. Distinct from citySeed for the exact same
+// reason citySeed is distinct from cityMeta: a pre-BUG-737 city directory
+// with no gamemode.json is unambiguously "no mode ever recorded", never a
+// guessed/defaulted value.
+type cityGameMode struct {
+	GameMode string `json:"game_mode"`
 }
 
 // cityMeta is the small sidecar written once per city directory so
@@ -128,6 +170,23 @@ func (s *DiskStore) lockFor(dir string) *sync.Mutex {
 
 func (s *DiskStore) cityDir(key CityKey) string {
 	return filepath.Join(s.root, encodeSegment(key.TenantID), encodeSegment(key.CityID))
+}
+
+// GameModeSidecarPath returns the on-disk path of city's gamemode.json
+// sidecar (BUG-737 P1-4's own round-required test scenario: "deleting
+// gamemode.json between boots must likewise refuse, not re-mode"). This
+// is a TEST-SUPPORT accessor only — no production caller needs the path
+// itself, only the SetGameModeIfAbsent/GameMode accessors above — added
+// because cityDir (and the hashed directory layout this package's own
+// doc comment discloses) is unexported, and the restart-refusal scenario
+// needs to delete the sidecar from cmd/metroserve's own test package,
+// which has no other way to locate it without re-deriving the hashing
+// scheme by hand.
+func (s *DiskStore) GameModeSidecarPath(city CityKey) string {
+	if err := s.checkNotCopied(); err != nil {
+		return ""
+	}
+	return filepath.Join(s.cityDir(city), gameModeFileName)
 }
 
 // ensureCityMeta writes the city's meta.json sidecar the first time
@@ -574,16 +633,270 @@ func (s *DiskStore) WorldSeed(ctx context.Context, city CityKey) (uint64, bool, 
 // an error — the explicit backward-compatible default for a city with no
 // seed ever recorded (BUG-488).
 func (s *DiskStore) readCitySeedLocked(dir string) (uint64, bool, error) {
+	cs, ok, err := s.readCitySeedStructLocked(dir)
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	return cs.WorldSeed, true, nil
+}
+
+// readCitySeedStructLocked reads dir's seed.json sidecar in FULL (the
+// world seed AND the BUG-737 round-2 ModeEpoch flag), if present. Must
+// be called with dir's per-city lock already held. A missing file is
+// ok=false, not an error. Both readCitySeedLocked (WorldSeed's own
+// narrower accessor) and SetGameModeEpoch/HasGameModeEpoch below share
+// this single decode path (GR#3 — one reader, not two that could drift).
+func (s *DiskStore) readCitySeedStructLocked(dir string) (citySeed, bool, error) {
 	data, err := os.ReadFile(filepath.Join(dir, seedFileName))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, false, nil
+			return citySeed{}, false, nil
 		}
-		return 0, false, fmt.Errorf("persist: read city seed: %w", err)
+		return citySeed{}, false, fmt.Errorf("persist: read city seed: %w", err)
 	}
 	var cs citySeed
 	if err := json.Unmarshal(data, &cs); err != nil {
-		return 0, false, fmt.Errorf("persist: decode city seed: %w", err)
+		return citySeed{}, false, fmt.Errorf("persist: decode city seed: %w", err)
 	}
-	return cs.WorldSeed, true, nil
+	return cs, true, nil
+}
+
+// readCitySeedRawFieldsLocked reads dir's seed.json sidecar as a raw
+// field map (map[string]json.RawMessage) rather than decoding into the
+// closed citySeed struct (BUG-737 re-round-3 finding P2-2): this
+// package's own citySeed struct only knows about "world_seed" and
+// "mode_epoch", so decoding-then-re-encoding through it would SILENTLY
+// DROP any other field a different writer (a future increment, an
+// operator hand-edit, an Azure-side migration tool) ever added to this
+// sidecar — e.g. a hypothetical "lineage_id" or "created_by" field
+// would decode fine into citySeed (json.Unmarshal ignores unknown
+// fields) but then vanish the next time this file is re-marshalled from
+// that same citySeed value. Reading into a raw field map and writing
+// the SAME map back (with only the one key this call cares about
+// changed) preserves every other field's JSON bytes byte-for-byte,
+// because json.RawMessage never decodes/re-encodes the value at all —
+// only SetGameModeEpoch (the one call site that re-writes an
+// ALREADY-EXISTING file) uses this; SetWorldSeedIfAbsent's own write
+// path only ever fires on a genuinely absent file, so there is nothing
+// to preserve there. A missing file returns an empty, non-nil map
+// (never an error) so a caller can merge into it uniformly whether or
+// not the file already existed.
+func (s *DiskStore) readCitySeedRawFieldsLocked(dir string) (map[string]json.RawMessage, error) {
+	fields := map[string]json.RawMessage{}
+	data, err := os.ReadFile(filepath.Join(dir, seedFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fields, nil
+		}
+		return nil, fmt.Errorf("persist: read city seed: %w", err)
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, fmt.Errorf("persist: decode city seed: %w", err)
+	}
+	return fields, nil
+}
+
+// SetGameModeEpoch implements Store (BUG-737 round-2 lead ruling,
+// 2026-09-05; field-preservation + seedless-city guard added round-3,
+// findings P2-1/P2-2). Idempotent: a no-op once city's seed.json already
+// carries mode_epoch=true. Merges the "mode_epoch" key into seed.json's
+// RAW field set (readCitySeedRawFieldsLocked) rather than round-tripping
+// through the closed citySeed struct, so any field this package does not
+// itself know about survives byte-for-byte (P2-2).
+//
+// Requires city to already have a durably recorded world seed
+// (ErrGameModeEpochWithoutSeed otherwise, P2-1): a seedless epoch record
+// would otherwise need an explicit world_seed:0 written into the SAME
+// file (citySeed.WorldSeed has no omitempty, since 0 is itself a
+// legitimate real seed value, not "absent") — WorldSeed would then
+// wrongly report ok=true, seed=0, and BUG-488's own SetWorldSeedIfAbsent
+// first-write-wins contract would permanently refuse to ever record the
+// city's REAL seed afterward. compose.go's Wire never reaches this
+// path in practice (SetWorldSeedIfAbsent always runs, for the same
+// city, before SetGameModeEpoch every time PersistStore is set), but the
+// Store contract itself must reject this ordering from any other caller
+// rather than silently brick the city.
+func (s *DiskStore) SetGameModeEpoch(ctx context.Context, city CityKey) error {
+	if err := s.checkNotCopied(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	dir := s.cityDir(city)
+
+	lock := s.lockFor(dir)
+	lock.Lock()
+	defer lock.Unlock()
+
+	fields, err := s.readCitySeedRawFieldsLocked(dir)
+	if err != nil {
+		return err
+	}
+
+	// P2-1: refuse without a recorded world seed. "world_seed" absent
+	// from the raw field set means exactly that — never present at all,
+	// whether the file itself is missing (fields is the empty map from
+	// readCitySeedRawFieldsLocked) or present but seedless (should not
+	// happen via this package's own writers, but the raw-field check
+	// covers it regardless of cause).
+	if _, hasSeed := fields["world_seed"]; !hasSeed {
+		return ErrGameModeEpochWithoutSeed
+	}
+
+	// Idempotent no-op if already marked true.
+	if raw, ok := fields["mode_epoch"]; ok {
+		var already bool
+		if err := json.Unmarshal(raw, &already); err == nil && already {
+			return nil
+		}
+	}
+	encodedTrue, err := json.Marshal(true)
+	if err != nil {
+		return fmt.Errorf("persist: encode mode_epoch: %w", err)
+	}
+	fields["mode_epoch"] = encodedTrue
+
+	// Mirrors SetWorldSeedIfAbsent/SetGameModeIfAbsent's own discipline:
+	// deliberately does NOT call ensureCityMeta.
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return fmt.Errorf("persist: create city dir: %w", err)
+	}
+	data, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("persist: encode city seed: %w", err)
+	}
+	if err := atomicWrite(dir, seedFileName, data); err != nil {
+		return fmt.Errorf("persist: write city seed: %w", err)
+	}
+	return nil
+}
+
+// HasGameModeEpoch implements Store (BUG-737 round-2 lead ruling,
+// 2026-09-05).
+func (s *DiskStore) HasGameModeEpoch(ctx context.Context, city CityKey) (bool, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	dir := s.cityDir(city)
+
+	lock := s.lockFor(dir)
+	lock.Lock()
+	defer lock.Unlock()
+
+	cs, ok, err := s.readCitySeedStructLocked(dir)
+	if err != nil || !ok {
+		return false, err
+	}
+	return cs.ModeEpoch, nil
+}
+
+// SetGameModeIfAbsent implements Store (BUG-737, mirroring
+// SetWorldSeedIfAbsent above exactly): the gamemode.json sidecar is
+// written via the same temp-then-rename atomicWrite discipline and the
+// FIRST-CALL-WINS semantics are enforced by a file-read check under the
+// per-city lock, so a concurrent racer for the SAME city can never stamp
+// a second, different mode.
+func (s *DiskStore) SetGameModeIfAbsent(ctx context.Context, city CityKey, mode string) (string, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	dir := s.cityDir(city)
+
+	lock := s.lockFor(dir)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if existing, ok, err := s.readCityGameModeLocked(dir); err != nil {
+		return "", err
+	} else if ok {
+		return existing, nil
+	}
+
+	// BUG-737 P1-2 (round finding): mode == "" is "no opinion", never a
+	// genuine mode -- an empty string must NEVER be durably stamped.
+	// Every pre-fix caller that never had a real chooser (or omitted the
+	// trailing variadic) passed "" here, and without this guard it landed
+	// in gamemode.json permanently: readCityGameModeLocked's OWN "" ==
+	// absent treatment (below) means a later call with a genuine mode
+	// would find "nothing recorded" every time on the READ side, but
+	// this WRITE side had already created the sidecar file, so a
+	// concurrent/later caller passing "" again would keep winning the
+	// first-write-wins race against one that finally has a real mode --
+	// worse, ANY write here at all (even one this function's own guard
+	// now skips) would need readCityGameModeLocked to treat a
+	// stored "" as absent too for the read side to ever unblock a later
+	// real stamp, which is why that guard exists in BOTH places. Return
+	// without creating the sidecar/dir at all, so a later real chooser
+	// can still win.
+	if mode == "" {
+		return "", nil
+	}
+
+	// Mirrors SetWorldSeedIfAbsent: deliberately does NOT call
+	// ensureCityMeta -- stamping a mode must never, by itself, make an
+	// otherwise-untouched city look like it has durable data.
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return "", fmt.Errorf("persist: create city dir: %w", err)
+	}
+	data, err := json.Marshal(cityGameMode{GameMode: mode})
+	if err != nil {
+		return "", fmt.Errorf("persist: encode city game mode: %w", err)
+	}
+	if err := atomicWrite(dir, gameModeFileName, data); err != nil {
+		return "", fmt.Errorf("persist: write city game mode: %w", err)
+	}
+	return mode, nil
+}
+
+// GameMode implements Store (BUG-737).
+func (s *DiskStore) GameMode(ctx context.Context, city CityKey) (string, bool, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return "", false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	dir := s.cityDir(city)
+
+	lock := s.lockFor(dir)
+	lock.Lock()
+	defer lock.Unlock()
+
+	return s.readCityGameModeLocked(dir)
+}
+
+// readCityGameModeLocked reads dir's gamemode.json sidecar, if any. Must
+// be called with dir's per-city lock already held. A missing file is
+// ok=false, not an error -- the explicit backward-compatible default for
+// a city with no mode ever recorded (BUG-737, mirrors
+// readCitySeedLocked).
+func (s *DiskStore) readCityGameModeLocked(dir string) (string, bool, error) {
+	data, err := os.ReadFile(filepath.Join(dir, gameModeFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("persist: read city game mode: %w", err)
+	}
+	var cm cityGameMode
+	if err := json.Unmarshal(data, &cm); err != nil {
+		return "", false, fmt.Errorf("persist: decode city game mode: %w", err)
+	}
+	// BUG-737 P1-2 (round finding): a stored EMPTY mode is treated
+	// identically to "never recorded" -- defensive-in-depth alongside
+	// SetGameModeIfAbsent's own write-side "" guard above, in case a
+	// sidecar ever ends up holding "" by some other path (a future
+	// caller, a hand-edited file, an older un-guarded write). ok=false
+	// here is what lets a later call with a genuine mode still win.
+	if cm.GameMode == "" {
+		return "", false, nil
+	}
+	return cm.GameMode, true, nil
 }

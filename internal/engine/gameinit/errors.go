@@ -31,4 +31,25 @@ const (
 	// point every settings/dev-console mode-change attempt funnels
 	// through, and it never touches the locked field.
 	ErrModeLocked = "MET-G5413"
+
+	// ErrLegacyGameModeStamped (BUG-737 round-2 lead ruling, 2026-09-05):
+	// a WARN-severity, non-fatal registry event -- a persist-layer city
+	// that predates FEAT-143 (a durably recorded world seed, but no
+	// gamemode.json and no ModeEpoch marker -- see internal/persist's
+	// Store contract doc) is having its mode established for the FIRST
+	// time via the one-time migration path, rather than refused. Raised
+	// by internal/engine/compose's checkGameMode (snapshot.go) -- never
+	// returned as a failing error, only constructed so errs.New's own
+	// auto-log (foundation/errs' logEntry, called for every registered
+	// code regardless of severity) makes the migration visible, never
+	// silent.
+	ErrLegacyGameModeStamped = "MET-G5420"
+
+	// NOTE: MET-G5421 was reserved for a save-bundle-side legacy warning
+	// but is UNUSED here -- internal/engine/save cannot import this
+	// package (no feat.saveux -> feat.gameinit reverse edge; see
+	// savewire.go's doc comment), so that warning is
+	// save.ErrLegacyGameModeAssumedReal (MET-E1000, save/errors.go)
+	// instead, a code feat.saveux owns and raises itself. G5421 stays
+	// reserved (harmless, data/errors.json) rather than unclaimed.
 )

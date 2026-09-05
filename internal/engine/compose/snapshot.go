@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/gameinit"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/save"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/persist"
@@ -355,6 +356,17 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 		return false, 0, err
 	}
 
+	// BUG-737 (FEAT-143 wiring): the sibling gameinit-mode check runs
+	// EARLIER than this — inside compose.go's Wire, before its own
+	// SetGameModeIfAbsent stamp — not here. See checkGameMode's own doc
+	// comment (below) for why: unlike world seed, a mode check placed
+	// AFTER Wire's blind stamp would never observe a "missing sidecar on
+	// an already-Wired city" state at all, because Wire's own stamp call
+	// (which necessarily runs before this function is ever reached)
+	// would have already re-established a fresh record using THIS
+	// boot's requested mode, making the check here trivially pass no
+	// matter what.
+
 	ids, err := store.ListSnapshots(ctx, city)
 	if err != nil {
 		return false, 0, err
@@ -531,6 +543,115 @@ func stampWorldSeedIfNeeded(ctx context.Context, store persist.Store, city persi
 	if _, err := store.SetWorldSeedIfAbsent(ctx, city, restoringSeed); err != nil {
 		return errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{"module": "persist", "step": "stamp-world-seed"})
 	}
+	return nil
+}
+
+// checkGameMode is BUG-737's persist-layer FEAT-143 mode guard, called
+// from compose.go's Wire BEFORE either of its own stamps (both
+// SetGameModeIfAbsent AND SetWorldSeedIfAbsent) — never from
+// RestoreLatestSnapshotOrGenesis. See this file's package doc note above
+// (or compose.go's own call-site comment) for why the ordering matters:
+// this function's disambiguation logic depends on reading
+// store.WorldSeed/HasGameModeEpoch as "what a PRIOR boot left behind",
+// which would be contaminated if read after this same call's own
+// stamps ran first.
+//
+// # Round-2 lead ruling (2026-09-05) — the migration story
+//
+// The original P1-4 design refused BOTH "genuinely pre-FEAT-143 legacy
+// city" and "gamemode.json deleted between boots" identically, on the
+// theory that seed.json's mere presence (without a mode) meant one or
+// the other and either way refusing was safe. That broke the LIVE Azure
+// dogfood city permanently: a real city with a real seed.json and a
+// real journal, but no gamemode.json because the concept did not exist
+// yet when it was created, was refused FOREVER — a manual JSON edit on
+// a remote persist dir is not an acceptable migration path. The fix
+// adds a THIRD durable signal, HasGameModeEpoch (persist/store.go),
+// specifically to tell those two cases apart:
+//
+//  1. store.GameMode reports a recorded mode AND it equals requestedMode
+//     (the mode THIS composition's own gameinit.GameInit resolved to):
+//     the common restart case — err=nil, Wire's stamps proceed (both
+//     are no-ops here since a value is already on record).
+//  2. store.GameMode reports a recorded mode and it does NOT equal
+//     requestedMode ("boot unlimited... stop, reboot real"): refused
+//     with save.ErrGameModeMismatch (MET-E820) BEFORE any journal
+//     record or snapshot is read — never a silent overrule.
+//  3. store.GameMode reports NO recorded mode, AND store.WorldSeed also
+//     reports none: a genuinely brand-new city — accept, err=nil. Wire's
+//     own stamps (which run immediately after this check returns)
+//     establish genesis for seed, mode, AND the mode epoch together.
+//  4. store.GameMode reports NO recorded mode, store.WorldSeed DOES
+//     report one (this city has been Wired before), AND
+//     HasGameModeEpoch reports true: this city was already migrated by
+//     a PRIOR boot (which stamped both a mode and the epoch), and its
+//     gamemode.json sidecar has since gone missing — refused with
+//     save.ErrGameModeMismatch, same as case 2. Never silently re-stamp.
+//  5. store.GameMode reports NO recorded mode, store.WorldSeed DOES
+//     report one, and HasGameModeEpoch reports FALSE: a genuinely
+//     pre-FEAT-143 legacy city — this city predates the mode concept
+//     entirely and has never been touched by mode-aware code. Accept,
+//     err=nil, but first raise gameinit.ErrLegacyGameModeStamped (a
+//     WARN-severity registry event naming the city and the mode about
+//     to be stamped — errs.New auto-logs on construction regardless of
+//     severity, so this is NEVER silent despite not being returned as
+//     an error). Wire's own subsequent SetGameModeIfAbsent call
+//     performs the actual one-time stamp; Wire ALSO calls
+//     SetGameModeEpoch unconditionally right after (every Wire call,
+//     both this legacy path and the ordinary genesis path 3), so this
+//     city is fully migrated from its very next boot onward — case 4's
+//     protection is live from that point on.
+func checkGameMode(ctx context.Context, store persist.Store, city persist.CityKey, requestedMode string, correlationID string) error {
+	rec, ok, err := store.GameMode(ctx, city)
+	if err != nil {
+		return errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{"module": "persist", "step": "read-game-mode"})
+	}
+	if ok {
+		if rec == requestedMode {
+			return nil
+		}
+		return errs.New(save.ErrGameModeMismatch, correlationID, map[string]any{
+			"bundleGameMode":  rec,
+			"sessionGameMode": requestedMode,
+		})
+	}
+
+	// No mode on record. Distinguish "genuinely never Wired before" from
+	// "was Wired before but the sidecar is now missing/never migrated"
+	// via the world-seed sidecar's own presence (see doc comment above).
+	_, seedRecorded, seedErr := store.WorldSeed(ctx, city)
+	if seedErr != nil {
+		return errs.Wrap(ErrModuleFailed, correlationID, seedErr, map[string]any{"module": "persist", "step": "read-world-seed-for-game-mode-check"})
+	}
+	if !seedRecorded {
+		return nil // case 3: genuinely brand new.
+	}
+
+	// This city has been Wired before. HasGameModeEpoch disambiguates
+	// "already migrated, sidecar now missing" (refuse) from "genuinely
+	// pre-FEAT-143 legacy" (stamp once, warn, never refuse) — the
+	// round-2 lead ruling's headline fix.
+	hasEpoch, epochErr := store.HasGameModeEpoch(ctx, city)
+	if epochErr != nil {
+		return errs.Wrap(ErrModuleFailed, correlationID, epochErr, map[string]any{"module": "persist", "step": "read-game-mode-epoch"})
+	}
+	if hasEpoch {
+		// case 4: already migrated once, sidecar now missing — refuse.
+		return errs.New(save.ErrGameModeMismatch, correlationID, map[string]any{
+			"bundleGameMode":  "(missing)",
+			"sessionGameMode": requestedMode,
+		})
+	}
+
+	// case 5: genuinely pre-FEAT-143 legacy city. Never silent: this
+	// WARN-severity registry error is constructed (which auto-logs it,
+	// foundation/errs' construct()/logEntry) but deliberately NOT
+	// returned — accept, and let Wire's own stamps perform the one-time
+	// migration.
+	_ = errs.New(gameinit.ErrLegacyGameModeStamped, correlationID, map[string]any{
+		"city": city.TenantID + "/" + city.CityID,
+		"mode": requestedMode,
+	})
 	return nil
 }
 

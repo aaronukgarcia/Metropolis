@@ -3,6 +3,7 @@ package persist
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 )
@@ -324,6 +325,259 @@ func runStoreConformance(t *testing.T, newStore storeFactory) {
 		}
 		if ok {
 			t.Fatal("Exists = true after ONLY a world-seed stamp, no journal or snapshot — a seed-only city must stay invisible")
+		}
+	})
+
+	// BUG-737 (FEAT-143 wiring, round finding P1-4): the GameMode sidecar
+	// mirrors WorldSeed's own conformance coverage exactly, sub-test for
+	// sub-test.
+
+	t.Run("game_mode_absent_by_default", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "never-moded"}
+
+		mode, ok, err := s.GameMode(ctx, city)
+		if err != nil {
+			t.Fatalf("GameMode on never-moded city: %v", err)
+		}
+		if ok {
+			t.Fatalf("GameMode ok=true mode=%q before any SetGameModeIfAbsent call, want ok=false", mode)
+		}
+	})
+
+	t.Run("game_mode_set_once_first_call_wins", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "moded-once"}
+
+		recorded, err := s.SetGameModeIfAbsent(ctx, city, "unlimited")
+		if err != nil {
+			t.Fatalf("SetGameModeIfAbsent (first): %v", err)
+		}
+		if recorded != "unlimited" {
+			t.Fatalf("first SetGameModeIfAbsent recorded = %q, want %q", recorded, "unlimited")
+		}
+
+		// A second call with a DIFFERENT mode must NOT overwrite —
+		// AC-3's whole point is "the ORIGINATING mode", immutable across
+		// a restart, same as WorldSeed's own first-call-wins contract.
+		recorded2, err := s.SetGameModeIfAbsent(ctx, city, "real")
+		if err != nil {
+			t.Fatalf("SetGameModeIfAbsent (second, different mode): %v", err)
+		}
+		if recorded2 != "unlimited" {
+			t.Fatalf("second SetGameModeIfAbsent recorded = %q, want %q (first-call-wins, never overwritten)", recorded2, "unlimited")
+		}
+
+		mode, ok, err := s.GameMode(ctx, city)
+		if err != nil {
+			t.Fatalf("GameMode after two SetGameModeIfAbsent calls: %v", err)
+		}
+		if !ok {
+			t.Fatal("GameMode ok=false after a successful SetGameModeIfAbsent")
+		}
+		if mode != "unlimited" {
+			t.Fatalf("GameMode = %q, want %q", mode, "unlimited")
+		}
+	})
+
+	t.Run("game_mode_empty_never_stamped", func(t *testing.T) {
+		// BUG-737 round finding P1-2: an empty mode ("no chooser
+		// opinion") must NEVER be durably stamped — unlike WorldSeed
+		// (where 0 is a legitimate value), GameMode's zero value is
+		// explicitly "absent", so a later call with a genuine mode must
+		// still be able to win.
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "empty-first"}
+
+		if recorded, err := s.SetGameModeIfAbsent(ctx, city, ""); err != nil {
+			t.Fatalf("SetGameModeIfAbsent(\"\"): %v", err)
+		} else if recorded != "" {
+			t.Fatalf("SetGameModeIfAbsent(\"\") recorded = %q, want \"\" (nothing stamped)", recorded)
+		}
+
+		if _, ok, err := s.GameMode(ctx, city); err != nil {
+			t.Fatalf("GameMode after empty stamp attempt: %v", err)
+		} else if ok {
+			t.Fatal("GameMode ok=true after ONLY an empty SetGameModeIfAbsent call — an empty mode must never be readable as recorded")
+		}
+
+		// A LATER call with a genuine mode must still win — proving the
+		// empty attempt did not poison the "already recorded" state.
+		recorded, err := s.SetGameModeIfAbsent(ctx, city, "unlimited")
+		if err != nil {
+			t.Fatalf("SetGameModeIfAbsent(\"unlimited\") after empty attempt: %v", err)
+		}
+		if recorded != "unlimited" {
+			t.Fatalf("SetGameModeIfAbsent(\"unlimited\") recorded = %q, want %q — an earlier empty call permanently blocked a real chooser", recorded, "unlimited")
+		}
+	})
+
+	t.Run("game_mode_isolated_per_city", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		cityX := CityKey{TenantID: "t", CityID: "mode-city-x"}
+		cityY := CityKey{TenantID: "t", CityID: "mode-city-y"}
+
+		if _, err := s.SetGameModeIfAbsent(ctx, cityX, "unlimited"); err != nil {
+			t.Fatalf("SetGameModeIfAbsent(X): %v", err)
+		}
+		modeY, okY, err := s.GameMode(ctx, cityY)
+		if err != nil {
+			t.Fatalf("GameMode(Y): %v", err)
+		}
+		if okY {
+			t.Fatalf("city Y reports a recorded mode (%q) after only city X was ever stamped — mode isolation leak", modeY)
+		}
+	})
+
+	t.Run("stamping_a_mode_alone_does_not_make_a_city_exist", func(t *testing.T) {
+		// Mirrors the identical WorldSeed regression test above:
+		// SetGameModeIfAbsent must never, by itself, make Exists/
+		// ListCities report a city with no real durable data.
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "mode-only-no-data"}
+
+		if _, err := s.SetGameModeIfAbsent(ctx, city, "real"); err != nil {
+			t.Fatalf("SetGameModeIfAbsent: %v", err)
+		}
+		ok, err := s.Exists(ctx, city)
+		if err != nil {
+			t.Fatalf("Exists: %v", err)
+		}
+		if ok {
+			t.Fatal("Exists = true after ONLY a game-mode stamp, no journal or snapshot — a mode-only city must stay invisible")
+		}
+	})
+
+	// BUG-737 round-2 lead ruling (2026-09-05): the mode-epoch marker
+	// conformance coverage, mirroring the world-seed/game-mode ones
+	// above sub-test for sub-test.
+
+	t.Run("game_mode_epoch_absent_by_default", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "never-epoched"}
+
+		has, err := s.HasGameModeEpoch(ctx, city)
+		if err != nil {
+			t.Fatalf("HasGameModeEpoch on never-touched city: %v", err)
+		}
+		if has {
+			t.Fatal("HasGameModeEpoch = true before any SetGameModeEpoch call, want false")
+		}
+	})
+
+	t.Run("game_mode_epoch_requires_world_seed", func(t *testing.T) {
+		// BUG-737 re-round-3 finding P2-1: SetGameModeEpoch on a city
+		// with NO recorded world seed must refuse with
+		// ErrGameModeEpochWithoutSeed, never silently establish a
+		// seedless epoch-only record (which, on the original DiskStore
+		// implementation, meant an explicit world_seed:0 that WorldSeed
+		// then read back as ok=true, seed=0 — bricking the city against
+		// ever recording its real seed).
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "epoch-without-seed"}
+
+		err := s.SetGameModeEpoch(ctx, city)
+		if err == nil {
+			t.Fatal("SetGameModeEpoch on a seedless city succeeded, want ErrGameModeEpochWithoutSeed")
+		}
+		if !errors.Is(err, ErrGameModeEpochWithoutSeed) {
+			t.Fatalf("SetGameModeEpoch error = %v, want ErrGameModeEpochWithoutSeed", err)
+		}
+		// The refusal must not itself brick anything: a subsequent
+		// legitimate SetWorldSeedIfAbsent then SetGameModeEpoch must
+		// still succeed cleanly.
+		if _, err := s.SetWorldSeedIfAbsent(ctx, city, 42); err != nil {
+			t.Fatalf("SetWorldSeedIfAbsent after refused epoch: %v", err)
+		}
+		if err := s.SetGameModeEpoch(ctx, city); err != nil {
+			t.Fatalf("SetGameModeEpoch after seeding: %v", err)
+		}
+	})
+
+	t.Run("game_mode_epoch_set_once_idempotent", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "epoched-once"}
+
+		if _, err := s.SetWorldSeedIfAbsent(ctx, city, 1); err != nil {
+			t.Fatalf("SetWorldSeedIfAbsent: %v", err)
+		}
+		if err := s.SetGameModeEpoch(ctx, city); err != nil {
+			t.Fatalf("SetGameModeEpoch (first): %v", err)
+		}
+		if err := s.SetGameModeEpoch(ctx, city); err != nil {
+			t.Fatalf("SetGameModeEpoch (second, idempotent no-op): %v", err)
+		}
+		has, err := s.HasGameModeEpoch(ctx, city)
+		if err != nil {
+			t.Fatalf("HasGameModeEpoch after SetGameModeEpoch: %v", err)
+		}
+		if !has {
+			t.Fatal("HasGameModeEpoch = false after a successful SetGameModeEpoch")
+		}
+	})
+
+	t.Run("game_mode_epoch_isolated_per_city", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		cityX := CityKey{TenantID: "t", CityID: "epoch-city-x"}
+		cityY := CityKey{TenantID: "t", CityID: "epoch-city-y"}
+
+		if _, err := s.SetWorldSeedIfAbsent(ctx, cityX, 1); err != nil {
+			t.Fatalf("SetWorldSeedIfAbsent(X): %v", err)
+		}
+		if err := s.SetGameModeEpoch(ctx, cityX); err != nil {
+			t.Fatalf("SetGameModeEpoch(X): %v", err)
+		}
+		hasY, err := s.HasGameModeEpoch(ctx, cityY)
+		if err != nil {
+			t.Fatalf("HasGameModeEpoch(Y): %v", err)
+		}
+		if hasY {
+			t.Fatal("city Y reports an epoch marker after only city X was ever marked — epoch isolation leak")
+		}
+	})
+
+	t.Run("game_mode_epoch_survives_game_mode_deletion", func(t *testing.T) {
+		// The whole point of storing the epoch marker independently of
+		// gamemode.json (BUG-737 round-2 lead ruling): SetGameModeIfAbsent
+		// followed by SetGameModeEpoch, then a caller emulating a
+		// deleted/lost gamemode.json by never touching GameMode again —
+		// HasGameModeEpoch must still report true, since a real
+		// implementation stores it in a DIFFERENT sidecar (DiskStore:
+		// seed.json; MemStore: a separate struct field) that a
+		// gamemode.json deletion never touches. This conformance test
+		// cannot literally delete a file (MemStore has none), so it
+		// proves the INDEPENDENCE property the only way that generalises
+		// across both implementations: setting the epoch and the mode
+		// are two separate calls, and the epoch persists even though
+		// nothing here ever re-touches GameMode after establishing it.
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "epoch-independent"}
+
+		if _, err := s.SetWorldSeedIfAbsent(ctx, city, 1); err != nil {
+			t.Fatalf("SetWorldSeedIfAbsent: %v", err)
+		}
+		if _, err := s.SetGameModeIfAbsent(ctx, city, "unlimited"); err != nil {
+			t.Fatalf("SetGameModeIfAbsent: %v", err)
+		}
+		if err := s.SetGameModeEpoch(ctx, city); err != nil {
+			t.Fatalf("SetGameModeEpoch: %v", err)
+		}
+		has, err := s.HasGameModeEpoch(ctx, city)
+		if err != nil {
+			t.Fatalf("HasGameModeEpoch: %v", err)
+		}
+		if !has {
+			t.Fatal("HasGameModeEpoch = false after SetGameModeEpoch — the epoch marker must be independently durable")
 		}
 	})
 

@@ -17,6 +17,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/extcommute"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/gameinit"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/households"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/leisure"
@@ -55,20 +56,38 @@ const (
 	// webconsole dogfood sim's committed STARTING_TREASURY=£1.5M), on top
 	// of the money base-unit rebase itself (1e-6 GBP/unit -> 1e-3 GBP/unit,
 	// see internal/foundation/det/money.go's MicropoundsPerPound doc
-	// comment) — so the raw literal below reflects BOTH changes: £1,500,000
-	// x 1,000 units/£ = 1,500,000,000.
-	initialTreasury = 1_500_000_000 // money-unit base (£1,500,000)
-	// initialCitizenWealth keeps its pre-existing 0.5:1 ratio to
-	// initialTreasury (Aaron's ruling: "keep initialCitizenWealth's 0.5:1
-	// ratio to treasury") — £750,000 x 1,000 units/£.
+	// comment) — so the figure is £1,500,000 x 1,000 units/£ =
+	// 1,500,000,000.
+	//
+	// BUG-737 (FEAT-143 wiring, round finding P3, GR#3): this used to be
+	// a bare Go literal `initialTreasury` right here — a SECOND source of
+	// truth duplicating the exact same figure data/gameinit.json's
+	// startingCapitalMicropounds now carries (kept numerically identical
+	// to this historical value on purpose, per that file's own disclosure
+	// comment). Wire's opening-treasury seeding (seedOpeningBalances,
+	// below) reads gi.StartingCapitalMicropounds() instead, so the
+	// literal has been removed rather than left to silently drift out of
+	// sync with the data file it duplicated. Every test that used to
+	// assert against this constant now loads the same figure from
+	// data/gameinit.json itself (see compose_gameinit_test.go's
+	// testInitialTreasury helper) — one source of truth, not two.
+	//
+	// initialCitizenWealth keeps its pre-existing 0.5:1 ratio to the
+	// (now data-sourced) opening treasury (Aaron's ruling: "keep
+	// initialCitizenWealth's 0.5:1 ratio to treasury") — £750,000 x
+	// 1,000 units/£. This one stays a literal: FEAT-143's scope is only
+	// the treasury/StartingCapitalMicropounds side of genesis money, and
+	// citizen wealth has no equivalent gameinit-mode dependency to keep
+	// in sync with.
 	initialCitizenWealth = 750_000_000 // money-unit base (£750,000, ratio-preserved)
 
 	// monthlyWagesFloor is the pre-existing finance STUB (formerly named
 	// monthlyWages, ALWAYS posted flat regardless of population) — kept as
 	// a FLOOR, not the wage bill itself, by FEAT-083's de-stub
 	// (2026-09-02, Aaron-authorized directly). Rescaled by the SAME factor
-	// initialTreasury grew by (150,000x in real terms: £10 -> £1,500,000):
-	// £1 x 150,000 x 1,000 units/£.
+	// the opening treasury grew by when it moved from the old £10 literal
+	// to today's £1,500,000 (data-sourced since BUG-737, see above)
+	// figure (150,000x in real terms): £1 x 150,000 x 1,000 units/£.
 	//
 	// FEAT-083 makes the wage bill population/employment-derived
 	// (employedResidentCount() x moneycirc.go's real UK gross wage,
@@ -252,6 +271,22 @@ type Deps struct {
 	// CorrelationID roots every registry-sourced error this composition
 	// constructs. Empty mints a fresh one.
 	CorrelationID string
+
+	// GameMode is BUG-737's FEAT-143 wiring seam: the new-game mode CHOICE
+	// as a plain wire string ("real" or "unlimited", gameinit.Mode's own
+	// String() values) — never a *gameinit.GameInit or gameinit.Mode typed
+	// value, so a caller in a package with NO registered edge to
+	// feat.gameinit (cmd/metropolis's feat.skeleton, cmd/metroserve — see
+	// compose_gameinit.go's doc comment for the exact edge-registration
+	// check) can still choose the mode without importing the package.
+	// Empty (the default, every existing Wire caller/test) resolves to
+	// gameinit.ModeReal — real mode, the full financial-failure loop,
+	// reproducing every pre-BUG-737 composed-engine test's behaviour
+	// byte-for-byte (GR#26/GR#15: a wiring pass must never silently change
+	// existing behaviour). An unrecognised non-empty value fails Wire with
+	// ErrModuleFailed naming "gameinit" (AC-1's fail-closed contract —
+	// never a silent default).
+	GameMode string
 
 	// World, Citizens and Market are the three REAL module dependencies.
 	// A nil field means "construct the default". (A caller that wants to
@@ -1001,7 +1036,31 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	}
 
 	financeAPI := finance.NewFinanceAPI(cid)
-	if err := seedOpeningBalances(financeAPI, initialTreasury, initialCitizenWealth); err != nil {
+
+	// BUG-737 (FEAT-143 wiring): construct the locked-at-startup game
+	// initialization mode and install it as finance's mode gate BEFORE
+	// seeding opening balances, so Real mode's opening treasury is
+	// sourced from data/gameinit.json (gi.StartingCapitalMicropounds,
+	// AC-6/GR#15) rather than a bare Go literal, and Unlimited mode's
+	// finance bypass (AC-2) is live from the very first tick.
+	gi, err := wireGameInit(financeAPI, deps.GameMode, cid)
+	if err != nil {
+		return nil, err
+	}
+	// StartingCapitalMicropounds always returns the data-sourced REAL-mode
+	// figure regardless of the locked mode (its own doc comment,
+	// api.go) — Unlimited's finance bypass makes the seeded balance value
+	// irrelevant to that mode's own failure-loop checks, so seeding the
+	// same real-mode figure in both modes is deliberate, not an oversight:
+	// it keeps genesis deterministic across modes and reproduces every
+	// pre-BUG-737 test's treasury expectation byte-for-byte (the data file
+	// is kept numerically equal to the old initialTreasury literal — see
+	// data/gameinit.json's disclosure).
+	openingTreasury, err := gi.StartingCapitalMicropounds(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "gameinit", "step": "StartingCapitalMicropounds"})
+	}
+	if err := seedOpeningBalances(financeAPI, openingTreasury, initialCitizenWealth); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "finance", "step": "seedOpeningBalances"})
 	}
 	// BUG-548: grant AcctFirms a working-capital credit line so
@@ -1354,6 +1413,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		buildAPI:                   buildAPI,
 		attract:                    attractAPI,
 		finance:                    financeAPI,
+		gameInit:                   gi,
 		crime:                      crimeAPI,
 		leisure:                    leisureAPI,
 		refuse:                     refuseAPI,
@@ -1461,6 +1521,36 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		}
 		journaler = newPersistCommandJournaler(journaler, deps.PersistStore, city)
 
+		// BUG-737 (FEAT-143 wiring, round findings P1-3/P1-4/P3): CHECK
+		// the composition's own locked gameinit mode against whatever is
+		// ALREADY durably on record -- BEFORE this call stamps anything
+		// at all, including the world-seed stamp immediately below.
+		// checkGameMode's own doc comment explains why the ordering
+		// matters: it distinguishes "genuinely fresh city" from "was
+		// Wired before but its gamemode.json sidecar is now missing" by
+		// reading whether a world seed is ALREADY on record — a signal
+		// that would be contaminated (always true) if read AFTER this
+		// same call's own SetWorldSeedIfAbsent stamp ran first. gi is
+		// guaranteed non-nil and already-validated at this point:
+		// wireGameInit ran earlier in this function and would have
+		// returned an error on an invalid mode string long before Wire
+		// ever reached here -- an invalid mode is NEVER stamped, closing
+		// P1-3's own named defect (the pre-fix code used to stamp in
+		// cmd/metroserve BEFORE compose.Wire validated anything at all,
+		// so a boot with "bogus" left a permanently-poisoned
+		// gamemode.json). A refusal here (save.ErrGameModeMismatch,
+		// naming both modes) fires on either a genuine cross-restart
+		// mismatch (P1-4's "unlimited then real") or a missing sidecar
+		// on an already-Wired city (P1-4's "deleted gamemode.json
+		// between boots") -- never a silent overrule (P2).
+		gameModeWire, err := gi.GameModeWire(cid)
+		if err != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "gameinit", "step": "GameModeWire"})
+		}
+		if err := checkGameMode(context.Background(), deps.PersistStore, city, gameModeWire, cid); err != nil {
+			return nil, err
+		}
+
 		// BUG-488: stamp this composition's own world seed as city's
 		// durable ORIGINATING seed the first time persistence is ever
 		// wired for it. SetWorldSeedIfAbsent is a no-op once a seed is
@@ -1476,6 +1566,29 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		// AppendJournal -- surfaced, never swallowed.
 		if _, err := deps.PersistStore.SetWorldSeedIfAbsent(context.Background(), city, e.WorldSeed()); err != nil {
 			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "persist", "step": "stamp-world-seed"})
+		}
+
+		// BUG-737: only stamp the gameinit-mode sidecar AFTER
+		// checkGameMode above has already passed -- SetGameModeIfAbsent
+		// is a no-op once a mode is already on record, safe to call
+		// unconditionally.
+		if _, err := deps.PersistStore.SetGameModeIfAbsent(context.Background(), city, gameModeWire); err != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "persist", "step": "stamp-game-mode"})
+		}
+
+		// BUG-737 round-2 lead ruling (2026-09-05): mark the mode epoch
+		// UNCONDITIONALLY, on every Wire call, whether checkGameMode
+		// just took the genesis path (case 3), the legacy-migration path
+		// (case 5), or the ordinary match path (case 1) -- idempotent
+		// (SetGameModeEpoch is a no-op once already marked), and this is
+		// what makes case 4 (a since-deleted gamemode.json on an
+		// ALREADY-migrated or genuinely-genesis city) detectable on a
+		// LATER boot: only a city whose mode was established under
+		// mode-aware code ever gets this marker, so its presence alone
+		// distinguishes "was migrated/genesis" from "genuinely never
+		// touched" (checkGameMode's own doc comment, snapshot.go).
+		if err := deps.PersistStore.SetGameModeEpoch(context.Background(), city); err != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "persist", "step": "stamp-game-mode-epoch"})
 		}
 	}
 	st.journaler = journaler
@@ -1637,6 +1750,15 @@ type simState struct {
 	// too so any future compose-owned poster (and tests) can reach the
 	// same ledger without re-threading it through every hook constructor.
 	finance *finance.FinanceAPI
+
+	// gameInit is BUG-737's FEAT-143 wiring: the *gameinit.GameInit
+	// constructed once in Wire (compose_gameinit.go) and installed as
+	// finance's mode gate (financeAPI.SetModeGate). Stored here so
+	// Composition.GameMode() (GR#17) and Save/Load's ctx.GameMode /
+	// WithExpectedGameMode threading (save_wire.go) can reach the same
+	// locked instance without re-constructing it. Never nil after a
+	// successful Wire — see wireGameInit's own doc comment.
+	gameInit *gameinit.GameInit
 
 	// FEAT-167 (docs/planning/icd/engine.attract-terms.md): the three real
 	// Safety/LeisureFit/Environment source modules, plus this integration's

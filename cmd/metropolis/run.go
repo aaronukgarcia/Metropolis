@@ -28,6 +28,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	headlessMode := fs.Bool("headless", false, "run engine.core headlessly (harness.headless, MOD-015): no UI attached, requires -seed/-months/-out")
 	version := fs.Bool("version", false, "print build identity and exit")
+	// BUG-737 (FEAT-143 wiring): the new-game mode CHOICE (US-1), as a
+	// plain wire string forwarded verbatim to compose.Deps.GameMode via
+	// bootCoreWithGameMode — this binary holds no registered edge to
+	// feat.gameinit (see bootCoreWithGameMode's doc comment) and never
+	// imports/validates internal/engine/gameinit.Mode itself; an
+	// unrecognised value fails loudly at compose.Wire (AC-1), not here.
+	gameMode := fs.String("game-mode", "real", "new-game initialization mode: \"real\" (finite starting capital, full financial-failure loop) or \"unlimited\" (sandbox: finance failure loop bypassed) -- FEAT-143")
 	hf := registerHeadlessFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -47,7 +54,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	correlationID := errs.NewCorrelationID()
 
-	w, err := bootCore(correlationID, newBootRegistry())
+	w, err := bootCoreWithGameMode(correlationID, newBootRegistry(), *gameMode)
 	if err != nil {
 		printBootError(stderr, err)
 		return 1

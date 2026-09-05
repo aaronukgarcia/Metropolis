@@ -75,6 +75,16 @@ func run(args []string, stdout, stderr *os.File) int {
 	// byte-for-byte the pre-inc3b behaviour). Ignored when persist-dir is
 	// empty (no store to snapshot into).
 	snapshotEvery := fs.Int64("snapshot-every", compose.SnapshotCadenceTicks, "durable snapshot cadence in ticks (0 = off; ignored without -persist-dir)")
+	// BUG-737 (FEAT-143 wiring, round finding P1-1): the new-game mode
+	// CHOICE, threaded as a plain wire string straight into
+	// WithGameMode/setUpPersistence's own variadic gameMode arg. This
+	// binary holds no registered edge to feat.gameinit (checked
+	// directly: feat.gameinit's inbound.consumers does not list any
+	// cmd/metroserve-owned key, and cmd/metroserve is not itself a
+	// registered module at all), so it never imports/validates
+	// internal/engine/gameinit.Mode -- an unrecognised value fails
+	// loudly inside compose.Wire (AC-1), not here.
+	gameMode := fs.String("game-mode", "real", "new-game initialization mode for a city persisted for the FIRST time under -persist-dir/-city: \"real\" (finite starting capital, full financial-failure loop) or \"unlimited\" (sandbox: finance failure loop bypassed) -- FEAT-143. A city that already has a durably recorded mode ignores this flag (AC-3: a restart must not be able to re-mode)")
 	printVersion := fs.Bool("version", false, "print build identity and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -90,13 +100,13 @@ func run(args []string, stdout, stderr *os.File) int {
 	// the legacy single-city host, byte-for-byte unchanged (AC-6). Gating on
 	// persist-dir keeps a default `metroserve` invocation identical to today.
 	if *persistDir != "" {
-		return runHosted(*addr, *persistDir, *city, *tickInterval, *snapshotEvery, stdout, stderr)
+		return runHosted(*addr, *persistDir, *city, *tickInterval, *snapshotEvery, *gameMode, stdout, stderr)
 	}
 
 	correlationID := string(protocol.NewCorrelationID())
 
 	e := core.NewEngine(core.WithWorldSeed(*seed))
-	comp, store, err := setUpPersistence(e, *persistDir, *city, stdout)
+	comp, store, err := setUpPersistence(e, *persistDir, *city, stdout, *gameMode)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "metroserve: %v\n", err)
 		return 1
@@ -186,8 +196,8 @@ func run(args []string, stdout, stderr *os.File) int {
 // resolver two plain strings; metroserve builds the persist.CityKey here,
 // inside its own package, and calls its own host — no new dependency edge is
 // forced on internal/protocol.
-func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snapshotEvery int64, stdout, stderr *os.File) int {
-	host, err := NewCityHost(persistDir, tickInterval, WithSnapshotEvery(snapshotEvery))
+func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snapshotEvery int64, gameMode string, stdout, stderr *os.File) int {
+	host, err := NewCityHost(persistDir, tickInterval, WithSnapshotEvery(snapshotEvery), WithGameMode(gameMode))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "metroserve: %v\n", err)
 		return 1

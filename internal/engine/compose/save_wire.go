@@ -149,11 +149,25 @@ func (c *Composition) Save(root string) error {
 	if err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "save", "step": "clock"})
 	}
+	// BUG-737 (FEAT-143 AC-4): every save declares the session's locked
+	// gameinit mode via GameModeWire, mirroring gameinit/savewire.go's
+	// documented write-path call shape exactly. GameModeWire only errors
+	// on a struct-copied *GameInit (impossible for c.state.gameInit,
+	// which Wire constructs and stores itself), but this still checks the
+	// error rather than threading "" into ctx.GameMode on a failure
+	// (savewire.go's own doc comment: an empty wire string is
+	// indistinguishable from "no mode declared" and is the exact escape
+	// hatch AC-5's own attack test closed on the save-package side).
+	gameMode, err := c.state.gameInit.GameModeWire(c.state.cid)
+	if err != nil {
+		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "gameinit", "step": "GameModeWire"})
+	}
 	ctx := save.Context{
 		WorldSeed:     int64(c.state.seed),
 		CreatedAtTick: clock.Tick(),
 		GameMonth:     clock.Month(),
 		AppVersion:    compositionSaveAppVersion,
+		GameMode:      gameMode,
 	}
 	mgr := save.NewManager(root, c.Participants(), c.state.cid)
 	return mgr.SaveManual(ctx, compositionSaveName)
@@ -211,7 +225,32 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 			"cause":  "no composition save named " + compositionSaveName + " found under root",
 		})
 	}
-	loadOpts := append([]save.LoadOption{save.WithExpectedWorldSeed(int64(c.state.seed))}, opts...)
+	// BUG-737 (FEAT-143 AC-5, round finding P2): every Load enforces the
+	// session's locked gameinit mode, mirroring gameinit/savewire.go's
+	// documented read-path call shape exactly. Unlike WithExpectedWorldSeed
+	// (prepended, so a caller's own save.AllowSeedMismatch() opt-out can
+	// still legitimately win — a deliberate reseed, e.g. the
+	// FEAT-1972079897 rules-change replay case), WithExpectedGameMode is
+	// APPENDED, so it ALWAYS wins over anything in opts: save/options.go's
+	// own doc comment is explicit that "there is deliberately no
+	// AllowGameModeMismatch escape hatch mirroring AllowSeedMismatch" — a
+	// caller-supplied save.WithExpectedGameMode(...) in opts winning via
+	// resolveLoadOptions' last-write-wins semantics would BE that
+	// nonexistent escape hatch, reachable through this exact opts
+	// parameter. This composition's own locked mode is therefore never
+	// negotiable, from any caller, under any opts. A bundle whose declared
+	// mode differs (or a pre-BUG-737/pre-FEAT-143 bundle with no mode at
+	// all) fails closed with save.ErrGameModeMismatch before any
+	// participant runs (save/load.go's own check happens before the shard
+	// loop).
+	gameMode, err := c.state.gameInit.GameModeWire(c.state.cid)
+	if err != nil {
+		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "gameinit", "step": "GameModeWire"})
+	}
+	loadOpts := make([]save.LoadOption, 0, len(opts)+2)
+	loadOpts = append(loadOpts, save.WithExpectedWorldSeed(int64(c.state.seed)))
+	loadOpts = append(loadOpts, opts...)
+	loadOpts = append(loadOpts, save.WithExpectedGameMode(gameMode)) // BUG-737 P2: always last, always wins
 	mgr := save.NewManager(root, c.Participants(), c.state.cid)
 	header, _, err := mgr.Load(dir, loadOpts...)
 	if err != nil {

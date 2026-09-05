@@ -278,7 +278,7 @@ func TestHeadless_TwelveMonthsMoneyMoves(t *testing.T) {
 	// EVERY RoleMoney account, including firms) is the AC-10 conservation
 	// figure that must stay unchanged — the budget still closes, the money
 	// just now visibly passes through firms on its way around the loop.
-	wantTotal := int64(initialTreasury) + int64(initialCitizenWealth)
+	wantTotal := testInitialTreasury(t) + int64(initialCitizenWealth)
 	if got := int64(comp.state.finance.TotalMoneyInCirculation()); got != wantTotal {
 		t.Fatalf("TotalMoneyInCirculation = %d, want conserved %d", got, wantTotal)
 	}
@@ -344,7 +344,7 @@ func TestBUG355_WagesPosted_IsPerMonthNotCumulative(t *testing.T) {
 func TestBUG355_PostRejection_SimStateMirrorsLedgerAtMonthEnd(t *testing.T) {
 	e, comp := newTestEngine(t, 42)
 	wageBill := int64(monthlyWagesFloor)
-	drain := initialTreasury - wageBill + 1 // leaves treasury just short of one wage bill
+	drain := testInitialTreasury(t) - wageBill + 1 // leaves treasury just short of one wage bill
 	if _, err := comp.state.finance.SettleConstruction(finance.Money(drain)); err != nil {
 		t.Fatalf("SettleConstruction(drain): %v", err)
 	}
@@ -439,7 +439,7 @@ func TestBUG355_PartialPost_TaxRejectionStillMirrorsLedger(t *testing.T) {
 	}
 	commercial := spend * commercialTaxRateBp / 10_000
 	industrial := spend * industrialTaxRateBp / 10_000
-	wantTr := int64(initialTreasury) - publicWageDebit + commercial + industrial + councilTax + incomeTax
+	wantTr := testInitialTreasury(t) - publicWageDebit + commercial + industrial + councilTax + incomeTax
 	if led, st := ledgerBalance(comp.state.finance, finance.AcctTreasury), comp.Treasury(); led != st || led != wantTr {
 		t.Fatalf("month end: FinanceAPI treasury = %d, Composition.Treasury = %d, want both %d", led, st, wantTr)
 	}

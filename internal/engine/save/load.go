@@ -78,33 +78,74 @@ func (m *Manager) Load(dir string, opts ...LoadOption) (serialize.Header, Meta, 
 		return serialize.Header{}, Meta{}, errs.Wrap(ErrMetaReadFailed, m.correlationID, err, map[string]any{"dir": dir, "cause": err.Error()})
 	}
 
-	// FEAT-143 AC-5: refuse a bundle whose declared game mode does not
-	// match the loading session's own locked mode, BEFORE any participant
-	// Handler runs (the shard-load loop below is the earliest point any
-	// participant state changes) -- so a refused load leaves every
-	// Participant, and therefore the whole composition, untouched. Skipped
-	// entirely unless the caller opted in via WithExpectedGameMode.
-	// meta.GameMode == "" (a pre-FEAT-143 bundle, or a hand-edited one
-	// with no mode) is treated as a mismatch against ANY expected mode --
-	// never silently accepted as a match, and never defaulted to
-	// "unlimited" (the false-pass this AC explicitly rules out).
+	// FEAT-143 AC-5 (BUG-737 round-2 lead ruling, 2026-09-05): refuse a
+	// bundle whose declared game mode does not match the loading
+	// session's own locked mode, BEFORE any participant Handler runs
+	// (the shard-load loop below is the earliest point any participant
+	// state changes) -- so a refused load leaves every Participant, and
+	// therefore the whole composition, untouched. Skipped entirely
+	// unless the caller opted in via WithExpectedGameMode.
 	//
-	// The round's finding (P2-A): lo.expectedGameMode == "" must ALSO
-	// always refuse, even against a bundle whose own meta.GameMode is
-	// itself "" (a legacy save) -- otherwise WithExpectedGameMode("")
+	// The round's finding (P2-A, still enforced): lo.expectedGameMode ==
+	// "" must ALWAYS refuse, even against a bundle whose own
+	// meta.GameMode is itself "" -- otherwise WithExpectedGameMode("")
 	// is an escape hatch that silently performs no real check at all.
-	// This is reachable in production because GameModeWire() (this
-	// package's caller-supplied expected value) returns "" whenever the
-	// SEC-020 copy-guard trips on a copied *GameInit, so an empty
-	// expected mode must never be treated as "matches an empty bundle
-	// mode" -- it is a caller error, not a legitimate expectation, and
-	// AC-5 requires fail-closed here exactly as for a real mismatch.
-	if lo.checkGameMode && (lo.expectedGameMode == "" || meta.GameMode != lo.expectedGameMode) {
-		return serialize.Header{}, Meta{}, errs.New(ErrGameModeMismatch, m.correlationID, map[string]any{
-			"dir":             dir,
-			"bundleGameMode":  meta.GameMode,
-			"sessionGameMode": lo.expectedGameMode,
-		})
+	// Reachable in production because GameModeWire() (this package's
+	// caller-supplied expected value) returns "" whenever the SEC-020
+	// copy-guard trips on a copied *GameInit.
+	//
+	// The round-2 lead ruling (replacing the ORIGINAL AC-5 text, which
+	// treated meta.GameMode == "" as a mismatch against every expected
+	// mode unconditionally): that blanket refusal broke every single
+	// save bundle written before FEAT-143 shipped, with no migration
+	// path at all. The rule now is a genuine three-way split once
+	// lo.expectedGameMode is non-empty:
+	//
+	//   - meta.GameMode == lo.expectedGameMode: match, proceed.
+	//   - meta.GameMode == "" (a genuinely pre-FEAT-143 bundle, never
+	//     declared a mode at all): loads ONLY when lo.expectedGameMode
+	//     is "real" (the conservative default) -- raises
+	//     ErrLegacyGameModeAssumedReal, a WARN-severity registry event
+	//     (constructed via errs.New, which auto-logs regardless of
+	//     severity -- see foundation/errs' construct()/logEntry -- so
+	//     this is NEVER silent despite not being returned as an error),
+	//     then proceeds. Loading such a bundle into an UNLIMITED session
+	//     still refuses -- an absent mode is never treated as "matches
+	//     unlimited" (the original AC's false-pass-risk note survives
+	//     for this direction).
+	//   - meta.GameMode is present but differs from lo.expectedGameMode
+	//     (covers both a genuine cross-mode mismatch and the "" ==
+	//     lo.expectedGameMode case P2-A forbids): refuse, unchanged.
+	//
+	// A bundle loaded under the legacy-assumed-real path is re-stamped
+	// with the session's real GameMode on its very next Save call --
+	// Composition.Save (compose/save_wire.go) always writes the CURRENT
+	// session's own locked mode into ctx.GameMode regardless of what was
+	// loaded, so no special re-stamp code is needed here: the very next
+	// save closes the gap automatically.
+	if lo.checkGameMode {
+		switch {
+		case lo.expectedGameMode == "":
+			return serialize.Header{}, Meta{}, errs.New(ErrGameModeMismatch, m.correlationID, map[string]any{
+				"dir":             dir,
+				"bundleGameMode":  meta.GameMode,
+				"sessionGameMode": lo.expectedGameMode,
+			})
+		case meta.GameMode == lo.expectedGameMode:
+			// match -- proceed.
+		case meta.GameMode == "" && lo.expectedGameMode == "real":
+			// Legacy bundle, conservative real-mode session: accept with
+			// a non-fatal, never-silent WARN (see doc comment above).
+			_ = errs.New(ErrLegacyGameModeAssumedReal, m.correlationID, map[string]any{
+				"path": dir,
+			})
+		default:
+			return serialize.Header{}, Meta{}, errs.New(ErrGameModeMismatch, m.correlationID, map[string]any{
+				"dir":             dir,
+				"bundleGameMode":  meta.GameMode,
+				"sessionGameMode": lo.expectedGameMode,
+			})
+		}
 	}
 
 	byKind := make(map[string]Participant, len(m.participants))

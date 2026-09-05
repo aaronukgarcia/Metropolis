@@ -133,12 +133,17 @@ func TestGameMode_LoadAcceptsMatch(t *testing.T) {
 	}
 }
 
-// TestGameMode_AbsentModeRejected (AC-5's false-pass-risk note): a save
-// written with NO mode field (a pre-FEAT-143 bundle, GameMode == "") must
-// be REJECTED when the caller opts into WithExpectedGameMode — never
-// silently treated as a match, and never defaulted to "unlimited" as a
-// silent relaxation that would let an old save silently unlock money.
-func TestGameMode_AbsentModeRejected(t *testing.T) {
+// TestGameMode_AbsentModeAssumedRealNeverUnlimited (BUG-737 round-2 lead
+// ruling, 2026-09-05 — REPLACES the original AC-5 text this test's name
+// used to be TestGameMode_AbsentModeRejected for): a save written with
+// NO mode field (a pre-FEAT-143 bundle, GameMode == "") loads ONLY into
+// the conservative REAL session (with a non-fatal ErrLegacyGameModeAssumedReal
+// WARN, never silent) — the original blanket-rejection rule broke every
+// save bundle written before FEAT-143 shipped, with no migration path at
+// all. Loading the SAME absent-mode bundle into an UNLIMITED session
+// still refuses — an absent mode is never treated as "matches unlimited"
+// (the original false-pass-risk note survives for this direction).
+func TestGameMode_AbsentModeAssumedRealNeverUnlimited(t *testing.T) {
 	root := t.TempDir()
 	mgr := NewManager(root, nil, "test-corr")
 
@@ -156,10 +161,11 @@ func TestGameMode_AbsentModeRejected(t *testing.T) {
 		t.Fatalf("precondition: expected an absent GameMode, got %q", meta.GameMode)
 	}
 
-	for _, expected := range []string{"real", "unlimited"} {
-		if _, _, err := mgr.Load(manualDir(root, "no-mode"), WithExpectedGameMode(expected)); err == nil {
-			t.Fatalf("Load of a mode-less save with WithExpectedGameMode(%q) succeeded, want ErrGameModeMismatch (never default to a mode)", expected)
-		}
+	if _, _, err := mgr.Load(manualDir(root, "no-mode"), WithExpectedGameMode("real")); err != nil {
+		t.Fatalf("Load of a mode-less save with WithExpectedGameMode(\"real\") refused, want the legacy-migration ACCEPT: %v", err)
+	}
+	if _, _, err := mgr.Load(manualDir(root, "no-mode"), WithExpectedGameMode("unlimited")); err == nil {
+		t.Fatal("Load of a mode-less save with WithExpectedGameMode(\"unlimited\") succeeded, want ErrGameModeMismatch — an absent mode must never be treated as matching unlimited")
 	}
 }
 

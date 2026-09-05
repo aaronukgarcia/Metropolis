@@ -261,6 +261,18 @@ func (failingStore) SetWorldSeedIfAbsent(context.Context, persist.CityKey, uint6
 func (failingStore) WorldSeed(context.Context, persist.CityKey) (uint64, bool, error) {
 	panic("failingStore.WorldSeed called")
 }
+func (failingStore) SetGameModeIfAbsent(context.Context, persist.CityKey, string) (string, error) {
+	panic("failingStore.SetGameModeIfAbsent called")
+}
+func (failingStore) GameMode(context.Context, persist.CityKey) (string, bool, error) {
+	panic("failingStore.GameMode called")
+}
+func (failingStore) SetGameModeEpoch(context.Context, persist.CityKey) error {
+	panic("failingStore.SetGameModeEpoch called")
+}
+func (failingStore) HasGameModeEpoch(context.Context, persist.CityKey) (bool, error) {
+	panic("failingStore.HasGameModeEpoch called")
+}
 
 // TestPersistJournal_FailClosed proves a durable-persist failure is
 // surfaced, never swallowed (AC-1 fail-closed): the adapter's ObserveCommand
