@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/harness/replay"
@@ -99,15 +100,26 @@ func TestAttackJournalStatus_ConcurrentReadsMonotone(t *testing.T) {
 	}
 }
 
+// recorderByteCopy produces a struct-copied *replay.Recorder via a raw memcpy
+// through unsafe.Pointer, mirroring citizensByteCopy in
+// internal/engine/citizens/copyguard_test.go: a literal `cp := *r` is flagged
+// by go vet's copylocks check, which CI runs bare (nolint directives only bind
+// golangci-lint, not `go vet ./...`).
+func recorderByteCopy(r *replay.Recorder) *replay.Recorder {
+	cp := new(replay.Recorder)
+	*(*[unsafe.Sizeof(replay.Recorder{})]byte)(unsafe.Pointer(cp)) = *(*[unsafe.Sizeof(replay.Recorder{})]byte)(unsafe.Pointer(r))
+	return cp
+}
+
 // A2a: a struct-COPIED Recorder injected as the journaler. SEC-037 says
 // Len() must REFUSE rather than report 0; JournalStatus must surface that
 // as EntriesKnown=true + EntriesErr!=nil (we-have-a-recorder-that-refused),
 // never as a silent 0.
 func TestAttackJournalStatus_CopiedRecorderSurfacesErrNotZero(t *testing.T) {
 	orig := replay.NewRecorder()
-	copied := *orig //nolint:govet // deliberate SEC-037 copy under attack
+	copied := recorderByteCopy(orig) // deliberate SEC-037 copy under attack (raw memcpy: go vet copylocks runs bare in CI)
 	e := core.NewEngine(core.WithWorldSeed(1), core.WithPoolSize(1))
-	comp, err := Wire(e, &Deps{CommandJournaler: &copied})
+	comp, err := Wire(e, &Deps{CommandJournaler: copied})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}
