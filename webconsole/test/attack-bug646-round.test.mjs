@@ -154,11 +154,16 @@ test('BUG-646 ATTACK: occupiedSet/roadTileSetOf stay byte-identical to a from-sc
   }
 
   // A REFUSED placement (deliberately overlapping an existing building) must
-  // be a true no-op — no state change, no cache corruption for the NEXT real
-  // placement.
+  // not touch buildings/roads or corrupt the caches for the NEXT real
+  // placement. BUG-490: like the funds case below, it now returns a NEW object
+  // carrying an "already occupied" placeNotice instead of a silent identity
+  // no-op, so the invariant is "same buildings, same roads, same sets, notice
+  // present" — not reference equality.
   const occBefore = s;
   const overlapAttempt = reducer(s, { type: 'place', spec: 'res_hut', x: 10, y: 10 });
-  assert.equal(overlapAttempt, occBefore, 'a refused (occupied-tile) placement must return the identical state reference (true no-op)');
+  assert.equal(overlapAttempt.buildings, occBefore.buildings, 'a refused (occupied-tile) placement must not touch the buildings array');
+  assert.equal(overlapAttempt.funds, occBefore.funds, 'a refused (occupied-tile) placement must not move money');
+  assert.match(String(overlapAttempt.placeNotice), /occupied/i, 'a refused (occupied-tile) placement must explain itself via placeNotice (BUG-490)');
   assertSetsSane(overlapAttempt, 'after refused overlap placement');
 
   // An out-of-funds abort must never mutate buildings/funds (BUG-396: it DOES
