@@ -2537,6 +2537,36 @@
       "message": "Demolition of order {orderID} (kind {buildingID}) was already deregistered from deathservices — treated as a no-op.",
       "remedy": "No action needed; a redelivered demolition cursor is expected to be idempotent."
     },
+    "MET-G817": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "citizen disk paging enabled with an invalid configuration: {reason}",
+      "remedy": "supply a non-empty PageDir and a MaxResidentShards >= 1 in compose.Deps.CitizenPaging"
+    },
+    "MET-G818": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "citizen disk paging directory {dir} is already stamped for a different city identity (recorded tenant={recordedTenant} city={recordedCity} seed={recordedSeed}; requested tenant={tenant} city={city} seed={seed}) -- refusing to reuse it",
+      "remedy": "point compose.Deps.CitizenPaging.PageDir at a directory unique to this city's lineage (e.g. compose.CitizenPageDir), or delete the stale directory if it truly belongs to no live city"
+    },
+    "MET-G819": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "citizen disk paging directory {dir} is exclusively claimed by another live composition (pid={recordedPid} tenant={recordedTenant} city={recordedCity} epoch={recordedEpoch}) -- refusing a second concurrent opener",
+      "remedy": "wait for the other composition to stop (releasing its claim), pass a directory unique to this composition, or -- only after confirming the recorded pid is truly gone (see the liveness-check limits documented on CitizenPagingOptions.Reclaim) -- set CitizenPagingOptions.Reclaim / metroserve's -citizen-paging-reclaim to force-take the claim"
+    },
+    "MET-G820": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "citizen disk paging directory {dir} holds {pageFileCount} .page file(s) but no identity stamp -- refusing to adopt an unidentifiable, possibly-foreign page set",
+      "remedy": "point CitizenPagingOptions.PageDir at a fresh or genuinely-owned directory, or delete the stale .page files if they are confirmed orphaned"
+    },
+    "MET-G821": {
+      "severity": "warn",
+      "module": "feat.compositionroot",
+      "message": "citizen disk paging directory {dir} claim.pid no longer matches the claim this composition took (recorded pid={recordedPid} epoch={recordedEpoch}; this composition's own pid={pid} epoch={epoch}) -- leaving the file in place rather than deleting another live holder's claim",
+      "remedy": "this is expected after a Reclaim took over from this composition's stale claim; no action needed unless it recurs for a composition that was never reclaimed, which would indicate the claim file was tampered with externally"
+    },
     "MET-G900": {
       "severity": "error",
       "module": "engine.unlocks",

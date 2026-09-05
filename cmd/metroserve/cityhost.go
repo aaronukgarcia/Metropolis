@@ -121,6 +121,12 @@ func (rc *runningCity) stop() {
 	<-rc.loopDone
 	<-rc.pumpDone
 	_ = rc.transport.Close()
+	// BUG-764 round finding F1: release this city's citizen-paging
+	// exclusive directory claim (a no-op if paging was never enabled)
+	// BEFORE this city's key can be considered free again -- see
+	// GetOrCreate's stopping-marker wait, which blocks a same-key rebuild
+	// until stop() (this whole function) has returned.
+	_ = rc.comp.Close()
 	if rc.unregisterHealth != nil {
 		rc.unregisterHealth()
 	}
@@ -209,6 +215,17 @@ type CityHost struct {
 	// evictor or the guarded methods.
 	onBuildStart func()
 
+	// onEvictStopping (BUG-764 round finding F1/(b), opus-round-bug764) is a
+	// TEST-ONLY seam (nil on every production path), mirroring onBuildStart's
+	// exact shape: when set, evictIdle calls it for each doomed key AFTER
+	// installing that key's `stopping` marker (so a concurrent GetOrCreate
+	// for the same key already finds it and waits) and BEFORE calling the
+	// slow, unlocked stop() -- letting a test deterministically land a
+	// concurrent GetOrCreate exactly inside the window the round's finding
+	// depends on, rather than relying on wall-clock timing to hit a window
+	// that may only be microseconds wide.
+	onEvictStopping func()
+
 	// rootCtx/rootCancel bound EVERY city's lifetime to the host, independent
 	// of any caller's request context: a city keeps running after the
 	// GetOrCreate call that built it returns, and stops only on Shutdown(key)
@@ -216,8 +233,24 @@ type CityHost struct {
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
 
-	mu     sync.Mutex // guards cities (incl. each entry's active/idleSince)
+	mu     sync.Mutex // guards cities (incl. each entry's active/idleSince) AND stopping
 	cities map[persist.CityKey]*cityEntry
+
+	// stopping (BUG-764 round finding F1/(b)) holds one channel per city key
+	// currently mid-teardown: evictIdle removes the key from `cities` and
+	// installs a channel here BEFORE calling the slow, unlocked stop() (which
+	// releases the city's citizen-paging directory claim among other
+	// things), and closes+deletes the channel only AFTER stop() returns.
+	// GetOrCreate's claimant path checks this FIRST — a key present here is
+	// still-tearing-down, not merely absent, so a concurrent same-key
+	// GetOrCreate WAITS for the channel to close (i.e. for the old city's
+	// claim to actually be released) before building a fresh city, rather
+	// than racing straight into compose.Wire against a directory the old
+	// composition might still hold. Without this, evictIdle's own
+	// map-delete-then-unlocked-stop ordering let a same-key GetOrCreate
+	// build (and Wire/page) a SECOND live composition while the first was
+	// still ticking — the round's own reachable production path for F1.
+	stopping map[persist.CityKey]chan struct{}
 
 	// idleTimeout / sweepInterval are the eviction tunables (FEAT-1972079942
 	// AC-3), seeded from IdleEvictTimeout / evictSweepInterval by NewCityHost.
@@ -249,6 +282,24 @@ type CityHost struct {
 	// SetGameModeIfAbsent/GameMode persistence (persist/store.go) this fix
 	// adds, which is already keyed per-CityKey and ready for it.
 	gameMode string
+
+	// persistDir is the raw -persist-dir this host was constructed with
+	// (empty in no-persist mode). Kept verbatim (not just derived into
+	// `store`) so buildCity can derive each city's citizen-paging directory
+	// via compose.CitizenPageDir(persistDir, key, seed) -- the paging root
+	// sits alongside, never inside, the DiskStore's own tenant/city hash
+	// tree (see compose.CitizenPageDir's doc comment). Fixed at
+	// construction, never reassigned -- no lock needed to read it.
+	persistDir string
+
+	// citizenPagingEnabled/citizenPageBudget (BUG-764, WithCitizenPaging)
+	// are the host-wide disk-paging knobs every city this host builds
+	// requests via compose.Deps.CitizenPaging. Fixed at construction, never
+	// reassigned -- mirrors gameMode's own "read-only after construction"
+	// discipline.
+	citizenPagingEnabled bool
+	citizenPageBudget    int
+	citizenPagingReclaim bool
 
 	// health is FEAT-2326609775 inc1's /health registry: one cityHealthState
 	// per currently-live city, registered by buildCity and unregistered by
@@ -312,6 +363,33 @@ func WithGameMode(mode string) CityHostOption {
 	}
 }
 
+// WithCitizenPaging (BUG-764) turns on citizens.CitizensAPI's disk-backed
+// shard paging (compose.CitizenPagingOptions) for every city this host
+// subsequently builds. enabled=false (the default, every pre-BUG-764
+// construction call) reproduces prior behaviour byte-for-byte: no paging,
+// every cold shard stays permanently resident. maxResidentShards is
+// forwarded verbatim to compose.CitizenPagingOptions.MaxResidentShards
+// (compose.Wire itself rejects < 1 when enabled — this option does not
+// duplicate that validation).
+//
+// Paging REQUIRES a durable persist root (newCityHost's own construction
+// check refuses enabled=true against an empty persistDir): a page directory
+// with no durable root to live under is not a directory this host can
+// derive a stable per-lineage identity for (see compose.CitizenPageDir's
+// own doc comment on the "ephemeral composition" narrower guarantee this
+// avoids relying on in production). Mirrors WithGameMode's SEC-020
+// discipline exactly.
+func WithCitizenPaging(enabled bool, maxResidentShards int, reclaim bool) CityHostOption {
+	return func(h *CityHost) {
+		if err := h.checkNotCopied(); err != nil {
+			return
+		}
+		h.citizenPagingEnabled = enabled
+		h.citizenPageBudget = maxResidentShards
+		h.citizenPagingReclaim = reclaim
+	}
+}
+
 // NewCityHost constructs a CityHost. persistDir "" runs every city in
 // no-persist mode (in-memory journaler only, allowed for tests, matching
 // inc4's default-off); a non-empty persistDir opens ONE shared DiskStore
@@ -347,10 +425,12 @@ func newCityHost(persistDir string, tickInterval, idleTimeout, sweepInterval tim
 		rootCtx:       ctx,
 		rootCancel:    cancel,
 		cities:        make(map[persist.CityKey]*cityEntry),
+		stopping:      make(map[persist.CityKey]chan struct{}),
 		idleTimeout:   idleTimeout,
 		sweepInterval: sweepInterval,
 		evictorDone:   make(chan struct{}),
 		health:        newHealthRegistry(),
+		persistDir:    persistDir,
 	}
 	// self is stamped BEFORE options run (not after, as a pre-inc3b draft of
 	// this function had it) so every CityHostOption closure can call the
@@ -362,6 +442,15 @@ func newCityHost(persistDir string, tickInterval, idleTimeout, sweepInterval tim
 	h.self.Store(h)
 	for _, opt := range opts {
 		opt(h)
+	}
+	// BUG-764: citizen paging needs a durable root to derive a stable
+	// per-lineage page directory under (compose.CitizenPageDir) -- refuse
+	// at construction rather than silently building every city with paging
+	// off, which would be exactly the "compose never wires it" defect this
+	// item exists to close, just moved one layer up.
+	if h.citizenPagingEnabled && h.persistDir == "" {
+		cancel()
+		return nil, fmt.Errorf("metroserve: CityHost: WithCitizenPaging(true, ...) requires a non-empty persistDir (paging needs a durable root to derive each city's page directory under)")
 	}
 	// Start the single idle evictor (FEAT-1972079942 AC-3). It runs under the
 	// host root context and is joined by Close via evictorDone (AC-5).
@@ -401,7 +490,20 @@ func (h *CityHost) GetOrCreate(ctx context.Context, cityKey persist.CityKey) (*r
 		return nil, err
 	}
 
+claim:
 	h.mu.Lock()
+	// BUG-764 round finding F1/(b): a key currently mid-teardown (evictIdle
+	// has removed it from `cities` but its stop() -- which releases the
+	// city's citizen-paging directory claim -- has not finished yet) must
+	// be treated as UNAVAILABLE, not absent. Waiting here (rather than
+	// falling through to claim-and-build immediately) is what closes the
+	// race: without it, a same-key GetOrCreate could Wire a second live
+	// composition against a page directory the old one still holds.
+	if stopCh, ok := h.stopping[cityKey]; ok {
+		h.mu.Unlock()
+		<-stopCh
+		goto claim // the key is now either free or already rebuilt by a concurrent waiter -- re-check both maps from scratch
+	}
 	if e, ok := h.cities[cityKey]; ok {
 		// Touch the idle clock (FEAT-1972079942 AC-4): handing this city to a
 		// (re)connecting client resets its idle-since to now, so the evictor
@@ -453,7 +555,7 @@ func (h *CityHost) GetOrCreate(ctx context.Context, cityKey persist.CityKey) (*r
 		h.onBuildStart()
 	}
 
-	city, err := buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.snapshotEvery, h.engineOpts, h.logw, h.health, h.gameMode)
+	city, err := buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.snapshotEvery, h.engineOpts, h.logw, h.health, h.gameMode, h.persistDir, h.citizenPagingEnabled, h.citizenPageBudget, h.citizenPagingReclaim)
 	if err != nil {
 		// Register NOTHING on failure: remove the claim before signalling, so
 		// no half-built city is ever observable in the map, and a later
@@ -495,6 +597,15 @@ func (h *CityHost) Shutdown(cityKey persist.CityKey) error {
 	entry, ok := h.cities[cityKey]
 	if ok {
 		delete(h.cities, cityKey)
+		// BUG-764 RE-ROUND (opus-reround-bug764, optional fix (2)): install
+		// the SAME stopping marker evictIdle uses, in the SAME critical
+		// section as the map delete -- a concurrent GetOrCreate for this key
+		// must wait for THIS Shutdown's stop() (which releases the city's
+		// citizen-paging claim) to finish, exactly like the evictIdle race
+		// this marker was built for. Without this, Shutdown raced against
+		// GetOrCreate could spuriously refuse the rebuild
+		// (ErrCitizenPagingDirectoryClaimed) just like evictIdle used to.
+		h.stopping[cityKey] = make(chan struct{})
 	}
 	h.mu.Unlock()
 	if !ok {
@@ -504,6 +615,12 @@ func (h *CityHost) Shutdown(cityKey persist.CityKey) error {
 	if entry.city != nil {
 		entry.city.stop()
 	}
+	h.mu.Lock()
+	if ch, ok := h.stopping[cityKey]; ok {
+		close(ch)
+		delete(h.stopping, cityKey)
+	}
+	h.mu.Unlock()
 	return nil
 }
 
@@ -649,11 +766,23 @@ func (h *CityHost) evictIdle() {
 	}
 	now := time.Now()
 	h.mu.Lock()
-	var doomed []*cityEntry
+	type doomedEntry struct {
+		key persist.CityKey
+		e   *cityEntry
+	}
+	var doomed []doomedEntry
 	for key, e := range h.cities {
 		if e.active == 0 && !e.idleSince.IsZero() && now.Sub(e.idleSince) > h.idleTimeout {
-			doomed = append(doomed, e)
+			doomed = append(doomed, doomedEntry{key: key, e: e})
 			delete(h.cities, key)
+			// BUG-764 round finding F1/(b): install the stopping marker for
+			// this key IN THE SAME CRITICAL SECTION that removes it from
+			// `cities` -- there is no window between "key no longer in
+			// cities" and "key not yet marked stopping" for a concurrent
+			// GetOrCreate to slip through and start building a second live
+			// composition (and re-Wire/claim the same page directory) before
+			// this city's stop() (below, unlocked) has actually released it.
+			h.stopping[key] = make(chan struct{})
 		}
 	}
 	h.mu.Unlock()
@@ -661,11 +790,22 @@ func (h *CityHost) evictIdle() {
 	// Teardown outside the lock. Each doomed entry is already removed from the
 	// map, so no other path (GetOrCreate/Shutdown/Close) can observe or stop it
 	// — this goroutine owns it exclusively now (AC-4/AC-5, no double stop).
-	for _, e := range doomed {
-		<-e.ready // let any in-flight construction settle before stopping
-		if e.city != nil {
-			e.city.stop()
+	for _, d := range doomed {
+		<-d.e.ready // let any in-flight construction settle before stopping
+		if h.onEvictStopping != nil {
+			h.onEvictStopping() // test-only: land a concurrent GetOrCreate exactly here
 		}
+		if d.e.city != nil {
+			d.e.city.stop() // releases the citizen-paging claim, among other teardown (runningCity.stop)
+		}
+		// Only NOW is the key truly free: close+remove the stopping marker so
+		// any GetOrCreate that was waiting on it (or a future one) can proceed.
+		h.mu.Lock()
+		if ch, ok := h.stopping[d.key]; ok {
+			close(ch)
+			delete(h.stopping, d.key)
+		}
+		h.mu.Unlock()
 	}
 }
 
@@ -677,7 +817,7 @@ func (h *CityHost) evictIdle() {
 // nothing. It is a free function (not a *CityHost method) deliberately: it
 // takes no candidate-typed value, so it carries no SEC-020 copy-guard
 // obligation.
-func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persist.CityKey, tickInterval time.Duration, snapshotEvery int64, engineOpts []core.Option, logw io.Writer, healthReg *healthRegistry, gameMode string) (*runningCity, error) {
+func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persist.CityKey, tickInterval time.Duration, snapshotEvery int64, engineOpts []core.Option, logw io.Writer, healthReg *healthRegistry, gameMode string, persistDir string, citizenPagingEnabled bool, citizenPageBudget int, citizenPagingReclaim bool) (*runningCity, error) {
 	opts := make([]core.Option, 0, 1+len(engineOpts))
 	opts = append(opts, core.WithWorldSeed(seedForCity(key)))
 	opts = append(opts, engineOpts...)
@@ -706,7 +846,22 @@ func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persi
 		// the double-append guard is never re-implemented (GR#3). gameMode
 		// is forwarded so wireAndRehydrate can durably record it (AC-3: a
 		// restart must not be able to re-mode a persisted city).
-		comp, err = wireAndRehydrate(buildCtx, e, store, key, logw, gameMode)
+		//
+		// BUG-764: citizenPagingEnabled is only ever true here when
+		// newCityHost's own construction check has already proven
+		// persistDir != "" (WithCitizenPaging(true, ...) against an empty
+		// persistDir is refused at CityHost construction, before any city
+		// is ever built) -- so PageDir is always derivable.
+		paging := compose.CitizenPagingOptions{}
+		if citizenPagingEnabled {
+			paging = compose.CitizenPagingOptions{
+				Enabled:           true,
+				MaxResidentShards: citizenPageBudget,
+				PageDir:           compose.CitizenPageDir(persistDir, key, e.WorldSeed()),
+				Reclaim:           citizenPagingReclaim,
+			}
+		}
+		comp, err = wireAndRehydratePaging(buildCtx, e, store, key, logw, paging, gameMode)
 		if err != nil {
 			return nil, err
 		}

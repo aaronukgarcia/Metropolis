@@ -85,6 +85,32 @@ func run(args []string, stdout, stderr *os.File) int {
 	// internal/engine/gameinit.Mode -- an unrecognised value fails
 	// loudly inside compose.Wire (AC-1), not here.
 	gameMode := fs.String("game-mode", "real", "new-game initialization mode for a city persisted for the FIRST time under -persist-dir/-city: \"real\" (finite starting capital, full financial-failure loop) or \"unlimited\" (sandbox: finance failure loop bypassed) -- FEAT-143. A city that already has a durably recorded mode ignores this flag (AC-3: a restart must not be able to re-mode)")
+	// BUG-764: citizens.CitizensAPI.EnableDiskPaging (the BUG-664 disk-
+	// paging seam) had zero production callers before this flag -- this is
+	// the wiring the 100M-citizens goal needs to bound resident memory on a
+	// real, running engine (docs/planning/go-engine-100m-proving-plan.md).
+	// Default OFF (Aaron decides default-on): every pre-BUG-764 invocation
+	// keeps behaving byte-for-byte identically. REQUIRES -persist-dir (the
+	// page directory is derived from the persisted city's own identity,
+	// compose.CitizenPageDir) -- set with an empty -persist-dir is refused
+	// at boot, not silently ignored. The Azure deploy docs note the /data
+	// mount as the persisted /data root this flag's page directory (a
+	// pages/ subtree alongside the persist store's own tenant/city hash
+	// tree) lives under in production.
+	citizenPaging := fs.Bool("citizen-paging", false, "enable citizens.CitizensAPI disk-backed shard paging (BUG-664/BUG-764) to bound resident citizen memory at large population; requires -persist-dir (default OFF)")
+	citizenPageBudget := fs.Int("citizen-page-budget", compose.DefaultCitizenPagingMaxResidentShards, "maximum resident citizen cold-shards when -citizen-paging is set (ignored otherwise); beyond this many of the 256 shards, least-recently-used shards page out to disk")
+	// BUG-764 round finding F1 (opus-round-bug764): the exclusive
+	// page-directory claim (compose.CitizenPagingOptions.Reclaim) means a
+	// claim left behind by a process that crashed without a clean shutdown
+	// permanently refuses every later -citizen-paging boot at that
+	// identity/PageDir until explicitly cleared. This flag is that clear:
+	// the OPERATOR asserts (out-of-band -- there is no reliable automated
+	// way to prove this across a Container Apps revision boundary, see
+	// compose.CitizenPagingOptions.Reclaim's own doc comment) that no other
+	// live composition still holds the claim, and this boot may take it
+	// over. Default false: a stale claim is refused loudly, never silently
+	// stolen.
+	citizenPagingReclaim := fs.Bool("citizen-paging-reclaim", false, "force-take an existing citizen-paging directory claim rather than refuse (operator override for a claim left behind by a crashed process; verify no other live composition holds it first -- see CitizenPagingOptions.Reclaim)")
 	printVersion := fs.Bool("version", false, "print build identity and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -100,17 +126,24 @@ func run(args []string, stdout, stderr *os.File) int {
 	// the legacy single-city host, byte-for-byte unchanged (AC-6). Gating on
 	// persist-dir keeps a default `metroserve` invocation identical to today.
 	if *persistDir != "" {
-		return runHosted(*addr, *persistDir, *city, *tickInterval, *snapshotEvery, *gameMode, stdout, stderr)
+		return runHosted(*addr, *persistDir, *city, *tickInterval, *snapshotEvery, *gameMode, *citizenPaging, *citizenPageBudget, *citizenPagingReclaim, stdout, stderr)
 	}
 
 	correlationID := string(protocol.NewCorrelationID())
 
 	e := core.NewEngine(core.WithWorldSeed(*seed))
-	comp, store, err := setUpPersistence(e, *persistDir, *city, stdout, *gameMode)
+	comp, store, err := setUpPersistencePaging(e, *persistDir, *city, stdout, *citizenPaging, *citizenPageBudget, *citizenPagingReclaim, *gameMode)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "metroserve: %v\n", err)
 		return 1
 	}
+	// BUG-764 round finding F1: release this composition's citizen-paging
+	// exclusive directory claim (a no-op if paging was never enabled) on
+	// every exit path of this legacy single-city run() -- otherwise a
+	// restart of this SAME process against the SAME -persist-dir/-city
+	// would find its own prior claim still on disk and refuse
+	// (ErrCitizenPagingDirectoryClaimed) until -citizen-paging-reclaim.
+	defer func() { _ = comp.Close() }()
 
 	// FEAT-2326609775 inc1: /health wiring for the legacy single-city path.
 	healthReg := newHealthRegistry()
@@ -196,8 +229,8 @@ func run(args []string, stdout, stderr *os.File) int {
 // resolver two plain strings; metroserve builds the persist.CityKey here,
 // inside its own package, and calls its own host — no new dependency edge is
 // forced on internal/protocol.
-func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snapshotEvery int64, gameMode string, stdout, stderr *os.File) int {
-	host, err := NewCityHost(persistDir, tickInterval, WithSnapshotEvery(snapshotEvery), WithGameMode(gameMode))
+func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snapshotEvery int64, gameMode string, citizenPaging bool, citizenPageBudget int, citizenPagingReclaim bool, stdout, stderr *os.File) int {
+	host, err := NewCityHost(persistDir, tickInterval, WithSnapshotEvery(snapshotEvery), WithGameMode(gameMode), WithCitizenPaging(citizenPaging, citizenPageBudget, citizenPagingReclaim))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "metroserve: %v\n", err)
 		return 1

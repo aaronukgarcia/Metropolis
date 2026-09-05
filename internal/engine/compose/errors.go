@@ -188,4 +188,65 @@ const (
 	// ErrUnknownDeathServiceBuildingKind's own discarded-but-observable
 	// treatment.
 	ErrDemolitionAlreadyDeregistered = "MET-G816"
+
+	// ErrCitizenPagingConfigInvalid (BUG-764): Deps.CitizenPaging.Enabled
+	// was true but the configuration Wire needs to actually turn paging on
+	// is incomplete -- an empty PageDir (nowhere to write page files) or a
+	// MaxResidentShards < 1 (citizens.CitizensAPI.EnableDiskPaging's own
+	// ErrInvalidPagingBudget guard, mirrored here so an invalid budget is
+	// caught before a doomed EnableDiskPaging call rather than surfacing
+	// as a wrapped citizens-package error a compose caller does not expect
+	// to see). ctx["reason"] names which field was invalid.
+	ErrCitizenPagingConfigInvalid = "MET-G817"
+
+	// ErrCitizenPagingIdentityMismatch (BUG-764): Deps.CitizenPaging.PageDir
+	// already carries an identity stamp (pageIdentityFileName, written the
+	// first time ANY city's Wire call enabled paging under that directory)
+	// that does not match the CURRENT Wire call's city identity (tenant +
+	// city id from Deps.PersistCity, plus the engine's own WorldSeed) --
+	// the BUG-713-round-proved aliasing risk one level up: a directory
+	// accidentally reused across two different lineages (a same-seed city
+	// under a different CityKey, or vice versa) must never let one city's
+	// paged shards resurrect under another city's disk-paging store. Wire
+	// refuses rather than silently reusing (or silently overwriting) the
+	// stamp.
+	ErrCitizenPagingIdentityMismatch = "MET-G818"
+
+	// ErrCitizenPagingDirectoryClaimed (BUG-764 round finding F1, opus-
+	// round-bug764): a SECOND live composition attempted to enable disk
+	// paging against a directory another, still-running composition
+	// already holds an EXCLUSIVE claim on. Reachable in production two
+	// ways: cmd/metroserve's CityHost.evictIdle rebuilding a same-key city
+	// before the evicted one's teardown has released its claim, and two
+	// separate metroserve processes (e.g. two overlapping Container Apps
+	// revisions) pointed at the same /data mount. Before this fix,
+	// EnableDiskPaging's own PageStore had no cross-composition exclusion
+	// at all: two live compositions of the identical persist.CityKey
+	// silently interleaved writes to the SAME .page files with no error,
+	// no latch, and a PopulationHash that diverged from a solo control on
+	// every run.
+	ErrCitizenPagingDirectoryClaimed = "MET-G819"
+
+	// ErrCitizenPagingUnstampedForeignPages (BUG-764 round finding F2):
+	// a page directory holds real .page files but no identity.json stamp.
+	// Before this fix this was SILENTLY ADOPTED by whichever identity
+	// wired next (the stamp being absent looked identical to "a fresh,
+	// never-used directory") -- a stamp that is merely absent (hand-
+	// deleted, or never written by a pre-BUG-764 tool) is not
+	// tamper-evident on its own. Refusing whenever page files exist
+	// without a matching stamp closes that hole; a genuinely fresh
+	// directory (no .page files) still adopts and stamps normally.
+	ErrCitizenPagingUnstampedForeignPages = "MET-G820"
+
+	// ErrCitizenPagingClaimOwnershipMismatch (BUG-764 RE-ROUND finding P2,
+	// opus-reround-bug764): pageDirClaim.Release() found claim.pid's
+	// CURRENT content does not match the pid+epoch this handle itself
+	// stamped when it took the claim -- i.e. someone else (a Reclaim, most
+	// likely) has since taken over this directory. Logged, never removed:
+	// deleting it would strip protection from whoever holds the CURRENT
+	// claim, reopening exactly the F1 corruption shape one level up (a
+	// stale Close() disarming a live holder's exclusion guard). Severity
+	// warn, not error -- this is the EXPECTED shape after a legitimate
+	// Reclaim, not necessarily a defect.
+	ErrCitizenPagingClaimOwnershipMismatch = "MET-G821"
 )

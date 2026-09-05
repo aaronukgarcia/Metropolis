@@ -105,11 +105,29 @@ func (g *rehydrateGuardStore) AppendJournal(ctx context.Context, city persist.Ci
 // wireAndRehydrate's doc comment below for what happens to it on the
 // persist-on path.
 func setUpPersistence(e *core.Engine, persistDir, cityID string, stdout io.Writer, gameMode ...string) (*compose.Composition, persist.Store, error) {
+	return setUpPersistencePaging(e, persistDir, cityID, stdout, false, 0, false, gameMode...)
+}
+
+// setUpPersistencePaging is setUpPersistence with BUG-764's citizen-paging
+// knob made explicit (mirrors wireAndRehydrate/wireAndRehydratePaging's own
+// split above, for the identical "keep every pre-BUG-764 call site
+// compiling unchanged" reason). citizenPaging=false reproduces
+// setUpPersistence's prior behaviour byte-for-byte. Paging REQUIRES
+// persistDir != "" (a durable root to derive the per-lineage page directory
+// under, compose.CitizenPageDir) -- requesting it against the no-persist
+// legacy path is a caller error, refused loudly rather than silently
+// ignored (this is exactly the "compose never wires it" defect class this
+// item exists to close, so a caller's OWN request to enable it must never
+// be silently dropped either).
+func setUpPersistencePaging(e *core.Engine, persistDir, cityID string, stdout io.Writer, citizenPaging bool, citizenPageBudget int, citizenPagingReclaim bool, gameMode ...string) (*compose.Composition, persist.Store, error) {
 	mode := ""
 	if len(gameMode) > 0 {
 		mode = gameMode[0]
 	}
 	if persistDir == "" {
+		if citizenPaging {
+			return nil, nil, fmt.Errorf("metroserve: -citizen-paging requires a non-empty -persist-dir (paging needs a durable root to derive the city's page directory under)")
+		}
 		comp, err := compose.Wire(e, &compose.Deps{GameMode: mode})
 		if err != nil {
 			return nil, nil, fmt.Errorf("compose.Wire failed: %w", err)
@@ -123,7 +141,17 @@ func setUpPersistence(e *core.Engine, persistDir, cityID string, stdout io.Write
 	}
 	city := persist.CityKey{TenantID: persistTenantID, CityID: cityID}
 
-	comp, err := wireAndRehydrate(context.Background(), e, disk, city, stdout, mode)
+	paging := compose.CitizenPagingOptions{}
+	if citizenPaging {
+		paging = compose.CitizenPagingOptions{
+			Enabled:           true,
+			MaxResidentShards: citizenPageBudget,
+			PageDir:           compose.CitizenPageDir(persistDir, city, e.WorldSeed()),
+			Reclaim:           citizenPagingReclaim,
+		}
+	}
+
+	comp, err := wireAndRehydratePaging(context.Background(), e, disk, city, stdout, paging, mode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -178,6 +206,27 @@ func setUpPersistence(e *core.Engine, persistDir, cityID string, stdout io.Write
 // shape, never a silent overrule. This function's own call to
 // compose.Wire below is therefore where that refusal actually surfaces.
 func wireAndRehydrate(ctx context.Context, e *core.Engine, store persist.Store, city persist.CityKey, stdout io.Writer, gameMode ...string) (*compose.Composition, error) {
+	return wireAndRehydratePaging(ctx, e, store, city, stdout, compose.CitizenPagingOptions{}, gameMode...)
+}
+
+// wireAndRehydratePaging is wireAndRehydrate with BUG-764's citizen-paging
+// knob made explicit -- kept as a SEPARATE function (rather than widening
+// wireAndRehydrate's own signature) so wireAndRehydrate keeps its exact
+// pre-BUG-764 signature for any caller that never needs paging (this
+// package's own tests included), mirroring gameMode's own trailing-variadic
+// precedent for "every existing call site keeps compiling unchanged".
+//
+// F3 correction (round finding, opus-round-bug764): this function does NOT
+// compute paging.PageDir itself -- it forwards `paging` to compose.Wire
+// VERBATIM. The per-lineage directory (compose.CitizenPageDir(persistDir,
+// city, e.WorldSeed())) is computed by THIS FILE'S OWN CALLERS
+// (setUpPersistencePaging above, and cmd/metroserve's cityhost.go buildCity)
+// before they call this function -- both already hold the persist root and
+// city key this function does not otherwise need. A caller wanting a
+// specific literal directory (this package's own tests) simply passes
+// `paging` pre-populated; there is no "empty PageDir gets computed here"
+// fallback.
+func wireAndRehydratePaging(ctx context.Context, e *core.Engine, store persist.Store, city persist.CityKey, stdout io.Writer, paging compose.CitizenPagingOptions, gameMode ...string) (*compose.Composition, error) {
 	mode := ""
 	if len(gameMode) > 0 {
 		mode = gameMode[0]
@@ -190,7 +239,7 @@ func wireAndRehydrate(ctx context.Context, e *core.Engine, store persist.Store, 
 	// code observed, unchanged by this increment.
 	guard := &rehydrateGuardStore{Store: store}
 	guard.replaying.Store(true)
-	comp, err := compose.Wire(e, &compose.Deps{PersistStore: guard, PersistCity: city, GameMode: mode})
+	comp, err := compose.Wire(e, &compose.Deps{PersistStore: guard, PersistCity: city, GameMode: mode, CitizenPaging: paging})
 	if err != nil {
 		return nil, fmt.Errorf("compose.Wire failed: %w", err)
 	}

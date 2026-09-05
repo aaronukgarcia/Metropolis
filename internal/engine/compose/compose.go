@@ -379,6 +379,17 @@ type Deps struct {
 	// (docs/planning/icd/engine.firms-labourmarket.md §11).
 	Firms *firms.FirmsAPI
 
+	// CitizenPaging (BUG-764) enables citizens.CitizensAPI's disk-backed
+	// shard paging (BUG-664) for this composition — the wiring the
+	// 100M-citizens goal needs to bound resident memory on a real,
+	// running engine. The zero value (Enabled: false, the default) is a
+	// pure no-op reproducing every pre-BUG-764 Wire call byte-for-byte:
+	// paging stays off, every cold shard stays permanently resident. See
+	// CitizenPagingOptions' own doc comment (citizen_paging.go) for the
+	// field-by-field contract and CitizenPageDir for the recommended
+	// per-lineage directory derivation.
+	CitizenPaging CitizenPagingOptions
+
 	// DeathServices overrides construction of BUG-689's engine.deathservices
 	// dependency (default: LoadDeathServices, itself defaulting to
 	// deathservices.LoadDefault). nil is the common boot case — a caller
@@ -683,6 +694,31 @@ func RegisteredViewNames() []string {
 // directional liveness ACs without reaching into unexported state.
 type Composition struct {
 	state *simState
+}
+
+// Close releases resources this Composition holds OUTSIDE the engine
+// itself — today, only BUG-764's citizen-paging exclusive directory claim
+// (round finding F1), a pure no-op when citizen paging was never enabled.
+// Idempotent (safe to call more than once, or on every teardown path
+// unconditionally) — pageDirClaim.Release() tolerates a missing/already-
+// removed marker file.
+//
+// EVERY caller that Wires a composition with CitizenPaging.Enabled=true
+// MUST call Close() when done with it (a graceful shutdown, an eviction, a
+// test's own teardown) — otherwise a LATER Wire attempt at the identical
+// identity/PageDir is permanently refused (ErrCitizenPagingDirectoryClaimed)
+// until an operator explicitly sets CitizenPagingOptions.Reclaim. Close
+// does NOT stop the engine's tick driver, close any transport, or touch
+// anything else this composition is wired into — callers with their own
+// broader shutdown sequence (cmd/metroserve's runningCity.stop(),
+// internal/harness/headless's shutdown closure) call this as one step
+// among others, not as a replacement for them.
+func (c *Composition) Close() error {
+	if c == nil || c.state == nil {
+		return nil
+	}
+	c.state.citizenPagingClaim.Release()
+	return nil
 }
 
 // Population returns the current total citizen population (all fidelity
@@ -1026,6 +1062,37 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	if err := c.SetSeason(seasonAPI, cid); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "citizens"})
 	}
+	// BUG-764: wire the disk-paging seam (citizen_paging.go), if the caller
+	// asked for it, immediately after c's other post-construction wiring
+	// calls and before any hook registers (AC-4: no partially-wired engine
+	// on error). deps.PersistCity is the persist-layer's own city identity
+	// (zero value when PersistStore is nil / not set) -- see
+	// wireCitizenPaging's own doc comment for why worldSeed alone is not
+	// enough to key the page directory.
+	citizenPagingClaim, err := wireCitizenPaging(c, deps.CitizenPaging, deps.PersistCity, e.WorldSeed(), cid)
+	if err != nil {
+		// wireCitizenPaging's own errors are already fully-formed registry
+		// errors (ErrCitizenPagingConfigInvalid/ErrCitizenPagingIdentityMismatch/
+		// ErrCitizenPagingDirectoryClaimed/ErrCitizenPagingUnstampedForeignPages,
+		// or citizens' own ErrInvalidPagingBudget) -- returned verbatim rather
+		// than re-wrapped under ErrModuleFailed so a caller inspecting the
+		// error code sees the SPECIFIC cause, not a generic "citizens module
+		// failed" that would erase which of several distinct BUG-764 checks
+		// actually tripped.
+		return nil, err
+	}
+	// The claim must not outlive a Wire call that fails LATER (any of the
+	// many module-construction steps still below) -- an unreleased claim
+	// would permanently strand the directory for every future Wire attempt
+	// at the same identity, since only Composition.Close() (never process
+	// exit) removes the O_EXCL marker file. wireSucceeded flips true only
+	// at Wire's single success return, below.
+	wireSucceeded := false
+	defer func() {
+		if !wireSucceeded {
+			citizenPagingClaim.Release()
+		}
+	}()
 	logisticsAPI := deps.Logistics
 	if logisticsAPI == nil {
 		var err error
@@ -1432,6 +1499,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		cid:                        cid,
 		seed:                       e.WorldSeed(),
 		citizens:                   c,
+		citizenPagingClaim:         citizenPagingClaim,
 		world:                      w,
 		market:                     m,
 		consumption:                consumptionAPI,
@@ -1655,6 +1723,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		}
 	}
 
+	wireSucceeded = true // release-on-failure defer above stands down
 	return &Composition{state: st}, nil
 }
 
@@ -1757,8 +1826,17 @@ type simState struct {
 	journaler core.CommandJournaler
 
 	citizens *citizens.CitizensAPI
-	world    *world.WorldAPI
-	market   *market.MarketAPI
+
+	// citizenPagingClaim (BUG-764 round finding F1) is the exclusive
+	// page-directory claim this composition holds when citizen disk paging
+	// is enabled, nil otherwise. Released by Composition.Close() — callers
+	// MUST call Close() when tearing this composition down, or a later
+	// Wire attempt at the same identity/PageDir is permanently refused
+	// (ErrCitizenPagingDirectoryClaimed) until an operator sets
+	// CitizenPagingOptions.Reclaim.
+	citizenPagingClaim *pageDirClaim
+	world              *world.WorldAPI
+	market             *market.MarketAPI
 
 	// real baseline-one modules (FEAT-083): consumption/build/attract
 	// replace the three original stub slots. (finance/households are also

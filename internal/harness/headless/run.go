@@ -143,6 +143,15 @@ type Config struct {
 	// starts from a fresh, untouched header exactly as before this
 	// field existed.
 	InDir string
+
+	// CitizenPaging (BUG-764) forwards straight into
+	// compose.Deps.CitizenPaging for this run, so a headless caller (the
+	// population perf gate's own paging smoke, or a future
+	// cmd/metropolis-headless flag) can prove citizens.CitizensAPI disk
+	// paging is compatible with a real, ticked run at scale. The zero value
+	// (Enabled: false, the default) is a pure no-op — Run behaves
+	// byte-for-byte as before this field existed.
+	CitizenPaging compose.CitizenPagingOptions
 }
 
 // Result summarises a completed headless run.
@@ -210,6 +219,15 @@ type Result struct {
 	// pinned liveness invariant, never merely hoped for.
 	Births int64
 	Deaths int64
+
+	// PopulationHash (BUG-764) is compose.Composition.PopulationHash() read
+	// after every tick has advanced — the deterministic citizen-store
+	// fingerprint (AC-11's determinism probe, state_digest.go) a caller
+	// compares across two otherwise-identical runs to prove a knob (citizen
+	// disk paging, in this item's case) never changes simulated outcomes
+	// (GR#21): two Run calls with identical Config except CitizenPaging.Enabled
+	// must produce byte-identical PopulationHash values.
+	PopulationHash [32]byte
 }
 
 // Run drives one headless simulation run to completion: constructs a
@@ -326,6 +344,15 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			SeedResidentIDCount: cfg.SeedCitizenCount,
 		}
 	}
+	// BUG-764: forward the paging knob regardless of whether SeedCitizenCount
+	// built a deps above (a paging-only, non-seeded caller still needs
+	// deps constructed so Wire sees CitizenPaging).
+	if cfg.CitizenPaging.Enabled {
+		if deps == nil {
+			deps = &compose.Deps{}
+		}
+		deps.CitizenPaging = cfg.CitizenPaging
+	}
 
 	// FEAT-082 (ASM-001/ASM-421): every headless/perfci/synth run now
 	// drives a REAL simulation through the composition root, not a
@@ -337,6 +364,23 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// BUG-764 RE-ROUND finding P3 (opus-reround-bug764): the shutdown
+	// closure below (which calls comp.Close(), releasing any citizen-paging
+	// exclusive claim) is not installed until AFTER the dbgState.Enable and
+	// StartSubscriptionPump failure checks -- an early return on either of
+	// THOSE would leak the claim exactly like a crashed process, blocking a
+	// later retry at the same identity/PageDir until an operator sets
+	// CitizenPaging.Reclaim. This defer covers exactly that gap;
+	// shutdownInstalled flips true the moment `shutdown` exists below,
+	// standing this defer down for every later exit path (all of which
+	// already call shutdown(), which already calls comp.Close()) so the
+	// claim is never released twice.
+	shutdownInstalled := false
+	defer func() {
+		if !shutdownInstalled {
+			_ = comp.Close()
+		}
+	}()
 
 	if cfg.Debug {
 		if err := dbgState.Enable(debug.SourceFlag, correlationID); err != nil {
@@ -400,8 +444,15 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		err := <-loopDone
 		joinPumpDone(pumpDone, correlationID)
 		_ = transport.Close()
+		// BUG-764 round finding F1: release this run's citizen-paging
+		// exclusive directory claim (a no-op if paging was never enabled)
+		// on every exit path -- otherwise a second Run() at the same
+		// identity/PageDir (e.g. this package's own paging smoke test) would
+		// find the prior claim still on disk and refuse.
+		_ = comp.Close()
 		return err
 	}
+	shutdownInstalled = true // every exit path from here on already calls shutdown() (above), which already calls comp.Close() -- the early-return defer must stand down
 
 	scenarioCommands := 0
 	if cfg.ScenarioPath != "" {
@@ -456,6 +507,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		TickWallTime:     tickWallTime,
 		Births:           comp.VitalBirths(),
 		Deaths:           comp.VitalDeaths(),
+		PopulationHash:   comp.PopulationHash(),
 		ReportWriteErr:   rw.err,
 	}, nil
 }
