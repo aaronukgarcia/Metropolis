@@ -113,6 +113,7 @@ import {
   findReconnectionOpportunities,
   findOpportunities,
   capacityOf,
+  buildingCapacityOf,
   familyKeyOf,
   sectionOriginOf,
   sectionKeyOf,
@@ -2074,6 +2075,49 @@ function applyConsolidatorPass(
       continue;
     }
 
+    // BUG-736 (2026-09-05, independent round finding): AC-8 rule 4 ("never
+    // lose density/capacity") was proven live by the round on a 40-nursery
+    // (tier-9, auto-scaled) fixture — findOpportunities/consolidator.ts
+    // already computes the REAL tiered capacityGain (and its own doc
+    // comment says a negative value is reported HONESTLY, never clamped, so
+    // "Aaron can see it"), but this apply site never actually READ that
+    // number before committing. Recomputed here (not read from `opp.
+    // capacityGain` directly) against the group AS OF APPLY TIME — a tier
+    // could in principle have changed between discovery and apply within the
+    // same pass — using buildingCapacityOf, the SAME tiered-capacity helper
+    // findOpportunities uses (GR#3: one formula, exported from
+    // consolidator.ts, not re-derived here). `groupCapacityReal` is reused
+    // below by CEIL-3's family-share check too, replacing that check's own
+    // former flat-tier-0 approximation (see the comment at its use site) —
+    // one real number computed once per candidate, not two divergent ones.
+    //
+    // DESIGN QUESTION (Aaron to rule on; documented per the brief): when a
+    // group's true tiered capacity EXCEEDS the successor's flat tier-0
+    // capacity (the tier-9 nursery case: 40 x 2,000 = 80,000 vs edu_
+    // nursery_city's 1,000), is the right behaviour (a) skip the
+    // consolidation entirely (implemented here — safe, conservative, never
+    // loses capacity, but leaves the group unconsolidated forever since nothing
+    // about the group changes next pass), or (b) consolidate into MULTIPLE
+    // successors (ceil(groupCapacityReal / capacityOf(toSpec)) copies,
+    // sited across the freed footprint) or into a HIGHER-TIER successor
+    // (auto-scale the successor itself up to whatever tier makes
+    // capacityAtTier(toSpec, tier) >= groupCapacityReal, if the catalogue
+    // has headroom)? Option (b) would actually shrink the building count
+    // (Aaron's "fewer, bigger, deliberate" objective) instead of leaving a
+    // permanently-skipped opportunity, but needs new siting/multi-place
+    // logic and a ruling on whether an auto-scaled successor tier is
+    // considered "consolidation" or "auto-scale" for AC-21 provenance
+    // purposes — out of scope for this fix, which only needs to STOP the
+    // active capacity-loss bug. Skip is implemented now as the safe default;
+    // (b) is a follow-up BOW item if Aaron wants the ladder to actually
+    // clear tier-9-and-above groups instead of leaving them skipped forever.
+    const groupCapacityReal = group.reduce((sum, b) => sum + buildingCapacityOf(fromSpec, b.capacityTier ?? 0), 0);
+    const capacityGain = capacityOf(toSpec) - groupCapacityReal;
+    if (capacityGain < 0) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'capacity loss' });
+      continue;
+    }
+
     // AC-20 protected classes: under construction, or an auto-scale cooldown
     // in effect (do not fight the auto-scaler).
     let protectedHit: string | null = null;
@@ -2102,10 +2146,20 @@ function applyConsolidatorPass(
     // single-point-of-failure CEIL-3 exists to prevent) — the fix versus the
     // naive before-total comparison only removes the double count, it does
     // not exempt the sole-provider case, which is a genuine, intended block.
+    // BUG-736 (2026-09-05): this used to be `capacityOf(fromSpec) *
+    // opp.groupCount` — flat TIER-0 capacity for every group member,
+    // regardless of real auto-scale tier. That is a SECOND, DIVERGENT
+    // formula from findOpportunities' own real tiered sum (GR#3 violation)
+    // and is exactly why the tier-9 nursery case (real group capacity
+    // 66,000-80,000) passed the 0.5 family-share ceiling meant to catch it
+    // — the flat approximation read as only ~990 x groupCount. Now reuses
+    // `groupCapacityReal` (computed once above, shared with the
+    // capacity-loss gate) — the same real tiered sum findOpportunities/
+    // capacityGain already established, never re-derived here.
     const familyKey = familyKeyOf(toSpec);
     const familyTotalBefore = cityFamilyCapacity(index, familyKey) + (familyCapacityDelta.get(familyKey) ?? 0);
     const successorCapacity = capacityOf(toSpec);
-    const groupCapacityApprox = capacityOf(fromSpec) * opp.groupCount;
+    const groupCapacityApprox = groupCapacityReal;
     const familyTotalAfter = Math.max(0, familyTotalBefore - groupCapacityApprox) + successorCapacity;
     if (successorCapacity > CONSOLIDATOR_MAX_FAMILY_SHARE * familyTotalAfter) {
       skipped.push({ sectionKey: opp.sectionKey, reason: 'family share ceiling' });

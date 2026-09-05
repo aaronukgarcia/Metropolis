@@ -335,8 +335,17 @@ export function capacityOf(sp: Spec): number {
  * capacityFieldOf/direct-field lookup provides for the untiered case. Tiered
  * specs (capacityTiers present) are unaffected — capacityAtTier already
  * handles those correctly and this defers to it unchanged.
+ *
+ * EXPORTED (BUG-736, 2026-09-05): the engine.ts apply lane's CEIL-3
+ * family-share check used to approximate a demolished group's capacity as
+ * `capacityOf(fromSpec) * groupCount` — flat TIER-0 capacity for every
+ * member, regardless of any member's real auto-scaled tier. That is exactly
+ * the SSOT split findOpportunities (this file) already avoided by calling
+ * this very function per-building — exporting it (rather than re-deriving a
+ * second formula in engine.ts, GR#3) lets CEIL-3 read the SAME real tiered
+ * capacity findOpportunities/capacityGain already computed.
  */
-function buildingCapacityOf(sp: Spec, tier: number): number {
+export function buildingCapacityOf(sp: Spec, tier: number): number {
   if (sp.capacityTiers && sp.capacityTiers.length > 0) return capacityAtTier(sp, tier);
   const field = capacityFieldOf(sp);
   if (field == null) return 0;
