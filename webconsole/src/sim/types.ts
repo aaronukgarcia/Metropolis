@@ -397,6 +397,25 @@ export interface SimState {
    */
   consolidatorMode?: ConsolidatorMode;
   /**
+   * BUG-397 F1 (round REJECT fix, 2026-09-05) — whether the Transit Subsidy
+   * outflow was CLAMPED by POLICY_COST_CAP_FRACTION on the LAST tick
+   * computeFlows() ran (engine.ts). Existed purely to detect the bind/release
+   * TRANSITION so a cap-notice ledger row is written once, not every tick the
+   * cap continues to bind — an unconditional per-tick notice is the BUG-400
+   * class: an amount:0 row every tick evicts every real player event out of
+   * the ledger's 200-row ring within a few hundred ticks on any city where
+   * the cap binds continuously. Plain journalled sim-state boolean (mirrors
+   * gridImportEnabled/consolidatorEnabled's idiom immediately above/below) so
+   * it serialises/journals/replays exactly like every other field — the
+   * transition detection must survive save/load and replay, not just live in
+   * a single running session. Optional for backward tolerance: an old save
+   * predating this field is treated as `false` (not currently bound) by
+   * computeFlows()'s `s.transitSubsidyCapBound ?? false` read — worst case a
+   * legacy save that resumes mid-cap re-emits one bind notice it may have
+   * already shown once before saving, never a flood.
+   */
+  transitSubsidyCapBound?: boolean;
+  /**
    * FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03: "player can... set the
    * size of the consolidator"): the player-adjustable section/window size in
    * METRES (mirrors CONSOLIDATOR_SECTION_METRES's unit). Defaults to 800m

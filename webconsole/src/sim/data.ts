@@ -3835,6 +3835,28 @@ export const totalServedCapacity: (s: SimState) => number = memoOnState((s) => {
 });
 
 /**
+ * BUG-397 (Aaron's ruling, 2026-08-31, shape 1): total population 'served' by
+ * every online transit-family building (kind 'transport' — bus_station/
+ * metro_station/grand_terminus/etc — AND kind 'station' — station_ashford —
+ * both bucket into the SAME 'Transport' UPKEEP_BUCKET label, fiscal.ts). Mirrors
+ * totalServedCapacity's exact shape (isOnline gate, servedAtTier tier-aware
+ * read) one section above, just over the transit kinds instead of
+ * health/police. Feeds engine.ts's computeFlows() Transit Fare Revenue line:
+ * riders = min(population, transitServedCapacity(s)) — a building with no
+ * `served` field (e.g. bus_stop) contributes 0 capacity, same fail-soft
+ * posture as the rest of this file's served-based aggregates.
+ */
+export const transitServedCapacity: (s: SimState) => number = memoOnState((s) => {
+  let cap = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'transport' || sp?.kind === 'station') cap += servedAtTier(sp, b.capacityTier ?? 0);
+  }
+  return cap;
+});
+
+/**
  * FEAT-wage-stage1 (Q100067/Q100086, 2026-09-03) — the SAME building-jobs
  * basis as totalJobs() immediately above (identical loop shape, identical
  * BUG-525 isOnline gate, identical sp.jobs/commercial/industrial-fallback
@@ -6027,7 +6049,15 @@ export interface PolicyDef {
 
 export const POLICIES: PolicyDef[] = [
   { id: 'recycling', label: 'Recycling Mandate', description: '-7% utility & service upkeep, -2 approval' },
-  { id: 'transitSubsidy', label: 'Free Transit', description: '+25% growth rate and +8 approval; costs £1.5 per resident per tick' },
+  // BUG-397 (Aaron's ruling, 2026-08-31): the old copy ("costs £1.5 per
+  // resident per tick") claimed an uncapped, purely-linear-with-population
+  // cost — exactly the guaranteed-late-game-bankruptcy shape the ruling
+  // fixed. The real trade-off is now: turning this ON forgoes fare revenue
+  // AND pays a subsidy that scales sub-linearly with population and is
+  // capped as a fraction of tax income (fiscal.ts's SERVICE_COST_SCALE_EXPONENT
+  // / POLICY_COST_CAP_FRACTION) — described directionally, no bare formula
+  // in player-facing copy.
+  { id: 'transitSubsidy', label: 'Free Transit', description: '+25% growth rate and +8 approval; forgoes fare revenue and pays a capped, scaling subsidy instead' },
   { id: 'tourismDrive', label: 'Tourism Drive', description: 'Adds Tourism income scaling with population' },
   { id: 'austerity', label: 'Austerity Budget', description: '-10% all outflows, -12 approval' },
 ];

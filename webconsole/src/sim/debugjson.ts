@@ -331,6 +331,8 @@ export interface DebugJson {
     economyEpoch: number;
     /** FEAT-2326609781 (2026-09-04) — Channel Tunnel footprint schema counter; see SimState.tunnelFootprintEpoch's own doc comment. */
     tunnelFootprintEpoch: number;
+    /** BUG-397 F1 (2026-09-05) — Transit Subsidy cap-bound transition flag; see SimState.transitSubsidyCapBound's own doc comment. */
+    transitSubsidyCapBound: boolean;
   };
   flows: {
     inflows: FlowItem[];
@@ -640,6 +642,8 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   lineageId: 'sim.lineageId',
   // Aaron ruling 2026-09-04 (land_tunnel footprint grandfather).
   tunnelFootprintEpoch: 'sim.tunnelFootprintEpoch',
+  // BUG-397 F1 (2026-09-05) — Transit Subsidy cap-bound transition flag.
+  transitSubsidyCapBound: 'sim.transitSubsidyCapBound',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -1034,6 +1038,10 @@ export function buildDebugJson(
       // missed serializing it (caught by debugjson's own COMPLETENESS gate
       // on CI run 33898194308). Same legacy-reads-0 rule as economyEpoch.
       tunnelFootprintEpoch: s.tunnelFootprintEpoch ?? 0,
+      // BUG-397 F1 (2026-09-05): legacy state predating this field reads as
+      // `false` (not currently bound) — mirrors economyEpoch/tunnelFootprintEpoch's
+      // own legacy-default rule, see SimState.transitSubsidyCapBound's doc comment.
+      transitSubsidyCapBound: s.transitSubsidyCapBound ?? false,
     },
     flows: {
       inflows: s.lastFlows.inflows,

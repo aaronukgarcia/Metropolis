@@ -141,6 +141,157 @@ export function gridImportCostPerTick(capMW: number, needMW: number, tariff: num
 }
 
 /**
+ * BUG-397 (Aaron's ruling, 2026-08-31, shapes 2+3) — "it's a game, not NASA
+ * code" directional placeholders, exact values pending the balance pass:
+ *
+ *   (2) Service costs that scale with population must scale SUB-LINEARLY
+ *       (economies of scale: a city 10x the size does not need 10x the
+ *       per-resident spend on the same service) — modelled as
+ *       rate * population^SERVICE_COST_SCALE_EXPONENT instead of the old
+ *       flat rate * population. 0.85 is a NAMED placeholder exponent (1.0
+ *       would be the old linear behaviour; lower = more economy of scale).
+ *   (3) Any per-tick policy cost is capped at POLICY_COST_CAP_FRACTION of
+ *       that tick's tax income (Council + Business + Freight Tax) — a
+ *       self-limiting drain instead of a guaranteed-bankruptcy line that
+ *       grows forever with population. 0.5 carries forward the exact
+ *       fraction BUG-403's original Transit Subsidy cap already used.
+ *
+ * Both constants are consumed by engine.ts's computeFlows() Transit Subsidy
+ * line (today's only population-scaled policy-cost outflow).
+ *
+ * BUG-397 F3 CORRECTION (2026-09-05): this comment previously claimed
+ * consistency.ts's recompute ALSO consumes these constants "so the two can
+ * never drift" — that was never true. consistency.ts deliberately EXCLUDES
+ * 'Transit Subsidy' (and the Free Transit fare-forgone shape) from its
+ * upkeep-total reconciliation (see consistency.ts's `actualUpkeep` loop,
+ * alongside Wages/Road Auto-Scale/Overdraft Interest) because none of those
+ * are per-building `upkeep` bucket flows — the exclusion itself is correct,
+ * it is this comment's "consumed by consistency.ts" claim that was wrong.
+ * Reproducing computeFlows()'s FULL cap-base derivation here (brownout +
+ * congestion-adjusted baseTaxIncome, the BUG-397 F2 reference-rate floor,
+ * mine counts, harbour boost) inside consistency.ts's recompute was judged
+ * not "small" enough to be worth the drift risk of a second, necessarily
+ * approximate copy of that logic — filed as a follow-up if a real Transit
+ * Subsidy divergence bug is ever suspected, rather than built speculatively.
+ */
+export const SERVICE_COST_SCALE_EXPONENT = 0.85;
+export const POLICY_COST_CAP_FRACTION = 0.5;
+
+/**
+ * Sub-linear population-scaled service cost: rate * population^exponent,
+ * guarded at population<=0 (Math.pow(0, exponent) is legitimately 0, but the
+ * guard also protects any future negative-population defect from producing
+ * NaN/Infinity via a fractional power of a negative base). Pure/deterministic
+ * (GR#21). Shared by engine.ts and consistency.ts's recompute (GR#3 SSOT).
+ */
+export function scaledServiceCostPerTick(
+  ratePerResident: number,
+  population: number,
+  exponent: number = SERVICE_COST_SCALE_EXPONENT,
+): number {
+  if (population <= 0) return 0;
+  return Math.round(ratePerResident * Math.pow(population, exponent));
+}
+
+/**
+ * BUG-397 shape (1) — Free Transit's real trade-off: revenue FORGONE, not
+ * just subsidy paid. ⚠ PLACEHOLDER-balance (Aaron's row-by-row pass pending).
+ * Per-rider fare income booked only while the Free Transit policy is OFF
+ * (engine.ts gates the call site on `!s.policies.transitSubsidy`).
+ */
+export const TRANSIT_FARE_RATE_PER_RIDER = 0.4;
+
+/** SSOT label for the Transit Fare Revenue inflow (mirrors GRID_IMPORT_OUTFLOW_LABEL's
+ * doc: the generic sum-based conservation checker needs no per-label recompute). */
+export const TRANSIT_FARE_REVENUE_LABEL = 'Transit Fare Revenue';
+
+/**
+ * Transit fare revenue per tick: riders (capped at the transit network's
+ * total served capacity — you can't collect a fare from someone the network
+ * doesn't reach) * the per-rider rate. Pure, deterministic (GR#21).
+ */
+export function transitFareRevenuePerTick(riders: number, ratePerRider: number): number {
+  if (riders <= 0) return 0;
+  return Math.round(riders * ratePerRider);
+}
+
+/**
+ * BUG-397 (2026-08-31 ruling) — the measured guaranteed-bankruptcy shape:
+ * at pop 314,252 Transit Subsidy alone was pop*1.5*austerity, unbounded and
+ * linear forever. Kept as the same £1.5/resident BASE rate (BUG-403's
+ * original figure), now run through scaledServiceCostPerTick's sub-linear
+ * curve instead of a flat multiply — see the module-level doc above.
+ */
+export const TRANSIT_SUBSIDY_RATE_PER_RESIDENT = 1.5;
+
+export function transitSubsidyCostPerTick(population: number): number {
+  return scaledServiceCostPerTick(TRANSIT_SUBSIDY_RATE_PER_RESIDENT, population);
+}
+
+/**
+ * Freight Tax per tick: industrial zones * rate * 0.55, PLUS mine zones *
+ * rate * 0.9 (mines are weighted higher — extraction, not just throughput),
+ * the whole scaled by the harbour export-boost multiplier (1.4 while an
+ * online land_harbour building exists, 1 otherwise — see engine.ts's
+ * `harbourBoost`). Factored out of engine.ts's computeFlows() (GR#3) so
+ * BUG-397 F2's reference-rate cap-base calculation (taxIncomeAtRate below)
+ * reuses the IDENTICAL formula instead of a hand-duplicated copy that could
+ * silently drift from the real one. Pure/deterministic (GR#21).
+ */
+export function freightTaxPerTick(
+  industrialZones: number,
+  mineZones: number,
+  taxRate: number,
+  harbourBoost: number,
+): number {
+  return Math.round((industrialZones * taxRate * 0.55 + mineZones * taxRate * 0.9) * harbourBoost);
+}
+
+/**
+ * BUG-397 F2 exploit fix — LEAD RULING (Bev, 2026-09-05, flagged for Aaron's
+ * ratification): at 0% tax, baseTaxIncome collapses to 0, so the
+ * POLICY_COST_CAP_FRACTION cap on per-tick policy costs also collapses to 0 —
+ * Free Transit then costs NOTHING (the subsidy clamps to £0) while still
+ * granting its full +25% growth / +8 approval bonus, a free-lunch exploit.
+ * The cap base is therefore the GREATER of the city's actual tax income and
+ * the tax income the city WOULD earn at a placeholder reference rate,
+ * POLICY_CAP_REFERENCE_TAX_RATE — i.e. dropping the real tax rate below the
+ * reference never shrinks the cap below what the reference rate would fund.
+ * Expressed in the SAME units as TaxRates.residential/commercial/industrial
+ * (the 0-30 game-abstract scale councilTaxPerTick/businessTaxPerTick/
+ * freightTaxPerTick already use — see DEFAULT_RESIDENTIAL_TAX_RATE's own
+ * anchor comment above): the ruling's own shorthand "e.g. 0.10" means "a
+ * modest ~10%-of-the-slider reference", which on this codebase's existing
+ * 0-30 rate scale is 3 — comfortably below the 9/11/13 starting defaults, so
+ * a city taxing at or above its defaults sees no change from today (proven by
+ * fiscal-cap-reference.test.mjs's before/after equality test).
+ */
+export const POLICY_CAP_REFERENCE_TAX_RATE = 3;
+
+/**
+ * Tax income (Council + Business + Freight) the city WOULD earn if all three
+ * tax rates were set to `rate` instead of their actual player-set values —
+ * reuses the EXACT SAME formulas as the real per-tick computation (GR#3),
+ * just with the rate substituted, so there is only ever one tax formula that
+ * can drift. Pure/deterministic (GR#21). Used by BUG-397 F2's reference-rate
+ * cap floor (engine.ts computeFlows()).
+ */
+export function taxIncomeAtRate(
+  population: number,
+  commercialZones: number,
+  industrialZones: number,
+  mineZones: number,
+  rate: number,
+  harbourBoost: number,
+): number {
+  return (
+    councilTaxPerTick(population, rate) +
+    businessTaxPerTick(commercialZones, rate) +
+    freightTaxPerTick(industrialZones, mineZones, rate, harbourBoost)
+  );
+}
+
+/**
  * FEAT-2326609711 inc1 (AC-4) — tariff invariant verification, loaded and
  * called ONLY at test time (never during gameplay). Derives the CHEAPEST
  * local power plant's amortised cost — capex spread over

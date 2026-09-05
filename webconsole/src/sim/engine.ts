@@ -55,6 +55,7 @@ import {
   onlineResidentsCapacity,
   totalChildrenCapacity,
   totalServedCapacity,
+  transitServedCapacity,
   heightCapOf,
   footprintOf,
   demandFixPlan,
@@ -98,7 +99,7 @@ import type {
   BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL, INSOLVENCY_WARNING_THRESHOLD } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL, INSOLVENCY_WARNING_THRESHOLD, POLICY_COST_CAP_FRACTION, transitSubsidyCostPerTick, transitFareRevenuePerTick, TRANSIT_FARE_RATE_PER_RIDER, TRANSIT_FARE_REVENUE_LABEL, freightTaxPerTick, taxIncomeAtRate, POLICY_CAP_REFERENCE_TAX_RATE } from './fiscal.ts';
 // FEAT-2326609761 (CONSOLIDATOR mutation lane) — read-only discovery/opportunity
 // functions from the PARALLEL read-only lane's module. Safe one-directional
 // import: consolidator.ts is a LEAF (mirrors TICKS_PER_MONTH/CONNECT_EXEMPT_KINDS
@@ -582,7 +583,9 @@ export function regionalGrantPerTick(tick: number): number {
   return Math.floor((g * (phase + 1)) / tpm) - Math.floor((g * phase) / tpm);
 }
 
-export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: FlowItem[] } {
+export function computeFlows(
+  s: SimState,
+): { inflows: FlowItem[]; outflows: FlowItem[]; policyCapNotices: string[]; transitSubsidyCapBound: boolean } {
   // BUG-520 (remaining part): Business/Freight/Office Tax must count only
   // ONLINE buildings — a road-disconnected commercial/industrial/office/mine
   // building already pays zero upkeep (isOnline gate below), so it must also
@@ -717,9 +720,10 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   if (freightIdx >= 0) {
     inflows[freightIdx] = {
       label: 'Freight Tax',
-      value: Math.round(
-        (c3.industrial * t.industrial * 0.55 + c3.mine * t.industrial * 0.9) * harbourBoost
-      ),
+      // GR#3: reuses fiscal.ts's freightTaxPerTick — the SAME formula BUG-397
+      // F2's taxIncomeAtRate() reference-rate calculation below relies on, so
+      // the two can never drift apart.
+      value: freightTaxPerTick(c3.industrial, c3.mine, t.industrial, harbourBoost),
     };
   }
   // BROWNOUT consequence (BUG-393): while power need exceeds capacity,
@@ -774,17 +778,79 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     }
   }
 
-  // BUG-403 FIX: Transit Subsidy scaled/capped to avoid unbounded costs.
-  // PLACEHOLDER (balance-number regime): scale by tax income instead of population only.
-  // Base tax income = sum of tax flows (council, business, freight).
+  // BUG-397 (Aaron's ruling, 2026-08-31, all three shapes — see fiscal.ts's
+  // module-level doc for the full rationale): the measured shape at pop
+  // 314,252 was Transit Subsidy = pop*1.5*austerity, unbounded and 74% of
+  // ALL spend — guaranteed late-game bankruptcy. Base tax income = sum of tax
+  // flows (council, business, freight), same basis BUG-403's original cap used.
+  const policyCapNotices: string[] = [];
   const baseTaxIncome = inflows
     .filter((f) => ['Council Tax', 'Business Tax', 'Freight Tax'].includes(f.label))
     .reduce((a, f) => a + f.value, 0);
-  // PLACEHOLDER: cap transit subsidy at a fraction (50%) of base tax income.
-  const maxTransitSubsidy = Math.round(baseTaxIncome * 0.5);
-  const transitSubsidyCost = Math.round(s.population * 1.5);
-  if (s.policies.transitSubsidy)
-    outflows.push({ label: 'Transit Subsidy', value: Math.min(transitSubsidyCost, maxTransitSubsidy) });
+  // BUG-397 F2 (LEAD RULING, Bev, 2026-09-05, flagged for Aaron's
+  // ratification — see fiscal.ts's POLICY_CAP_REFERENCE_TAX_RATE doc for the
+  // full rationale): at 0% tax, baseTaxIncome is 0, so the cap below would
+  // also be 0 and Free Transit would cost nothing while still granting its
+  // full growth/approval bonus. The cap base is the GREATER of the city's
+  // actual tax income and the tax income it would earn at the reference rate
+  // — dropping real tax below the reference never shrinks the cap.
+  const referenceTaxIncome = taxIncomeAtRate(
+    s.population,
+    c3.commercial,
+    c3.industrial,
+    c3.mine,
+    POLICY_CAP_REFERENCE_TAX_RATE,
+    harbourBoost,
+  );
+  const capBase = Math.max(baseTaxIncome, referenceTaxIncome);
+  // Shape (3): policy costs (today: Transit Subsidy is the only per-tick
+  // population-scaled policy COST) clamp to POLICY_COST_CAP_FRACTION of tax
+  // income — a self-limiting drain, never an unbounded one.
+  const maxPolicyCost = Math.round(capBase * POLICY_COST_CAP_FRACTION);
+  // Shape (2): sub-linear scaling (rate * population^0.85) replaces the old
+  // flat rate * population — see fiscal.ts's scaledServiceCostPerTick.
+  const transitSubsidyCost = transitSubsidyCostPerTick(s.population);
+  // BUG-397 F1 (round REJECT fix, 2026-09-05): the old code pushed a
+  // policyCapNotices entry EVERY TICK the cap bound — on a 300k city at tax
+  // rate 1 that is an amount:0 ledger row every tick, and the ledger's
+  // 200-row ring evicts every REAL player event (build/loan/demolish) within
+  // ~260 ticks (the BUG-400 class, whose fix sits 8 lines below this one).
+  // Fixed to fire ONLY on a cap-state CHANGE (unbound->bound and
+  // bound->unbound), tracked via the journalled `transitSubsidyCapBound`
+  // boolean (default false for an old save predating this field, mirrors
+  // gridImportEnabled's `?? DEFAULT` idiom — see types.ts). `s` here IS the
+  // pre-tick state, so `s.transitSubsidyCapBound` is exactly last tick's
+  // outcome; the freshly computed `transitSubsidyCapBound` below is written
+  // back into `next` by advance() so the comparison survives save/load and
+  // replay (both rebuild state tick-by-tick through this same function).
+  const wasCapBound = s.transitSubsidyCapBound ?? false;
+  let transitSubsidyCapBound = false;
+  if (s.policies.transitSubsidy) {
+    const cappedTransitSubsidy = Math.min(transitSubsidyCost, maxPolicyCost);
+    outflows.push({ label: 'Transit Subsidy', value: cappedTransitSubsidy });
+    transitSubsidyCapBound = cappedTransitSubsidy < transitSubsidyCost;
+    // GR#17: a silent clamp is a defect — surface it (advance() below turns
+    // this into a ledger entry, a monitorable location) the moment it starts
+    // binding, once, not on every tick it continues to bind.
+    if (transitSubsidyCapBound && !wasCapBound) {
+      policyCapNotices.push(
+        `Transit Subsidy capped at ${cappedTransitSubsidy} (uncapped: ${transitSubsidyCost}) — ${Math.round(POLICY_COST_CAP_FRACTION * 100)}% of tax income cap`,
+      );
+    }
+  } else {
+    // Shape (1): Free Transit's real trade-off is FORGONE fare revenue, not
+    // just a subsidy line — booked only while the policy is OFF. Riders
+    // capped at the transit network's total served capacity (data.ts).
+    const transitRiders = Math.min(s.population, transitServedCapacity(s));
+    const fareRevenue = transitFareRevenuePerTick(transitRiders, TRANSIT_FARE_RATE_PER_RIDER);
+    if (fareRevenue > 0) inflows.push({ label: TRANSIT_FARE_REVENUE_LABEL, value: fareRevenue });
+  }
+  // Mirrors the bind-notice above: fires once on the tick the cap RELEASES,
+  // whether that release is the tax base recovering (still under the
+  // transitSubsidy policy) or the player switching the policy off outright.
+  if (wasCapBound && !transitSubsidyCapBound) {
+    policyCapNotices.push('Transit Subsidy cap released — the subsidy is no longer clamped');
+  }
 
   if (s.loanBalance > 0)
     outflows.push({ label: 'Loan Interest', value: Math.round(s.loanBalance * 0.005) });
@@ -826,7 +892,7 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   // IDENTICAL recycling(0.93 on discounted labels) + austerity(0.9 all) pipeline,
   // in the same order with the same rounding, to its recomputed outflows.
   outflows = applyOutflowPolicies(outflows, s.policies);
-  return { inflows, outflows };
+  return { inflows, outflows, policyCapNotices, transitSubsidyCapBound };
 }
 
 /**
@@ -2626,7 +2692,7 @@ function advance(s: SimState): SimState {
     }
   }
 
-  let { inflows, outflows } = computeFlows(s);
+  let { inflows, outflows, policyCapNotices, transitSubsidyCapBound } = computeFlows(s);
 
   // BUG-400: the Regional Grant is no longer injected here as a monthly lump.
   // computeFlows() now books it as a SMOOTHED per-tick inflow (regionalGrantPerTick),
@@ -2689,6 +2755,15 @@ function advance(s: SimState): SimState {
   let funds = s.funds + income - expense;
   let ledger: LedgerEntry[] = s.ledger;
   let nextLedger = s.nextLedgerId;
+
+  // BUG-397 (GR#17): surface the POLICY_COST_CAP_FRACTION clamp when it
+  // actually binds — a silent clamp is a defect (money forgone with no
+  // player-visible record). amount: 0 because no funds actually moved (the
+  // cap is on what was NEVER charged), so this cannot desync the
+  // conservation.funds-vs-flows check, which only sums lastFlows.
+  for (const note of policyCapNotices) {
+    ledger = [{ id: nextLedger++, tick, label: note, amount: 0 }, ...ledger].slice(0, LEDGER_CAP);
+  }
 
   // BUG-400: the recurring monthly "Regional Grant" ledger row is GONE. It used to
   // prepend a +800 event every 30 ticks into the 200-cap ledger, which over time
@@ -3307,6 +3382,12 @@ function advance(s: SimState): SimState {
     // consistency checks recompute Wages/Council Tax against the SAME basis the engine
     // used — not the grown end-of-tick population.
     lastFlows: { inflows, outflows, population: s.population },
+    // BUG-397 F1: this tick's Transit Subsidy cap-bound outcome, written back
+    // so NEXT tick's computeFlows(s) sees it as `s.transitSubsidyCapBound`
+    // and can detect the bind/release transition instead of re-notifying
+    // every tick. Survives save/load and replay because it is plain
+    // journalled sim state (types.ts), not a derived/local value.
+    transitSubsidyCapBound,
     lastRewardedLevel,
     notice: nextNotice,
     milestoneNotice: nextMilestoneNotice,

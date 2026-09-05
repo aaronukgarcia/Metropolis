@@ -111,7 +111,15 @@ export function FinanceLedgerTab() {
           <tr key={e.id}>
             <td>{e.tick}</td>
             <td>{e.label}</td>
-            <td className={e.amount >= 0 ? 'in' : 'out'}>{fmtSigned(e.amount)}</td>
+            {/* BUG-397 F4: an amount:0 row (today: only the Transit Subsidy
+                cap-bound/released notice, engine.ts) is an INFO row, not an
+                income event — rendering it via the 'in' (>=0) class showed a
+                literal "+£0" as if money had actually arrived. Zero gets its
+                own neutral 'muted' class + unsigned text; only a genuinely
+                nonzero amount earns the signed +/- in/out styling. */}
+            <td className={e.amount > 0 ? 'in' : e.amount < 0 ? 'out' : 'muted'}>
+              {e.amount === 0 ? fmtMoney(e.amount) : fmtSigned(e.amount)}
+            </td>
           </tr>
         ))}
       </tbody>
