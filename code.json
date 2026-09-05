@@ -802,6 +802,10 @@
             "outboundGuid": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6"
           },
           {
+            "key": "engine.logistics",
+            "outboundGuid": "1cd17147-10d9-41c6-ae98-27cbaa121a2d"
+          },
+          {
             "key": "engine.market",
             "outboundGuid": "cef595b0-f597-46b7-9143-2154175859c4"
           },
@@ -4052,6 +4056,11 @@
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          },
+          {
+            "key": "engine.refuse",
+            "moduleGuid": "93cadd89-ef03-4b29-b1b8-1b35c44788b7",
+            "inboundGuid": "877d2b29-6055-4ec4-9be2-b60b2d53fcf3"
           }
         ]
       },
@@ -4122,6 +4131,10 @@
           {
             "key": "engine.fuel",
             "outboundGuid": "028e7813-da5a-4d3b-a21e-04700849ae3c"
+          },
+          {
+            "key": "engine.households",
+            "outboundGuid": "d6fe2f65-8d26-46e8-8097-7a55db5e5dbd"
           },
           {
             "key": "engine.maintenance",
@@ -4478,6 +4491,10 @@
             "outboundGuid": "f4f37400-9913-4c53-b2eb-675921b8dc99"
           },
           {
+            "key": "engine.shopping",
+            "outboundGuid": "80c175d5-f412-46af-8f61-05009ea4ffea"
+          },
+          {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
@@ -4523,6 +4540,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },
@@ -4802,6 +4824,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "engine.finance",
+            "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
+            "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
           }
         ]
       },
@@ -5124,6 +5151,11 @@
             "key": "engine.deathservices",
             "moduleGuid": "75256c06-b41b-4094-a064-5db1282d4b98",
             "inboundGuid": "ba1fe880-21b7-46c0-bd56-257c0f6c223d"
+          },
+          {
+            "key": "engine.wellbeing",
+            "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
+            "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
           }
         ]
       },
@@ -5512,6 +5544,11 @@
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          },
+          {
+            "key": "engine.wellbeing",
+            "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
+            "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
           }
         ]
       },
@@ -5564,6 +5601,10 @@
             "outboundGuid": "f4f37400-9913-4c53-b2eb-675921b8dc99"
           },
           {
+            "key": "engine.services",
+            "outboundGuid": "47f5426b-85c0-4bce-a70e-621762f9f8f3"
+          },
+          {
             "key": "engine.shopping",
             "outboundGuid": "80c175d5-f412-46af-8f61-05009ea4ffea"
           },
@@ -5574,6 +5615,10 @@
           {
             "key": "engine.worklife",
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "feat.faith",
@@ -6895,6 +6940,10 @@
         "format": "Go package API + deltas",
         "pattern": "rounds are logistics movements; overflow states per cell",
         "consumers": [
+          {
+            "key": "engine.consumption",
+            "outboundGuid": "06f76f29-785a-413c-9b28-9862a326e116"
+          },
           {
             "key": "engine.farming",
             "outboundGuid": "8dd0b14d-7989-4a7c-92ea-758af8ef3516"
@@ -8223,6 +8272,11 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "engine.logistics",
+            "moduleGuid": "c59ecb6e-443f-4012-a0f0-b031de444335",
+            "inboundGuid": "26abfa77-3b11-43d0-a631-539a04e3a5f8"
           }
         ]
       },
