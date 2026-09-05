@@ -44,17 +44,36 @@
 //   the visible-count assertions are the real regression-catchers; the
 //   wall-clock bound is a generous sanity ceiling only.
 //
-//   UNCALLED_REGRESSION_BOUND_MS bounds the full-map (zoom-to-fit) case at
-//   3x its own observed median (11.0ms x 3 ~= 33ms -> 40ms), proving the fix
-//   did not make the ALREADY-EXPENSIVE zoomed-out case any worse.
+//   The full-map (zoom-to-fit) "not worse than pre-fix" case (BUG-757,
+//   2026-09-05) is NOT bounded by a wall-clock number any more — CI run
+//   33981560619's node-test shard 2 reproduced a real flake: 56.06ms culled
+//   median on the shared ubuntu runner against a locally-observed ~11ms,
+//   tripping the old absolute 40ms UNCALLED_REGRESSION_BOUND_MS purely from
+//   runner load, not a code regression (this project's verification
+//   standard forbids absolute wall-clock CI bounds for exactly this reason —
+//   see the BUG-694/BUG-710 de-flake idiom: rework a timing assertion into a
+//   deterministic, hardware-immune count). Fixed by asserting an ALGORITHMIC
+//   invariant instead: viewportCull.ts's visibleBuildingsOf takes an optional
+//   test-only `onCandidate` probe (no-op / zero behavioural change on every
+//   production call site, which never passes it) that counts every
+//   building-candidate the spatial-index walk actually examines. At a
+//   full-map viewport the culled path is CORRECTLY expected to examine every
+//   building once — so "not worse than the pre-fix unculled scan" becomes
+//   "candidatesVisited <= BUILDING_COUNT" (the unculled scan's own visit
+//   count, by construction, once per building) — deterministic, exact,
+//   immune to CI hardware variance. The wall-clock medians are still
+//   measured and logged for the historical record, but never asserted on.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { buildScaleFixture } from './scale/fixture.mjs';
 import { measureCurrentDrawLoopJsCost, measureCulledDrawLoopJsCost } from '../src/render/perfHarness.ts';
+import { visibleBuildingsOf } from '../src/render/viewportCull.ts';
+import { runMutantSelfReinvoke } from '../testsupport/mutant.mjs';
 
 const REPAINT_BOUND_MS = 8; // see derivation above: 4x observed ~0.41ms, rounded up generously.
-const UNCALLED_REGRESSION_BOUND_MS = 40; // 3x observed ~11.0ms full-map (zoom-to-fit) median.
 
 const BUILDING_COUNT = 49174; // Aaron's exact measured live-city count (BUG-659 brief).
 const TARGET_POPULATION = 3198809; // Aaron's exact measured live-city population.
@@ -94,16 +113,75 @@ test('BUG-659: viewport-culled repaint cost scales with VISIBLE count, not total
 });
 
 test('BUG-659: zoom-to-fit (full-map viewport) is NOT worse than the pre-fix unculled cost', () => {
+  const rect = { minX: 0, minY: 0, maxX: 440, maxY: 260 };
+
+  // Timing is measured and LOGGED for the historical record only — never
+  // asserted on. Absolute wall-clock bounds in CI are a forbidden timing
+  // class on this project (this test IS the counter-example: BUG-757, CI
+  // run 33981560619 shard 2 flaked 56.06ms vs a 40ms bound on shared
+  // hardware while passing 3/3 locally at ~11ms).
   const before = measureCurrentDrawLoopJsCost(state, 5);
-  const fullMap = measureCulledDrawLoopJsCost(state, { minX: 0, minY: 0, maxX: 440, maxY: 260 }, 5);
+  const fullMap = measureCulledDrawLoopJsCost(state, rect, 5);
   assert.equal(fullMap.visibleCount, BUILDING_COUNT, 'a full-map viewport must include every building — zero silently dropped');
-  assert.ok(
-    fullMap.msPerFrame < UNCALLED_REGRESSION_BOUND_MS,
-    `full-map (zoom-to-fit) culled median ${fullMap.msPerFrame.toFixed(2)}ms exceeds the regression bound ${UNCALLED_REGRESSION_BOUND_MS}ms`
+  console.log(
+    `[perf observation, not asserted] BUG-659 full-map: unculled median ${before.msPerFrame.toFixed(2)}ms, ` +
+      `culled median ${fullMap.msPerFrame.toFixed(2)}ms`
   );
-  // Documents the before/after relationship for the BOW record — not a hard
-  // multiplier assertion (both numbers are close by construction: a
-  // full-map viewport visits every building either way), just proves the
-  // culled path adds no meaningful per-building overhead over the plain scan.
-  assert.ok(fullMap.msPerFrame < before.msPerFrame * 3 + 5);
+
+  // ALGORITHMIC, deterministic, hardware-immune regression check (BUG-694/
+  // BUG-710 idiom): count every building-candidate the spatial-index walk
+  // actually examines via visibleBuildingsOf's optional test-only probe. At
+  // a full-map viewport the culled path is CORRECTLY expected to visit
+  // every building exactly once — precisely as many candidates as the
+  // pre-fix unculled scan visits (one pass over state.buildings, by
+  // construction BUILDING_COUNT visits). "Not worse than the pre-fix
+  // unculled cost" is therefore exactly: the culled walk must not examine
+  // MORE candidates than that. This can never flake under CI load — it
+  // counts operations, not milliseconds — and still catches a real
+  // regression (e.g. a spatial-index bug that revisits the same building
+  // across overlapping cells).
+  let candidatesVisited = 0;
+  const visible = visibleBuildingsOf(state.buildings, rect, () => {
+    candidatesVisited++;
+  });
+  assert.equal(visible.length, BUILDING_COUNT, 'algorithmic-count probe run must also see every building — zero silently dropped');
+  assert.ok(
+    candidatesVisited <= BUILDING_COUNT,
+    `full-map viewport spatial-index walk examined ${candidatesVisited} candidates — more than the ${BUILDING_COUNT} the pre-fix unculled scan visits (the cull is doing EXTRA work at zoom-to-fit)`
+  );
+});
+
+test('BUG-757: RED proof — a spatial-index walk that revisits candidates trips the algorithmic "not worse than pre-fix" check', () => {
+  // Mutates a SHADOW copy of viewportCull.ts (BUG-739 mutant.mjs idiom — the
+  // real, shared source file is never touched) so the probe callback fires
+  // TWICE per candidate examined instead of once — modelling exactly the
+  // class of spatial-index regression (a bucket walk that revisits the same
+  // building, e.g. from overlapping cell-range bounds) the algorithmic count
+  // exists to catch. Doubling every visit makes the culled full-map walk
+  // examine 2x BUILDING_COUNT candidates, which must trip the
+  // `candidatesVisited <= BUILDING_COUNT` assertion in the test above.
+  const { failed, output, crashed } = runMutantSelfReinvoke({
+    targetRelPath: path.join('render', 'viewportCull.ts'),
+    mutate: (original) => {
+      const fixedLine = '        onCandidate?.(b);';
+      assert.ok(original.includes(fixedLine), 'precondition: the probe call-site is present in viewportCull.ts');
+      const doubledCall = '        onCandidate?.(b);\n        onCandidate?.(b);';
+      return original.replace(fixedLine, doubledCall);
+    },
+    testFileAbsPath: fileURLToPath(import.meta.url),
+    // Must also select the "setup" test — it populates the shared `state`
+    // fixture the target test depends on (top-level `let state`, set by a
+    // prior test in this same file); selecting only the target test by name
+    // leaves `state` undefined and the child crashes before ever reaching
+    // the assertion this RED-PROOF is trying to trip.
+    testNamePattern: '^(setup: build the real 49,174-building.*|BUG-659: zoom-to-fit \\(full-map viewport\\) is NOT worse than the pre-fix unculled cost)$',
+  });
+
+  assert.ok(!crashed, `the re-invoked test must actually RUN (not crash at load time) against the mutant; output:\n${output}`);
+  assert.ok(failed, 'the full-map "not worse than pre-fix" test must FAIL against a spatial-index walk that double-visits candidates');
+  assert.match(
+    output,
+    /more than the \d+ the pre-fix unculled scan visits/,
+    `child test run output must report the SPECIFIC algorithmic-count assertion failing, not just any failure; got:\n${output}`
+  );
 });

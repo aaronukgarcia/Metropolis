@@ -110,7 +110,11 @@ export function spatialIndexOf(buildings: Building[]): SpatialIndex {
  * this codebase e.g. buildOccupiedSet). Never a superset, never a subset —
  * see this file's header comment for the correctness contract.
  */
-export function visibleBuildingsOf(buildings: Building[], rect: TileRect): Building[] {
+export function visibleBuildingsOf(
+  buildings: Building[],
+  rect: TileRect,
+  onCandidate?: (b: Building) => void
+): Building[] {
   const idx = spatialIndexOf(buildings);
   const margin = idx.maxFootprint;
   const cMinX = Math.floor((rect.minX - margin) / idx.cellSize);
@@ -123,6 +127,13 @@ export function visibleBuildingsOf(buildings: Building[], rect: TileRect): Build
       const arr = idx.cells.get(`${cx},${cy}`);
       if (!arr) continue;
       for (const b of arr) {
+        // Optional test-only probe (BUG-757): counts every building-candidate
+        // the spatial-index walk actually examines, so a test can assert an
+        // ALGORITHMIC "the culled path visits no more candidates than the
+        // pre-fix unculled scan" bound instead of a flaky wall-clock one.
+        // No-op (a single `undefined` check) on every production call site,
+        // which never passes this argument — zero behavioural change.
+        onCandidate?.(b);
         const sp = SPECS[b.spec];
         if (!sp) continue;
         const { w, h } = footprintOf(b, sp);
