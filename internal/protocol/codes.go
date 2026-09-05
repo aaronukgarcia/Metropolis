@@ -41,6 +41,15 @@ const (
 	// hanging). See SubscriptionAllocator.self's doc comment
 	// (subscription.go).
 	ErrSubscriptionAllocatorCopied = "MET-P002"
+
+	// ErrInvalidEntityID: ValidateEntityID (FEAT-042 AC-20) rejected an
+	// EntityID — empty, or containing a disallowed character — when
+	// constructing or validating a TargetRef (FEAT-042 AC-21). Named and
+	// registered here rather than reusing ErrInvalidViewName's shape
+	// verbatim, mirroring the existing one-sentinel-per-validated-type
+	// convention in this package (see ErrInvalidViewName in
+	// subscription.go).
+	ErrInvalidEntityID = "MET-P003"
 )
 
 // Registry error codes for the WebSocket JSON-RPC transport

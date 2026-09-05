@@ -384,7 +384,7 @@ func (c *CitizensAPI) snapshotHead() (citizensHead, error) {
 
 	epochs := make([]int64, numColdShards)
 	for i := range c.cold {
-		epochs[i] = c.cold[i].epochMonth
+		epochs[i] = c.shardAt(i).epochMonth
 	}
 
 	head := citizensHead{
@@ -452,7 +452,7 @@ func (c *CitizensAPI) snapshotColdShard(shard int) []coldCitizenWire {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	s := c.cold[shard]
+	s := c.shardAt(shard)
 	n := s.count()
 	out := make([]coldCitizenWire, 0, n)
 	for i := 0; i < n; i++ {
@@ -522,6 +522,19 @@ func (c *CitizensAPI) resetForLoad() error {
 	for i := range c.cold {
 		c.cold[i] = newColdShard(0)
 	}
+	// Every shard is freshly resident again (BUG-664 paging): a load
+	// target is rebuilt from scratch, so shardAt's LRU touch history AND
+	// any lingering shardPins from before the reset are meaningless --
+	// reseed everything exactly like EnableDiskPaging's own initial seed
+	// does (round-2: also zeroes shardPins/residentCount/pageList/
+	// pageElem now, not just pageOrder), otherwise a stale pageOrder
+	// referencing pre-reset shard identities could drive
+	// evictOverBudgetLocked to evict a shard it thinks is resident, or a
+	// leaked pin from the PREVIOUS city could permanently block eviction
+	// in the loaded one.
+	if c.pages != nil {
+		c.seedPageBookkeepingLocked()
+	}
 	c.hot = make(map[uint64]*Citizen)
 	c.households = make(map[uint64]*Household)
 	c.month = 0
@@ -586,7 +599,7 @@ func (c *CitizensAPI) applyLoadRecord(rec serialize.Record) error {
 		// Restore each shard's age-delta epoch BEFORE any cold record appends
 		// (append derives birthDelta relative to the shard's epoch).
 		for i := range c.cold {
-			c.cold[i].epochMonth = m.EpochMonths[i]
+			c.shardAt(i).epochMonth = m.EpochMonths[i]
 		}
 
 	case recCitizensCold:
@@ -603,7 +616,7 @@ func (c *CitizensAPI) applyLoadRecord(rec serialize.Record) error {
 		if err := validateShardIndex(shard, numColdShards, cid); err != nil {
 			return err
 		}
-		s := c.cold[shard]
+		s := c.shardAt(shard)
 		s.append(r)
 		// Restore the per-row bookkeeping column append zeroed (the one
 		// durable cold value ColdRecord does not carry).

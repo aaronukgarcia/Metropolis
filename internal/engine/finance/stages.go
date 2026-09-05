@@ -464,17 +464,24 @@ func (f *FinanceAPI) SpendPosted() Money {
 }
 
 // BudgetBalance returns the tick's city budget balance: tax revenue
-// minus opex, debt interest, construction, and imports (AC-3's
-// "budget = tax − opex − debt − construction", extended by §7's imports
-// outflow — with imports zero this is exactly the AC's formula).
-// Computed with saturating subtraction so the net never wraps (GR#16).
+// minus the composed OPEX total, capex, construction, and imports
+// (FEAT-094 AC-2: "every component is a real budget drain" — the
+// composed total folds in maintenance, staffing wages, raw materials,
+// and services alongside debt service, so BudgetBalance subtracts every
+// OPEX component, not just the pre-FEAT-094 service-opex figure. Before
+// FEAT-094, ComposedOpex() == OpexTotal() + DebtServiceTotal() exactly
+// when no maintenance/materials/staff-wage component has posted, so
+// this is a strict extension of the original "budget = tax − opex −
+// debt − construction" formula, never a behaviour change for a caller
+// that never posts the new components). Computed with saturating
+// subtraction so the net never wraps (GR#16).
 func (f *FinanceAPI) BudgetBalance() Money {
 	if err := f.checkNotCopied("BudgetBalance"); err != nil {
 		return 0
 	}
 	b := f.TaxRevenue()
-	b = satSubMoney(b, f.OpexTotal())
-	b = satSubMoney(b, f.DebtServiceTotal())
+	b = satSubMoney(b, f.ComposedOpex())
+	b = satSubMoney(b, f.CapexTotal())
 	b = satSubMoney(b, f.ConstructionTotal())
 	b = satSubMoney(b, f.ImportsTotal())
 	return b

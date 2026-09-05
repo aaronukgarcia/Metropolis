@@ -77,6 +77,15 @@ type FinanceAPI struct {
 	investments  []*InvestmentProgramme
 	nextInvestID InvestmentID
 
+	// FEAT-094 CAPEX/OPEX integration state. opexCfg is the injected
+	// balance data (SetOpexConfig/LoadOpexConfig) — nil until set, so a
+	// method that needs it fails closed with ErrOpexConfigNotSet rather
+	// than silently substituting a hardcoded default (GR#15). backlog is
+	// the running maintenance-underfunding balance (AC-5): it persists
+	// across months, unlike the per-tick ledger aggregates.
+	opexCfg *OpexConfig
+	backlog Money
+
 	// self is the SEC-020 copy guard, stored exactly once in
 	// NewFinanceAPI before the value is returned to any caller.
 	self atomic.Pointer[FinanceAPI]

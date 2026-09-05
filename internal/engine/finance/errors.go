@@ -60,4 +60,36 @@ const (
 	// ErrInvalidFirm: a SimpleFirm carried a negative revenue or cost
 	// input (AC-9).
 	ErrInvalidFirm = "MET-G210"
+
+	// ErrOpexDataInvalid: data/opexintegration.json (FEAT-094's OPEX
+	// balance data) could not be read or parsed (I/O or JSON-decode
+	// failure) — carries a {cause} from the wrapped error. See
+	// ErrOpexDataSchema for schema/field-level validation failures,
+	// which carry no underlying error to quote as a cause.
+	ErrOpexDataInvalid = "MET-G211"
+
+	// ErrOpexDataSchema: data/opexintegration.json (or the
+	// METROPOLIS_DATA_DIR resolution) failed schema/field validation —
+	// a {field} failed a named {rule}. Split from ErrOpexDataInvalid
+	// (BUG/FEAT-094 round finding: 6 of 8 call sites had no {cause} to
+	// supply, rendering the literal token "{cause}" to the user and
+	// failing TestRenderGate_WholeTreeHasNoLiteralTokens).
+	ErrOpexDataSchema = "MET-G216"
+
+	// ErrOpexConfigNotSet: an OPEX-integration method that needs balance
+	// data (SetOpexConfig/LoadOpexConfig) was called before it was set.
+	ErrOpexConfigNotSet = "MET-G212"
+
+	// ErrMaintenanceDemandNegative: PostMaintenance was called with a
+	// negative engineer-day demand figure (AC-11).
+	ErrMaintenanceDemandNegative = "MET-G213"
+
+	// ErrMaintenanceFundedNegative: PostMaintenance was called with a
+	// negative funded amount (AC-11).
+	ErrMaintenanceFundedNegative = "MET-G214"
+
+	// ErrCapexUnclassified: PostCapexSpend was called with a non-positive
+	// capital cost — a refit/rebuild with no declared capital cost is not
+	// a capital event (AC-11).
+	ErrCapexUnclassified = "MET-G215"
 )

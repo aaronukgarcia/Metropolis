@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "meta": {
+    "note": "engine.finance (MOD-022) FEAT-094 CAPEX/OPEX integration balance data: every magnitude below is a directional placeholder pending Aaron's balance pass (GR#15, ASM-284) -- never a Go literal in internal/engine/finance/opex*.go.",
+    "costPerEngineerDayUnit": "microPoundsPerEngineerDay",
+    "backlogEfficiencyDivisorUnit": "engineerDays (backlog magnitude that costs 1 basis point (0.01%) of efficiency)",
+    "majorDrainMinFractionUnit": "basisPoints (of composed OPEX total)"
+  },
+  "costPerEngineerDayMicroPounds": 250000000,
+  "backlogEfficiencyDivisorEngineerDays": 50,
+  "minEfficiencyBasisPoints": 2000,
+  "majorDrainMinFractionBasisPoints": 500
+}

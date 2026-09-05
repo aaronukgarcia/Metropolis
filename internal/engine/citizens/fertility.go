@@ -335,7 +335,7 @@ const FertilityChildIDBase = fertilityChildIDBase
 func (c *CitizensAPI) applyFertilityLocked(seed uint64, month int64, shards []int, correlationID string) int {
 	births := 0
 	for _, shard := range shards {
-		s := c.cold[shard]
+		s := c.shardAt(shard)
 		// Snapshot the pre-pass row count: a birth appends a new row (to
 		// this shard or another), and the new child must never itself be
 		// considered for fertility within the SAME pass that created it.
@@ -480,7 +480,7 @@ func (c *CitizensAPI) birthChildLocked(parentA, parentB, householdID uint64, mon
 	}
 
 	r := hotToColdRecord(child, districtOf(child.Home))
-	c.cold[det.ShardForEntity(childID)].append(r)
+	c.shardAt(det.ShardForEntity(childID)).append(r)
 
 	// Write-through to both parents (cold childCount + hot Children, exactly
 	// mirroring the dual-store discipline LifeEventPartner/education-drift

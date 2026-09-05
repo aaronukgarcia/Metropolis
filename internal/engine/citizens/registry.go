@@ -1,6 +1,7 @@
 package citizens
 
 import (
+	"container/list"
 	"crypto/sha256"
 	"encoding/binary"
 	"sort"
@@ -90,6 +91,73 @@ type CitizensAPI struct {
 	// once at the start of each month and applied across its 30 day-ticks.
 	monthParams ColdPassParams
 
+	// pages is the OPTIONAL disk-backed paging seam (BUG-664, paging.go),
+	// wired in only via EnableDiskPaging. nil (the default for every
+	// existing NewCitizensAPI caller, ~80 call sites) means every shard
+	// stays permanently resident in cold, byte-for-byte the pre-BUG-664
+	// behaviour -- paging is opt-in and changes nothing for a caller that
+	// never enables it.
+	pages *PageStore
+	// maxResidentShards bounds how many of the numColdShards slots stay
+	// non-nil in cold at once once paging is enabled. Meaningless while
+	// pages == nil.
+	maxResidentShards int
+	// pageOrder is shardAt's LEGACY LRU order of shard indices, kept ONLY
+	// for resetForLoad/EnableDiskPaging's doc-comment continuity; the real
+	// eviction order now comes from pageList (BUG-664 round-2 P2: O(len)
+	// linear scan+splice replaced by an O(1)-amortised doubly-linked list,
+	// see pageList's own doc comment). Deliberately still never a map for
+	// ORDER purposes (GR#21): pageList's traversal order is exactly touch
+	// history, never Go's randomised map iteration order -- pageElem below
+	// is used only for O(1) NODE LOOKUP, never to decide eviction order.
+	pageOrder []int
+	// pageList is the deterministic LRU order of shard indices currently
+	// resident in cold (paging-enabled mode only): Front() is the
+	// least-recently-touched resident, Back() the most recent.
+	// touchShardLocked moves a shard's node to the back in O(1) via
+	// pageElem's lookup (container/list itself never allocates a hidden
+	// hash map -- Go's map only backs pageElem here, for finding a node by
+	// shard index, and is never iterated to establish an ORDER). Kept
+	// alongside pageOrder (a plain slice) for now so resetForLoad's
+	// existing reseed idiom keeps compiling; both are rebuilt together.
+	pageList *list.List
+	// pageElem is pageList's O(1) node lookup: shard index -> its
+	// *list.Element, so touchShardLocked/evictOverBudgetLocked never do a
+	// linear scan over the resident set (BUG-664 round-2 P2). Guarded by
+	// pagingMu, exactly like pageList and pageOrder.
+	pageElem map[int]*list.Element
+	// residentCount is an O(1)-maintained mirror of "how many of the
+	// numColdShards slots in cold are non-nil right now" (BUG-664 round-2
+	// P2: evictOverBudgetLocked used to recompute this with a fresh
+	// O(numColdShards) scan on EVERY shardAt call). Incremented exactly
+	// once per nil->resident transition (the paged-in miss branch of
+	// loadShardLocked, plus EnableDiskPaging/resetForLoad's initial seed),
+	// decremented exactly once per resident->nil transition
+	// (evictOverBudgetLocked's successful Store+nil). Guarded by pagingMu.
+	residentCount int
+	// shardPins is the BUG-664 round-2 P0 fix: a per-shard in-use
+	// refcount, guarded by pagingMu. acquireShard increments the count
+	// for the caller's shard BEFORE releasing pagingMu (so the pointer it
+	// hands back is provably still resident for as long as the caller
+	// holds the pin); releaseShard decrements it. evictOverBudgetLocked
+	// NEVER selects a shard with shardPins[i] > 0 as an eviction victim --
+	// see its own doc comment for the "all candidates pinned" policy.
+	// Plain shardAt (used by every OTHER call site in this package, all
+	// of which run strictly sequentially under c.mu -- see shardAt's own
+	// doc comment for why only runShardsParallel's goroutines are ever
+	// concurrent) does not pin at all, so it stays the pre-existing
+	// zero-ceremony accessor those 17 call sites already use.
+	shardPins [numColdShards]int32
+	// pagingMu guards cold's nil<->resident slot transitions and every
+	// PageStore.Load/Store call, INDEPENDENT of mu. shardAt/acquireShard
+	// are called from inside runShardsParallel's per-shard goroutines
+	// (AdvanceDayTick, c.mu already held there) as well as from ordinary
+	// c.mu.RLock query paths (coldRecord and friends) -- a second,
+	// dedicated mutex here means shardAt is safe under either of mu's two
+	// lock modes without a nested-acquire deadlock or lock-order hazard,
+	// since pagingMu is never held while acquiring mu (only the reverse).
+	pagingMu sync.Mutex
+
 	mu sync.RWMutex
 
 	// self is the SEC-020 copyguard (atomic.Pointer, mirroring
@@ -140,6 +208,264 @@ func (c *CitizensAPI) checkNotCopied(correlationID string, method string) error 
 		return errs.New(ErrAPICopied, correlationID, map[string]any{"method": method})
 	}
 	return nil
+}
+
+// EnableDiskPaging wires BUG-664's disk-backed LRU PageStore in as the real
+// residency manager for cold (A7, doc.go's "NVMe and paging" section):
+// beyond maxResident of the numColdShards shards, the least-recently-used
+// resident shards are evicted to dir and reloaded on demand, so resident
+// memory stops growing past the residency ceiling regardless of city size.
+// Optional and idempotent-to-call-once, mirroring SetSeason/
+// SetDeathDrainCapacity's post-construction wiring precedent -- a
+// CitizensAPI that never calls this keeps every shard permanently resident,
+// exactly pre-BUG-664 behaviour. maxResident < 1 is rejected (evicting
+// every shard on every access would defeat every other read/write path in
+// this package, which assumes shardAt returns a stable, currently-in-use
+// shard for the duration of the call).
+func (c *CitizensAPI) EnableDiskPaging(dir string, maxResident int, correlationID string) error {
+	if err := c.checkNotCopied(correlationID, "EnableDiskPaging"); err != nil {
+		return err
+	}
+	if maxResident < 1 {
+		return errs.New(ErrInvalidPagingBudget, correlationID, map[string]any{"maxResident": maxResident})
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pages = NewPageStore(dir, maxResident)
+	c.maxResidentShards = maxResident
+	c.seedPageBookkeepingLocked()
+	return nil
+}
+
+// seedPageBookkeepingLocked (re)builds pageOrder/pageList/pageElem/
+// residentCount/shardPins from the CURRENT contents of cold. Called from
+// EnableDiskPaging (first wiring) and resetForLoad (a load target rebuilds
+// cold from scratch, so any pre-reset LRU/pin history is meaningless and
+// must never survive into the loaded city -- see resetForLoad's own doc
+// comment). Every shard starts resident already (construction/restore
+// populate cold directly), so this seeds the LRU order with the
+// currently-resident set: without it, the very first shardAt-driven
+// eviction would have no real touch history to work from and would evict
+// shard 0 first by pure accident of iteration order. Caller holds c.mu
+// (not pagingMu -- this only runs during construction-time wiring or a
+// full-registry reset, never concurrently with a live shardAt/acquireShard
+// call, so pagingMu is not needed here).
+func (c *CitizensAPI) seedPageBookkeepingLocked() {
+	c.pageOrder = c.pageOrder[:0]
+	c.pageList = list.New()
+	c.pageElem = make(map[int]*list.Element, numColdShards)
+	c.residentCount = 0
+	for i := range c.cold {
+		c.shardPins[i] = 0
+		if c.cold[i] != nil {
+			c.pageOrder = append(c.pageOrder, i)
+			c.pageElem[i] = c.pageList.PushBack(i)
+			c.residentCount++
+		}
+	}
+}
+
+// shardAt returns the ColdShard resident at index shard, transparently
+// reloading it from c.pages if paging is enabled and the shard has been
+// paged out (cold[shard] == nil). Every direct cold[shard] read/write in
+// this package (registry.go/fertility.go/participant.go) goes through this
+// accessor instead -- the single choke point BUG-664 was missing -- so a
+// citizen lookup, a life-event mutation, and the amortised cold pass all
+// see the SAME transparently-paged view of the store, regardless of
+// whether the caller holds mu as a reader or a writer (pagingMu is
+// independent of mu, see its own doc comment on the struct).
+//
+// When paging is disabled (the default, c.pages == nil) this is exactly
+// the pre-BUG-664 `c.cold[shard]` expression -- zero lock overhead, zero
+// behavioural change, so every existing determinism/perf test is
+// unaffected by paging's mere existence in the package.
+func (c *CitizensAPI) shardAt(shard int) *ColdShard {
+	if c.pages == nil {
+		return c.cold[shard]
+	}
+	c.pagingMu.Lock()
+	defer c.pagingMu.Unlock()
+	return c.loadShardLocked(shard)
+}
+
+// acquireShard is shardAt's PINNED sibling (BUG-664 round-2 P0 fix): it
+// returns the resident shard at index shard exactly like shardAt, but also
+// increments shardPins[shard] BEFORE releasing pagingMu, and the caller
+// MUST call releaseShard(shard) (via defer, at every call site) once done
+// with the pointer. While a shard is pinned, evictOverBudgetLocked will
+// NEVER select it as an eviction victim, no matter how far over budget
+// residency runs.
+//
+// This is the fix for the round's P0: runShardsParallel fans AdvanceDayTick
+// out over c.workers goroutines, each processing a DIFFERENT shard
+// concurrently under the SAME c.mu.Lock (a write lock only serialises
+// against OTHER top-level API calls, not against sibling goroutines inside
+// this one call) -- plain shardAt hands back a pointer and releases
+// pagingMu immediately, so nothing stopped a second worker's shardAt call
+// from choosing the FIRST worker's still-in-use shard as its eviction
+// victim and Store()-ing (reading every column of) a shard that worker was
+// concurrently mutating. acquireShard/releaseShard close that window: a
+// pinned shard is provably still resident for the caller's whole work
+// window, regardless of what any sibling goroutine does concurrently.
+//
+// Every OTHER shardAt call site in this package (registry.go/fertility.go/
+// participant.go) runs strictly SEQUENTIALLY -- either under c.mu.Lock
+// outside of runShardsParallel, or under c.mu.RLock query paths that never
+// overlap a write-locked AdvanceDayTick/AdvanceMonth call -- so they keep
+// using the plain, unpinned shardAt (see its own doc comment): adding pin
+// bookkeeping there would be pure overhead with no correctness benefit,
+// and (per the round's brief) plain shardAt's signature must stay
+// single-return so the attacker's own regression test
+// (TestAttackBug664EvictionPersistsInPlaceMutations, which calls
+// `api.shardAt(shard)` directly) keeps compiling unchanged.
+func (c *CitizensAPI) acquireShard(shard int) *ColdShard {
+	if c.pages == nil {
+		return c.cold[shard]
+	}
+	c.pagingMu.Lock()
+	defer c.pagingMu.Unlock()
+	s := c.loadShardLocked(shard)
+	c.shardPins[shard]++
+	return s
+}
+
+// releaseShard releases one pin acquireShard placed on shard. A no-op when
+// paging is disabled (mirrors acquireShard's own zero-overhead fast path).
+// Safe to call even if the pin count is already zero (defensive: a bug
+// that double-releases must never underflow into a negative refcount that
+// would look like "never pinned" to evictOverBudgetLocked and reopen the
+// P0 race — GR#1). After releasing, opportunistically re-runs
+// evictOverBudgetLocked so a shard that was only kept resident by the
+// all-candidates-pinned policy (see evictOverBudgetLocked's doc comment)
+// gets paged back out promptly, instead of waiting for the next unrelated
+// shardAt/acquireShard call to notice the budget is still exceeded.
+func (c *CitizensAPI) releaseShard(shard int) {
+	if c.pages == nil {
+		return
+	}
+	c.pagingMu.Lock()
+	defer c.pagingMu.Unlock()
+	if c.shardPins[shard] > 0 {
+		c.shardPins[shard]--
+	}
+	c.evictOverBudgetLocked(-1) // -1: no shard to protect, everything unpinned is fair game
+}
+
+// loadShardLocked returns the resident shard at index shard, transparently
+// reloading it from c.pages if paging is enabled and the shard has been
+// paged out (cold[shard] == nil), touching its LRU position and running
+// the eviction check. Caller holds pagingMu. Shared by shardAt (unpinned)
+// and acquireShard (which additionally pins after this returns) so both
+// accessors see the exact same load/touch/evict discipline.
+func (c *CitizensAPI) loadShardLocked(shard int) *ColdShard {
+	if s := c.cold[shard]; s != nil {
+		// EnableDiskPaging can be (and usually is) called against a
+		// CitizensAPI whose 256 shards are ALL already resident from
+		// NewCitizensAPI's construction loop -- every one of them starts
+		// non-nil, never paged out, so a cache HIT must still run the
+		// eviction check. Without this, the very first EnableDiskPaging
+		// call would never shrink residency down to maxResidentShards at
+		// all: nothing would ever be nil, so the cache-MISS reload branch
+		// below (the only other place evictOverBudgetLocked used to run)
+		// would never fire, and the whole paging seam would silently stay
+		// a no-op forever.
+		c.touchShardLocked(shard)
+		c.evictOverBudgetLocked(shard)
+		return s
+	}
+	// Paged out: reload from disk. A miss (ok == false) means this shard
+	// has never been persisted under paging (e.g. it was evicted before
+	// ever being Store()'d, structurally unreachable since
+	// evictOverBudgetLocked always Stores before nilling) -- fail safe
+	// with a fresh empty shard rather than a nil-deref crash (GR#1) if it
+	// is ever hit.
+	s, ok := c.pages.Load(shard)
+	if !ok {
+		s = newColdShard(0)
+	}
+	c.cold[shard] = s
+	c.residentCount++
+	c.touchShardLocked(shard)
+	c.evictOverBudgetLocked(shard)
+	return s
+}
+
+// touchShardLocked moves shard to the most-recently-used end of pageList
+// (caller holds pagingMu). O(1) amortised via pageElem's node lookup
+// (BUG-664 round-2 P2: this used to be an O(len(pageOrder)) linear
+// scan+splice on every single shardAt call) -- pageOrder is kept alongside
+// as a plain append-only mirror purely for resetForLoad/doc continuity,
+// never consulted for eviction order any more.
+func (c *CitizensAPI) touchShardLocked(shard int) {
+	if e, ok := c.pageElem[shard]; ok {
+		c.pageList.MoveToBack(e)
+		return
+	}
+	c.pageElem[shard] = c.pageList.PushBack(shard)
+}
+
+// evictOverBudgetLocked pages the least-recently-used resident, UNPINNED
+// shard(s) out to disk until the resident count is back within
+// maxResidentShards, never evicting keep (the shard the caller just
+// touched and is about to use) and NEVER evicting a shard with
+// shardPins[i] > 0 (BUG-664 round-2 P0: a pinned shard is one some
+// runShardsParallel worker is mid-flight on via acquireShard -- evicting
+// it out from under that goroutine is exactly the data race the round
+// caught). Pass keep = -1 when there is no shard to protect (e.g.
+// releaseShard's post-release retry).
+//
+// POLICY (round brief, explicit choice): if every over-budget resident
+// candidate is either keep or pinned, this returns having evicted nothing
+// further, temporarily exceeding maxResidentShards rather than blocking or
+// evicting an in-use shard. This is intentional and bounded in practice by
+// c.workers (at most one shard pinned per live goroutine at a time) -- a
+// budget of 2 with 16 workers can genuinely run up to 16 shards resident
+// at once under heavy concurrent pressure, which trades a temporary
+// memory-residency overshoot for correctness, never the reverse.
+//
+// Caller holds pagingMu. Every eviction Stores the shard's CURRENT
+// in-memory state immediately before dropping the reference -- unlike
+// PageStore's own doc comment ("its data is already persisted by Store"),
+// this never assumes an earlier Store call is still fresh, because a
+// shard's rows can be mutated in place after being loaded/made-resident
+// and before being evicted (applyMonthly, append, removeAt, ... all mutate
+// through the pointer shardAt/acquireShard handed out, not through a Store
+// call) -- a stale disk copy at eviction time would silently lose exactly
+// that mutation the next time this shard is paged back in.
+func (c *CitizensAPI) evictOverBudgetLocked(keep int) {
+	for c.residentCount > c.maxResidentShards {
+		var victim = -1
+		for e := c.pageList.Front(); e != nil; e = e.Next() {
+			v := e.Value.(int)
+			if v == keep || c.cold[v] == nil || c.shardPins[v] > 0 {
+				continue
+			}
+			victim = v
+			c.pageList.Remove(e)
+			delete(c.pageElem, v)
+			break
+		}
+		if victim < 0 {
+			return // nothing evictable: only keep and/or pinned shards remain over budget
+		}
+		s := c.cold[victim]
+		if err := c.pages.Store(victim, s); err != nil {
+			// A disk write failure must never silently discard a resident
+			// shard's data (GR#1) -- keep it resident rather than evict on
+			// a failed persist. The caller already has what it needs from
+			// this call; this failure just means the residency budget is
+			// temporarily exceeded, corrected on the next shardAt/
+			// acquireShard/releaseShard call once the transient I/O issue
+			// clears. victim's pageList/pageElem entry was already removed
+			// above; touchShardLocked will transparently re-seed it the
+			// next time this shard is touched, exactly as before this
+			// rework (pageOrder had the same "removed, not re-added on
+			// failure" behaviour).
+			return
+		}
+		c.cold[victim] = nil
+		c.residentCount--
+	}
 }
 
 // SetSeason wires the engine.season dependency inc2's weather-emergency
@@ -261,10 +587,10 @@ func (c *CitizensAPI) SeedColdRecords(records []ColdRecord, correlationID string
 		// this id -- whether from an earlier record in THIS batch or a
 		// prior SeedColdRecords call -- is rejected rather than silently
 		// admitted as a second, unreachable-after-removal row.
-		if c.cold[shard].rowOf(r.ID) >= 0 {
+		if c.shardAt(shard).rowOf(r.ID) >= 0 {
 			return errs.New(ErrDuplicateCitizenID, correlationID, map[string]any{"id": r.ID, "fidelity": "cold", "path": "SeedColdRecords"})
 		}
-		c.cold[shard].append(r)
+		c.shardAt(shard).append(r)
 	}
 	return nil
 }
@@ -442,8 +768,8 @@ func (c *CitizensAPI) TotalPopulation(correlationID string) int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	n := 0
-	for _, s := range c.cold {
-		n += s.count()
+	for shard := range c.cold {
+		n += c.shardAt(shard).count()
 	}
 	return n
 }
@@ -573,7 +899,7 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 			return errs.New(ErrDuplicateCitizenID, cmd.CorrelationID, map[string]any{"id": cmd.Citizen.ID, "fidelity": "cold", "path": "LifeEventBirth"})
 		}
 		r := hotToColdRecord(cmd.Citizen, districtOf(cmd.Citizen.Home))
-		c.cold[det.ShardForEntity(cmd.Citizen.ID)].append(r)
+		c.shardAt(det.ShardForEntity(cmd.Citizen.ID)).append(r)
 		if cmd.Citizen.Fidelity != FidelityCold {
 			cp := cmd.Citizen
 			cp.Month = c.month
@@ -675,7 +1001,7 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 			cit.Personality = newP
 			refreshDerivedLeisure(cit) // personality changed → re-derive leisure
 		} else if shard, row, ok := c.coldRowLocked(cmd.CitizenID); ok {
-			s := c.cold[shard]
+			s := c.shardAt(shard)
 			newP = ApplyEducationEffect(widenPersonality(s.personalityAt(row)), int32(s.attainment[row]))
 		} else {
 			return nil // unknown citizen: no-op, not a corruption
@@ -784,8 +1110,18 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 	// hazard-selected this month, not once per citizen, so this is no
 	// longer the parallelism-killing bottleneck the pre-BUG-663 dq.IsQueued
 	// call was.
+	// BUG-664 round-2 P0 FIX: this is the ONLY place in the package where
+	// shardAt/acquireShard is ever called concurrently across DIFFERENT
+	// shard indices (runShardsParallel fans out c.workers goroutines,
+	// c.mu.Lock only serialises this whole AdvanceDayTick call against
+	// OTHER top-level API calls, not against these sibling goroutines) --
+	// so this is the one call site that pins via acquireShard/
+	// releaseShard rather than the plain unpinned shardAt every other
+	// (strictly sequential) call site in this package still uses.
 	results := runShardsParallel(c.workers, shards, func(shard int) passTotals {
-		return c.cold[shard].applyMonthly(seed, month, params, func(id uint64) bool {
+		s := c.acquireShard(shard)
+		defer c.releaseShard(shard)
+		return s.applyMonthly(seed, month, params, func(id uint64) bool {
 			return hotSet[id]
 		}, c.deathQueue, shard, correlationID)
 	})
@@ -866,7 +1202,7 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 		// sequence is deterministic and worker-count invariant too.
 		for _, id := range realised {
 			shard := det.ShardForEntity(id)
-			row := c.cold[shard].rowOf(id)
+			row := c.shardAt(shard).rowOf(id)
 			if row < 0 {
 				// Structurally unreachable: a realised id was Enqueue'd from
 				// this exact shard (det.ShardForEntity is a pure function of
@@ -877,7 +1213,7 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 				// genuine invariant violation if it is ever hit.
 				continue
 			}
-			shardStore := c.cold[shard]
+			shardStore := c.shardAt(shard)
 			d := coldDeath{
 				citizenID:   id,
 				householdID: uint64(shardStore.households[row]),
@@ -979,7 +1315,7 @@ func (c *CitizensAPI) PopulationHash(correlationID string) [32]byte {
 	putU64(uint64(c.dayTick))
 
 	for shard := 0; shard < numColdShards; shard++ {
-		s := c.cold[shard]
+		s := c.shardAt(shard)
 		putU64(uint64(s.count()))
 		for i := 0; i < s.count(); i++ {
 			r := s.recordAt(i)
@@ -1050,7 +1386,8 @@ func (c *CitizensAPI) hotIDSetLocked() map[uint64]bool {
 
 func (c *CitizensAPI) allColdRecordsLocked() []ColdRecord {
 	var out []ColdRecord
-	for _, s := range c.cold {
+	for shard := range c.cold {
+		s := c.shardAt(shard)
 		for i := 0; i < s.count(); i++ {
 			out = append(out, s.recordAt(i))
 		}
@@ -1060,7 +1397,7 @@ func (c *CitizensAPI) allColdRecordsLocked() []ColdRecord {
 
 func (c *CitizensAPI) coldRecord(id uint64) (ColdRecord, bool) {
 	shard := det.ShardForEntity(id)
-	s := c.cold[shard]
+	s := c.shardAt(shard)
 	if row := s.rowOf(id); row >= 0 {
 		return s.recordAt(row), true
 	}
@@ -1069,7 +1406,7 @@ func (c *CitizensAPI) coldRecord(id uint64) (ColdRecord, bool) {
 
 func (c *CitizensAPI) removeColdLocked(id uint64) {
 	shard := det.ShardForEntity(id)
-	s := c.cold[shard]
+	s := c.shardAt(shard)
 	if row := s.rowOf(id); row >= 0 {
 		s.removeAt(row)
 	}
@@ -1187,7 +1524,7 @@ func (c *CitizensAPI) clearPartnerOnlyLocked(citizenID uint64) {
 // ColdShard doc comment).
 func (c *CitizensAPI) setColdHouseholdLocked(citizenID uint64, householdID, partnerID uint64) {
 	shard := det.ShardForEntity(citizenID)
-	s := c.cold[shard]
+	s := c.shardAt(shard)
 	if row := s.rowOf(citizenID); row >= 0 {
 		s.households[row] = householdID
 		s.partners[row] = partnerID
@@ -1197,7 +1534,7 @@ func (c *CitizensAPI) setColdHouseholdLocked(citizenID uint64, householdID, part
 // coldRowLocked returns the (shard, row) of a citizen's cold record.
 func (c *CitizensAPI) coldRowLocked(id uint64) (int, int, bool) {
 	shard := det.ShardForEntity(id)
-	row := c.cold[shard].rowOf(id)
+	row := c.shardAt(shard).rowOf(id)
 	if row < 0 {
 		return 0, 0, false
 	}
@@ -1209,8 +1546,9 @@ func (c *CitizensAPI) coldRowLocked(id uint64) (int, int, bool) {
 // never only the hot elevation cache.
 func (c *CitizensAPI) mutateColdLocked(id uint64, fn func(s *ColdShard, row int)) {
 	shard := det.ShardForEntity(id)
-	if row := c.cold[shard].rowOf(id); row >= 0 {
-		fn(c.cold[shard], row)
+	s := c.shardAt(shard)
+	if row := s.rowOf(id); row >= 0 {
+		fn(s, row)
 	}
 }
 
@@ -1258,7 +1596,8 @@ func refreshDerivedLeisure(cit *Citizen) {
 func (c *CitizensAPI) coldParamsLocked(correlationID string) ColdPassParams {
 	b := newStratifiedSampleBuilder(c.month, c.seed, 1)
 	var buf []ColdRecord
-	for _, s := range c.cold {
+	for shard := range c.cold {
+		s := c.shardAt(shard)
 		n := s.count()
 		if cap(buf) < n {
 			buf = make([]ColdRecord, n)

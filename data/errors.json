@@ -1283,6 +1283,12 @@
       "message": "Allocate called on a copied SubscriptionAllocator value, not the one NewSubscriptionAllocator constructed",
       "remedy": "Always use the *SubscriptionAllocator pointer NewSubscriptionAllocator returned. Do not dereference-and-reassign it ('a2 := *a') or pass it by value -- that produces a second, independently-incrementing counter seeded from the same point, so the copy and the original hand out COLLIDING SubscriptionIDs rather than crashing or hanging (SEC-023). If you need a second independent allocator, call NewSubscriptionAllocator again."
     },
+    "MET-P003": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "invalid entity ID {entityId} in a protocol.TargetRef (FEAT-042 AC-20/AC-32)",
+      "remedy": "supply a non-empty EntityID using only the characters ValidateEntityID accepts"
+    },
     "MET-P090": {
       "severity": "error",
       "module": "engine.stub",
@@ -1925,6 +1931,12 @@
       "message": "{path} rejected: citizen id {id} already exists ({fidelity})",
       "remedy": "A {path} call's citizen id already exists in this CitizensAPI's cold or hot store (LifeEventBirth and SeedColdRecords both mint/admit ids and both hit this same guard). Rejected rather than silently appended as a second row (which would alias two logically-distinct citizens under one id, invisible to TotalPopulation's row-count-based conservation view) -- FEAT-169's cross-module ID-collision finding: engine.attract's migrant ids and this package's fertility-child ids partition the same 2^62-2^63 high-bit range by convention, not by a shared allocator, so this check is the last-resort defense-in-depth catch if that convention is ever violated. The caller must mint a genuinely fresh id."
     },
+    "MET-G011": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizens: EnableDiskPaging maxResident {maxResident} must be >= 1",
+      "remedy": "Pass a maxResident of at least 1 (or leave paging disabled) so every shardAt call always has at least one resident shard to work with."
+    },
     "MET-G100": {
       "severity": "error",
       "module": "engine.projections",
@@ -2050,6 +2062,42 @@
       "module": "engine.finance",
       "message": "invalid firm: {field} {value} fails {rule}",
       "remedy": "A SimpleFirm's revenue/cost inputs failed validation (negative revenue or cost). Reject the firm rather than opening a firm with an invalid P&L."
+    },
+    "MET-G211": {
+      "severity": "fatal",
+      "module": "engine.finance",
+      "message": "OPEX integration data file failed schema validation: {cause}",
+      "remedy": "check data/opexintegration.json against its schema (version, positive cost-per-engineer-day, positive backlog divisor)"
+    },
+    "MET-G212": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "an OPEX-integration method requiring balance data was called before SetOpexConfig loaded it",
+      "remedy": "call SetOpexConfig (or LoadOpexConfig) once during composition before posting maintenance/backlog-efficiency figures"
+    },
+    "MET-G213": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "maintenance settlement demand was negative: {amount}",
+      "remedy": "the caller (engine.maintenance) must never pass a negative engineer-day demand figure"
+    },
+    "MET-G214": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "maintenance settlement funded amount was negative: {amount}",
+      "remedy": "the caller must never pass a negative funded amount; fund zero to represent no allocation, never a negative one"
+    },
+    "MET-G215": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "a refit/rebuild event was posted with no declared capital cost",
+      "remedy": "PostCapexSpend requires a positive cost; a zero-cost refit/rebuild is not a capital event and should not call this path"
+    },
+    "MET-G216": {
+      "severity": "fatal",
+      "module": "engine.finance",
+      "message": "invalid OPEX integration data: {field} fails {rule}",
+      "remedy": "check data/opexintegration.json (or the METROPOLIS_DATA_DIR resolution) against its schema; the named field failed the named validation rule"
     },
     "MET-G300": {
       "severity": "error",

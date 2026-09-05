@@ -117,6 +117,14 @@ const (
 	// ever violated by a future caller.
 	ErrDuplicateCitizenID = "MET-G010"
 
+	// ErrInvalidPagingBudget (BUG-664): EnableDiskPaging was called with a
+	// maxResident < 1. shardAt's eviction discipline assumes at least one
+	// shard can always stay resident for the duration of the call that just
+	// touched it (evictOverBudgetLocked never evicts the shard the caller
+	// is about to use) -- a budget of 0 would defeat that invariant, so
+	// it is rejected outright rather than silently clamped to 1.
+	ErrInvalidPagingBudget = "MET-G011"
+
 	// --- feat.deathwave (FEAT-087) — range G5400-G5409, claimed via
 	// tools/plan/add-error.js claim-range (BUG-273's allocator). A
 	// separate range from engine.citizens' own G000-G099 block because the

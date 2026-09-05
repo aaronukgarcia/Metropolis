@@ -162,6 +162,13 @@ type financeMetaWire struct {
 	MissedPayments   int          `json:"missedPayments"`
 	InsolvencyMonths int          `json:"insolvencyMonths"`
 	GameOver         bool         `json:"gameOver"`
+	// Backlog is FEAT-094's running maintenance-underfunding balance
+	// (AC-5) — real simulation state that persists across months, so it
+	// must survive a save/load round trip like every other running total
+	// here (never re-derived from the ledger on load — the ledger's
+	// per-tick transactions don't carry enough history to reconstruct a
+	// balance that has been decaying/growing over many prior months).
+	Backlog Money `json:"backlog"`
 }
 
 // financeSnapshot is a point-in-time, deterministically-ordered copy of
@@ -283,6 +290,7 @@ func (f *FinanceAPI) snapshotForSave() (financeSnapshot, error) {
 			MissedPayments:   f.missedPayments,
 			InsolvencyMonths: f.insolvencyMonths,
 			GameOver:         f.gameOver,
+			Backlog:          f.backlog,
 		},
 	}
 
@@ -410,6 +418,7 @@ func (f *FinanceAPI) resetForLoad() error {
 	f.missedPayments = 0
 	f.insolvencyMonths = 0
 	f.gameOver = false
+	f.backlog = 0
 	return nil
 }
 
@@ -447,6 +456,7 @@ func (f *FinanceAPI) applyLoadRecord(rec serialize.Record) error {
 		f.missedPayments = m.MissedPayments
 		f.insolvencyMonths = m.InsolvencyMonths
 		f.gameOver = m.GameOver
+		f.backlog = m.Backlog
 
 	case recAccount:
 		var a accountRecordWire

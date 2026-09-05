@@ -74,6 +74,7 @@ func TestFinanceAPIFieldsAllClassified(t *testing.T) {
 		"correlationID": "per-instance error correlation, not simulation state",
 		"gate":          "injected MilestoneGate config, wired by the composition root on load",
 		"self":          "SEC-020 copy-guard pointer, re-armed by NewFinanceAPI",
+		"opexCfg":       "FEAT-094 injected OPEX balance config (SetOpexConfig/LoadOpexConfig), wired by the composition root on load like gate",
 	}
 	// Covered: serialized via financeMetaWire or a per-item record.
 	covered := map[string]bool{
@@ -83,6 +84,7 @@ func TestFinanceAPIFieldsAllClassified(t *testing.T) {
 		"nextLoanID": true, "totalDebt": true, "missedPayments": true,
 		"insolvencyMonths": true, "gameOver": true, "firms": true, "nextFirmID": true,
 		"investments": true, "nextInvestID": true,
+		"backlog": true,
 	}
 	ft := reflect.TypeOf((*FinanceAPI)(nil)).Elem()
 	for i := 0; i < ft.NumField(); i++ {

@@ -29,6 +29,31 @@
 //     the 1:1 gRPC mapping; no gRPC code or dependency lives here.
 //   - codec.go       — JSON encode/decode (encoding/json only) of every
 //     envelope type, built on the commands.go registry.
+//   - entity.go      — FEAT-042: EntityID and TargetRef, the sub-entity
+//     addressing pair (a ledger line, a diagram arrow) inside an
+//     already-open view's patch.
+//
+// # FEAT-042 (additive amendment to the frozen v1 contract)
+//
+// FEAT-042 extends this package with entity-level drill addressing
+// (EntityID/TargetRef, entity.go) and an explicit crisis signal
+// (Event.Crisis, events.go). Both are purely additive: every new field is
+// omitempty-tagged and every new type is exported alongside the existing
+// vocabulary, never replacing it. AC-26 proves marshalling is
+// byte-identical to the pre-amendment schema when the new fields are at
+// their zero value; AC-28 proves ProtocolVersion stays "1.0" (an exact
+// string-equality check in Command.Validate — see envelope.go — makes a
+// version bump actively wrong for an additive change, not merely
+// unnecessary); AC-29 proves a v1-recorded fixture with none of the new
+// keys still replays cleanly under this code. Neither addition
+// introduces a hand-maintained JSON wire-mirror struct (FEAT-042 AC-27) —
+// if a future change ever does, that same commit must add a
+// reflection-based field-parity test modeled on
+// TestHeaderWireFieldsMatchHeader (internal/foundation/serialize). See
+// docs/planning/acceptance/int.protocol.md's "FEAT-042" section for the
+// full AC-19..AC-36 range, and its own AC-36 note that AC-1..AC-18 above
+// remain the byte-for-byte v1 freeze record this amendment does not
+// touch.
 //
 // # Rules this package must not break
 //

@@ -393,6 +393,37 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 			"season field, participant.go precedent). engine.season is itself pure " +
 			"month-index curves read from data/seasonal.json -- there is nothing here to " +
 			"serialize, only a pointer to re-wire.",
+		"pages": "BUG-664 disk-backed paging seam -- an OPTIONAL runtime residency " +
+			"mechanism over cold (the actual durable source of truth, already " +
+			"covered below), re-wired post-load via EnableDiskPaging exactly like " +
+			"SetSeason/SetDeathDrainCapacity's own precedent, never simulation " +
+			"state. cold itself is always restored fully resident by resetForLoad, " +
+			"so a load target starts correct with paging disabled regardless of " +
+			"whether the SAVED engine had it enabled.",
+		"maxResidentShards": "BUG-664 paging config paired with pages -- meaningless " +
+			"while pages is nil, re-supplied via EnableDiskPaging's own argument on " +
+			"load, never serialized state.",
+		"pageOrder": "BUG-664 shardAt's in-memory LRU touch history over cold -- " +
+			"pure runtime bookkeeping derived from access pattern, not from any " +
+			"citizen's data; reseeded by EnableDiskPaging/resetForLoad, never " +
+			"serialized state.",
+		"pageList": "BUG-664 round-2 P2 -- the O(1)-amortised replacement for " +
+			"pageOrder's linear-scan LRU (same runtime bookkeeping, same " +
+			"reseed-on-EnableDiskPaging/resetForLoad lifecycle), not " +
+			"simulation state.",
+		"pageElem": "BUG-664 round-2 P2 -- pageList's O(1) node-lookup index " +
+			"(shard -> *list.Element), pure runtime bookkeeping paired with " +
+			"pageList, never serialized state.",
+		"residentCount": "BUG-664 round-2 P2 -- an O(1)-maintained mirror of " +
+			"how many cold[] slots are non-nil, derived entirely from pages/cold " +
+			"(both already covered), reseeded by EnableDiskPaging/resetForLoad, " +
+			"never serialized state.",
+		"shardPins": "BUG-664 round-2 P0 -- the per-shard in-use refcount " +
+			"acquireShard/releaseShard maintain around runShardsParallel's " +
+			"concurrent workers; always zero outside the span of a live " +
+			"AdvanceDayTick call and reseeded by EnableDiskPaging/resetForLoad, " +
+			"never serialized state.",
+		"pagingMu": "runtime lock guarding pages/pageOrder/pageList/shardPins transitions, not state",
 	}
 	covered := map[string]bool{
 		"month": true, "dayTick": true, "cold": true, "hot": true,

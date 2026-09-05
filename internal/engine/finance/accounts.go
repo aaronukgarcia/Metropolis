@@ -81,6 +81,20 @@ const (
 	CatReserveInterest Category = "reserve.interest"
 	CatReserveDeposit  Category = "reserve.deposit"
 	CatInvestment      Category = "investment"
+
+	// FEAT-094 CAPEX/OPEX integration categories. Maintenance, raw
+	// materials, and staffing wages are the three composed-OPEX
+	// components that previously had no category of their own (they
+	// would otherwise have been folded into the generic CatOpex "service
+	// opex" bucket — exactly the false-pass AC-1 exists to prevent).
+	// CatCapex is the capital side of a policy-driven maintenance/repair
+	// classification (AC-7/AC-8): a refit/rebuild event posts here,
+	// distinct from CatConstruction (new-build spend) and CatOpex-family
+	// (routine operating drains).
+	CatMaintenance Category = "opex.maintenance"
+	CatMaterials   Category = "opex.materials"
+	CatStaffWages  Category = "opex.staffwages"
+	CatCapex       Category = "capex.maintenance"
 )
 
 // taxCategories is the ordered set of categories that compose the tax

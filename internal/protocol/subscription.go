@@ -36,6 +36,21 @@ type SubscriptionID string
 // for entity-scoped views addressed by ID in segment 2. This mirrors
 // EntityRef's "typed:id" convention closely enough to stay predictable
 // without coupling the two.
+//
+// FEAT-042 AC-19 (documentation, not a wire change): UI-SPEC §4's
+// drill-through rule gives its own worked examples of a WHOLE-ENTITY
+// drill target — "a congestion percentage opens that junction; a
+// school-roll number opens that school" — and both are already
+// satisfied today, with zero code change, by this grammar's existing
+// entity-scoped segment: a congestion view subscribes as
+// "junction.14.approaches" and a school-roll view as
+// "school.7.roll" (school's own view names are that module's to define;
+// "junction"/"citizen" above are this package's own already-passing
+// TestValidateViewName cases). What this grammar does NOT reach is
+// UI-SPEC §4's "a cash figure opens its ledger lines" case: a single
+// ledger LINE, buried inside an already-open "f2.ledger" view's patch,
+// is not a subscription of its own — that narrower, genuinely new gap is
+// what EntityID/TargetRef (entity.go) exist to close. See AC-20/AC-21.
 var viewNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(\.[a-z0-9]+)+$`)
 
 // ValidateViewName reports whether name follows the naming scheme
