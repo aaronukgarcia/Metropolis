@@ -79,9 +79,26 @@ export function EngineLagChip({ speed }: { speed: number }) {
   // new tracker mutation in between (nothing else may fire for seconds after
   // a stall clears) — a light poll re-reads the snapshot so recentStallMs
   // reliably reverts to null once STALL_DISPLAY_MS has elapsed.
+  //
+  // BUG-721 fix: bind to `window.setInterval`/`window.clearInterval`
+  // explicitly rather than the bare global. Under tsx/jsdom, the bare
+  // `setInterval` identifier resolves to NODE's own timer (not the jsdom
+  // window's), because jsdom is loaded as a library into a real Node global
+  // scope rather than replacing it — so a leaked interval binds a real Node
+  // timer that `dom.window.close()` has no power to stop; only
+  // `clearInterval`/process exit can. Routing through the jsdom `window`
+  // object (present in every real browser too, where `window.setInterval`
+  // and the bare global are the same thing, so this is a no-op behaviour
+  // change there) makes the timer belong to the window being torn down.
+  // `.unref?.()` additionally ensures that IF a caller ever fails to clear
+  // this interval (a bug in the cleanup below, or a test that throws before
+  // unmount), the underlying Node timer can never by itself keep the process
+  // alive — `unref` is a Node-only Timeout method (absent in a real browser's
+  // DOMHighResTimeStamp-keyed interval id, hence the optional chaining).
   useEffect(() => {
-    const id = setInterval(() => setSnapshot(engineLagTracker.snapshot(nowMs())), 500);
-    return () => clearInterval(id);
+    const id = window.setInterval(() => setSnapshot(engineLagTracker.snapshot(nowMs())), 500);
+    (id as unknown as { unref?: () => void })?.unref?.();
+    return () => window.clearInterval(id);
   }, []);
 
   // Stall-detector heartbeat: requestAnimationFrame is unavailable under

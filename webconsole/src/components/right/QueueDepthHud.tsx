@@ -117,8 +117,10 @@ export function QueueDepthHud() {
       }
     };
     readOnce();
-    const id = setInterval(readOnce, WORKER_POLL_MS);
-    return () => clearInterval(id);
+    // BUG-721: window-bound + unref'd — see TopBar.tsx's EngineLagChip.
+    const id = window.setInterval(readOnce, WORKER_POLL_MS);
+    (id as unknown as { unref?: () => void })?.unref?.();
+    return () => window.clearInterval(id);
   }, []);
 
   // GR#1: an unexpected/empty tracker state (nothing has ever been tracked)

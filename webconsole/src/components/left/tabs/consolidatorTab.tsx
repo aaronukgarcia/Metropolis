@@ -165,7 +165,12 @@ export function ConsolidatorTab() {
     }
     // Poll for the next due refresh rather than recomputing on every state
     // change — mirrors DebugTab's "freeze a frame, retake on a timer" idiom.
-    const id = setInterval(() => {
+    // BUG-721: bind to window.setInterval/clearInterval (not the bare
+    // global) — under tsx/jsdom the bare identifier resolves to Node's own
+    // timer, which dom.window.close() cannot stop; unref as a backstop in
+    // case a test throws before this effect's own cleanup runs (see
+    // TopBar.tsx's EngineLagChip for the full rationale).
+    const id = window.setInterval(() => {
       const { due: dueNow } = nextRefreshDue(lastRefreshRef.current, Date.now(), REFRESH_MS);
       if (dueNow) {
         lastRefreshRef.current = Date.now();
@@ -174,7 +179,8 @@ export function ConsolidatorTab() {
         publishConsolidatorFocus(f.monthTop[0]?.sectionKey ?? null);
       }
     }, 1000);
-    return () => clearInterval(id);
+    (id as unknown as { unref?: () => void })?.unref?.();
+    return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: frame refresh is TIME-driven, not state-driven (see file header)
   }, [state, enabled]);
 

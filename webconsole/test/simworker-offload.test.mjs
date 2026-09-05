@@ -1490,13 +1490,19 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
     return dom;
   }
 
-  /** Spy on the global setInterval/clearInterval, capturing the tick-loop's
-   *  own callback by its distinctive delay (same isolation trick as
-   *  store-dispatch.test.tsx's BAR-2 — the autosave timer uses a different
-   *  delay and must not be confused with it). Returns {get, restore}. */
+  /** Spy on the tick-loop's setInterval, capturing its own callback by its
+   *  distinctive delay (same isolation trick as store-dispatch.test.tsx's
+   *  BAR-2 — the autosave timer uses a different delay and must not be
+   *  confused with it). Returns {get, restore}.
+   *
+   *  BUG-721: store.tsx's tick-driver interval now binds `window.setInterval`
+   *  (not the bare global) — see store.tsx's own BUG-721 comments — so this
+   *  spy targets `globalThis.window.setInterval` (installJsdomForWorkerTests
+   *  above assigns `globalThis.window = <jsdom window>`, exactly what
+   *  `window` resolves to inside store.tsx). */
   function captureTickLoopCallback() {
-    const g = globalThis;
-    const real = g.setInterval.bind(globalThis);
+    const g = globalThis.window;
+    const real = g.setInterval.bind(g);
     let captured = null;
     g.setInterval = (...args) => {
       const id = real(...args);

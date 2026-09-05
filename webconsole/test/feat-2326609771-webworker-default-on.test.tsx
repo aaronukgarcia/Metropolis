@@ -225,12 +225,18 @@ function installJsdom() {
   return dom;
 }
 
-/** Spy on the global setInterval, capturing the tick-driver's own callback by
- *  its distinctive delay (TICK_LOOP_DELAY_MS) — same isolation trick as
- *  simworker-offload.test.mjs's BUG-597 section. */
+/** Spy on the tick-driver's setInterval, capturing its own callback by its
+ *  distinctive delay (TICK_LOOP_DELAY_MS) — same isolation trick as
+ *  simworker-offload.test.mjs's BUG-597 section.
+ *
+ *  BUG-721: store.tsx's tick-driver interval now binds `window.setInterval`
+ *  (not the bare global) — see store.tsx's own BUG-721 comments — so this
+ *  spy targets `globalThis.window.setInterval` (installJsdom() above assigns
+ *  `globalThis.window = <jsdom window>`, exactly what `window` resolves to
+ *  inside store.tsx). */
 function captureTickLoopCallback() {
-  const g = globalThis as any;
-  const real = g.setInterval.bind(globalThis);
+  const g = (globalThis as any).window as any;
+  const real = g.setInterval.bind(g);
   let captured: (() => void) | null = null;
   g.setInterval = (...args: any[]) => {
     const id = real(...args);

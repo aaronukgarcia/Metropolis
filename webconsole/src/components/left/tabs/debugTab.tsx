@@ -127,8 +127,12 @@ export function DebugTab() {
   const [frame, setFrame] = useState(() => takeFrame(state));
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
+    // BUG-721: window-bound + unref'd — see TopBar.tsx's EngineLagChip for
+    // why the bare global setInterval/clearInterval pair is the wrong shape
+    // under tsx/jsdom (dom.window.close() cannot stop a Node-bound timer).
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    (id as unknown as { unref?: () => void })?.unref?.();
+    return () => window.clearInterval(id);
   }, []);
   // Retake the frame only when the 15 s window has elapsed. The effect closure
   // is recreated every render, so when `now` ticks it sees the LATEST state.

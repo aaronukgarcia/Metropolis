@@ -1026,7 +1026,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
 
   // BUG-435: stall watchdog — if progress doesn't advance for WATCHDOG_MS, we move to stalled phase.
   const [stallInfo, setStallInfo] = useState<{ actionsDone: number; actionsTotal: number; phaseLabel: string } | null>(null);
-  const watchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // BUG-721: typed as `number` (not `ReturnType<typeof setTimeout>`, which
+  // under @types/node resolves to NodeJS.Timeout) — the ref now holds a
+  // window.setTimeout id, see the self-rearming watchdog effect below.
+  const watchdogTimerRef = useRef<number | null>(null);
 
   // r1 REJECT follow-up BAR-3: generation counter. Bumped on every fresh
   // onRebuild/onRetry dispatch AND on a watchdog-fired stall, so an old chunked
@@ -1451,7 +1454,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // issueTickRequest is never called again before this one either resolves
   // (cleared in worker.onmessage) or fires (which itself tears the worker
   // down, so no second request — and therefore no second timer — can follow).
-  const workerHandshakeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // BUG-721: typed as `number` (window.setTimeout's return type), not
+  // `ReturnType<typeof setTimeout>` (NodeJS.Timeout under @types/node) — see
+  // the arm site below, now window-bound.
+  const workerHandshakeTimeoutRef = useRef<number | null>(null);
 
   /**
    * B1/B2/"lesser" fix, superseding the FIRST cut's buffer-while-in-flight
@@ -1646,7 +1652,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // misleading steady-state "N pending" reading while the clock is
         // still frozen on this worker instance's very first reply.
         getGlobalWorkerQueueTracker().reportHandshakeStartAt(Date.now());
-        workerHandshakeTimeoutRef.current = setTimeout(() => {
+        // BUG-721: window-bound — see TopBar.tsx's EngineLagChip for the
+        // full rationale (a bare-global setTimeout resolves to Node's own
+        // timer under tsx/jsdom, which dom.window.close() cannot stop).
+        workerHandshakeTimeoutRef.current = window.setTimeout(() => {
           workerHandshakeTimeoutRef.current = null;
           if (workerHandshakeCompleteRef.current) return; // belt-and-braces: the reply won the race just before this fired.
           const stillCurrent = workerRef.current === worker;
@@ -1764,7 +1773,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // one; a later crash is `runtime-error` (worker.onerror below), not a
       // handshake failure, precisely because this line already ran.
       if (workerHandshakeTimeoutRef.current !== null) {
-        clearTimeout(workerHandshakeTimeoutRef.current);
+        window.clearTimeout(workerHandshakeTimeoutRef.current);
         workerHandshakeTimeoutRef.current = null;
       }
       workerHandshakeCompleteRef.current = true;
@@ -1859,7 +1868,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // below); the distinction is purely for the honest HUD line / error
       // record, not for behaviour.
       if (workerHandshakeTimeoutRef.current !== null) {
-        clearTimeout(workerHandshakeTimeoutRef.current);
+        window.clearTimeout(workerHandshakeTimeoutRef.current);
         workerHandshakeTimeoutRef.current = null;
       }
       const reason = workerHandshakeCompleteRef.current ? 'runtime-error' : 'handshake-error';
@@ -1928,7 +1937,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // torn-down worker (workerRef already null by then) after this
       // SimProvider instance is gone.
       if (workerHandshakeTimeoutRef.current !== null) {
-        clearTimeout(workerHandshakeTimeoutRef.current);
+        window.clearTimeout(workerHandshakeTimeoutRef.current);
         workerHandshakeTimeoutRef.current = null;
       }
     };
@@ -2398,7 +2407,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // Autosave timer: every AUTOSAVE_INTERVAL_MS, persist a savepoint.
   // FEAT-1972079854: rolling autosave with fail-safe error handling.
   useEffect(() => {
-    const intervalId = setInterval(() => {
+    // BUG-721: window-bound — see TopBar.tsx's EngineLagChip for why the
+    // bare global setInterval/clearInterval pair is the wrong shape under
+    // tsx/jsdom (dom.window.close() cannot stop a Node-bound timer).
+    const intervalId = window.setInterval(() => {
       try {
         // Calculate journalTail: entries added since last savepoint.
         const tail = journalTail(journal, lastSaveIndex);
@@ -2429,7 +2441,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         setAutoSaveError(true);
       }
     }, AUTOSAVE_INTERVAL_MS);
-    return () => clearInterval(intervalId);
+    return () => window.clearInterval(intervalId);
   }, [state, journal, lastSaveIndex]);
 
   // GR#1 (FEAT-1972079898): feed the error envelope's "heap" ref with a bounded
@@ -2525,8 +2537,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
     };
 
     postAuditIfDue(); // fire immediately on enable rather than waiting a full poll interval
-    const auditIntervalId = setInterval(postAuditIfDue, AUDIT_POLL_MS);
-    return () => clearInterval(auditIntervalId);
+    // BUG-721: window-bound — see TopBar.tsx's EngineLagChip.
+    const auditIntervalId = window.setInterval(postAuditIfDue, AUDIT_POLL_MS);
+    return () => window.clearInterval(auditIntervalId);
   }, [state.consolidatorEnabled]);
 
   // GR#27 CAPTURE BEFORE WIPE — RELOAD boundary (BUG-427). BUG-420's attemptWipe
@@ -2589,7 +2602,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // — read whenever this effect (re)fires, i.e. whenever state.speed
     // changes (this effect's own dependency array, below).
     engineLagTracker.setIntervalMs(SPEED_MS[state.speed]);
-    const id = setInterval(() => {
+    // BUG-721: window-bound — see TopBar.tsx's EngineLagChip for why the
+    // bare global setInterval/clearInterval pair is the wrong shape under
+    // tsx/jsdom (dom.window.close() cannot stop a Node-bound timer); pure
+    // rebinding, no timing/semantics change.
+    const id = window.setInterval(() => {
       if (rebuildInProgress) return;
       // BUG-618: one "wants a tick" fire, counted BEFORE any
       // worker/fallback branching below — a fire that finds the worker
@@ -2630,7 +2647,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // today's untouched behaviour, same reducer module.
       wrappedDispatch({ type: 'tick' });
     }, SPEED_MS[state.speed]);
-    return () => clearInterval(id);
+    return () => window.clearInterval(id);
   }, [state.speed, wrappedDispatch]);
 
   // FEAT-1972079917 / BUG-435: watchdog timeout (ms) — if chunked replay progress
@@ -2638,9 +2655,14 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const WATCHDOG_MS = 10_000;
 
   // Clean up the stall watchdog timer.
+  // BUG-721: window-bound — see TopBar.tsx's EngineLagChip for the full
+  // rationale (a bare-global setTimeout resolves to Node's own timer under
+  // tsx/jsdom, which dom.window.close() cannot stop) — this watchdog
+  // self-rearms while the tab is hidden (see the arm site below), so an
+  // un-cleared instance is exactly the recurring-leak shape BUG-721 fixes.
   const clearWatchdog = () => {
     if (watchdogTimerRef.current) {
-      clearTimeout(watchdogTimerRef.current);
+      window.clearTimeout(watchdogTimerRef.current);
       watchdogTimerRef.current = null;
     }
   };
@@ -2824,14 +2846,18 @@ export function SimProvider({ children }: { children: ReactNode }) {
           if (lastProgressRef.current?.actionsDone !== progress.actionsDone) {
             clearWatchdog();
             lastProgressRef.current = { actionsDone: progress.actionsDone, timestamp: now };
-            watchdogTimerRef.current = setTimeout(function fireWatchdog() {
+            // BUG-721: window-bound — see clearWatchdog's own comment above.
+            watchdogTimerRef.current = window.setTimeout(function fireWatchdog() {
               // BAR-5: a backgrounded tab throttles requestAnimationFrame (the
               // replay's own driver) but NOT setTimeout, so a merely-hidden tab
               // looks identical to a genuine stall. Re-arm instead of declaring
               // one when the tab is hidden — rAF will resume and make real
               // progress once it's foregrounded again.
               if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-                watchdogTimerRef.current = setTimeout(fireWatchdog, WATCHDOG_MS);
+                // BUG-721: window-bound re-arm — this is the recurring-leak
+                // shape (self-rearms indefinitely while hidden), exactly why
+                // it must never bind the bare global.
+                watchdogTimerRef.current = window.setTimeout(fireWatchdog, WATCHDOG_MS);
                 return;
               }
               // No progress for WATCHDOG_MS while visible — genuine stall.

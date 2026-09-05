@@ -141,10 +141,12 @@ export function StaleBuildBanner() {
       }
     };
     check();
-    const id = setInterval(check, POLL_MS);
+    // BUG-721: window-bound + unref'd — see TopBar.tsx's EngineLagChip.
+    const id = window.setInterval(check, POLL_MS);
+    (id as unknown as { unref?: () => void })?.unref?.();
     return () => {
       alive = false;
-      clearInterval(id);
+      window.clearInterval(id);
     };
   }, []);
 

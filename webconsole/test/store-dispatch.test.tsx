@@ -116,10 +116,16 @@ test('BAR-2: the tick-loop setInterval is not recreated across a burst of dispat
     const { act } = await import('react-dom/test-utils');
     const { SimProvider, useSim } = await import('../src/sim/store.tsx');
 
-    // Spy on setInterval/clearInterval on the GLOBAL scope: store.tsx calls the bare
-    // identifiers `setInterval`/`clearInterval` (not `window.setInterval`), which under
-    // Node resolve to globalThis's, not dom.window's — spying on dom.window would silently
-    // count zero calls (that was tried first and produced a false green on assertion 1).
+    // Spy on setInterval/clearInterval on the jsdom WINDOW: BUG-721 moved
+    // store.tsx's mount-effect intervals (including the tick loop) from the
+    // bare global identifiers to `window.setInterval`/`window.clearInterval`
+    // (a leaked bare-global timer bound to Node's own timer table instead of
+    // the jsdom window, which `dom.window.close()` cannot stop — see
+    // TopBar.tsx's EngineLagChip and store.tsx's own BUG-721 comments), so
+    // the calls this test needs to observe now land on `dom.window`, not
+    // `globalThis`. (Historical note, now inverted: before BUG-721 this spy
+    // had to target `globalThis` — spying on `dom.window` back then silently
+    // counted zero calls.)
     //
     // Two DIFFERENT effects in store.tsx call setInterval: the tick loop (deps
     // [state.speed, wrappedDispatch], delay = SPEED_MS[state.speed]) and the autosave
@@ -129,12 +135,12 @@ test('BAR-2: the tick-loop setInterval is not recreated across a burst of dispat
     // default speed=1, per SPEED_MS in engine.ts) rather than counting all setInterval
     // calls (which falsely flagged the ALWAYS-churning-by-design autosave timer too).
     const TICK_LOOP_DELAY_MS = 900;
-    const g = globalThis as unknown as { setInterval: typeof setInterval; clearInterval: typeof clearInterval };
+    const g = dom.window as unknown as { setInterval: typeof setInterval; clearInterval: typeof clearInterval };
     let setIntervalCalls = 0;
     let clearIntervalCalls = 0;
     const tickIntervalIds = new Set<unknown>();
-    const realSetInterval = g.setInterval.bind(globalThis);
-    const realClearInterval = g.clearInterval.bind(globalThis);
+    const realSetInterval = g.setInterval.bind(dom.window);
+    const realClearInterval = g.clearInterval.bind(dom.window);
     g.setInterval = ((...args: Parameters<typeof setInterval>) => {
       const id = realSetInterval(...(args as [any, any?]));
       if (args[1] === TICK_LOOP_DELAY_MS) {

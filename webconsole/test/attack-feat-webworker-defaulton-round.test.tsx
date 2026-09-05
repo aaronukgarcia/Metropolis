@@ -85,10 +85,17 @@ function installJsdom() {
 /** Capture EVERY setInterval registration (regardless of delay) — used to
  *  find the tick-driver's interval without needing to know SPEED_MS's value
  *  up front (store.tsx registers exactly one interval on mount at
- *  state.speed's resolved ms). */
+ *  state.speed's resolved ms).
+ *
+ *  BUG-721: store.tsx's tick-driver interval now binds `window.setInterval`
+ *  (not the bare global) — see store.tsx's own BUG-721 comments and
+ *  TopBar.tsx's EngineLagChip for the full rationale — so this spy targets
+ *  `globalThis.window.setInterval` (installJsdom() above assigns
+ *  `globalThis.window = <jsdom window>`, which is exactly what `window`
+ *  resolves to inside store.tsx). */
 function captureAnyInterval() {
-  const g = globalThis as any;
-  const real = g.setInterval.bind(globalThis);
+  const g = (globalThis as any).window as any;
+  const real = g.setInterval.bind(g);
   let captured: (() => void) | null = null;
   g.setInterval = (...args: any[]) => {
     const id = real(...args);

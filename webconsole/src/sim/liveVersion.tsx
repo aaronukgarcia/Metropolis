@@ -70,7 +70,16 @@ export function useLiveVersion(): LiveVersion {
   const [upgradeSource, setUpgradeSource] = useState<UpgradeSource | null>(null);
   // Highest numeric we've already surfaced, so we toast once per upgrade.
   const seen = useRef<string>(versionNumeric);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // BUG-721: window.setTimeout/window.clearTimeout is what this file uses
+  // below (not the bare global, which under tsx/jsdom binds to Node's own
+  // timer — see TopBar.tsx's EngineLagChip for the full rationale). The DOM
+  // lib's `Window.setTimeout` returns `number`, not `NodeJS.Timeout` — typed
+  // explicitly here rather than via `ReturnType<typeof setTimeout>` because
+  // @types/node's ambient global `setTimeout` declaration otherwise wins
+  // overload resolution even through `window.`, which would silently widen
+  // this back to `NodeJS.Timeout` and mismatch the real `number` returned at
+  // runtime by a browser/jsdom window.
+  const toastTimer = useRef<number | null>(null);
   // BUG-435: queued version that arrived during a rebuild.
   const queuedVersionRef = useRef<{ numeric: string; raw: string; label: string } | null>(null);
   // Track whether a rebuild is currently in progress.
@@ -105,8 +114,9 @@ export function useLiveVersion(): LiveVersion {
         setRaw(r);
         setUpgradedTo(label);
         setUpgradeSource('hot');
-        if (toastTimer.current) clearTimeout(toastTimer.current);
-        toastTimer.current = setTimeout(() => {
+        // BUG-721: window-bound — see TopBar.tsx's EngineLagChip.
+        if (toastTimer.current) window.clearTimeout(toastTimer.current);
+        toastTimer.current = window.setTimeout(() => {
           if (alive) setUpgradedTo(null);
         }, TOAST_MS);
       } catch {
@@ -114,7 +124,9 @@ export function useLiveVersion(): LiveVersion {
       }
     };
 
-    const id = setInterval(check, POLL_MS);
+    // BUG-721: window-bound + unref'd — see TopBar.tsx's EngineLagChip.
+    const id = window.setInterval(check, POLL_MS);
+    (id as unknown as { unref?: () => void })?.unref?.();
     check();
 
     // Subscribe to rebuild progress changes. When a rebuild completes (goes from
@@ -134,8 +146,8 @@ export function useLiveVersion(): LiveVersion {
         // rebuild, so the toast must not claim the city kept playing.
         setUpgradedTo(queued.label);
         setUpgradeSource('drain');
-        if (toastTimer.current) clearTimeout(toastTimer.current);
-        toastTimer.current = setTimeout(() => {
+        if (toastTimer.current) window.clearTimeout(toastTimer.current);
+        toastTimer.current = window.setTimeout(() => {
           if (alive) setUpgradedTo(null);
         }, TOAST_MS);
       }
@@ -143,8 +155,8 @@ export function useLiveVersion(): LiveVersion {
 
     return () => {
       alive = false;
-      clearInterval(id);
-      if (toastTimer.current) clearTimeout(toastTimer.current);
+      window.clearInterval(id);
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
       unsubscribe();
     };
   }, []);
