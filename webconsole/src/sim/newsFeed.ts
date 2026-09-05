@@ -31,7 +31,13 @@ import { gameDate, fmtMoney } from './utils.ts';
 
 export type NewsSeverity = 'info' | 'success' | 'warning' | 'error';
 
-export type NewsSource = 'levelup' | 'milestone' | 'placeNotice' | 'consolidatorCapacityUnknown' | 'payrollShortfall';
+export type NewsSource =
+  | 'levelup'
+  | 'milestone'
+  | 'placeNotice'
+  | 'consolidatorCapacityUnknown'
+  | 'payrollShortfall'
+  | 'insolvency';
 
 export interface NewsEntry {
   /** Stable within one feed instance: `${source}-${seq}`. Not global/shared. */
@@ -87,6 +93,16 @@ export interface NewsFeedSources {
    *  would fire the SAME clear-edge on a mid-starve disconnect as on an
    *  actual recovery. */
   payrollShortfall?: { amountMicropounds: number; months: number } | null;
+  /** BUG-769: FinanceAPI.InsolvencyMonths()/IsInsolvent(), read through the
+   *  f2.finance wire patch's flat insolvencyMonths/insolvent fields (the
+   *  OTHER real, already-consumed BUG-759 gap — see BUG-723's
+   *  payrollShortfall field above for the identical seam/rationale).
+   *
+   *  Same null/undefined-vs-real-object discipline as payrollShortfall:
+   *  null/undefined means "no live-engine data right now" and causes
+   *  NEITHER a start nor a clear transition; only a real object (even one
+   *  with insolvent:false) is a genuine "connected and reporting" reading. */
+  insolvency?: { months: number; insolvent: boolean } | null;
 }
 
 /** Per-source "currently active value" memory. Caller owns one instance for the feed's lifetime. */
@@ -122,6 +138,11 @@ export interface NewsFeedTracker {
    *  month a shortfall persists (unlike levelup/milestone's stable id) and
    *  a value-equality check would wrongly re-fire on every such change. */
   payrollShortfallActive: boolean;
+  /** BUG-769: true while the last-observed insolvency source reported
+   *  insolvent:true — mirrors payrollShortfallActive's exact "boolean gate,
+   *  not a value-equality check" rationale (the Months figure legitimately
+   *  changes every month the streak continues or resets). */
+  insolvencyActive: boolean;
 }
 
 export function createNewsFeedTracker(): NewsFeedTracker {
@@ -132,6 +153,7 @@ export function createNewsFeedTracker(): NewsFeedTracker {
     consolidatorCapacityUnknownKey: null,
     consolidatorCapacityUnknownMaxId: -Infinity,
     payrollShortfallActive: false,
+    insolvencyActive: false,
   };
 }
 
@@ -301,6 +323,23 @@ export function observeNews(
     } else if (!psActive && tracker.payrollShortfallActive) {
       tracker.payrollShortfallActive = false;
       push('payrollShortfall', 'success', 'Payroll shortfall recovered — private wages fully paid.');
+    }
+  }
+
+  // BUG-769: one entry on the START of insolvency (AC-7's 3-consecutive-
+  // months game-over signal going true), one on its CLEAR — mirrors the
+  // payrollShortfall block immediately above exactly, including the
+  // null-is-not-a-real-zero-reading discipline (a live-engine disconnect
+  // must never fire the same "recovered" clear-edge as a genuine recovery).
+  const ins = sources.insolvency;
+  if (ins != null) {
+    const insActive = ins.insolvent;
+    if (insActive && !tracker.insolvencyActive) {
+      tracker.insolvencyActive = true;
+      push('insolvency', 'error', `City insolvent: ${ins.months} consecutive month(s) of unmet obligations.`);
+    } else if (!insActive && tracker.insolvencyActive) {
+      tracker.insolvencyActive = false;
+      push('insolvency', 'success', 'Insolvency resolved — obligations are being met again.');
     }
   }
 

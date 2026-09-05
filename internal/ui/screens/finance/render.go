@@ -159,6 +159,41 @@ func RenderPayrollShortfall(buf *core.Buffer, rect core.Rect, p PayrollShortfall
 	drawText(buf, rect, rect.X, rect.Y, line, style.Bold(true))
 }
 
+// RenderInsolvency (BUG-769, AC-7) draws the insolvency status line:
+// nothing while have is false (no signal published yet) or while Months is
+// 0 (no consecutive failed-obligations streak — the healthy, silent
+// default), a single warning line otherwise, escalated to an insolvent/
+// game-over line once Insolvent is true. Mirrors RenderPayrollShortfall's
+// exact "guard on have, draw nothing when there is nothing to say" shape —
+// like every Render* function in this package, it is NOT wired into an
+// assembled TUI frame by any caller today (this fix does not attempt to
+// close that pre-existing, package-wide gap — see RenderPayrollShortfall's
+// own doc comment).
+func RenderInsolvency(buf *core.Buffer, rect core.Rect, v InsolvencyView, have bool, style tcell.Style) {
+	// BUG-769 round REJECT (opus-round-bug769, F2): `v.Months <= 0` alone
+	// used to short-circuit BEFORE looking at v.Insolvent, drawing
+	// NOTHING — but FinanceAPI.gameOver LATCHES (RecordMonthResult never
+	// clears it once set) while InsolvencyMonths resets to 0 on the very
+	// next met month, so a real, reachable production sequence (3 starved
+	// months then 3 funded months, proven live by
+	// attack_bug769_round_test.go's TestAttackBUG769_RecoveryAfterGameOver)
+	// reaches exactly Months=0 + Insolvent=true — the GAME OVER line would
+	// silently vanish the month after it first appeared. The guard now
+	// only skips rendering when there is genuinely nothing to say: no
+	// signal published (have=false) or a clean, never-latched city
+	// (Months<=0 AND not Insolvent).
+	if buf == nil || rect.W <= 0 || rect.H <= 0 || !have || (v.Months <= 0 && !v.Insolvent) {
+		return
+	}
+	if v.Insolvent {
+		line := fmt.Sprintf("INSOLVENT: %d consecutive month(s) of unmet obligations — GAME OVER", v.Months)
+		drawText(buf, rect, rect.X, rect.Y, line, style.Bold(true).Foreground(tcell.ColorRed))
+		return
+	}
+	line := fmt.Sprintf("INSOLVENCY WARNING: %d consecutive month(s) of unmet obligations", v.Months)
+	drawText(buf, rect, rect.X, rect.Y, line, style.Bold(true))
+}
+
 func RenderLoans(buf *core.Buffer, rect core.Rect, loans []LoanState, rating int, history []float64, rejected string, have bool, style tcell.Style) {
 	if buf == nil || rect.W <= 0 || rect.H <= 0 {
 		return

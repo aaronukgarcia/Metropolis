@@ -93,6 +93,26 @@ func (f *FinanceAPI) InsolvencyMonths() int {
 	return f.insolvencyMonths
 }
 
+// InsolvencyStatus (BUG-769 round finding F1/F4, opus-round-bug769)
+// returns InsolvencyMonths() and IsInsolvent() under ONE RLock
+// acquisition — mirrors PayrollShortfallStatus's identical torn-read
+// rationale immediately above (that accessor's own doc comment): a
+// caller reading months and gameOver via two SEPARATE calls could
+// observe a torn snapshot if RecordMonthResult's write lock lands exactly
+// between them (e.g. a concurrent publish reading months=3-pre-reset
+// alongside gameOver=false-post-reset, or any other interleaving). Every
+// production caller of both fields together (finance_publish.go's
+// buildFinanceBalanceSheetPatch) uses this instead of the two individual
+// accessors.
+func (f *FinanceAPI) InsolvencyStatus() (months int, insolvent bool) {
+	if err := f.checkNotCopied("InsolvencyStatus"); err != nil {
+		return 0, false
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.insolvencyMonths, f.gameOver
+}
+
 // cityObligationAccounts is the FIXED, deterministic set of accounts
 // AvailableCredit sums over (BUG-759 round re-REJECT, opus-reround-
 // bug759): the accounts the CITY itself can actually draw on to settle

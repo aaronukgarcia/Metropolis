@@ -21,14 +21,21 @@
 // only current decoder of "f2.finance" patches — see wire.ts's
 // decodeFinanceBalanceSheetPatch). Consumed by: components/NewsFeed.tsx.
 
-import type { FinancePayrollShortfallView } from './wire.ts';
+import type { FinanceInsolvencyView, FinancePayrollShortfallView } from './wire.ts';
 
 /** Null means "no live-engine finance data has arrived this session" —
  *  distinct from a populated view whose amountMicropounds is 0 (a real
  *  "no shortfall this month" reading from a connected engine). */
 export type FinanceStatusSnapshot = FinancePayrollShortfallView | null;
 
+/** BUG-769: same null-means-unknown discipline as FinanceStatusSnapshot
+ *  above, for the AC-7 insolvency signal — a populated view whose
+ *  insolvent is false is a real "solvent this month" reading, distinct
+ *  from null ("no live-engine data has arrived / connection dropped"). */
+export type InsolvencyStatusSnapshot = FinanceInsolvencyView | null;
+
 type Listener = (snapshot: FinanceStatusSnapshot) => void;
+type InsolvencyListener = (snapshot: InsolvencyStatusSnapshot) => void;
 
 /**
  * FinanceStatusTracker: an observable holder of the most recently decoded
@@ -40,6 +47,15 @@ type Listener = (snapshot: FinanceStatusSnapshot) => void;
 export class FinanceStatusTracker {
   private snapshotValue: FinanceStatusSnapshot = null;
   private listeners = new Set<Listener>();
+
+  // BUG-769: a second, independent observable slot for the AC-7
+  // insolvency signal, on the SAME tracker instance/seam (LiveEngineBadge
+  // writes both from the one decoded "f2.finance" patch; NewsFeed and any
+  // other surface subscribe to whichever it needs) rather than a second
+  // module-level singleton — mirrors this class's own payrollShortfall
+  // shape exactly, just parallel state.
+  private insolvencyValue: InsolvencyStatusSnapshot = null;
+  private insolvencyListeners = new Set<InsolvencyListener>();
 
   /** Record the latest decoded payrollShortfall view (or null to mean "no
    *  live data" — e.g. on disconnect). Never throws; a null/undefined
@@ -64,16 +80,44 @@ export class FinanceStatusTracker {
     };
   }
 
+  /** BUG-769: record the latest decoded insolvency view (or null to mean
+   *  "no live data"). Mirrors setPayrollShortfall exactly. */
+  setInsolvency(view: InsolvencyStatusSnapshot | undefined): void {
+    this.insolvencyValue = view ?? null;
+    this.emitInsolvency();
+  }
+
+  insolvencySnapshot(): InsolvencyStatusSnapshot {
+    return this.insolvencyValue;
+  }
+
+  /** BUG-769: subscribe to insolvency updates. Mirrors subscribe() exactly
+   *  (fires immediately with the current snapshot; returns an unsubscribe
+   *  function). */
+  subscribeInsolvency(listener: InsolvencyListener): () => void {
+    this.insolvencyListeners.add(listener);
+    listener(this.insolvencyValue);
+    return () => {
+      this.insolvencyListeners.delete(listener);
+    };
+  }
+
   /** Test/dev-only reset back to "no live data" — mirrors queueDepth's
    *  resetAll(), used by tests so one suite's writes never leak into the
-   *  next via the shared module-level singleton. */
+   *  next via the shared module-level singleton. Resets BOTH slots. */
   reset(): void {
     this.snapshotValue = null;
+    this.insolvencyValue = null;
     this.emit();
+    this.emitInsolvency();
   }
 
   private emit(): void {
     for (const l of this.listeners) l(this.snapshotValue);
+  }
+
+  private emitInsolvency(): void {
+    for (const l of this.insolvencyListeners) l(this.insolvencyValue);
   }
 }
 

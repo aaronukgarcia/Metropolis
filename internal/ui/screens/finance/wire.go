@@ -138,6 +138,31 @@ type wirePatch struct {
 	// signal this cycle" and clears the screen's have-flag exactly like
 	// every other optional section here.
 	PayrollShortfall *wirePayrollShortfallView `json:"payrollShortfall,omitempty"`
+
+	// InsolvencyMonths/Insolvent are BUG-769's fix: mirror compose's
+	// finance_publish.go's financeBalanceSheetWirePatch.InsolvencyMonths/
+	// .Insolvent field-for-field. FinanceAPI.InsolvencyMonths() (the AC-7
+	// consecutive-failed-months counter) and FinanceAPI.IsInsolvent() (the
+	// 3-consecutive-months game-over signal) have advanced for real since
+	// BUG-759's financeHook.ApplyEffect call site landed, but nothing on
+	// the wire ever surfaced either — nil (never sent, via omitempty) means
+	// "no signal this cycle" (the Go side's Valid()-copy-guard path,
+	// unreachable in production) and clears the screen's have-flag exactly
+	// like every other optional section here.
+	InsolvencyMonths *int  `json:"insolvencyMonths,omitempty"`
+	Insolvent        *bool `json:"insolvent,omitempty"`
+
+	// InsolvencyVerdict is BUG-769's second increment: mirrors compose's
+	// finance_publish.go's InsolvencyVerdict field-for-field —
+	// engine.spiral's DecayAPI.EvaluateInsolvency verdict as a string
+	// ("insolvency" | "none"), read via the now-registered
+	// feat.compositionroot -> engine.spiral edge. Distinct from (and
+	// expected to always agree with) the plain Insolvent bool above,
+	// which is FinanceAPI.IsInsolvent() read directly, never through
+	// spiral. nil (never sent, via omitempty) means "no signal this
+	// cycle" (the Go side's Valid() copy-guard path, unreachable in
+	// production).
+	InsolvencyVerdict *string `json:"insolvencyVerdict,omitempty"`
 }
 
 // decodeWirePatch validates the size and schema-version envelope, then

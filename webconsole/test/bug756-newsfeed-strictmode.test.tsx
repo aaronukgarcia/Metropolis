@@ -220,7 +220,7 @@ test('BUG-756 RED-PROOF: reverting NewsFeed.tsx to the render-phase derivation r
     mutate: (original) => {
       const startMarker = 'const trackerRef = useRef(createNewsFeedTracker());';
       const endMarker =
-        "}, [state.lineageId, state.notice, state.milestoneNotice, state.placeNotice, consolidatorLatestPass, financeStatus]);";
+        "}, [state.lineageId, state.notice, state.milestoneNotice, state.placeNotice, consolidatorLatestPass, financeStatus, insolvencyStatus]);";
       const startIdx = original.indexOf(startMarker);
       const endIdx = original.indexOf(endMarker);
       if (startIdx === -1 || endIdx === -1) {

@@ -36,7 +36,7 @@ import {
   type NewsEntry,
 } from '../sim/newsFeed';
 import { recordError } from '../sim/backend';
-import { financeStatusTracker, type FinanceStatusSnapshot } from '../sim/financeStatusTracker';
+import { financeStatusTracker, type FinanceStatusSnapshot, type InsolvencyStatusSnapshot } from '../sim/financeStatusTracker';
 
 const SEVERITY_LABEL: Record<NewsEntry['severity'], string> = {
   info: 'Info',
@@ -112,6 +112,7 @@ export function NewsFeed() {
       consolidatorLatestPass,
       tick: state.tick,
       payrollShortfall: financeStatus,
+      insolvency: insolvencyStatus,
     };
   }
 
@@ -128,6 +129,14 @@ export function NewsFeed() {
   // render-phase-derivable SimState fields this component otherwise reads.
   const [financeStatus, setFinanceStatus] = useState<FinanceStatusSnapshot>(() => financeStatusTracker.snapshot());
   useEffect(() => financeStatusTracker.subscribe(setFinanceStatus), []);
+
+  // BUG-769: the OTHER real, already-consumed BUG-759 gap — same seam,
+  // same asynchronous-subscription rationale as financeStatus above (no
+  // local mock-sim equivalent, cannot be derived during render).
+  const [insolvencyStatus, setInsolvencyStatus] = useState<InsolvencyStatusSnapshot>(() =>
+    financeStatusTracker.insolvencySnapshot()
+  );
+  useEffect(() => financeStatusTracker.subscribeInsolvency(setInsolvencyStatus), []);
 
   const trackerRef = useRef(createNewsFeedTracker());
   const seqRef = useRef(createNewsFeedSeq());
@@ -147,6 +156,7 @@ export function NewsFeed() {
     placeNotice: unknown;
     consolidatorLatestPass: unknown;
     payrollShortfall: unknown;
+    insolvency: unknown;
   } | null>(null);
   // BUG-742 round P3: `state.consolidatorLog[0]` — the newest pass, which
   // may be a 'capacity unknown' skip-only entry — is journalled, plain
@@ -190,6 +200,7 @@ export function NewsFeed() {
       placeNotice: state.placeNotice,
       consolidatorLatestPass,
       payrollShortfall: financeStatus,
+      insolvency: insolvencyStatus,
     };
     const last = lastEffectSourcesRef.current;
     const alreadyProcessed =
@@ -199,7 +210,8 @@ export function NewsFeed() {
       last.milestoneNotice === signature.milestoneNotice &&
       last.placeNotice === signature.placeNotice &&
       last.consolidatorLatestPass === signature.consolidatorLatestPass &&
-      last.payrollShortfall === signature.payrollShortfall;
+      last.payrollShortfall === signature.payrollShortfall &&
+      last.insolvency === signature.insolvency;
     if (alreadyProcessed) return; // StrictMode's duplicate invocation of this SAME effect body — no-op, by design.
     lastEffectSourcesRef.current = signature;
 
@@ -240,7 +252,7 @@ export function NewsFeed() {
     // marks them observed, so it's a guaranteed no-op that round-trips
     // through the identity bailout above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.lineageId, state.notice, state.milestoneNotice, state.placeNotice, consolidatorLatestPass, financeStatus]);
+  }, [state.lineageId, state.notice, state.milestoneNotice, state.placeNotice, consolidatorLatestPass, financeStatus, insolvencyStatus]);
 
   const unreadCount = Math.max(0, ring.length - seenCount);
   const latest = ring[0] ?? null;

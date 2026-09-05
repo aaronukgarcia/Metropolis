@@ -26,6 +26,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/spiral"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/unlocks"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/wellbeing"
@@ -1049,6 +1050,21 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 
 	financeAPI := finance.NewFinanceAPI(cid)
 
+	// BUG-769: construct engine.spiral's DecayAPI now that the
+	// feat.compositionroot -> engine.spiral edge is registered
+	// (docs/planning/master-plan-v2.1.json / code.json). EvaluateInsolvency
+	// (death.go) takes *finance.FinanceAPI directly on every call — it
+	// needs no SetFinance/SetProjections wiring for the insolvency half of
+	// spiral's death-condition surface (only GhostCityTrigger needs
+	// projections, which baseline-one's monthly finance hook below never
+	// calls). Constructed here, once, alongside financeAPI so both are
+	// available to financeHook.ApplyEffect's post-RecordMonthResult call
+	// below.
+	spiralAPI, err := spiral.New(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "spiral"})
+	}
+
 	// BUG-737 (FEAT-143 wiring): construct the locked-at-startup game
 	// initialization mode and install it as finance's mode gate BEFORE
 	// seeding opening balances, so Real mode's opening treasury is
@@ -1425,6 +1441,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		buildAPI:                   buildAPI,
 		attract:                    attractAPI,
 		finance:                    financeAPI,
+		spiral:                     spiralAPI,
 		gameInit:                   gi,
 		crime:                      crimeAPI,
 		leisure:                    leisureAPI,
@@ -1762,6 +1779,16 @@ type simState struct {
 	// too so any future compose-owned poster (and tests) can reach the
 	// same ledger without re-threading it through every hook constructor.
 	finance *finance.FinanceAPI
+
+	// spiral is BUG-769's engine.spiral instance (the registered
+	// feat.compositionroot -> engine.spiral edge): constructed in Wire,
+	// consulted by financeHook.ApplyEffect right after
+	// FinanceAPI.RecordMonthResult each month for its DeathVerdict
+	// (EvaluateInsolvency — see that call site's own doc comment for why
+	// only the insolvency half of spiral's death surface is consulted
+	// here). Stored here so a future consumer/test can reach the same
+	// instance without re-constructing it.
+	spiral *spiral.DecayAPI
 
 	// gameInit is BUG-737's FEAT-143 wiring: the *gameinit.GameInit
 	// constructed once in Wire (compose_gameinit.go) and installed as
@@ -2612,6 +2639,25 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 			creditAvailable = st.finance.AvailableCredit() > 0
 		}
 		st.finance.RecordMonthResult(obligationsMet, creditAvailable)
+
+		// BUG-769 round REJECT (opus-round-bug769, F1): this call site
+		// used to consult engine.spiral here and mirror the DeathVerdict
+		// into an atomic (insolvencyVerdictPub, BUG-324-pattern) for
+		// finance_publish.go to read later. That mirror is written ONLY at
+		// a month boundary while Insolvent/InsolvencyMonths on the SAME
+		// wire patch are read LIVE from finance on every publish — so a
+		// Save(solvent) -> starve -> Load sequence (finance's own
+		// participant resetForLoad zeroes insolvencyMonths/gameOver on
+		// Load, but nothing reset the mirror) published
+		// insolvent=false/months=0 alongside a STALE verdict="insolvency"
+		// on the very same patch. Fixed per the round's own recommendation
+		// (F1/F4): DELETE the mirror entirely — EvaluateInsolvency is a
+		// pure reader of finance.IsInsolvent() with no state of its own
+		// (spiral.DecayAPI keeps no insolvency-specific field; see
+		// death.go), so it is called LIVE inside
+		// buildFinanceBalanceSheetPatch instead, beside the same
+		// FinanceAPI.Valid() guard CreditRating/Insolvent already use —
+		// see that function for the real call site now.
 	}
 	// Mirror the LEDGER unconditionally — on success and on rejection
 	// alike. A rejected Post leaves the ledger unchanged by contract

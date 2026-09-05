@@ -72,6 +72,11 @@ type Screen struct {
 	payrollShortfall     *PayrollShortfallView
 	havePayrollShortfall bool
 
+	// insolvency/haveInsolvency (BUG-769): the AC-7 insolvency status
+	// surface, mirroring payrollShortfall's exact have-flag shape.
+	insolvency     *InsolvencyView
+	haveInsolvency bool
+
 	// engine is the diagrams layout cache, hoisted onto the Screen so it
 	// LIVES ACROSS FRAMES (BUG-316). The former per-frame diagrams.NewEngine()
 	// inside RenderSankey built a fresh empty cache every frame, so the cache
@@ -292,6 +297,30 @@ func (s *Screen) ApplyDelta(delta protocol.Delta) {
 	} else {
 		s.havePayrollShortfall = false
 	}
+
+	// BUG-769: InsolvencyMonths and Insolvent are always published
+	// together (finance_publish.go sets both from the same
+	// st.finance.Valid() guard), so a nil check on either is equivalent —
+	// InsolvencyMonths is checked, mirroring CreditRating's own single-
+	// field nil check immediately above.
+	if p.InsolvencyMonths != nil {
+		insolvent := false
+		if p.Insolvent != nil {
+			insolvent = *p.Insolvent
+		}
+		verdict := ""
+		if p.InsolvencyVerdict != nil {
+			verdict = *p.InsolvencyVerdict
+		}
+		s.insolvency = &InsolvencyView{
+			Months:    *p.InsolvencyMonths,
+			Insolvent: insolvent,
+			Verdict:   verdict,
+		}
+		s.haveInsolvency = true
+	} else {
+		s.haveInsolvency = false
+	}
 }
 
 func (s *Screen) HaveData() bool {
@@ -476,6 +505,21 @@ func (s *Screen) PayrollShortfall() (PayrollShortfallView, bool) {
 		return PayrollShortfallView{}, false
 	}
 	return *s.payrollShortfall, true
+}
+
+// Insolvency returns the most recently published AC-7 insolvency status
+// (BUG-769) and whether a signal has been published at all — mirrors
+// PayrollShortfall's have-flag contract exactly.
+func (s *Screen) Insolvency() (InsolvencyView, bool) {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Insolvency"}); err != nil {
+		return InsolvencyView{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.haveInsolvency {
+		return InsolvencyView{}, false
+	}
+	return *s.insolvency, true
 }
 
 func (s *Screen) BorrowLoan(send SendCommandFunc, amountMicropounds int64, termMonths int) error {

@@ -106,6 +106,59 @@ type financeBalanceSheetWirePatch struct {
 	// fast-follow (trend tracking is a distinct feature from publishing
 	// the current score) and stays unpopulated here.
 	CreditRating *int `json:"creditRating,omitempty"`
+
+	// InsolvencyMonths/Insolvent are BUG-769's wiring of the OTHER real,
+	// already-consumed BUG-759 gap: FinanceAPI.InsolvencyMonths()/
+	// IsInsolvent() (insolvency.go) have advanced for real in production
+	// since BUG-759's financeHook.ApplyEffect call site landed, but
+	// nothing on the wire ever surfaced either figure — a player-facing
+	// city could sit at IsInsolvent()==true forever with no way to see it
+	// (engine.spiral.EvaluateInsolvency, the only Go consumer, is itself
+	// not reachable from compose — feat.compositionroot has no registered
+	// outbound edge to engine.spiral in code.json, GR#25 — so this publish
+	// leg is the ONLY production surface for the signal right now).
+	// Same live-read + Valid()-nil discipline as CreditRating immediately
+	// above: both fields are read from the SAME st.finance.Valid() check
+	// (one guard, two accessors — InsolvencyMonths/IsInsolvent are cheap
+	// atomic-mutex reads, not worth a second Valid() call), nil ONLY on
+	// the SEC-020 copy-guard violation, unreachable in production.
+	InsolvencyMonths *int  `json:"insolvencyMonths,omitempty"`
+	Insolvent        *bool `json:"insolvent,omitempty"`
+
+	// InsolvencyVerdict is BUG-769's second increment: engine.spiral's
+	// DecayAPI.EvaluateInsolvency verdict (spiral/death.go — DeathVerdict.
+	// String(): "insolvency" | "none"; "ghost-city" is structurally
+	// unreachable via this call site, since GhostCityTrigger is never
+	// called here). BUG-769 round REJECT (opus-round-bug769, F1): this
+	// used to be read from an atomic mirror written only at a month
+	// boundary, which went stale across a Save->starve->Load sequence
+	// (finance's own participant reset zeroes insolvencyMonths/gameOver
+	// on Load; nothing reset the mirror) — DELETED per the round's own
+	// recommendation. EvaluateInsolvency is now called LIVE, every
+	// publish tick, inside buildFinanceBalanceSheetPatch, on the exact
+	// same finance handle InsolvencyStatus() reads for Insolvent/
+	// InsolvencyMonths above — so all three fields on this patch can never
+	// disagree with each other the way the mirror could. This is spiral's
+	// OWN read of finance's signal, distinct in PROVENANCE from (but now
+	// always in sync with) the plain Insolvent bool above, which
+	// finance_publish.go derives directly from FinanceAPI.IsInsolvent()
+	// without going through spiral at all. Honest disclosure (unchanged by
+	// this round): EvaluateInsolvency is a pure reader with NO enforcement
+	// of its own — there is no game-over/halt state anywhere in the
+	// composed engine yet for a DeathInsolvency verdict to trigger;
+	// building that halt is a separate policy item. Also unchanged (round
+	// finding F3, honest disclosure): FinanceAPI.gameOver LATCHES once set
+	// (RecordMonthResult never clears it) while InsolvencyMonths resets to
+	// 0 on the next met month — so a reachable, real production state is
+	// InsolvencyMonths=0 with Insolvent=true and InsolvencyVerdict=
+	// "insolvency" simultaneously (3 starved months then 3 funded months,
+	// never a save/load). There is NO engine-level "recovery" from
+	// insolvency once latched; the ONLY way this triple clears to
+	// (0,false,"none") is a Load/New Game that resets FinanceAPI's
+	// underlying state (see finance's own resetForLoad participant). nil
+	// ONLY on the same st.finance.Valid() copy-guard path as CreditRating/
+	// Insolvent above (unreachable in production).
+	InsolvencyVerdict *string `json:"insolvencyVerdict,omitempty"`
 }
 
 // financePayrollShortfallView mirrors internal/ui/screens/finance/wire.go's
@@ -238,16 +291,60 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 	// simState can leave nil) — the copy-guard is the only degraded path
 	// here.
 	var creditRating *int
+	var insolvencyMonths *int
+	var insolvent *bool
+	var insolvencyVerdict *string
 	if st.finance.Valid() {
 		rating := int(st.finance.CreditRatingNow())
 		creditRating = &rating
+
+		// BUG-769 round fix (opus-round-bug769, F1/F4): InsolvencyStatus()
+		// reads Months and IsInsolvent under ONE RLock (insolvency.go),
+		// replacing two separate calls (InsolvencyMonths() then
+		// IsInsolvent()) that could observe a torn snapshot if
+		// RecordMonthResult's write lock landed exactly between them —
+		// same torn-read class PayrollShortfallStatus already guards
+		// against a few lines above. Both live every publish tick, never
+		// cached.
+		months, isInsolvent := st.finance.InsolvencyStatus()
+		insolvencyMonths = &months
+		insolvent = &isInsolvent
+
+		// BUG-769 round fix (F1): the atomic verdict mirror this call site
+		// used to read was written ONLY at a month boundary while
+		// Insolvent/InsolvencyMonths above are read LIVE — so a
+		// Save(solvent)->starve->Load sequence could publish a stale
+		// "insolvency" verdict alongside insolvent=false/months=0 on the
+		// SAME patch (finance's own resetForLoad participant zeroes
+		// insolvencyMonths/gameOver on Load; nothing reset the mirror).
+		// Fixed per the round's own recommendation: the mirror is DELETED
+		// and EvaluateInsolvency is called LIVE, right here, on the exact
+		// same st.finance handle InsolvencyStatus() just read — it is a
+		// pure reader (spiral/death.go calls FinanceAPI.IsInsolvent(),
+		// keeps no insolvency-specific state of its own), so this call can
+		// never itself introduce a NEW torn read or staleness window; it
+		// is exactly as fresh as isInsolvent above on every publish.
+		//
+		// st.spiral is never nil after a successful Wire, but several
+		// pre-existing tests hand-construct a bare &simState{cid, finance}
+		// (bug308_test.go, bug333_test.go) that bypasses Wire entirely and
+		// leaves it nil — guarded exactly like st.gameInit's own
+		// UnlimitedMoney nil-check above, rather than assuming Wire ran.
+		if st.spiral != nil {
+			verdict := st.spiral.EvaluateInsolvency(st.finance)
+			verdictStr := verdict.String()
+			insolvencyVerdict = &verdictStr
+		}
 	}
 
 	patch := financeBalanceSheetWirePatch{
-		SchemaVersion:    financeWireSchemaVersion,
-		UnlimitedMoney:   unlimitedMoney,
-		PayrollShortfall: payrollShortfall,
-		CreditRating:     creditRating,
+		SchemaVersion:     financeWireSchemaVersion,
+		UnlimitedMoney:    unlimitedMoney,
+		PayrollShortfall:  payrollShortfall,
+		CreditRating:      creditRating,
+		InsolvencyMonths:  insolvencyMonths,
+		Insolvent:         insolvent,
+		InsolvencyVerdict: insolvencyVerdict,
 		BalanceSheet: &financeBalanceSheetView{
 			Assets: []financeBalanceItem{
 				{Label: "Treasury", ValueMicropounds: int64(treasury)},

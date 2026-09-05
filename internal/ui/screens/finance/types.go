@@ -75,3 +75,21 @@ type PayrollShortfallView struct {
 	AmountMicropounds int64
 	Months            int
 }
+
+// InsolvencyView is the player-facing AC-7 insolvency status surface
+// (BUG-769): Months mirrors FinanceAPI.InsolvencyMonths() (the consecutive
+// failed-obligations-months counter) and Insolvent mirrors
+// FinanceAPI.IsInsolvent() (the 3-consecutive-months game-over signal).
+type InsolvencyView struct {
+	Months    int
+	Insolvent bool
+
+	// Verdict is BUG-769's second increment: engine.spiral's
+	// EvaluateInsolvency verdict as a string ("insolvency" | "none") —
+	// see wire.go's InsolvencyVerdict field doc comment for the full
+	// disclosure. Empty string is a valid, if unusual, decode: it means
+	// the wire patch carried InsolvencyMonths/Insolvent but not
+	// InsolvencyVerdict (a pre-this-increment server, or a schema drift),
+	// distinct from "none" (a real, connected reading of no verdict).
+	Verdict string
+}

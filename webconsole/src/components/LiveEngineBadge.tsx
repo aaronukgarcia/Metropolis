@@ -80,6 +80,17 @@ export function LiveEngineBadge() {
         // patch this cycle" (schema mismatch/decode failure) and "patch
         // decoded but the server hasn't published this section yet".
         financeStatusTracker.setPayrollShortfall(patch?.payrollShortfall ?? null);
+        // BUG-769: the OTHER real, already-consumed BUG-759 gap —
+        // FinanceAPI.InsolvencyMonths()/IsInsolvent() advance for real
+        // every month but nothing surfaced them. Same seam, same
+        // absent/null-means-unknown discipline as payrollShortfall above:
+        // both insolvencyMonths and insolvent must be present (non-null)
+        // for a real reading; either missing means "no signal this cycle".
+        const insolvencyMonths = patch?.insolvencyMonths;
+        const insolvent = patch?.insolvent;
+        financeStatusTracker.setInsolvency(
+          insolvencyMonths != null && insolvent != null ? { months: insolvencyMonths, insolvent } : null
+        );
       },
     });
     clientRef.current = client;

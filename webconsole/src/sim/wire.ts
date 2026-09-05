@@ -317,6 +317,19 @@ export interface FinancePayrollShortfallView {
   months: number;
 }
 
+/** BUG-769: mirrors finance_publish.go's financeBalanceSheetWirePatch
+ * .InsolvencyMonths/.Insolvent field-for-field (the OTHER real,
+ * already-consumed BUG-759 gap — FinanceAPI.InsolvencyMonths()/
+ * IsInsolvent() have advanced for real in production since BUG-759's
+ * financeHook.ApplyEffect call site landed, but nothing on the wire ever
+ * surfaced either figure). months is the consecutive failed-obligations
+ * streak (0 means clean); insolvent is the AC-7 3-consecutive-months
+ * game-over signal. */
+export interface FinanceInsolvencyView {
+  months: number;
+  insolvent: boolean;
+}
+
 /** Mirrors finance_publish.go's financeBalanceSheetWirePatch
  * field-for-field. Every field beyond balanceSheet is a documented
  * fast-follow on the Go side (PL/loans/taxSliders/publicPayroll/sankey)
@@ -344,6 +357,29 @@ export interface FinanceBalanceSheetPatch {
    * null is declared reachable here and isFinanceBalanceSheetPatch below
    * treats it identically to "field absent" rather than rejecting it. */
   payrollShortfall?: FinancePayrollShortfallView | null;
+  /** BUG-769: mirrors finance_publish.go's flat InsolvencyMonths/Insolvent
+   * wire fields (NOT a nested object, unlike payrollShortfall — matches
+   * the Go side's own two-separate-*pointer field shape). Absent/null on
+   * either means "no signal this cycle" (the Go side's Valid()
+   * copy-guard path, unreachable in production). */
+  insolvencyMonths?: number | null;
+  insolvent?: boolean | null;
+  // BUG-769 round finding F5 (opus-round-bug769): compose's wire patch
+  // also carries `insolvencyVerdict` (engine.spiral's own
+  // EvaluateInsolvency read, string "insolvency"|"none") beside these two
+  // fields. DELIBERATELY NOT declared or decoded here: it is provenance
+  // metadata (WHICH module read the signal), not new player-facing
+  // information beyond what `insolvent`/`insolvencyMonths` above already
+  // carry, and the webconsole badge/news-feed pipeline needs only the
+  // plain boolean+counter. internal/ui/screens/finance (the TUI) is the
+  // ONLY consumer of insolvencyVerdict today — see that package's wire.go/
+  // screen.go InsolvencyView.Verdict. isFinanceBalanceSheetPatch below
+  // does not need to validate a field this type does not declare;
+  // JSON.parse simply leaves it unread on the decoded object, which is
+  // safe because nothing here ever accesses it. If a future webconsole
+  // surface needs to distinguish "spiral said so" from "finance said so"
+  // (e.g. diagnosing a disagreement between the two), add the field +
+  // validation + a financeStatusTracker slot at that point, not before.
 }
 
 /** Runtime shape check for a decoded Delta.patch claiming to be
@@ -394,6 +430,15 @@ export function isFinanceBalanceSheetPatch(v: unknown): v is FinanceBalanceSheet
     if (typeof ps.month !== 'number') return false;
     if (typeof ps.amountMicropounds !== 'number') return false;
     if (typeof ps.months !== 'number') return false;
+  }
+  // BUG-769: same absent/null-means-unknown discipline as payrollShortfall
+  // above, but flat fields (mirrors the Go side's own two-separate-pointer
+  // shape rather than a nested object).
+  if (p.insolvencyMonths !== undefined && p.insolvencyMonths !== null) {
+    if (typeof p.insolvencyMonths !== 'number') return false;
+  }
+  if (p.insolvent !== undefined && p.insolvent !== null) {
+    if (typeof p.insolvent !== 'boolean') return false;
   }
   return true;
 }
