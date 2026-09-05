@@ -31,15 +31,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { runMutantSelfReinvoke } from './helpers/mutant.mjs';
 import { initialState } from '../src/sim/engine.ts';
 import { demandFixPlan, SPECS, AUTO_BUILD_DEMAND_FRACTION, LADDER_CREDIT_FRACTION, creditedUnitCapacity } from '../src/sim/data.ts';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_PATH = path.join(__dirname, '..', 'src', 'sim', 'data.ts');
 
 function shortfallState(population, fundsOverride = 1_000_000_000_000) {
   const base = initialState();
@@ -183,50 +179,38 @@ test('BUG-686 small-city boundary: a 40-place nursery shortfall gets exactly ONE
   assert.equal(plan.count, 1);
 });
 
-test('RED-PROOF (source revert, GR#24 scratch-copy — never git): reversing largestFirstFill\'s sort to smallest-first reddens the Aaron-shape power test', () => {
-  const original = fs.readFileSync(DATA_PATH, 'utf8');
-  const fixedLine = 'if (a.capacity !== b.capacity) return b.capacity - a.capacity;';
-  assert.ok(original.includes(fixedLine), 'precondition: the largest-first (descending-capacity) comparator is present in data.ts');
+test('RED-PROOF (source revert, private shadow copy — BUG-739, never the real file): reversing largestFirstFill\'s sort to smallest-first reddens the Aaron-shape power test', () => {
+  const { failed, output, crashed } = runMutantSelfReinvoke({
+    targetRelPath: path.join('sim', 'data.ts'),
+    mutate: (original) => {
+      const fixedLine = 'if (a.capacity !== b.capacity) return b.capacity - a.capacity;';
+      assert.ok(original.includes(fixedLine), 'precondition: the largest-first (descending-capacity) comparator is present in data.ts');
+      // Smallest-first (ascending) — exactly the pre-BUG-685-style
+      // monoculture shape (always reach for the smallest unlocked unit first).
+      const buggyLine = 'if (a.capacity !== b.capacity) return a.capacity - b.capacity;';
+      return original.replace(fixedLine, buggyLine);
+    },
+    testFileAbsPath: fileURLToPath(import.meta.url),
+    testNamePattern: 'BUG-685 Aaron-shape: power demand-fix plan',
+  });
 
-  // Smallest-first (ascending) — exactly the pre-BUG-685-style monoculture
-  // shape (always reach for the smallest unlocked unit first).
-  const buggyLine = 'if (a.capacity !== b.capacity) return a.capacity - b.capacity;';
-  const reverted = original.replace(fixedLine, buggyLine);
-  assert.notEqual(reverted, original, 'precondition: the textual swap actually changed the file');
-
-  const backupPath = DATA_PATH + '.bug685-red-proof.bak';
-  fs.copyFileSync(DATA_PATH, backupPath); // scratch copy, per GR#24 — never git for revert
-  try {
-    fs.writeFileSync(DATA_PATH, reverted, 'utf8');
-
-    const nodeExe = process.execPath;
-    const childEnv = { ...process.env };
-    delete childEnv.NODE_TEST_CONTEXT; // BUG-509/BUG-662 precedent: required or the child silently IPCs to the outer runner instead of exiting non-zero
-    let failed = false;
-    let output = '';
-    try {
-      output = execFileSync(
-        nodeExe,
-        [
-          '--test',
-          '--test-name-pattern=BUG-685 Aaron-shape: power demand-fix plan',
-          fileURLToPath(import.meta.url),
-        ],
-        { cwd: path.join(__dirname, '..'), encoding: 'utf8', stdio: 'pipe', env: childEnv }
-      );
-    } catch (err) {
-      failed = true;
-      output = (err.stdout || '') + (err.stderr || '');
-    }
-
-    assert.ok(failed, 'the Aaron-shape power test must FAIL against a smallest-first (reverted) picker — proves the test can fail');
-    assert.match(output, /not ok|fail/i, 'child test run output reports a failure against the smallest-first revert');
-  } finally {
-    // Restore the fixed file — scratch mv/copy only, never git (GR#24).
-    fs.copyFileSync(backupPath, DATA_PATH);
-    fs.unlinkSync(backupPath);
-  }
-
-  const restored = fs.readFileSync(DATA_PATH, 'utf8');
-  assert.equal(restored, original, 'data.ts is restored byte-identical to the fixed version after the RED proof');
+  // R2 (BUG-739 round REJECT, 2026-09-05): `failed` alone cannot distinguish
+  // "the mutant was detected" from "the child crashed for an unrelated
+  // reason" — require crashed === false AND the SPECIFIC expected assertion
+  // text, never a bare exit-status/generic-word match.
+  assert.ok(!crashed, `the re-invoked test must actually RUN (not crash at load time) against the mutant; output:\n${output}`);
+  assert.ok(failed, 'the Aaron-shape power test must FAIL against a smallest-first (reverted) picker — proves the test can fail');
+  // Either of two assertions in the re-invoked test is specific to THIS
+  // mutation and can fire first (assert.ok throws immediately, so whichever
+  // check the test reaches first short-circuits the rest): the ordering
+  // check itself ("power mix must be ordered largest-capacity-first"), or —
+  // reached earlier in source order — the monoculture guard ("pow_wind must
+  // never be the ENTIRE plan"), since smallest-first genuinely can make
+  // pow_wind the whole plan. Both are specific to a largest-first regression,
+  // never a generic "fail" match.
+  assert.match(
+    output,
+    /power mix must be ordered largest-capacity-first|pow_wind must never be the ENTIRE plan/,
+    `child test run output must report one of the SPECIFIC largest-first assertions failing, not just any failure; got:\n${output}`,
+  );
 });

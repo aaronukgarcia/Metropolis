@@ -525,36 +525,33 @@ test('F2: an auto-connect SWEEP event increments cumulativeCapexSpent by EXACTLY
 // so a reviewer can see the sabotage/restore pair without re-running the
 // whole suite by hand — see the inline fs operations below.
 test('RED self-proof: AC-7 fails if the once-only latch is not migrated on load (proves the test above is not vacuous)', async () => {
-  const fs = await import('node:fs');
-  const path = await import('node:path');
-  const url = await import('node:url');
-  const engineTsPath = path.default.join(
-    path.default.dirname(url.default.fileURLToPath(import.meta.url)),
-    '..',
-    'src',
-    'sim',
-    'engine.ts',
-  );
-  const original = fs.default.readFileSync(engineTsPath, 'utf8');
-  // F3 (independent round REJECT, 2026-09-02) changed this migration line
-  // from a bare `=== undefined` read to a `typeof === 'boolean'` coercion —
-  // the marker below tracks that exact line so this self-proof keeps
-  // sabotaging the REAL current code, not a stale string that silently stops
-  // matching (which would make this precondition assert false forever,
-  // masking the whole RED self-proof instead of proving it).
-  const sabotageMarker =
-    "let dynamicBailoutUsed = typeof s.dynamicBailoutUsed === 'boolean' ? s.dynamicBailoutUsed : undefined;";
-  assert.ok(original.includes(sabotageMarker), 'precondition: the exact migration line must exist to sabotage');
-  // Sabotage: force dynamicBailoutUsed to ALWAYS read false, regardless of
-  // what a loaded save carries — reproduces the BUG-504-class re-arm bug for
-  // the NEW latch (a save's used status is silently forgotten on load).
-  const sabotaged = original.replace(sabotageMarker, 'let dynamicBailoutUsed = false; /* SABOTAGED */');
-  assert.notEqual(sabotaged, original, 'precondition: the sabotage replacement must actually change the file');
-  fs.default.writeFileSync(engineTsPath, sabotaged, 'utf8');
+  // BUG-739: mutation now runs against a private webconsole/test/helpers/
+  // mutant.mjs shadow copy of webconsole/src, never the real, shared
+  // engine.ts — a distinct shadow path is its own cache-miss for
+  // `await import(...)`, so the old cache-busting query-string trick against
+  // the REAL file is no longer needed either.
+  const { createMutantShadow } = await import('./helpers/mutant.mjs');
+  const shadow = createMutantShadow({
+    targetRelPath: 'sim/engine.ts',
+    mutate: (original) => {
+      // F3 (independent round REJECT, 2026-09-02) changed this migration line
+      // from a bare `=== undefined` read to a `typeof === 'boolean'` coercion —
+      // the marker below tracks that exact line so this self-proof keeps
+      // sabotaging the REAL current code, not a stale string that silently
+      // stops matching (which would make this precondition assert false
+      // forever, masking the whole RED self-proof instead of proving it).
+      const sabotageMarker =
+        "let dynamicBailoutUsed = typeof s.dynamicBailoutUsed === 'boolean' ? s.dynamicBailoutUsed : undefined;";
+      assert.ok(original.includes(sabotageMarker), 'precondition: the exact migration line must exist to sabotage');
+      // Sabotage: force dynamicBailoutUsed to ALWAYS read false, regardless
+      // of what a loaded save carries — reproduces the BUG-504-class re-arm
+      // bug for the NEW latch (a save's used status is silently forgotten on
+      // load).
+      return original.replace(sabotageMarker, 'let dynamicBailoutUsed = false; /* SABOTAGED */');
+    },
+  });
   try {
-    // Re-import with a cache-busting query so Node re-evaluates the sabotaged source.
-    const bust = `?redproof=${Date.now()}`;
-    const sabotagedEngine = await import(`../src/sim/engine.ts${bust}`);
+    const sabotagedEngine = await import(shadow.importUrl('sim/engine.ts'));
     const usedS = (() => {
       const w = sabotagedEngine.reducer(
         sabotagedEngine.initialState(),
@@ -574,9 +571,6 @@ test('RED self-proof: AC-7 fails if the once-only latch is not migrated on load 
     // Under the sabotage, the migration forgets the latch entirely.
     assert.equal(reloaded.dynamicBailoutUsed, false, 'RED CONFIRMED: the sabotaged build forgets the latch on reload');
   } finally {
-    // Restore byte-for-byte via a plain fs write (GR#24: never git checkout/restore).
-    fs.default.writeFileSync(engineTsPath, original, 'utf8');
-    const restored = fs.default.readFileSync(engineTsPath, 'utf8');
-    assert.equal(restored, original, 'engine.ts must be restored EXACTLY — GR#24 scratch-copy discipline');
+    shadow.cleanup();
   }
 });

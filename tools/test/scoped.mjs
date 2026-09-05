@@ -153,72 +153,53 @@ const SLOW_TEST_CAPS_SEC = new Map([
   ['bug606-round2-fixes.test.tsx', 600],
 ]);
 
-// BUG-651: these files each mutate a shared src/sim/*.ts file IN PLACE as
-// part of their GR#24 scratch-copy RED-proof discipline (cp file -> file.bak,
-// mutate file, run a fresh child against it, restore file from file.bak) —
-// live-repro'd racing under node:test's default per-file concurrency: two
-// such tests running in the SAME node --test process can interleave so that
-// test B's `cp` captures test A's MID-MUTATION content as ITS "clean"
-// backup, and test B's later restore then permanently corrupts the shared
-// source file on disk with no assertion catching it (reproduced against
-// src/sim/data.ts, corrupted between attack-bug642-memo.test.mjs and
-// attack-bug643-memo.test.mjs both racing on the same DATA_TS_PATH). Force
-// these to run SERIALLY (one file at a time within the node --test process)
-// whenever 2+ of them land in the same invocation — correctness over speed;
-// this list only ever costs time when two are batched together.
-// MAINTENANCE INVARIANT (F1, round BUG-696, same precedent as
-// SLOW_TEST_CAPS_SEC above): this list is hand-maintained, and a
-// hand-maintained allowlist WILL fall behind — it already did once
-// (feat-dynamic-bailout.test.mjs sabotages src/sim/engine.ts exactly like
-// bug-509-tiered-population-ceiling.test.mjs below and was missing). It is
-// NOT trusted on its own: tools/scoped-runner-attack.mjs's
-// "serial: every src-mutating test is on FILE_MUTATING_TEST_BASENAMES [F1]"
-// test derives the expected set straight from the test files themselves
-// (greps for the cp/writeFileSync-mutate/restore shape against every
-// webconsole/test/*.test.mjs) and REDS if this list has drifted. Treat that
-// test as the actual source of truth; update this list in the SAME commit
-// whenever it reds, exactly like SLOW_TEST_CAPS_SEC's own rule.
-const FILE_MUTATING_TEST_BASENAMES = new Set([
-  'attack-bug642-memo.test.mjs', // mutates src/sim/data.ts
-  'attack-bug643-memo.test.mjs', // mutates src/sim/data.ts
-  'bug645-population-visibility.test.mjs', // mutates src/sim/data.ts
-  'bug662-college-capacity-tier.test.mjs', // mutates src/sim/data.ts
-  'bug-509-tiered-population-ceiling.test.mjs', // mutates src/sim/engine.ts
-  'feat-dynamic-bailout.test.mjs', // mutates src/sim/engine.ts (F1 finding — was missing)
-  // BUG-708 re-round B4/B5 finding: tsx tests mutate shared sources too.
-  // attack-bug641-round2.test.tsx really does writeFileSync src/components/
-  // demandFixUi.ts in place. Listed here so needsSerialExecution/
-  // partitionMutatingPaired (below) also serialise the tsx group it lands in.
-  'attack-bug641-round2.test.tsx', // mutates src/components/demandFixUi.ts
-  // FEAT-2326609772 largest-first rebase, round 4 mechanical finding: three
-  // more tests do the same cp/writeFileSync-mutate/restore RED-PROOF dance
-  // against shared src/sim files and were missing from this list.
-  'bug685-686-largest-first.test.mjs', // mutates src/sim/data.ts
-  'attack-largest-first-reround.test.mjs', // mutates src/sim/data.ts and src/sim/engine.ts
-  'bug606-fix-all.test.mjs', // mutates src/sim/engine.ts
-]);
+// BUG-651/BUG-739 HISTORY (this allowlist is now DOCUMENTATION-ONLY, kept
+// empty, never expected to gain entries again):
+//
+// BUG-651 found that several tests proved their GR#24 RED-PROOF by mutating
+// a shared src/sim/*.ts file IN PLACE on disk (cp file -> file.bak, mutate
+// file, run a fresh child against it, restore file from file.bak) and could
+// race each other under node:test's default per-file concurrency — two such
+// tests in the SAME node --test process could interleave so that test B's
+// `cp` captured test A's MID-MUTATION content as ITS "clean" backup, and
+// test B's later restore then permanently corrupted the shared source file
+// on disk with no assertion catching it. This list existed to force those
+// tests to run SERIALLY against each other WHEN INVOKED THROUGH THIS RUNNER.
+//
+// BUG-739 (independent round, 2026-09-05) found the deeper problem this
+// serialisation could never fix: CI's node-test job invokes the bare
+// `node --test` runner directly, sharded 3 ways, at DEFAULT CONCURRENCY —
+// it never goes through scoped.mjs, so this allowlist's serialisation was
+// never in effect on CI at all. An unrelated IMPORTING sibling landing in
+// the same CI shard as a mutating test could transiently observe the
+// sabotaged real file mid-mutation, with no serialisation possible from
+// outside the process. The actual fix: every test that used to mutate a
+// shared src file in place was converted to run its RED-PROOF against a
+// private, disposable shadow copy of webconsole/src (and, where a test
+// re-invokes itself, webconsole/test too) via
+// webconsole/test/helpers/mutant.mjs's runWithMutant/runMutantSelfReinvoke/
+// createMutantShadow — the real src tree is never written to by any test,
+// so there is no shared-file race left for ANY runner (this one or CI's
+// bare invocation) to need protecting against.
+//
+// This set is kept (rather than deleted) as a live invariant, not a relic:
+// tools/scoped-runner-attack.mjs's "no test writes into webconsole/src"
+// check greps every webconsole/test/*.test.{mjs,tsx} for a
+// writeFileSync/appendFileSync/copyFileSync targeting webconsole/src and
+// REDS if it finds one — i.e. the invariant flipped from "every mutator is
+// LISTED here" to "NO mutator may exist at all". Should that test ever
+// legitimately need an exception again, the fix is almost certainly wrong —
+// convert the offending test to the mutant.mjs helper instead of resurrecting
+// this list.
+const FILE_MUTATING_TEST_BASENAMES = new Set([]);
 
-// Basename -> the real source file basename it mutates in place. Used only
-// for the D4 post-group re-check's "which test in that group likely owns
-// the strand" reporting (BUG-708) — not load-bearing for the serialisation
-// decision itself (FILE_MUTATING_TEST_BASENAMES is).
-const FILE_MUTATING_TEST_TARGET_BASENAME = new Map([
-  ['attack-bug642-memo.test.mjs', 'data.ts'],
-  ['attack-bug643-memo.test.mjs', 'data.ts'],
-  ['bug645-population-visibility.test.mjs', 'data.ts'],
-  ['bug662-college-capacity-tier.test.mjs', 'data.ts'],
-  ['bug-509-tiered-population-ceiling.test.mjs', 'engine.ts'],
-  ['feat-dynamic-bailout.test.mjs', 'engine.ts'],
-  ['attack-bug641-round2.test.tsx', 'demandFixUi.ts'],
-  // FEAT-2326609772 largest-first rebase, round 4 finding — see the matching
-  // FILE_MUTATING_TEST_BASENAMES entries above. reround's own two mutation
-  // proofs (RR-8/RR-9) hit BOTH data.ts and engine.ts; this map only carries
-  // one value per test (reporting-only, per this map's own doc comment
-  // above), so data.ts is listed as the primary/first-hit target.
-  ['bug685-686-largest-first.test.mjs', 'data.ts'],
-  ['attack-largest-first-reround.test.mjs', 'data.ts'],
-  ['bug606-fix-all.test.mjs', 'engine.ts'],
-]);
+// Historical companion to FILE_MUTATING_TEST_BASENAMES (BUG-708's "which
+// test in that group likely owns the strand" reporting) — kept empty for the
+// same reason: no test mutates a real src file in place any more, so there
+// is nothing to attribute a stranded .bak to. findStaleBakFiles()/
+// failOnStaleBakFiles() below stay in place regardless, as a fail-closed
+// backstop should a future test ever reintroduce a stray .bak by mistake.
+const FILE_MUTATING_TEST_TARGET_BASENAME = new Map([]);
 
 // BUG-708: a killed/timed-out mutating test (the watchdog above SIGKILLs at
 // the ceiling BY DESIGN) can strand its GR#24 scratch-copy backup — the

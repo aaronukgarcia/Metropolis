@@ -17,24 +17,21 @@
 // THE FIX: the ceiling now calls `onlineResidentsCapacity(s)` (residential-only,
 // isOnline-gated, tier-aware) instead of the inline flat sum.
 //
-// RED proof (scratch cp/mv, restored immediately after — no git revert, per
-// GR#24): the third test below copies src/sim/engine.ts to a .bak, textually
-// swaps the fixed `const capacity = onlineResidentsCapacity(s);` line back to
-// the original flat-sum IIFE, re-runs the deterministic ceiling test (second
-// test below) as a child process against that reverted source, asserts it
-// FAILS, then restores the original file from the backup in a try/finally.
+// RED proof (BUG-739: a private webconsole/test/helpers/mutant.mjs shadow
+// copy of webconsole/src + webconsole/test, never the real shared
+// engine.ts): the third test below textually swaps the fixed
+// `const capacity = onlineResidentsCapacity(s);` line back to the original
+// flat-sum IIFE inside that shadow copy, re-runs the deterministic ceiling
+// test (second test below) as a child process against the shadow's reverted
+// source, and asserts it FAILS.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { runMutantSelfReinvoke } from './helpers/mutant.mjs';
 import { SPECS, onlineResidentsCapacity, residentsCapacity } from '../src/sim/data.ts';
 import { initialState, reducer } from '../src/sim/engine.ts';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ENGINE_PATH = path.join(__dirname, '..', 'src', 'sim', 'engine.ts');
 
 // res_estate: flat base (tier 0) = 1500 residents; tier 2 (capacityTiers[2]) = 1815.
 const SP = SPECS['res_estate'];
@@ -127,67 +124,45 @@ test('BUG-509: the population growth ceiling inside advance()/tick honours the t
 });
 
 test('BUG-509: RED proof — reverting the fix (flat sum, no capacityTier read) reproduces the pre-fix over-capacity shrink', () => {
-  const original = fs.readFileSync(ENGINE_PATH, 'utf8');
-  const fixedLine = '  const capacity = onlineResidentsCapacity(s);';
-  assert.ok(original.includes(fixedLine), 'precondition: the fixed one-line ceiling is present in engine.ts');
+  // BUG-739: mutation now runs against a private webconsole/test/helpers/
+  // mutant.mjs shadow copy of BOTH webconsole/src and webconsole/test (this
+  // test re-invokes ITSELF as a child, so the shadow needs the test file too)
+  // — the real, shared engine.ts is never written to.
+  const { failed, output, crashed } = runMutantSelfReinvoke({
+    targetRelPath: path.join('sim', 'engine.ts'),
+    mutate: (original) => {
+      const fixedLine = '  const capacity = onlineResidentsCapacity(s);';
+      assert.ok(original.includes(fixedLine), 'precondition: the fixed one-line ceiling is present in engine.ts');
+      const buggyIIFE = [
+        '  const capacity = (() => {',
+        '    let cap = 0;',
+        '    for (const b of s.buildings) {',
+        '      if (!isOnline(s, b)) continue;',
+        '      const sp = SPECS[b.spec];',
+        "      if (sp?.kind === 'residential') cap += sp.residents ?? 8;",
+        '    }',
+        '    return cap;',
+        '  })();',
+      ].join('\n');
+      return original.replace(fixedLine, buggyIIFE);
+    },
+    testFileAbsPath: fileURLToPath(import.meta.url),
+    testNamePattern: 'BUG-509: the population growth ceiling',
+  });
 
-  const buggyIIFE = [
-    '  const capacity = (() => {',
-    '    let cap = 0;',
-    '    for (const b of s.buildings) {',
-    '      if (!isOnline(s, b)) continue;',
-    '      const sp = SPECS[b.spec];',
-    "      if (sp?.kind === 'residential') cap += sp.residents ?? 8;",
-    '    }',
-    '    return cap;',
-    '  })();',
-  ].join('\n');
-
-  const reverted = original.replace(fixedLine, buggyIIFE);
-  assert.notEqual(reverted, original, 'precondition: the textual swap actually changed the file');
-
-  const backupPath = ENGINE_PATH + '.bug509-red-proof.bak';
-  fs.copyFileSync(ENGINE_PATH, backupPath); // scratch copy, per GR#24 — never git for revert
-  try {
-    fs.writeFileSync(ENGINE_PATH, reverted, 'utf8');
-
-    // Run this same test file's SECOND test (the ceiling behaviour test) as a
-    // fresh, INDEPENDENT child process against the reverted source, and confirm
-    // it fails. NODE_TEST_CONTEXT must be stripped from the child's env: this
-    // test itself normally runs under an outer `node --test`, which sets that
-    // var, and Node's test runner then treats an inherited child as a
-    // subtest reporting over IPC to the (unrelated) outer runner instead of
-    // exiting non-zero on failure — silently making this whole RED proof a
-    // false pass. Confirmed empirically: without stripping it, the exact same
-    // revert+run below exits 0 (looks green) purely because of the inherited
-    // env var, even though the reverted code visibly fails when run directly.
-    const nodeExe = process.execPath;
-    const childEnv = { ...process.env };
-    delete childEnv.NODE_TEST_CONTEXT;
-    let failed = false;
-    let output = '';
-    try {
-      output = execFileSync(
-        nodeExe,
-        ['--test', '--test-name-pattern=BUG-509: the population growth ceiling', fileURLToPath(import.meta.url)],
-        { cwd: path.join(__dirname, '..'), encoding: 'utf8', stdio: 'pipe', env: childEnv }
-      );
-    } catch (err) {
-      failed = true;
-      output = (err.stdout || '') + (err.stderr || '');
-    }
-
-    assert.ok(failed, 'the ceiling test must FAIL against the reverted (flat-sum) engine.ts — proves the test can fail');
-    assert.match(output, /not ok|fail/i, 'child test run output reports a failure against the flat-sum revert');
-  } finally {
-    // Restore the fixed file — scratch mv/copy only, never git (GR#24).
-    fs.copyFileSync(backupPath, ENGINE_PATH);
-    fs.unlinkSync(backupPath);
-  }
-
-  // Sanity: after restore, the fix is back in place.
-  const restored = fs.readFileSync(ENGINE_PATH, 'utf8');
-  assert.equal(restored, original, 'engine.ts is restored byte-identical to the fixed version after the RED proof');
+  // R2 (BUG-739 round REJECT, 2026-09-05): `failed` alone cannot distinguish
+  // "the mutant was detected" from "the child crashed for an unrelated
+  // reason" (e.g. a syntax-breaking mutation) — both redden `failed`
+  // identically. Require the test runner to have actually REPORTED (crashed
+  // === false) AND the output to name the SPECIFIC assertion this exact
+  // mutation is expected to trip, not a bare exit-status/generic-word match.
+  assert.ok(!crashed, `the re-invoked test must actually RUN (not crash at load time) against the mutant; output:\n${output}`);
+  assert.ok(failed, 'the ceiling test must FAIL against the reverted (flat-sum) engine.ts — proves the test can fail');
+  assert.match(
+    output,
+    /over-capacity churn must shrink toward the TIERED capacity/,
+    `child test run output must report the SPECIFIC over-capacity-ceiling assertion failing, not just any failure; got:\n${output}`,
+  );
 });
 
 test('BUG-509: the ceiling change does not disturb funds/conservation (auto-scale charging is independent of the ceiling)', () => {

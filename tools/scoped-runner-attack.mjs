@@ -28,10 +28,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, readdirSync, cpSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const RUNNER = join(REPO, 'tools', 'test', 'scoped.mjs');
@@ -171,52 +171,159 @@ test('serial: the concurrency injection exists and is gated on the allowlist', (
   assert.ok(/function needsSerialExecution/.test(RUNNER_SRC), 'BUG-651 gate removed');
 });
 
-// ROUND FINDING F1 (P1) — was EXPECTED RED at time of writing, fixed by the
-// BUG-708 re-work: webconsole/test/feat-dynamic-bailout.test.mjs is now on
-// FILE_MUTATING_TEST_BASENAMES (see scoped.mjs).
+// ROUND FINDING F1 (P1), SUPERSEDED BY BUG-739 (2026-09-05): this test used
+// to assert "every src-mutating test is on FILE_MUTATING_TEST_BASENAMES" —
+// i.e. it TOLERATED in-place mutation of a shared webconsole/src file as
+// long as scoped.mjs knew to serialise it. BUG-739's independent round found
+// that tolerance was never actually safe: CI's node-test job invokes the
+// bare `node --test` runner directly (sharded 3 ways, default concurrency),
+// which never goes through scoped.mjs at all, so the serialisation this test
+// was protecting was NEVER in effect on CI. An unrelated importing sibling
+// landing in the same CI shard as a mutating test could transiently observe
+// the sabotaged real file mid-mutation.
 //
-// RE-ROUND (BUG-708) HONESTY FIX (B2-B4): this check derives the expected set
-// from the tests themselves (GR#15), but it is a PATTERN-MATCHED heuristic,
-// not an exhaustive proof — it can only ever catch mutation shapes it knows
-// to grep for, and it is only as complete as the API list and the file-glob
-// below. The original version matched ONLY `writeFileSync(` against ONLY
-// `*.test.mjs` files, which the re-round's B2/B3/B4 probes showed missed:
-// an `fs/promises` `writeFile(` mutation (B2), a `copyFileSync`/`renameSync`
-// in-place swap (B3), and any mutating `.test.tsx` file at all (B4 —
-// attack-bug641-round2.test.tsx writeFileSyncs src/components/demandFixUi.ts
-// in place and was invisible to a `*.test.mjs`-only glob). All three are now
-// covered below. The HONEST claim is: this check catches every mutation
-// written through `writeFileSync`, `fs/promises.writeFile`, or a
-// `copyFileSync`+`renameSync` swap, against a path that looks like
-// `src/sim/*.ts`, `src/components/*.ts`, or one of the known path-variable
-// names, in any `*.test.mjs` or `*.test.tsx` file — NOT every conceivable way
-// a test could mutate a shared source file (e.g. it would still miss a
-// mutation performed by a spawned child process, or one written through a
-// stream/fd API, or a path built from strings this regex can't parse). It
-// falls behind exactly as far as the shapes it doesn't grep for; it is not a
-// guarantee against every future mutation style.
-test('serial: every src-mutating test is on FILE_MUTATING_TEST_BASENAMES [F1]', () => {
-  const listed = new Set(
-    [...RUNNER_SRC.matchAll(/'([\w.\-]+\.test\.(?:mjs|tsx))', \/\/ mutates/g)].map((m) => m[1]),
-  );
-  assert.ok(listed.size >= 5, 'expected to parse the mutating-test allowlist');
+// The fix converted every one of those tests to run its RED-PROOF against a
+// private, disposable shadow copy of webconsole/src (webconsole/test/
+// helpers/mutant.mjs's runWithMutant/runMutantSelfReinvoke/createMutantShadow)
+// instead of writing the real file in place — so the invariant this test
+// enforces FLIPS: no test may write into webconsole/src at all, full stop.
+// FILE_MUTATING_TEST_BASENAMES/FILE_MUTATING_TEST_TARGET_BASENAME in
+// scoped.mjs are kept only as documentation of the retired mechanism (both
+// now empty Sets/Maps) — this test no longer reads them.
+//
+// R3 (BUG-739 round REJECT, 2026-09-05): the FIRST version of this check used
+// a fixed-size text WINDOW around each write call to avoid false-flagging a
+// file that legitimately imports the real src (for a read-only baseline)
+// while separately writing an unrelated throwaway probe file elsewhere. The
+// round found this window is itself a gap: a real mutator that assigns a
+// src-like path to a variable, then calls writeFileSync(thatVariable, ...)
+// with 200+ characters of comment between the two, sails straight through —
+// proximity was never the right signal. FIXED by tracing the write's TARGET
+// EXPRESSION instead of textual distance: this scans the WHOLE file (no
+// window) to build a set of variable names whose OWN declaration's
+// right-hand side looks like a src path (directly, or via a simple
+// alias-of-an-alias chain), then flags a write call whose first argument is
+// either a literal src-like path OR a bare identifier in that traced set —
+// regardless of how far apart the declaration and the call sit. The
+// original false-positive concern (a file that merely MENTIONS a real src
+// path in an unrelated baseline import, or in a comment, while writing to
+// something else entirely) is handled the same way it always should have
+// been: by requiring the WRITE CALL's own argument to resolve to a src path,
+// not by requiring the two substrings to be textually close.
+//
+// Any file that imports webconsole/test/helpers/mutant.mjs is exempted
+// outright — it is trusted to route its mutation through the helper's own
+// shadow-copy safety net (which independently asserts the real file is
+// byte-identical after every run, BUG-708-style), so this heuristic does not
+// need to (and, being purely textual, cannot reliably) verify HOW the helper
+// itself is used inside that file.
+//
+// Same honesty caveat as every version of this check: it is PATTERN-MATCHED,
+// not a real interpreter — it would still miss a mutation performed by a
+// spawned child process, one written through a raw stream/fd API, or a path
+// built by string concatenation this regex can't parse. It falls behind
+// exactly as far as the shapes it doesn't grep for.
+test('forbidden: NO test writes into webconsole/src [F1, superseded by BUG-739]', () => {
   const testDir = join(REPO, 'webconsole', 'test');
   const offenders = [];
-  // B2/B3: writeFileSync, fs/promises writeFile, and a copyFileSync+renameSync
-  // in-place swap are all mutation APIs seen in this repo's own RED-proof
-  // tests (see FILE_MUTATING_TEST_BASENAMES's comments in scoped.mjs).
-  const mutatingApi = /writeFileSync\s*\(|\bwriteFile\s*\(|copyFileSync\s*\([\s\S]{0,200}renameSync\s*\(/;
+  const usesHelper = /from\s+['"]\.\/helpers\/mutant\.mjs['"]/;
+  const mutatingApiCall = /(?:writeFileSync|writeFile|copyFileSync)\s*\(\s*([^,)]+)/g;
   // Tolerate both contiguous paths (src/sim/data.ts) and path.join-style
   // comma/quote-separated segments (path.join('src', 'sim', 'data.ts')) — a
   // handful of stray separator characters between segments either way.
   const srcPath = /src[\\/'",\s]{0,5}(?:sim|components)[\\/'",\s]{0,5}[\w.-]+\.tsx?|_TS_PATH|engineTsPath|dataTsPath/i;
-  // B4: scan .test.tsx alongside .test.mjs — a tsx mutator is exactly as
-  // dangerous to a shared src/*.ts(x) file as an mjs one.
+  // A declaration whose RHS looks like a src path: `const X = ...src/sim/...`
+  const declPattern = /(?:const|let|var)\s+(\w+)\s*=\s*([^;\n]+)/g;
+
   for (const f of readdirSync(testDir).filter((n) => /\.test\.(mjs|tsx)$/.test(n))) {
     const src = readFileSync(join(testDir, f), 'utf8');
-    if (mutatingApi.test(src) && srcPath.test(src) && !listed.has(f)) offenders.push(f);
+    if (usesHelper.test(src)) continue; // trusts the helper's own internal shadow-copy safety net
+
+    // Build the traced-alias set: any variable whose OWN declaration's RHS
+    // is a src-like path, resolved through up to a few rounds of
+    // alias-of-an-alias (`const a = REAL_PATH; const b = a;`).
+    const srcVars = new Set();
+    const decls = [...src.matchAll(declPattern)];
+    for (let round = 0; round < 4; round++) {
+      let changed = false;
+      for (const [, name, rhs] of decls) {
+        if (srcVars.has(name)) continue;
+        const rhsIsDirectSrcPath = srcPath.test(rhs);
+        const rhsIsAlias = /^\s*(\w+)\s*$/.test(rhs) && srcVars.has(rhs.trim());
+        if (rhsIsDirectSrcPath || rhsIsAlias) {
+          srcVars.add(name);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+
+    let flagged = false;
+    for (const m of src.matchAll(mutatingApiCall)) {
+      const target = m[1].trim();
+      if (srcPath.test(target) || srcVars.has(target)) {
+        flagged = true;
+        break;
+      }
+    }
+    // copyFileSync + renameSync in-place swap (a real second shape this
+    // repo's RED-proofs used to use): renameSync's own DESTINATION argument
+    // is the same target-expression check, traced the same way.
+    if (!flagged) {
+      for (const m of src.matchAll(/renameSync\s*\(\s*[^,]+,\s*([^,)]+)/g)) {
+        const target = m[1].trim();
+        if (srcPath.test(target) || srcVars.has(target)) {
+          flagged = true;
+          break;
+        }
+      }
+    }
+    if (flagged) offenders.push(f);
   }
-  assert.deepEqual(offenders, [], `src-mutating tests missing from the allowlist: ${offenders.join(', ')}`);
+  assert.deepEqual(
+    offenders,
+    [],
+    `test(s) still write into webconsole/src in place — convert to webconsole/test/helpers/mutant.mjs ` +
+      `(runWithMutant/runMutantSelfReinvoke/createMutantShadow) instead: ${offenders.join(', ')}`,
+  );
+});
+
+// R3 companion (BUG-739 round REJECT, 2026-09-05): the F1 test above proves
+// no CURRENT test file writes into src — but a heuristic that has never seen
+// a real positive is an untested detector. This proves it actually FIRES:
+// a synthetic fixture, planted in a scratch temp dir (never inside the real
+// webconsole/test — the check under test only scans that directory, so a
+// fixture placed there would need cleanup this test can't risk skipping)
+// mirroring the exact evasion the round found — an ALIASED path constant
+// with 200+ characters of comment between the declaration and the write
+// call — is fed through the SAME detection logic inline (duplicated
+// minimally rather than importing the real test's closure, since node:test
+// doesn't expose it) and must be caught.
+test('R3: the F1 target-expression trace actually catches an aliased-path-with-a-comment-gap mutator (synthetic fixture, not a real file)', () => {
+  const fixtureSrc = [
+    "import { writeFileSync, readFileSync } from 'node:fs';",
+    "const ENGINE_ALIAS = '../src/sim/engine.ts';",
+    '// '.padEnd(220, 'x'), // 200+ chars of filler comment between decl and use
+    'const original = readFileSync(ENGINE_ALIAS, "utf8");',
+    'writeFileSync(ENGINE_ALIAS, original.replace("a", "b"), "utf8");',
+  ].join('\n');
+
+  const usesHelper = /from\s+['"]\.\/helpers\/mutant\.mjs['"]/;
+  const mutatingApiCall = /(?:writeFileSync|writeFile|copyFileSync)\s*\(\s*([^,)]+)/g;
+  const srcPath = /src[\\/'",\s]{0,5}(?:sim|components)[\\/'",\s]{0,5}[\w.-]+\.tsx?|_TS_PATH|engineTsPath|dataTsPath/i;
+  const declPattern = /(?:const|let|var)\s+(\w+)\s*=\s*([^;\n]+)/g;
+
+  assert.ok(!usesHelper.test(fixtureSrc), 'fixture sanity: must not accidentally import the helper (would exempt it)');
+  const srcVars = new Set();
+  for (const [, name, rhs] of fixtureSrc.matchAll(declPattern)) {
+    if (srcPath.test(rhs)) srcVars.add(name);
+  }
+  assert.ok(srcVars.has('ENGINE_ALIAS'), 'fixture sanity: ENGINE_ALIAS must be traced as a src-path variable');
+  let flagged = false;
+  for (const m of fixtureSrc.matchAll(mutatingApiCall)) {
+    if (srcPath.test(m[1].trim()) || srcVars.has(m[1].trim())) flagged = true;
+  }
+  assert.ok(flagged, 'the aliased-path-with-comment-gap fixture must be flagged by the SAME target-expression trace F1 uses');
 });
 
 // B5 (was RED, now fixed by the re-work): the partition itself used to be
@@ -330,4 +437,109 @@ test('drift: WEBCONSOLE_TSX_FILES matches the webconsole package script [F5]', (
   const script = pkg.scripts.test;
   const fromScript = [...script.matchAll(/(test\/[\w.\-]+\.test\.tsx)/g)].map((m) => m[1]);
   assert.deepEqual(listed, fromScript, 'runner tsx list has drifted from the package script');
+});
+
+// ──────────────────────── BUG-739: CI-shape reproduction ─────────────────────
+//
+// This is the round's own reproduction of the defect scoped.mjs's
+// serialisation could never fix: CI's node-test job invokes the BARE
+// `node --test` runner directly, sharded 3 ways, at DEFAULT concurrency —
+// it never goes through scoped.mjs's FILE_MUTATING_TEST_BASENAMES
+// serialisation at all. Two real, converted mutator tests
+// (attack-bug643-memo.test.mjs, bug645-population-visibility.test.mjs — both
+// target src/sim/data.ts) run alongside a minimal IMPORTING SIBLING of
+// data.ts, via a direct `node --test <files...>` invocation (no scoped.mjs
+// in the loop at all, matching CI's shape exactly), at whatever concurrency
+// node picks by default.
+//
+// SAFETY: this whole reproduction runs against a DISPOSABLE SCRATCH COPY of
+// webconsole (src/ + test/, cpSync'd into a temp dir), never the real repo
+// tree — including for the deliberately-unsafe mutation-testing proof below,
+// which sets MUTANT_UNSAFE_WRITE_IN_PLACE=1 specifically to reintroduce
+// BUG-739's original in-place-write race. That knob's writes still land
+// inside webconsole/test/helpers/mutant.mjs's own SRC_ROOT computation
+// (relative to ITS OWN file location), so copying the whole webconsole tree
+// — helpers/mutant.mjs included — is what makes "in place" mean "in the
+// scratch copy" for this proof rather than "in the real, live repository
+// source". (History: the first version of this proof pointed the unsafe
+// knob at the REAL webconsole/src directly and the race it deliberately
+// provoked left the real src/sim/data.ts genuinely corrupted on disk after
+// the run — caught immediately by the very next `node --test` on the real
+// tree going red, fixed by hand, and this test rewritten to never touch the
+// real tree again.)
+function buildScratchWebconsole() {
+  const scratchDir = mkdtempSync(join(tmpdir(), 'scoped-attack-ci-shape-webconsole-'));
+  cpSync(join(REPO, 'webconsole', 'src'), join(scratchDir, 'src'), { recursive: true });
+  cpSync(join(REPO, 'webconsole', 'test'), join(scratchDir, 'test'), { recursive: true });
+  return scratchDir;
+}
+
+function writeCiShapeSibling(scratchDir) {
+  const dataTsUrl = pathToFileURL(join(scratchDir, 'src', 'sim', 'data.ts')).href;
+  const file = join(scratchDir, 'test', 'zz-ci-shape-sibling.test.mjs');
+  writeFileSync(
+    file,
+    [
+      "import { test } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      `import { SPECS } from ${JSON.stringify(dataTsUrl)};`,
+      "test('ci-shape sibling: SPECS is the real, unmutated catalogue', () => {",
+      "  assert.ok(SPECS && Object.keys(SPECS).length > 0, 'SPECS must be populated');",
+      "  assert.ok(SPECS.res_hut, 'a known real spec id must exist — a corrupted data.ts would likely lose or rename this');",
+      '});',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  return file;
+}
+
+function runCiShape(extraEnv = {}) {
+  const webconsoleDir = buildScratchWebconsole();
+  try {
+    const mutatorA = join(webconsoleDir, 'test', 'attack-bug643-memo.test.mjs');
+    const mutatorB = join(webconsoleDir, 'test', 'bug645-population-visibility.test.mjs');
+    const siblingFile = writeCiShapeSibling(webconsoleDir);
+    // NODE_TEST_CONTEXT must NOT be inherited: this attack file itself runs
+    // under an outer `node --test`, which sets that var for THIS process;
+    // spawnSync inherits the parent env by default, and Node's test runner
+    // then treats the child as a recursive re-entry and SKIPS running the
+    // files entirely ("run() is being called recursively within a test
+    // file") — the exact F6/BUG-546 class this repo has hit repeatedly.
+    const childEnv = { ...process.env, ...extraEnv };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const res = spawnSync(
+      process.execPath,
+      ['--test', mutatorA, mutatorB, siblingFile],
+      { cwd: webconsoleDir, encoding: 'utf8', timeout: 180000, env: childEnv },
+    );
+    return { res, out: `${res.stdout || ''}${res.stderr || ''}` };
+  } finally {
+    rmSync(webconsoleDir, { recursive: true, force: true });
+  }
+}
+
+test('BUG-739 CI-shape: an importing sibling of data.ts survives two mutator tests run alongside it via plain `node --test` (no scoped.mjs, matching CI\'s sharded default-concurrency shape)', () => {
+  const { res, out } = runCiShape();
+  assert.equal(res.status, 0, `CI-shape run must exit 0 (sibling + both mutators all green); status=${res.status}\n${out}`);
+  assert.match(out, /ci-shape sibling: SPECS is the real, unmutated catalogue/, 'the sibling test must actually have run');
+});
+
+// MUTATION-TESTING PROOF (task gate): flip webconsole/test/helpers/
+// mutant.mjs's MUTANT_UNSAFE_WRITE_IN_PLACE knob — which deliberately
+// reintroduces BUG-739's original defect (mutate the file in place instead
+// of a shadow copy, still confined to the scratch webconsole copy this
+// whole reproduction runs against — see buildScratchWebconsole's safety
+// comment above) — and confirm the SAME CI-shape run above now REDS. This is
+// the mechanical proof that the shadow-copy mechanism is actually
+// load-bearing, not just present: remove it, and this exact test goes red.
+test('BUG-739 mutation-testing proof: with the shadow copy DISABLED (MUTANT_UNSAFE_WRITE_IN_PLACE=1), the same CI-shape run REDS', () => {
+  const { res, out } = runCiShape({ MUTANT_UNSAFE_WRITE_IN_PLACE: '1' });
+  assert.notEqual(
+    res.status,
+    0,
+    'with the shadow-copy mechanism disabled, the CI-shape run must fail (either the sibling observes a ' +
+      'mutant, or a mutator\'s own in-place restore step races and corrupts data.ts for the other) — a ' +
+      'status of 0 here means the shadow copy was NOT the thing keeping this green\n' + out,
+  );
 });

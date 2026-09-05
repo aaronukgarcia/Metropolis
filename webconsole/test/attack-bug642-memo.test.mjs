@@ -43,7 +43,6 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -462,22 +461,17 @@ test('ATTACK (i): memory estimate documented (no runnable GC-timing assertion �
 const DATA_TS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'sim', 'data.ts');
 const BACKUP_PATH = `${DATA_TS_PATH}.attack642.bak`;
 
-function withUnmemoisedWaterCaps(mutateFn, testFn) {
-  // GR#24-compliant mutation cycle: cp f f.bak; ls verifying the .bak;
-  // mutate; run; mv f.bak f. NEVER a git command.
-  execFileSync('cp', [DATA_TS_PATH, BACKUP_PATH]);
-  const backupStat = fs.statSync(BACKUP_PATH);
-  assert.ok(backupStat.size > 0, 'GR#24 mutation-cycle safety check: backup file must exist and be non-empty before mutating');
-  try {
-    const original = fs.readFileSync(DATA_TS_PATH, 'utf8');
-    const mutated = mutateFn(original);
-    assert.notEqual(mutated, original, 'RED-PROOF setup: the mutation must actually change the file');
-    fs.writeFileSync(DATA_TS_PATH, mutated, 'utf8');
-    testFn();
-  } finally {
-    fs.renameSync(BACKUP_PATH, DATA_TS_PATH);
-  }
-}
+// BUG-739: this file previously defined a `withUnmemoisedWaterCaps(mutateFn,
+// testFn)` GR#24 scratch-copy helper (cp DATA_TS_PATH -> .bak, write the
+// mutated content OVER THE REAL src/sim/data.ts, run, restore from .bak)
+// here — but it was NEVER CALLED (test (j) below has always been
+// documentation-only; see its own comment for why an in-process before/after
+// can't work in this file's tsx process). A dead function that still wrote a
+// real shared src file in place was exactly the shape BUG-739's round found
+// live elsewhere in this allowlist, so it is removed rather than converted:
+// there is no live mutation cycle here to move onto webconsole/test/helpers/
+// mutant.mjs. See attack-bug643-memo.test.mjs for this file's sibling, which
+// DOES execute its RED-PROOF live and IS converted to the new helper.
 
 test('ATTACK (j): RED-PROOF documented (see report) — reverting the waterCaps memoisation is proven, via a separate manual run outside this file\'s own tsx process, to keep identity green and turn the 488-plant-scale perf assertion red', () => {
   // WHY THIS IS DOCUMENTED RATHER THAN EXECUTED INLINE: this test file is

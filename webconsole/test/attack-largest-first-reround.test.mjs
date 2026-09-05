@@ -59,6 +59,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { runWithMutant } from './helpers/mutant.mjs';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { SPECS, largestFirstFill, demandFixPlan, placementCost } from '../src/sim/data.ts';
 
@@ -358,24 +359,40 @@ function runCanary() {
   }
 }
 
-function mutateAndProve(relPath, find, replace, label) {
-  const abs = path.join(WEBCONSOLE, relPath);
-  const original = fs.readFileSync(abs, 'utf8');
-  assert.ok(original.includes(find), `${label}: mutation anchor not found — the fix moved, re-target this proof`);
-  try {
-    fs.writeFileSync(abs, original.replace(find, replace));
-    const mutantBuilt = runCanary();
-    assert.equal(mutantBuilt, 0, `${label}: the mutant still built ${mutantBuilt} units — RR-4 does NOT red on it`);
-  } finally {
-    fs.writeFileSync(abs, original);
-  }
-  assert.equal(fs.readFileSync(abs, 'utf8'), original, `${label}: scratch-copy restore was not byte-identical`);
+// BUG-739: mutation now runs against a private webconsole/test/helpers/
+// mutant.mjs shadow copy of webconsole/src, never the real, shared
+// data.ts/engine.ts — the shadow-relative canary below mirrors CANARY above
+// but imports via './sim/...' (the shadow root mirrors src/ directly) rather
+// than './src/sim/...' (which is what a script at the real webconsole root
+// needs).
+const MUTANT_CANARY = `
+import { initialState, reducer } from './sim/engine.ts';
+import { SPECS } from './sim/data.ts';
+const b = initialState();
+const s = { ...b, population: 100000, unlockedAll: true, funds: 50000000, administrationState: null };
+const a = reducer(s, { type: 'resolveDemand', serviceKey: 'power' });
+const n = a.buildings.filter((x) => SPECS[x.spec] && SPECS[x.spec].kind === 'power').length;
+console.log('POWER_BUILT=' + n);
+`;
+
+function mutateAndProve(srcRelPath, find, replace, label) {
+  const out = runWithMutant({
+    targetRelPath: srcRelPath,
+    mutate: (original) => {
+      assert.ok(original.includes(find), `${label}: mutation anchor not found — the fix moved, re-target this proof`);
+      return original.replace(find, replace);
+    },
+    childBody: MUTANT_CANARY,
+    extraArgs: ['--experimental-strip-types'],
+  });
+  const mutantBuilt = Number(/POWER_BUILT=(\d+)/.exec(out)?.[1] ?? -1);
+  assert.equal(mutantBuilt, 0, `${label}: the mutant still built ${mutantBuilt} units — RR-4 does NOT red on it`);
 }
 
 test('RR-8 (M1 red-proof): removing the affordability gate in largestFirstFill() makes the poor city build ZERO', () => {
   assert.ok(runCanary() > 0, 'baseline: unmutated source must build something');
   mutateAndProve(
-    path.join('src', 'sim', 'data.ts'),
+    path.join('sim', 'data.ts'),
     'const maxAffordable = c.unitCost > 0 ? Math.floor(fundsRemaining / c.unitCost) : Infinity;',
     'const maxAffordable = Infinity; // MUTANT M1',
     'M1'
@@ -385,7 +402,7 @@ test('RR-8 (M1 red-proof): removing the affordability gate in largestFirstFill()
 
 test('RR-8 (M2 red-proof): removing the placePlanItem() self-heal makes the poor city build ZERO', () => {
   mutateAndProve(
-    path.join('src', 'sim', 'engine.ts'),
+    path.join('sim', 'engine.ts'),
     '  const result = walkMix(cur, item.mix, item.count, unitCap);',
     '  const result = walkMix(cur, item.mix, item.count, unitCap);\n  if (true) return result; // MUTANT M2',
     'M2'
@@ -428,20 +445,36 @@ function runRR1Canary() {
   }
 }
 
+// Shadow-relative mirror of CANARY_RR1 (BUG-739: './sim/...' against the
+// shadow root that mirrors src/ directly, not './src/sim/...' against the
+// real webconsole root) — the real, shared engine.ts is never written to.
+const MUTANT_CANARY_RR1 = `
+import { initialState, reducer } from './sim/engine.ts';
+import { SPECS, demandFixPlan } from './sim/data.ts';
+const b = initialState();
+const s = { ...b, population: 200000, unlockedAll: true, funds: 5000000000, administrationState: null };
+const plan = demandFixPlan(s).find((p) => p.serviceKey === 'power');
+const headline = SPECS[plan.specId];
+const after = reducer(s, { type: 'resolveDemandAll' });
+const notice = after.placeNotice ?? '';
+const actuallyBuilt = after.buildings.filter((x) => x.spec === plan.specId).length;
+console.log('PHANTOM=' + ((notice.includes(headline.name) && actuallyBuilt === 0) ? 1 : 0));
+`;
+
 test('RR-9 (mutation of THIS round\'s fix): reverting to a bare-count comparison reproduces the RR-1 phantom asset', () => {
   assert.equal(runRR1Canary(), 0, 'baseline: the fixed source must never report a phantom asset');
-  const abs = path.join(WEBCONSOLE, 'src', 'sim', 'engine.ts');
-  const original = fs.readFileSync(abs, 'utf8');
   const find =
     "built.push(matchesPlan && result.placed >= plan.count ? planLabel(plan) : builtMixLabel(result.builtMix));";
-  assert.ok(original.includes(find), 'RR-9: mutation anchor not found — the RR-1 fix moved, re-target this proof');
-  const mutated = "built.push(result.placed >= plan.count ? planLabel(plan) : builtMixLabel(result.builtMix)); // MUTANT RR-9";
-  try {
-    fs.writeFileSync(abs, original.replace(find, mutated));
-    assert.equal(runRR1Canary(), 1, 'RR-9: the mutant (bare-count comparison) must reproduce the RR-1 phantom asset');
-  } finally {
-    fs.writeFileSync(abs, original);
-  }
-  assert.equal(fs.readFileSync(abs, 'utf8'), original, 'RR-9: scratch-copy restore was not byte-identical');
+  const mutatedLine = "built.push(result.placed >= plan.count ? planLabel(plan) : builtMixLabel(result.builtMix)); // MUTANT RR-9";
+  const out = runWithMutant({
+    targetRelPath: path.join('sim', 'engine.ts'),
+    mutate: (original) => {
+      assert.ok(original.includes(find), 'RR-9: mutation anchor not found — the RR-1 fix moved, re-target this proof');
+      return original.replace(find, mutatedLine);
+    },
+    childBody: MUTANT_CANARY_RR1,
+    extraArgs: ['--experimental-strip-types'],
+  });
+  assert.equal(Number(/PHANTOM=(\d+)/.exec(out)?.[1] ?? -1), 1, 'RR-9: the mutant (bare-count comparison) must reproduce the RR-1 phantom asset');
   assert.equal(runRR1Canary(), 0, 'restore: source must be back to green (no phantom asset) behaviour');
 });

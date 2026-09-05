@@ -27,10 +27,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import { runWithMutant } from './helpers/mutant.mjs';
 import {
   residentialConstructionSummary,
   offlineResidentsByReason,
@@ -254,66 +254,65 @@ test('BUG-645: PERF — residentialConstructionSummary median WARM (cached, same
 // ────────────────────────────────────────────────────────────────────────
 
 const DATA_TS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'sim', 'data.ts');
-const BACKUP_PATH = `${DATA_TS_PATH}.bug645.bak`;
 
-test('BUG-645: RED-PROOF — un-memoising residentialConstructionSummary (scratch mutation, run in a fresh child process) turns the WARM-call perf bound RED at scale, while a tiny hand-built state\'s answer is unaffected', () => {
-  execFileSync('cp', [DATA_TS_PATH, BACKUP_PATH]);
-  const backupStat = fs.statSync(BACKUP_PATH);
-  assert.ok(backupStat.size > 0, 'GR#24 mutation-cycle safety check: backup must exist and be non-empty before mutating');
+// BUG-739: the fixed child script that used to live at
+// test/scale/bug645-redproof-child.mjs and hard-import the REAL
+// '../../src/sim/data.ts' is retired — its logic is now inlined below,
+// pointed at webconsole/test/helpers/mutant.mjs's private shadow copy of
+// webconsole/src, so the real, shared data.ts is never written to.
+test('BUG-645: RED-PROOF — un-memoising residentialConstructionSummary (scratch mutation, run in a fresh child process against a private shadow copy of webconsole/src) turns the WARM-call perf bound RED at scale, while a tiny hand-built state\'s answer is unaffected', () => {
+  const fixtureUrl = pathToFileURL(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'scale', 'fixture.mjs')
+  ).href;
+  let threw = false;
+  let output = '';
   try {
-    const original = fs.readFileSync(DATA_TS_PATH, 'utf8');
-    const openMarker = 'export const residentialConstructionSummary: (s: SimState) => { count: number; capacity: number } = memoOnState(\n  (s) => {';
-    const closeMarker = '    return { count, capacity };\n  }\n);';
-    assert.ok(original.includes(openMarker), 'RED-PROOF setup: expected opening shape not found — update this test\'s marker if the function was refactored');
-    assert.ok(original.includes(closeMarker), 'RED-PROOF setup: expected closing shape not found — update this test\'s marker if the function was refactored');
-    // Strip the memoOnState wrapper (both its opening call and matching
-    // closing paren) so residentialConstructionSummary becomes a plain arrow
-    // function that recomputes on EVERY call — the pre-fix shape this
-    // red-proof simulates.
-    const mutated = original
-      .replace(openMarker, 'export const residentialConstructionSummary: (s: SimState) => { count: number; capacity: number } = (s) => {')
-      .replace(closeMarker, '    return { count, capacity };\n  };');
-    assert.notEqual(mutated, original, 'RED-PROOF setup: the mutation must actually change the file');
-    fs.writeFileSync(DATA_TS_PATH, mutated, 'utf8');
-
-    // Run a FRESH child process (this test file's own tsx import cache already
-    // holds the memoised version — matches attack-bug642-memo.test.mjs's
-    // documented reasoning for why this must be a child process, not inline).
-    const scriptPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'scale', 'bug645-redproof-child.mjs');
-    const webconsoleDir = path.resolve(path.dirname(DATA_TS_PATH), '..', '..'); // .../webconsole/src/sim/data.ts -> .../webconsole
-    let output;
-    let threw = false;
-    try {
-      // NODE_TEST_CONTEXT must NOT be inherited here: this outer file is
-      // itself running under `node --test`, so process.env.NODE_TEST_CONTEXT
-      // is set for THIS process — execFileSync inherits the parent env by
-      // default, which would make the child's own NODE_TEST_CONTEXT guard
-      // (see bug645-redproof-child.mjs's header) exit(0) immediately without
-      // ever measuring anything, silently defeating this whole red-proof.
-      const childEnv = { ...process.env };
-      delete childEnv.NODE_TEST_CONTEXT;
-      output = execFileSync(process.execPath, ['--import', 'tsx', scriptPath], {
-        cwd: webconsoleDir,
-        encoding: 'utf8',
-        env: childEnv,
-      });
-    } catch (err) {
-      threw = true;
-      output = (err.stdout || '') + (err.stderr || '');
-    }
-    assert.ok(threw, 'the un-memoised child script must exit non-zero (its own perf assertion must fail)');
-    assert.match(output, /RED-PROOF-FAIL/, `child output must report the perf assertion failing; got: ${output}`);
-  } finally {
-    fs.renameSync(BACKUP_PATH, DATA_TS_PATH);
+    output = runWithMutant({
+      targetRelPath: path.join('sim', 'data.ts'),
+      mutate: (original) => {
+        const openMarker = 'export const residentialConstructionSummary: (s: SimState) => { count: number; capacity: number } = memoOnState(\n  (s) => {';
+        const closeMarker = '    return { count, capacity };\n  }\n);';
+        assert.ok(original.includes(openMarker), 'RED-PROOF setup: expected opening shape not found — update this test\'s marker if the function was refactored');
+        assert.ok(original.includes(closeMarker), 'RED-PROOF setup: expected closing shape not found — update this test\'s marker if the function was refactored');
+        // Strip the memoOnState wrapper (both its opening call and matching
+        // closing paren) so residentialConstructionSummary becomes a plain
+        // arrow function that recomputes on EVERY call — the pre-fix shape
+        // this red-proof simulates.
+        return original
+          .replace(openMarker, 'export const residentialConstructionSummary: (s: SimState) => { count: number; capacity: number } = (s) => {')
+          .replace(closeMarker, '    return { count, capacity };\n  };');
+      },
+      childBody:
+        `const { residentialConstructionSummary } = await import('./sim/data.ts');\n` +
+        `const { buildScaleFixture } = await import(${JSON.stringify(fixtureUrl)});\n` +
+        `const WARM_CALL_MEDIAN_BOUND_MS = 0.05;\n` +
+        `const SCALE_BUILDING_COUNT = 29831;\n` +
+        `const SCALE_TARGET_POPULATION = 1_900_000;\n` +
+        `const REPEATS = 20;\n` +
+        `function median(values){const sorted=[...values].sort((a,b)=>a-b);return sorted[Math.floor(sorted.length/2)];}\n` +
+        `const s = buildScaleFixture({ buildingCount: SCALE_BUILDING_COUNT, targetPopulation: SCALE_TARGET_POPULATION, settleTicks: 1 });\n` +
+        `residentialConstructionSummary(s);\n` +
+        `const times = [];\n` +
+        `for (let i = 0; i < REPEATS; i++) { const t0 = performance.now(); residentialConstructionSummary(s); times.push(performance.now() - t0); }\n` +
+        `const med = median(times);\n` +
+        `console.log(\`[bug645-redproof-child] median WARM call time: \${med.toFixed(4)}ms (bound \${WARM_CALL_MEDIAN_BOUND_MS}ms)\`);\n` +
+        `if (med >= WARM_CALL_MEDIAN_BOUND_MS) { console.log('RED-PROOF-FAIL: median warm-call time exceeds the memoised bound — the un-memoised mutation was correctly detected.'); process.exit(1); }\n` +
+        `console.log('unexpectedly stayed under bound even unmemoised — RED-PROOF DID NOT FIRE');\n` +
+        `process.exit(0);\n`,
+    });
+  } catch (err) {
+    threw = true;
+    output = (err.stdout || '') + (err.stderr || '');
   }
+  assert.ok(threw, 'the un-memoised child script must exit non-zero (its own perf assertion must fail)');
+  assert.match(output, /RED-PROOF-FAIL/, `child output must report the perf assertion failing; got: ${output}`);
 });
 
-test('BUG-645: RED-PROOF tripwire — data.ts is currently in its expected (memoised) state, no stray backup left behind', () => {
+test('BUG-645: RED-PROOF tripwire — data.ts is currently in its expected (memoised) state', () => {
   const src = fs.readFileSync(DATA_TS_PATH, 'utf8');
   assert.match(
     src,
     /export const residentialConstructionSummary: \(s: SimState\) => \{ count: number; capacity: number \} = memoOnState\(/,
     'data.ts must currently contain the memoised residentialConstructionSummary implementation'
   );
-  assert.equal(fs.existsSync(BACKUP_PATH), false, 'no stray .bak file should be left over from a prior red-proof run');
 });

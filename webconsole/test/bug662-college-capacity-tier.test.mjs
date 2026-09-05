@@ -30,24 +30,20 @@
 // (the canonical oracle already used by totalChildrenCapacity/BUG-509's
 // residential precedent), never a hand-typed literal.
 //
-// RED proof (scratch cp/mv, restored in a finally — no git revert, GR#24):
-// the last test copies src/sim/data.ts to a .bak, textually reverts
-// serviceCapacityAggregates' two children/served accumulator lines back to
-// their pre-fix flat form, re-runs this file's first test as a child process
-// against that reverted source, asserts it FAILS, then restores the original
-// file from the backup.
+// RED proof (BUG-739: a private webconsole/test/helpers/mutant.mjs shadow
+// copy of webconsole/src + webconsole/test, never the real shared data.ts):
+// the last test textually reverts serviceCapacityAggregates' two
+// children/served accumulator lines back to their pre-fix flat form inside
+// that shadow copy, re-runs this file's first test as a child process
+// against the shadow's reverted source, and asserts it FAILS.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { runMutantSelfReinvoke } from './helpers/mutant.mjs';
 import { SPECS, capacityAtTier, serviceCoverageOf, demandFixPlan } from '../src/sim/data.ts';
 import { initialState } from '../src/sim/engine.ts';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_PATH = path.join(__dirname, '..', 'src', 'sim', 'data.ts');
 
 // edu_tech (Technical College) is the concrete "College" repro case: stage
 // 'tertiary' (feeds the 'college' coverage row) AND carries its own
@@ -143,47 +139,31 @@ test('BUG-662-class: the same tier-aware guard fixes the sibling services (nurse
 });
 
 test('BUG-662: RED proof — reverting the fix (flat sum, no capacityTier read) reproduces the pre-fix undercount', () => {
-  const original = fs.readFileSync(DATA_PATH, 'utf8');
-  const fixedLine = "    else if (sp.stage === 'tertiary') tertiary += childrenAtTier(sp, tier);";
-  assert.ok(original.includes(fixedLine), 'precondition: the fixed tier-aware tertiary line is present in data.ts');
+  // BUG-739: mutation now runs against a private webconsole/test/helpers/
+  // mutant.mjs shadow copy of BOTH webconsole/src and webconsole/test (this
+  // test re-invokes ITSELF as a child, so the shadow needs the test file too)
+  // — the real, shared data.ts is never written to.
+  const { failed, output, crashed } = runMutantSelfReinvoke({
+    targetRelPath: path.join('sim', 'data.ts'),
+    mutate: (original) => {
+      const fixedLine = "    else if (sp.stage === 'tertiary') tertiary += childrenAtTier(sp, tier);";
+      assert.ok(original.includes(fixedLine), 'precondition: the fixed tier-aware tertiary line is present in data.ts');
+      const buggyLine = "    else if (sp.stage === 'tertiary') tertiary += sp.children ?? 0;";
+      return original.replace(fixedLine, buggyLine);
+    },
+    testFileAbsPath: fileURLToPath(import.meta.url),
+    testNamePattern: "BUG-662: serviceCoverageOf's 'college' row",
+  });
 
-  const buggyLine = "    else if (sp.stage === 'tertiary') tertiary += sp.children ?? 0;";
-  const reverted = original.replace(fixedLine, buggyLine);
-  assert.notEqual(reverted, original, 'precondition: the textual swap actually changed the file');
-
-  const backupPath = DATA_PATH + '.bug662-red-proof.bak';
-  fs.copyFileSync(DATA_PATH, backupPath); // scratch copy, per GR#24 — never git for revert
-  try {
-    fs.writeFileSync(DATA_PATH, reverted, 'utf8');
-
-    const nodeExe = process.execPath;
-    const childEnv = { ...process.env };
-    delete childEnv.NODE_TEST_CONTEXT; // see BUG-509's identical note: required or the child silently reports via IPC to the outer runner instead of exiting non-zero
-    let failed = false;
-    let output = '';
-    try {
-      output = execFileSync(
-        nodeExe,
-        [
-          '--test',
-          "--test-name-pattern=BUG-662: serviceCoverageOf's 'college' row",
-          fileURLToPath(import.meta.url),
-        ],
-        { cwd: path.join(__dirname, '..'), encoding: 'utf8', stdio: 'pipe', env: childEnv }
-      );
-    } catch (err) {
-      failed = true;
-      output = (err.stdout || '') + (err.stderr || '');
-    }
-
-    assert.ok(failed, "the 'college' coverage test must FAIL against the reverted (flat-sum) data.ts — proves the test can fail");
-    assert.match(output, /not ok|fail/i, 'child test run output reports a failure against the flat-sum revert');
-  } finally {
-    // Restore the fixed file — scratch mv/copy only, never git (GR#24).
-    fs.copyFileSync(backupPath, DATA_PATH);
-    fs.unlinkSync(backupPath);
-  }
-
-  const restored = fs.readFileSync(DATA_PATH, 'utf8');
-  assert.equal(restored, original, 'data.ts is restored byte-identical to the fixed version after the RED proof');
+  // R2 (BUG-739 round REJECT, 2026-09-05): `failed` alone cannot distinguish
+  // "the mutant was detected" from "the child crashed for an unrelated
+  // reason" — require crashed === false AND the SPECIFIC expected assertion
+  // text, never a bare exit-status/generic-word match.
+  assert.ok(!crashed, `the re-invoked test must actually RUN (not crash at load time) against the mutant; output:\n${output}`);
+  assert.ok(failed, "the 'college' coverage test must FAIL against the reverted (flat-sum) data.ts — proves the test can fail");
+  assert.match(
+    output,
+    /the college coverage row's cap must be the tiered capacity/,
+    `child test run output must report the SPECIFIC tiered-capacity assertion failing, not just any failure; got:\n${output}`,
+  );
 });

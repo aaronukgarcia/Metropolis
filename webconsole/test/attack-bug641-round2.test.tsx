@@ -15,10 +15,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { runWithMutant, runBaselineProbe } from './helpers/mutant.mjs';
 import { initialState } from '../src/sim/engine.ts';
 import { demandOf } from '../src/sim/engine.ts';
 import { SPECS, totalJobs, WORKING_AGE_FRACTION } from '../src/sim/data.ts';
@@ -234,69 +231,132 @@ test('ATTACK-641-R2: laundering check — the message\'s "N short" figure is sti
 // ---------------------------------------------------------------------------
 
 test('ATTACK-641-R2: RED-PROOF — removing the index finite-guard alone reddens the NaN-population regression; removing the shortfall finite-guard alone reddens the +Infinity-population regression; original file is restored byte-identical afterward', () => {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const targetPath = path.join(here, '..', 'src', 'components', 'demandFixUi.ts');
-  const original = fs.readFileSync(targetPath, 'utf8');
-  const backupPath = targetPath + '.attack-r2.bak';
-  fs.writeFileSync(backupPath, original, 'utf8');
+  // BUG-739: each mutation now runs against a private webconsole/test/
+  // helpers/mutant.mjs shadow copy of webconsole/src — the real, shared
+  // demandFixUi.ts is never written to. Each probe is a fresh child process
+  // (so the mutated TS source is freshly re-evaluated, never cached from a
+  // prior import), importing via './components/demandFixUi.ts' /
+  // './sim/engine.ts' relative to the shadow root (which mirrors src/
+  // directly), rather than '../src/...' relative to the real webconsole/test.
+  //
+  // R1 (BUG-739 round REJECT, 2026-09-05): src/components/demandFixUi.ts (and
+  // its own imports of ../sim/engine, ../sim/data, ../sim/types, ../sim/utils)
+  // uses EXTENSIONLESS relative specifiers throughout — plain `node` (native
+  // TS type-stripping, no loader) cannot resolve those at all and the child
+  // died at link time with ERR_MODULE_NOT_FOUND on EVERY run, mutated or not.
+  // The old assertion (`!ok || !out.includes('PROBE-A-PASSED')`) treated ANY
+  // crash as "detection", so a semantically inert mutation "passed" exactly
+  // like the real one — a vacuous RED-PROOF. Fixed two ways: (1) the tsx
+  // loader is now passed via extraArgs, resolved with `import.meta.resolve`
+  // (portable — no hardcoded node_modules path) so extensionless imports
+  // actually resolve; (2) each probe is run TWICE — first against an
+  // UNMUTATED shadow copy (runBaselineProbe), asserting it reaches its own
+  // PASSED marker (proves the probe mechanism itself works, independent of
+  // any mutation), THEN against the mutant, asserting the output contains
+  // the SPECIFIC assertion message that mutation is expected to trip — never
+  // a bare "didn't say PASSED" check, which a crash satisfies just as well
+  // as a real detection.
+  const tsxLoaderUrl = import.meta.resolve('tsx');
 
-  const runProbe = (probeSrc: string): { ok: boolean; out: string } => {
-    // Isolated in-process probe via a temp .mjs harness invoked as a child
-    // process (so the mutated TS source is freshly re-evaluated per probe,
-    // never cached from a prior import in THIS test process).
-    const tmpDir = fs.mkdtempSync(path.join(here, 'r2-redproof-'));
-    const probePath = path.join(tmpDir, 'probe.mjs');
-    fs.writeFileSync(probePath, probeSrc, 'utf8');
+  const runProbeAgainstMutant = (find: string, replace: string, probeSrc: string): { ok: boolean; out: string } => {
+    let out = '';
+    let ok = true;
     try {
-      const out = execFileSync(
-        process.execPath,
-        ['--import', 'tsx', probePath],
-        { cwd: path.join(here, '..'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-      );
-      return { ok: true, out };
+      out = runWithMutant({
+        targetRelPath: 'components/demandFixUi.ts',
+        mutate: (original: string) => {
+          assert.ok(original.includes(find), 'precondition: mutation string must actually be found (test would be vacuous otherwise)');
+          return original.replace(find, replace);
+        },
+        childBody: probeSrc,
+        extraArgs: ['--import', tsxLoaderUrl],
+      });
     } catch (e) {
+      ok = false;
       const err = e as { stdout?: string; stderr?: string; message?: string };
-      return { ok: false, out: (err.stdout ?? '') + (err.stderr ?? '') + (err.message ?? '') };
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      out = (err.stdout ?? '') + (err.stderr ?? '') + (err.message ?? '');
     }
+    return { ok, out };
   };
 
-  try {
-    // --- Mutation A: strip the index finite-guard back to the bare r1-buggy comparison. ---
-    const mutatedA = original.replace(
-      'if (!Number.isFinite(index) || index <= ZONE_DEMAND_THRESHOLD) return null;',
-      'if (index <= ZONE_DEMAND_THRESHOLD) return null;',
-    );
-    assert.notEqual(mutatedA, original, 'precondition: mutation A string must actually be found and replaced (test would be vacuous otherwise)');
-    fs.writeFileSync(targetPath, mutatedA, 'utf8');
-    const probeA = runProbe(`
+  const runBaseline = (probeSrc: string): { ok: boolean; out: string } => {
+    let out = '';
+    let ok = true;
+    try {
+      out = runBaselineProbe({
+        targetRelPath: 'components/demandFixUi.ts',
+        childBody: probeSrc,
+        extraArgs: ['--import', tsxLoaderUrl],
+      });
+    } catch (e) {
+      ok = false;
+      const err = e as { stdout?: string; stderr?: string; message?: string };
+      out = (err.stdout ?? '') + (err.stderr ?? '') + (err.message ?? '');
+    }
+    return { ok, out };
+  };
+
+  // R1 non-vacuity fix, continued: population=NaN was found (via a live
+  // debug probe, not assumed) to be independently caught by the SECOND
+  // (shortfall) guard regardless of guard A's state — s.population feeds
+  // BOTH demandOf()'s index AND zoneFixFor's own `workers = s.population *
+  // WORKING_AGE_FRACTION`, so a NaN population poisons `shortfall` too, and
+  // guard B alone empties the plan whether or not guard A is mutated,
+  // making that fixture unable to isolate guard A at all (confirmed: the
+  // mutated plan is EMPTY either way — the exact vacuous-pass shape this
+  // round is fixing). A poisoned TAX RATE, not population, is what isolates
+  // guard A cleanly: demandOf()'s residential formula reads s.taxRates but
+  // zoneFixFor's workers/jobs/shortfall math never does, so
+  // taxRates.residential=NaN poisons ONLY the residential demandIndex while
+  // shortfall/count stay perfectly finite — confirmed live: with guard A
+  // removed, this fixture produces a real plan item with
+  // `demandIndex: NaN` and an otherwise-valid finite count/shortfall/
+  // planCost, exactly BUG-641 r1's "garbage numbers shown to the player"
+  // shape, with the SECOND guard never in a position to also catch it.
+  const probeASrc = `
       import assert from 'node:assert/strict';
-      import { zoneDemandFixPlan } from '../src/components/demandFixUi.ts';
-      import { initialState } from '../src/sim/engine.ts';
-      const s = { ...initialState(), population: NaN, unlockedAll: true, funds: 1_000_000_000, administrationState: null };
+      import { zoneDemandFixPlan } from './components/demandFixUi.ts';
+      import { initialState } from './sim/engine.ts';
+      const base = initialState();
+      const s = { ...base, population: 200000, unlockedAll: true, funds: 1_000_000_000, administrationState: null, taxRates: { ...base.taxRates, residential: NaN } };
       const plan = zoneDemandFixPlan(s);
-      for (const item of plan) {
-        assert.ok(!Number.isNaN(item.count), 'must not be NaN');
+      const residential = plan.find((p) => p.zone === 'residential');
+      // Against UNMUTATED source, guard A correctly filters this out
+      // (residential is undefined) — nothing to check, reach PASSED. Against
+      // the MUTATED source, guard A is bypassed and residential leaks
+      // through with a NaN demandIndex, which THIS assertion catches.
+      if (residential) {
+        assert.ok(!Number.isNaN(residential.demandIndex), 'demandIndex must not be NaN');
       }
       process.stdout.write('PROBE-A-PASSED');
-    `);
-    assert.ok(!probeA.ok || !probeA.out.includes('PROBE-A-PASSED'), `mutation A (index guard removed) must REDDEN the NaN-population case, but the probe reported: ${probeA.out}`);
+    `;
 
-    // Restore before the second mutation so each is tested against the real fix in isolation.
-    fs.writeFileSync(targetPath, original, 'utf8');
+  // NON-VACUITY PRECONDITION for probe A: the SAME probe, run against
+  // UNMUTATED source, must actually reach PROBE-A-PASSED. If this fails, the
+  // probe itself is broken (wrong loader, bad import path, etc.) and the
+  // mutated run's "failure" below would prove nothing.
+  const baselineA = runBaseline(probeASrc);
+  assert.ok(baselineA.ok && baselineA.out.includes('PROBE-A-PASSED'), `non-vacuity precondition failed: probe A must PASS against UNMUTATED demandFixUi.ts before it can be trusted to detect mutation A; got: ${baselineA.out}`);
 
-    // --- Mutation B: strip the shortfall finite-guard. ---
-    const mutatedB = original.replace(
-      'if (!Number.isFinite(shortfall)) return null;\n',
-      '',
-    );
-    assert.notEqual(mutatedB, original, 'precondition: mutation B string must actually be found and replaced (test would be vacuous otherwise)');
-    fs.writeFileSync(targetPath, mutatedB, 'utf8');
-    const probeB = runProbe(`
+  // --- Mutation A: strip the index finite-guard back to the bare r1-buggy comparison. ---
+  const probeA = runProbeAgainstMutant(
+    'if (!Number.isFinite(index) || index <= ZONE_DEMAND_THRESHOLD) return null;',
+    'if (index <= ZONE_DEMAND_THRESHOLD) return null;',
+    probeASrc,
+  );
+  // Specific expected failure: with the index guard removed, a NaN
+  // population's NaN demandIndex is never gated out (every comparison
+  // against NaN is false), so the resulting item's `count` is NaN and the
+  // probe's own `assert.ok(!Number.isNaN(item.count), 'must not be NaN')`
+  // throws with EXACTLY this message — never a bare crash/no-PASSED-marker
+  // check, which a broken probe (or an unrelated crash) would satisfy too.
+  assert.ok(!probeA.ok, `mutation A (index guard removed) must make the probe process exit non-zero; got: ${probeA.out}`);
+  assert.match(probeA.out, /must not be NaN/, `mutation A must trip the SPECIFIC 'must not be NaN' assertion, not just any failure; got: ${probeA.out}`);
+
+  const probeBSrc = `
       import assert from 'node:assert/strict';
-      import { zoneDemandFixPlan } from '../src/components/demandFixUi.ts';
-      import { initialState } from '../src/sim/engine.ts';
+      import { zoneDemandFixPlan } from './components/demandFixUi.ts';
+      import { initialState } from './sim/engine.ts';
       // -Infinity (not +Infinity) is the reachable case for the shortfall
       // guard specifically: residential's index clamps to a LEGITIMATE finite
       // 100 here (index guard silent), while the (jobs-workers) shortfall
@@ -307,13 +367,18 @@ test('ATTACK-641-R2: RED-PROOF — removing the index finite-guard alone reddens
       const residential = plan.find((p) => p.zone === 'residential');
       assert.equal(residential, undefined, 'a -Infinity-shortfall residential item must be omitted');
       process.stdout.write('PROBE-B-PASSED');
-    `);
-    assert.ok(!probeB.ok || !probeB.out.includes('PROBE-B-PASSED'), `mutation B (shortfall guard removed) must REDDEN the -Infinity-population residential case, but the probe reported: ${probeB.out}`);
-  } finally {
-    // GR#24: restore via scratch-copy mv, never a git command.
-    fs.writeFileSync(targetPath, fs.readFileSync(backupPath, 'utf8'), 'utf8');
-    fs.rmSync(backupPath, { force: true });
-    const restored = fs.readFileSync(targetPath, 'utf8');
-    assert.equal(restored, original, 'the author\'s file must be restored BYTE-IDENTICAL after the red-proof mutations');
-  }
+    `;
+
+  // NON-VACUITY PRECONDITION for probe B.
+  const baselineB = runBaseline(probeBSrc);
+  assert.ok(baselineB.ok && baselineB.out.includes('PROBE-B-PASSED'), `non-vacuity precondition failed: probe B must PASS against UNMUTATED demandFixUi.ts before it can be trusted to detect mutation B; got: ${baselineB.out}`);
+
+  // --- Mutation B: strip the shortfall finite-guard. ---
+  const probeB = runProbeAgainstMutant(
+    'if (!Number.isFinite(shortfall)) return null;\n',
+    '',
+    probeBSrc,
+  );
+  assert.ok(!probeB.ok, `mutation B (shortfall guard removed) must make the probe process exit non-zero; got: ${probeB.out}`);
+  assert.match(probeB.out, /a -Infinity-shortfall residential item must be omitted/, `mutation B must trip the SPECIFIC shortfall-omission assertion, not just any failure; got: ${probeB.out}`);
 });

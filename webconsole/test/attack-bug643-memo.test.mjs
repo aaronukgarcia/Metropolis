@@ -36,10 +36,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import { runWithMutant } from './helpers/mutant.mjs';
 import {
   isOnline,
   wasteGeneratedOf,
@@ -510,15 +510,15 @@ test('PERF: computeRoadConnectivity median (cold, no intra-run reuse, fresh stat
 });
 
 // ────────────────────────────────────────────────────────────────────────
-// (e) RED-PROOF — revert processingMixOf's memoisation via a GR#24-compliant
-// scratch copy (cp/mv, never git) and prove the perf bound goes RED while
-// identity stays GREEN. Run in a FRESH child process (tsx/node ESM caches the
-// module graph, so an in-process before/after cannot observe a mid-run edit —
-// same reasoning BUG-642's attack suite documents for its own red-proof).
+// (e) RED-PROOF — revert stationLinks's memoisation and prove the perf bound
+// goes RED while identity stays GREEN. Run in a FRESH child process against
+// a private webconsole/test/helpers/mutant.mjs shadow copy of
+// webconsole/src (BUG-739: never write the real, shared data.ts in place —
+// tsx/node ESM caches the module graph so an in-process before/after can't
+// observe a mid-run edit anyway, same reasoning BUG-642's sibling documents).
 // ────────────────────────────────────────────────────────────────────────
 
 const DATA_TS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'sim', 'data.ts');
-const BACKUP_PATH = `${DATA_TS_PATH}.attack643.bak`;
 
 // WHY stationLinks IS THE RED-PROOF TARGET, NOT processingMixOf/wasteStatsOf:
 // this file's chain is LAYERED (wasteStatsOf wraps wasteGeneratedOf +
@@ -533,64 +533,48 @@ const BACKUP_PATH = `${DATA_TS_PATH}.attack643.bak`;
 // it (it IS the base O(buildings) computation, called directly by 4 engine.ts
 // sites) — reverting ITS memo is the one edit in this fix guaranteed to show up
 // as a real, undiluted slowdown, so it is the one exercised here.
-test('ATTACK (e): RED-PROOF — reverting stationLinks to its unmemoised form keeps identity green but turns its perf bound red (proven in a fresh child process, data.ts restored via GR#24 scratch-copy discipline)', () => {
-  execFileSync('cp', [DATA_TS_PATH, BACKUP_PATH]);
-  const backupStat = fs.statSync(BACKUP_PATH);
-  assert.ok(backupStat.size > 0, 'GR#24 mutation-cycle safety check: backup file must exist and be non-empty before mutating');
-
-  const CHILD_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'scale', '__bug643-redproof-child.mjs');
-
-  try {
-    const original = fs.readFileSync(DATA_TS_PATH, 'utf8');
-    // Un-memoise stationLinks: swap the memoOnState-wrapped const declaration
-    // for a plain exported function that recomputes every call — exactly its
-    // pre-BUG-643 shape.
-    const marker = 'export const stationLinks: (s: SimState) => StationLinkInfo = memoOnState((s) => {';
-    assert.ok(original.includes(marker), 'RED-PROOF setup: expected memoised stationLinks declaration not found — data.ts shape changed');
-    const mutated = original
-      .replace(marker, 'export function stationLinks(s: SimState): StationLinkInfo {')
-      .replace(
-        /(export function stationLinks\(s: SimState\): StationLinkInfo \{[\s\S]*?\n  return \{ total, connectedIds \};\n)\}\);/,
-        '$1}'
-      );
-    assert.notEqual(mutated, original, 'RED-PROOF setup: the mutation must actually change the file');
-    fs.writeFileSync(DATA_TS_PATH, mutated, 'utf8');
-
-    fs.writeFileSync(
-      CHILD_SCRIPT,
-      `import { stationLinks } from '../../src/sim/data.ts';\n` +
-        `import { buildScaleFixture } from '../scale/fixture.mjs';\n` +
-        `const base = buildScaleFixture();\n` +
-        `function fresh(){ return { ...base, buildings: base.buildings.slice() }; }\n` +
-        `function median(v){const a=[...v].sort((x,y)=>x-y);return a[Math.floor(a.length/2)];}\n` +
-        `const samples=[];\n` +
-        `for (let i=0;i<7;i++){const s=fresh();const t0=performance.now();for(let c=0;c<20;c++)stationLinks(s);samples.push(performance.now()-t0);}\n` +
-        `console.log(JSON.stringify({ median: median(samples) }));\n`,
-      'utf8'
-    );
-
-    const out = execFileSync('node', ['--import', 'tsx', CHILD_SCRIPT], {
-      cwd: path.join(path.dirname(fileURLToPath(import.meta.url)), '..'),
-      encoding: 'utf8',
-    });
-    const { median: unmemoisedMedian } = JSON.parse(out.trim().split('\n').pop());
-    console.log(`[RED-PROOF] unmemoised stationLinks median=${unmemoisedMedian.toFixed(2)}ms (bound was 6ms)`);
-    assert.ok(
-      unmemoisedMedian > 6,
-      `RED-PROOF FAILED: reverting the memoisation should have pushed the median (${unmemoisedMedian.toFixed(2)}ms) over the 6ms bound — if it did not, the bound is too loose or the memo was not actually doing anything`
-    );
-  } finally {
-    fs.renameSync(BACKUP_PATH, DATA_TS_PATH);
-    if (fs.existsSync(CHILD_SCRIPT)) fs.rmSync(CHILD_SCRIPT);
-  }
+test('ATTACK (e): RED-PROOF — reverting stationLinks to its unmemoised form keeps identity green but turns its perf bound red (proven in a fresh child process against a private shadow copy of webconsole/src — the real data.ts is never touched)', () => {
+  const fixtureUrl = pathToFileURL(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'scale', 'fixture.mjs')
+  ).href;
+  const out = runWithMutant({
+    targetRelPath: path.join('sim', 'data.ts'),
+    mutate: (original) => {
+      // Un-memoise stationLinks: swap the memoOnState-wrapped const
+      // declaration for a plain exported function that recomputes every
+      // call — exactly its pre-BUG-643 shape.
+      const marker = 'export const stationLinks: (s: SimState) => StationLinkInfo = memoOnState((s) => {';
+      assert.ok(original.includes(marker), 'RED-PROOF setup: expected memoised stationLinks declaration not found — data.ts shape changed');
+      return original
+        .replace(marker, 'export function stationLinks(s: SimState): StationLinkInfo {')
+        .replace(
+          /(export function stationLinks\(s: SimState\): StationLinkInfo \{[\s\S]*?\n  return \{ total, connectedIds \};\n)\}\);/,
+          '$1}'
+        );
+    },
+    childBody:
+      `import { stationLinks } from './sim/data.ts';\n` +
+      `import { buildScaleFixture } from ${JSON.stringify(fixtureUrl)};\n` +
+      `const base = buildScaleFixture();\n` +
+      `function fresh(){ return { ...base, buildings: base.buildings.slice() }; }\n` +
+      `function median(v){const a=[...v].sort((x,y)=>x-y);return a[Math.floor(a.length/2)];}\n` +
+      `const samples=[];\n` +
+      `for (let i=0;i<7;i++){const s=fresh();const t0=performance.now();for(let c=0;c<20;c++)stationLinks(s);samples.push(performance.now()-t0);}\n` +
+      `console.log(JSON.stringify({ median: median(samples) }));\n`,
+  });
+  const { median: unmemoisedMedian } = JSON.parse(out.trim().split('\n').pop());
+  console.log(`[RED-PROOF] unmemoised stationLinks median=${unmemoisedMedian.toFixed(2)}ms (bound was 6ms)`);
+  assert.ok(
+    unmemoisedMedian > 6,
+    `RED-PROOF FAILED: reverting the memoisation should have pushed the median (${unmemoisedMedian.toFixed(2)}ms) over the 6ms bound — if it did not, the bound is too loose or the memo was not actually doing anything`
+  );
 });
 
-test('ATTACK (e): tripwire — data.ts is back in its expected (memoised, BUG-643-fixed) state after the red-proof, no stray .bak left', () => {
+test('ATTACK (e): tripwire — data.ts is back in its expected (memoised, BUG-643-fixed) state after the red-proof (BUG-739: the red-proof now mutates a private shadow copy, never the real file, so there is nothing to restore — this simply confirms the real file was never touched)', () => {
   const src = fs.readFileSync(DATA_TS_PATH, 'utf8');
   assert.match(
     src,
     /export const stationLinks: \(s: SimState\) => StationLinkInfo = memoOnState\(\(s\) => \{/,
     'data.ts must currently contain the memoised stationLinks implementation'
   );
-  assert.equal(fs.existsSync(BACKUP_PATH), false, 'no stray .bak file should be left over from the red-proof run');
 });

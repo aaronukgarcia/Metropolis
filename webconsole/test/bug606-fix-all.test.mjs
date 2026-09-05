@@ -22,15 +22,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { runMutantSelfReinvoke } from './helpers/mutant.mjs';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { demandFixPlan, orderedDemandFixPlan, SPECS, placementCost } from '../src/sim/data.ts';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ENGINE_PATH = path.join(__dirname, '..', 'src', 'sim', 'engine.ts');
 
 function shortfallState(population, fundsOverride = 1_000_000_000) {
   const base = initialState();
@@ -209,53 +205,34 @@ test('resolveDemand (BUG-685-MONEY end-to-end): a single-entry unaffordable prim
   assert.ok(!/Placed 0 of/.test(result.placeNotice ?? ''), `placeNotice must not report zero progress, got: ${result.placeNotice}`);
 });
 
-test('RED-PROOF (source revert, GR#24 scratch-copy — never git): disabling placePlanItem\'s self-heal fallback reddens the BUG-685-MONEY end-to-end test', () => {
-  const original = fs.readFileSync(ENGINE_PATH, 'utf8');
-  const fixedLine =
-    'if (result.placed > 0 || (cur.administrationState && item.mix.some((m) => placementCost(SPECS[m.specId]) > 0))) {';
-  assert.ok(original.includes(fixedLine), 'precondition: the self-heal guard is present in engine.ts');
+test('RED-PROOF (source revert, private shadow copy — BUG-739, never the real file): disabling placePlanItem\'s self-heal fallback reddens the BUG-685-MONEY end-to-end test', () => {
+  const { failed, output, crashed } = runMutantSelfReinvoke({
+    targetRelPath: path.join('sim', 'engine.ts'),
+    mutate: (original) => {
+      const fixedLine =
+        'if (result.placed > 0 || (cur.administrationState && item.mix.some((m) => placementCost(SPECS[m.specId]) > 0))) {';
+      assert.ok(original.includes(fixedLine), 'precondition: the self-heal guard is present in engine.ts');
+      // Force the guard to always short-circuit — exactly the
+      // pre-BUG-685-MONEY shape (a one-shot unaffordable mix places 0 and
+      // NOTHING retries).
+      const buggyLine = 'if (true) {';
+      return original.replace(fixedLine, buggyLine);
+    },
+    testFileAbsPath: fileURLToPath(import.meta.url),
+    testNamePattern: 'BUG-685-MONEY end-to-end',
+  });
 
-  // Force the guard to always short-circuit — exactly the pre-BUG-685-MONEY
-  // shape (a one-shot unaffordable mix places 0 and NOTHING retries).
-  const buggyLine = 'if (true) {';
-  const reverted = original.replace(fixedLine, buggyLine);
-  assert.notEqual(reverted, original, 'precondition: the textual swap actually changed the file');
-
-  const backupPath = ENGINE_PATH + '.bug685-money-red-proof.bak';
-  fs.copyFileSync(ENGINE_PATH, backupPath); // scratch copy, per GR#24 — never git for revert
-  try {
-    fs.writeFileSync(ENGINE_PATH, reverted, 'utf8');
-
-    const nodeExe = process.execPath;
-    const childEnv = { ...process.env };
-    delete childEnv.NODE_TEST_CONTEXT; // BUG-509/BUG-662 precedent: required or the child silently IPCs to the outer runner instead of exiting non-zero
-    let failed = false;
-    let output = '';
-    try {
-      output = execFileSync(
-        nodeExe,
-        [
-          '--test',
-          '--test-name-pattern=BUG-685-MONEY end-to-end',
-          fileURLToPath(import.meta.url),
-        ],
-        { cwd: path.join(__dirname, '..'), encoding: 'utf8', stdio: 'pipe', env: childEnv }
-      );
-    } catch (err) {
-      failed = true;
-      output = (err.stdout || '') + (err.stderr || '');
-    }
-
-    assert.ok(failed, 'the BUG-685-MONEY end-to-end test must FAIL against a self-heal-disabled revert — proves the test can fail');
-    assert.match(output, /not ok|fail/i, 'child test run output reports a failure against the disabled-fallback revert');
-  } finally {
-    // Restore the fixed file — scratch copy only, never git (GR#24).
-    fs.copyFileSync(backupPath, ENGINE_PATH);
-    fs.unlinkSync(backupPath);
-  }
-
-  const restored = fs.readFileSync(ENGINE_PATH, 'utf8');
-  assert.equal(restored, original, 'engine.ts is restored byte-identical to the fixed version after the RED proof');
+  // R2 (BUG-739 round REJECT, 2026-09-05): `failed` alone cannot distinguish
+  // "the mutant was detected" from "the child crashed for an unrelated
+  // reason" — require crashed === false AND the SPECIFIC expected assertion
+  // text, never a bare exit-status/generic-word match.
+  assert.ok(!crashed, `the re-invoked test must actually RUN (not crash at load time) against the mutant; output:\n${output}`);
+  assert.ok(failed, 'the BUG-685-MONEY end-to-end test must FAIL against a self-heal-disabled revert — proves the test can fail');
+  assert.match(
+    output,
+    /the fallback must place at least one building, never zero/,
+    `child test run output must report the SPECIFIC zero-placement assertion failing, not just any failure; got:\n${output}`,
+  );
 });
 
 test('resolveDemandAll: determinism — dispatched twice from the same state yields byte-identical results', () => {
