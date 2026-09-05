@@ -630,9 +630,16 @@ export function freshestSavepoint(candidates: Array<Savepoint | null>): Savepoin
   for (const sp of candidates) {
     if (!sp) continue;
     if (!isValidSavepointMeta(sp)) {
+      // BUG-672 (loud-refusal closure): every other corrupt-storage path in
+      // this estate (MET-V859/V860/V865/V868...) carries a registry code so
+      // the player-visible error ring is diagnosable rather than an anonymous
+      // 'app'/'load' row indistinguishable from any other boot-time notice.
+      // MET-V869 was reserved (V868-V869) alongside MET-V868 but never wired
+      // up to this exact site — this closes that gap without changing the
+      // fail-open behaviour (the slot is still skipped, never trusted).
       recordError(
         `A durable IndexedDB savepoint slot was ignored during the boot-freshness check: corrupt metadata (snapshotTick=${String(sp.snapshotTick)}, savedAt=${String(sp.savedAt)})`,
-        { type: 'app', action: 'load' },
+        { type: 'app', action: 'load', code: 'MET-V869' },
       );
       continue;
     }

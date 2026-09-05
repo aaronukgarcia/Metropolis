@@ -5638,6 +5638,12 @@
       "module": "ui.webconsole",
       "message": "Savepoint restore refused for lineage {lineageId}: {reason} -- booted a fresh city instead of the {snapshotTick}-tick save",
       "remedy": "BUG-755: the existing savepoint failed the boot-time consistency/restore gate ({reason}). This is NOT a fresh install -- a save exists and was not used. Check the Standby/Rebuild prompt (or the news feed) for a recovery option before starting a new city; the refused savepoint is untouched on disk and a future fix may still recover it."
+    },
+    "MET-V869": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "A durable IndexedDB savepoint slot was ignored during the boot-freshness check: corrupt metadata (snapshotTick={snapshotTick}, savedAt={savedAt})",
+      "remedy": "FEAT-2326609780/BUG-672: a hand-edited or truncated IndexedDB mirror entry failed the same tick/savedAt shape check every other savepoint reader uses. The slot was skipped (never allowed to win the freshness comparison) so a corrupt mirror entry can never silently replace a good boot -- localStorage's own copy (or another valid mirror slot) is used instead. Re-export the save from a working session if this recurs."
     }
   }
 }
