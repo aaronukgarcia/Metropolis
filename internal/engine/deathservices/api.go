@@ -1,6 +1,7 @@
 package deathservices
 
 import (
+	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -124,6 +125,27 @@ type DeathServicesAPI struct {
 	// per call, so a stuck-negative accounting bug does not flood the log.
 	negativeBudgetWarned bool
 
+	// handoffCursor is BUG-689's exactly-once paging watermark over
+	// engine.citizens' FEAT-087/BUG-483 [citizens.CitizensAPI.
+	// DeathHandoffSince] stream: the running count of handoff records this
+	// module has already PAGED PAST (consumed, in DeathHandoffSince's own
+	// sense -- see that method's doc: "the count of records the caller has
+	// already consumed... never an index into some other coordinate
+	// space"). Durable, serialized by this package's own save.Participant
+	// (participant.go) alongside bodies/plots/budgets/dispensation, so a
+	// restore never replays an already-applied slice of the handoff
+	// stream and never skips one either -- see [DeathServicesAPI.
+	// IntakeFromHandoff]'s doc for why the cursor advance and the Intake
+	// application happen atomically under the SAME lock hold, which is
+	// what makes this the PRIMARY exactly-once mechanism (Intake's own
+	// per-citizenID [ErrDuplicateDeath] dedup is a secondary safety net,
+	// not the mechanism this module relies on for a save/restore
+	// boundary -- citizen ids are never reused, so that dedup alone would
+	// never catch a citizen record dropped from the LIVE map by other
+	// means, and it says nothing about a re-consumed handoff PAGE that
+	// happens to carry only already-terminal bodies).
+	handoffCursor int64
+
 	// self is the SEC-020 copyguard (atomic.Pointer, mirroring
 	// citizens.DeathQueue.self / logistics.LogisticsAPI.self): stored
 	// exactly once, at the end of construction, before the value is
@@ -245,7 +267,75 @@ func (d *DeathServicesAPI) Intake(deaths []citizens.RealisedDeath, correlationID
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	return d.intakeLocked(deaths, correlationID)
+}
 
+// IntakeFromHandoff is BUG-689's compose-facing entry point: it applies
+// deaths (a page already read from [citizens.CitizensAPI.DeathHandoffSince]
+// via THIS module's own [HandoffCursor]) through the identical [Intake]
+// logic AND advances the persisted handoffCursor by len(deaths), both
+// under ONE continuous lock hold.
+//
+// Why the cursor advances by len(deaths), not len(applied): the cursor
+// tracks how far this module has PAGED THROUGH citizens' handoff stream --
+// DeathHandoffSince's own contract ("the count of records the caller has
+// already consumed"), a property of the READ, not of what Intake's
+// internal citizenID-keyed dedup chose to do with each entry. Advancing by
+// the received count (rather than the applied count) is what makes a
+// restored cursor + a fresh DeathHandoffSince(cursor) call reconstruct
+// EXACTLY the same next page a never-restarted run would have asked for
+// next -- an entry Intake skipped as a duplicate is still gone from the
+// stream's un-paged remainder either way, so re-requesting it would just
+// reproduce the identical (now again-skipped) duplicate, never recover a
+// dropped death.
+//
+// The single-lock-hold atomicity is the exactly-once contract's load-
+// bearing property: a caller that reads deaths via DeathHandoffSince, then
+// crashes (or is never called again) before calling IntakeFromHandoff,
+// leaves the cursor UNADVANCED -- so the next attempt re-reads the exact
+// same page from citizens (which is idempotent: DeathHandoffSince is a
+// pure read that never truncates citizens' own stream). Conversely, once
+// this call returns, the cursor advance and the intake application are a
+// single fact together -- a save taken any time after this call observes
+// BOTH together or (if taken strictly before) NEITHER, never a
+// half-applied state where the cursor moved but the bodies did not, or
+// vice versa.
+func (d *DeathServicesAPI) IntakeFromHandoff(deaths []citizens.RealisedDeath, correlationID string) ([]uint64, error) {
+	if err := d.checkNotCopied(correlationID, "IntakeFromHandoff"); err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	applied, err := d.intakeLocked(deaths, correlationID)
+	d.handoffCursor += int64(len(deaths))
+	return applied, err
+}
+
+// HandoffCursor returns the current handoff-stream paging watermark (the
+// value the next [citizens.CitizensAPI.DeathHandoffSince] call should pass
+// as cursor). 0 for a freshly constructed module that has never called
+// [IntakeFromHandoff] -- the same starting point DeathHandoffSince's own
+// doc names for "a consumer's very first call".
+func (d *DeathServicesAPI) HandoffCursor(correlationID string) (int64, error) {
+	if err := d.checkNotCopied(correlationID, "HandoffCursor"); err != nil {
+		return 0, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.handoffCursor, nil
+}
+
+// intakeLocked is Intake's lock-held implementation, extracted so
+// IntakeFromHandoff can apply the identical dedup/dispensation-signal
+// logic atomically alongside its own cursor advance. Caller must hold d.mu.
+// The checkNotCopied call here is REDUNDANT with Intake/IntakeFromHandoff's
+// own guard (the only two call sites) -- kept anyway, matching this
+// package's (and citizens.DeathQueue's indexInsert/indexRemove,
+// awaitingSortedLocked above) established double-check convention:
+// astgate's syntactic, no-call-graph scan cannot see that an unexported
+// helper is reached only through an already-guarded entry point.
+func (d *DeathServicesAPI) intakeLocked(deaths []citizens.RealisedDeath, correlationID string) ([]uint64, error) {
+	_ = d.checkNotCopied(correlationID, "intakeLocked")
 	seenInBatch := make(map[uint64]bool, len(deaths))
 	out := make([]uint64, 0, len(deaths))
 	anyEmergency := false
@@ -288,6 +378,18 @@ func (d *DeathServicesAPI) Intake(deaths []citizens.RealisedDeath, correlationID
 		d.dispensation.active = true
 	}
 	return out, dupErr
+}
+
+// IsDuplicateDeath reports whether err is (wraps) [ErrDuplicateDeath] --
+// Intake/IntakeFromHandoff's own documented WARNING-not-abort signal (H4
+// policy (b)): every OTHER entry in the batch was still applied, so a
+// caller such as compose's monthly intake hook (BUG-689) treats this as
+// "some entries were skipped as already-applied duplicates" rather than a
+// hook failure. Mirrors this file's own isNoPlotAvailable-style registry
+// error check (cemetery.go).
+func IsDuplicateDeath(err error) bool {
+	var e *errs.E
+	return errors.As(err, &e) && e.Code == ErrDuplicateDeath
 }
 
 // Body returns a read-only snapshot of one body record. Unknown citizenID

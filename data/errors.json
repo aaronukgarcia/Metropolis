@@ -5512,6 +5512,12 @@
       "module": "ui.webconsole",
       "message": "Debug commit {id} payload cannot be serialized: {reason}",
       "remedy": "The commit payload itself contains a non-JSON-serializable value (a circular reference or similar) -- this is a defect in what was captured, not a network or sink problem. The sink was never contacted and its reachability status is unchanged. Report this payload shape; the frame was NOT queued or sent."
+    },
+    "MET-G5452": {
+      "severity": "error",
+      "module": "engine.deathservices",
+      "message": "deathservices handoffCursor decoded to a negative value",
+      "remedy": "reject the load or clamp the cursor to 0 at decode time; a hostile or corrupt shard must never install a negative watermark"
     }
   }
 }

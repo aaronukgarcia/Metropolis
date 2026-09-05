@@ -6,6 +6,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/deathservices"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
@@ -124,6 +125,15 @@ func (c *Composition) Participants() []save.Participant {
 		// see services/participant.go's doc comment for the full
 		// durable-vs-derived analysis and the BUG-586 reconciliation rule.
 		services.NewSaveParticipant(st.services),
+		// BUG-689: engine.deathservices' own bodies/plots/budgets/
+		// dispensation/handoff-cursor state (participant.go's doc comment
+		// has the full durable-field analysis). Closes the AC-20 round's
+		// second built-but-not-wired half — without this, a save/restore
+		// boundary would silently drop every body record AND the handoff
+		// cursor, double-delivering the whole handoff stream on the next
+		// restore once the monthly Intake hook (compose.go's
+		// deathServicesHook) is live.
+		deathservices.NewSaveParticipant(st.deathServices),
 		newComposeLedgerParticipant(st),
 	}
 }
@@ -203,8 +213,39 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	}
 	loadOpts := append([]save.LoadOption{save.WithExpectedWorldSeed(int64(c.state.seed))}, opts...)
 	mgr := save.NewManager(root, c.Participants(), c.state.cid)
-	if _, _, err := mgr.Load(dir, loadOpts...); err != nil {
+	header, _, err := mgr.Load(dir, loadOpts...)
+	if err != nil {
+		// A refused load (seed mismatch, corrupt bundle, ...) must leave
+		// every participant untouched (TestBUG479_Load_SeedMismatch_...'s
+		// pristine-digest proof) — so the F1 reset below runs ONLY after
+		// mgr.Load has actually succeeded, never on this path.
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "save", "step": "load", "dir": dir})
+	}
+	// BUG-689 round follow-up F1: save.Manager.Load only calls a
+	// Participant's Handler for shards its bundle header actually lists
+	// (load.go's shard loop ranges over header.ShardIndex, never the
+	// registered participant set) — a bundle with NO deathservices shard
+	// (every pre-BUG-689 save) therefore never touches deathservices at
+	// all, leaving its live state exactly as it was before this Load while
+	// every OTHER module IS reset and restored just above. Detected here
+	// from the now-validated header (checked ONLY after a successful
+	// mgr.Load, so a refused load never mutates deathservices either) and
+	// reset explicitly so "no shard present" always means "clean module
+	// state" regardless of the bundle's contents. When the shard IS
+	// present this is a deliberate no-op: Handler already reset the module
+	// eagerly on construction (participant.go's Handler doc) before
+	// installing the streamed records.
+	hasDeathServicesShard := false
+	for _, sm := range header.ShardIndex {
+		if sm.Kind == deathservices.KindDeathServices {
+			hasDeathServicesShard = true
+			break
+		}
+	}
+	if !hasDeathServicesShard {
+		if err := c.state.deathServices.ResetForLoad(c.state.cid); err != nil {
+			return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "deathservices", "step": "reset-for-load"})
+		}
 	}
 	// FEAT-1972079943 — recompute the DERIVED compose-owned ledgers from the
 	// now-restored modules. treasury/citizenWealth are publish-mirrors of the

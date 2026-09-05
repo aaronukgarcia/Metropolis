@@ -128,15 +128,15 @@ func TestSaveRoundTrip_PerModuleStateIsByteIdentical(t *testing.T) {
 
 	// Sanity: the driven composition is genuinely non-trivial (some module
 	// state moved off its post-Wire default), so an all-empty "round trip"
-	// cannot pass vacuously. Thirteen participants as of the
-	// FEAT-build-services-bridge-2026-09-02 round remedy (root fix): the
+	// cannot pass vacuously. Fourteen participants as of BUG-689: the
 	// seven stateful modules + crime + the stateless market/consumption
 	// scaffolds (empty-but-conformant, Aaron 2026-09-01) + attract (closes
 	// the LoadAt cross-month-boundary gap, FEAT-1972079947) + services
-	// (closes the live-composition-rewind phantom-instance hazard) + the
-	// compose-owned ledger participant.
-	if len(streamsA) != 13 {
-		t.Fatalf("expected 13 participants, got %d", len(streamsA))
+	// (closes the live-composition-rewind phantom-instance hazard) +
+	// deathservices (BUG-689's bodies/plots/budgets/dispensation/handoff-
+	// cursor participant) + the compose-owned ledger participant.
+	if len(streamsA) != 14 {
+		t.Fatalf("expected 14 participants, got %d", len(streamsA))
 	}
 
 	dir := t.TempDir()

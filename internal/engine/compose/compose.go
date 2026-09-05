@@ -12,6 +12,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/deathservices"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/extcommute"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
@@ -340,6 +341,30 @@ type Deps struct {
 	// (docs/planning/icd/engine.firms-labourmarket.md §11).
 	Firms *firms.FirmsAPI
 
+	// DeathServices overrides construction of BUG-689's engine.deathservices
+	// dependency (default: LoadDeathServices, itself defaulting to
+	// deathservices.LoadDefault). nil is the common boot case — a caller
+	// wanting the exact pre-BUG-689 behaviour never sets this; the wiring
+	// stays fail-safe regardless (see intakeDeathServices's own doc: a nil
+	// st.deathServices/st.citizens is a documented no-op, and for the
+	// CURRENT data/deathservices.json + data/mortality.json figures the
+	// injected drain (hearseMonthlyTransportBudget=300) never binds tighter
+	// than the ordinary mortality budget (monthlyDeathBudget=25) — see
+	// TestBUG689_DrainCapacityNeverBindsForDefaultData — so wiring it on by
+	// default reproduces the prior population trajectory byte-for-byte for
+	// every existing baseline-one fixture). The test seam lets a caller
+	// inject a pre-registered instance to prove FEAT-088's disposal state
+	// actually moves when the live handoff stream feeds it
+	// (docs/planning/acceptance/MOD-083-inc1.md).
+	DeathServices *deathservices.DeathServicesAPI
+
+	// LoadDeathServices overrides DeathServicesAPI construction (defaults
+	// to deathservices.LoadDefault). nil is the common boot case; the AC-4
+	// test seam: a caller injects a failing loader and asserts Wire returns
+	// ErrModuleFailed naming "deathservices" with zero hooks left behind —
+	// mirrors LoadMarket/LoadTraffic's identical shape above.
+	LoadDeathServices func(correlationID string) (*deathservices.DeathServicesAPI, error)
+
 	// LoadTraffic overrides construction of the FEAT-206 engine.traffic
 	// dependency (defaults to loadDefaultTraffic — traffic.New() +
 	// LoadConfig against the resolved data/ dir, mirroring LoadMarket's
@@ -453,6 +478,18 @@ var registrationOrder = []moduleRegistration{
 	// order via this slice's iteration order (GR#21).
 	{name: "build", phase: core.PhaseDailyTick, hook: func(st *simState) core.PhaseHook { return &buildHook{st: st} }},
 	{name: "attract", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &attractHook{st: st} }},
+	// BUG-689: engine.deathservices' monthly Intake, matching MOD-083's own
+	// month-level budget semantics (hearse/dispensation throughput are
+	// both month-scoped counters, cemetery.go/hearse.go/dispensation.go)
+	// — registered on the SAME monthly PhasePopulation slot as attract,
+	// after it in this slice. The relative order carries no correctness
+	// meaning today (deathservices' intake reads only citizens' handoff
+	// stream and its own state, never attract's freshly-computed migration
+	// numbers), but is placed after attract/citizens so a body that both
+	// dies (citizens' daily-tick realisation, earlier in the tick) and is
+	// then intaken (this monthly hook) never observes a same-tick
+	// ordering ambiguity with the population-affecting hooks above it.
+	{name: "deathservices", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &deathServicesHook{st: st} }},
 	{name: "invariant", phase: core.PhaseDailyTick, hook: nil},
 }
 
@@ -625,6 +662,14 @@ func (c *Composition) ExtCommute() *extcommute.ExtCommuteAPI {
 // composed instance through — mirrors ExtCommute() above.
 func (c *Composition) Traffic() *traffic.TrafficAPI {
 	return c.state.traffic
+}
+
+// DeathServices returns the composed engine's BUG-689 engine.deathservices
+// instance — the same one deathServicesHook's monthly Intake drives and
+// Participants() (save_wire.go) saves/restores. Read-only accessor for
+// tests and inspection tooling.
+func (c *Composition) DeathServices() *deathservices.DeathServicesAPI {
+	return c.state.deathServices
 }
 
 // Journaler returns the composed engine's engine-owns-journal seam
@@ -1056,6 +1101,66 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "unlocks"})
 	}
 
+	// BUG-689: construct BUG-689/MOD-083's engine.deathservices dependency
+	// (the registered feat.compositionroot -> engine.deathservices edge,
+	// e2927b5) — resolved BEFORE the first hook registers, like every
+	// other module above (AC-4 — no partially-wired engine on a
+	// construction failure).
+	deathServicesAPI := deps.DeathServices
+	if deathServicesAPI == nil {
+		loadDeathServices := deps.LoadDeathServices
+		if loadDeathServices == nil {
+			loadDeathServices = deathservices.LoadDefault
+		}
+		var dsErr error
+		deathServicesAPI, dsErr = loadDeathServices(cid)
+		if dsErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, dsErr, map[string]any{"module": "deathservices"})
+		}
+	}
+	// AC-8 (round-3, commit 6a4e210): both registered outbound edges
+	// (engine.services for cremation cost posting, engine.logistics for
+	// hearse-trip congestion) are wired here, mirroring buildAPI's own
+	// SetServices/SetLogistics calls above — an unwired DeathServicesAPI
+	// (a bare NewDeathServicesAPI/Load in an older/unrelated test) simply
+	// degrades to the documented local-only accounting (api.go's struct
+	// doc), so this wiring is additive-only.
+	if err := deathServicesAPI.Wire(servicesAPI, logisticsAPI, cid); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "deathservices"})
+	}
+	// FEAT-087 inc3/BUG-689 (GR#3 SSOT fix, round follow-up G2): wire
+	// citizens' FEAT-088 [citizens.DrainCapacity] (ASM-580) through
+	// MOD-083's OWN registered composition-root adapter,
+	// [deathservices.DeathServicesAPI.WireDrainCapacity], instead of a
+	// hand-rolled second closure. WireDrainCapacity passes the module
+	// itself (which implements [citizens.DrainCapacity] directly via
+	// [deathservices.DeathServicesAPI.MonthlyDrainCapacity]) into the
+	// already-registered citizens.CitizensAPI.SetDeathDrainCapacity seam —
+	// the live, recomputed-every-call figure (plot capacity + cremation
+	// headroom + remaining hearse budget) rather than the old hand-rolled
+	// closure's static HearseMonthlyBudget()-only constant. Numerically
+	// identical for every current fixture (0 cemeteries + 0 crematoria +
+	// 300 hearse budget == 300, TestBUG689_DrainCapacityNeverBindsForDefaultData)
+	// but no longer two competing SSOT implementations of one concept.
+	//
+	// Lock-order note (the round's explicit caveat): this closes a REAL
+	// new lock-nesting edge — citizens.DeathQueue.RealiseDrained holds
+	// q.mu when it calls q.drain.MonthlyDrainCapacity (deathwave.go), which
+	// is now deathservices' own MonthlyDrainCapacity taking d.mu. The old
+	// hand-rolled closure called HearseMonthlyBudget (no lock) so this edge
+	// did not exist before. Audited: deathservices never calls back into
+	// citizens while holding d.mu (Intake/IntakeFromHandoff only consume
+	// citizens.RealisedDeath as plain data), so the edge is one-directional
+	// (q.mu -> d.mu) and does not invert against any existing d.mu-then-
+	// q.mu path — there is none. Re-hammered under -race with concurrent
+	// readers during live ticks and save/restore mid-month
+	// (TestAttackBUG689_ConcurrentReadersDuringTicks,
+	// TestBUG689_WireDrainCapacity_RaceUnderConcurrentTicksAndReads) with no
+	// reported inversion.
+	if err := deathServicesAPI.WireDrainCapacity(c, cid); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "deathservices", "step": "WireDrainCapacity"})
+	}
+
 	invReg := invariant.NewRegistry()
 	for _, inv := range []invariant.Invariant{
 		invariant.NewPeopleInvariant(),
@@ -1087,6 +1192,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		refuse:                  refuseAPI,
 		services:                servicesAPI,
 		firms:                   firmsAPI,
+		deathServices:           deathServicesAPI,
 		traffic:                 trafficAPI,
 		extCommute:              extCommuteAPI,
 		unlocks:                 unlocksAPI,
@@ -1343,6 +1449,16 @@ type simState struct {
 	// crime/leisure/refuse above.
 	services *services.ServicesAPI
 	firms    *firms.FirmsAPI
+
+	// deathServices is BUG-689's engine.deathservices instance (the
+	// registered feat.compositionroot -> engine.deathservices edge,
+	// e2927b5): constructed in Wire, wired to services/logistics, and
+	// injected as citizens' [citizens.DrainCapacity] (deathServicesHook
+	// below drives its monthly Intake). Stored here — mirroring every
+	// other module field's own doc comment — so Participants()
+	// (save_wire.go) and Composition.DeathServices() (test/inspection
+	// accessor) can reach the same instance.
+	deathServices *deathservices.DeathServicesAPI
 
 	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): the composed
 	// engine.traffic dependency (traffic_wire.go). trafficTickHook calls
@@ -2335,6 +2451,90 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 		HousingVacancy:     baselineOneHousingVacancy,
 		JunctionThroughput: baselineOneJunctionThroughput,
 	})
+}
+
+// deathServicesEffect carries the month deathServicesHook.RunShard reads
+// from the clock, mirroring attractEffect's identical shape (a PhaseHook's
+// RunShard/ApplyEffect split must never read live engine state from
+// ApplyEffect directly — GR#21 determinism discipline).
+type deathServicesEffect struct {
+	month int64
+}
+
+// deathServicesHook drives BUG-689's monthly engine.deathservices Intake
+// from the live tick, on the same monthly PhasePopulation slot as attract
+// (registrationOrder above).
+type deathServicesHook struct {
+	st *simState
+}
+
+func (h *deathServicesHook) RunShard(shard int) ([]core.Effect, error) {
+	if shard != 0 {
+		return nil, nil
+	}
+	clock, err := h.st.e.Clock()
+	if err != nil {
+		return nil, err
+	}
+	return []core.Effect{{Sequence: 0, Payload: deathServicesEffect{month: clock.Month()}}}, nil
+}
+
+func (h *deathServicesHook) ApplyEffect(eff core.Effect) {
+	p, ok := eff.Payload.(deathServicesEffect)
+	if !ok {
+		return
+	}
+	if err := h.st.intakeDeathServices(p.month); err != nil {
+		_ = errs.New(ErrModuleFailed, h.st.cid, map[string]any{"module": "deathservices", "cause": err.Error()})
+	}
+}
+
+// SingleShard implements core.SingleShardHook (mirrors attractHook): the
+// only Effect ever emitted comes from shard 0.
+func (h *deathServicesHook) SingleShard() bool { return true }
+
+// intakeDeathServices is BUG-689's exactly-once monthly drain of citizens'
+// FEAT-087/BUG-483 handoff stream into engine.deathservices: it reads
+// deathservices' OWN persisted cursor (round-trips through its
+// save.Participant, participant.go), pages exactly the NEW entries since
+// that cursor via [citizens.CitizensAPI.DeathHandoffSince], and applies
+// them through [deathservices.DeathServicesAPI.IntakeFromHandoff] — which
+// advances the cursor atomically with the intake application (see that
+// method's doc for why the two never observe a save/restore boundary
+// independently of each other).
+//
+// Nil-wiring fail-safe (AC per the BUG-689 brief): a nil st.deathServices
+// or st.citizens (never true through Wire today — both are unconditionally
+// constructed — but defensive against a future lower-level test harness
+// that builds a *simState directly) is a documented no-op, never a panic.
+func (st *simState) intakeDeathServices(month int64) error {
+	_ = month // reserved for a future month-scoped policy; unused today.
+	if st.deathServices == nil || st.citizens == nil {
+		return nil
+	}
+	cursor, err := st.deathServices.HandoffCursor(st.cid)
+	if err != nil {
+		return err
+	}
+	if cursor < 0 || cursor > math.MaxInt {
+		cursor = 0 // defensive clamp; DeathHandoffSince itself also clamps negatives.
+	}
+	deaths, err := st.citizens.DeathHandoffSince(int(cursor), st.cid)
+	if err != nil {
+		return err
+	}
+	if len(deaths) == 0 {
+		return nil
+	}
+	_, err = st.deathServices.IntakeFromHandoff(deaths, st.cid)
+	// ErrDuplicateDeath is Intake's own documented WARNING-not-abort signal
+	// (H4 policy (b): every other entry in the batch was still applied) —
+	// never a hook failure. Every other error IS a genuine fault (a
+	// SEC-020 copy-guard trip, most plausibly) and propagates.
+	if err != nil && !deathservices.IsDuplicateDeath(err) {
+		return err
+	}
+	return nil
 }
 
 // safetyTerm advances engine.crime one month against the single citywide

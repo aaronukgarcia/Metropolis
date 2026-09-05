@@ -78,4 +78,20 @@ const (
 	// month) is suspected. Logged as a diagnosability aid (GR#17), mirrors
 	// citizens.ErrNegativeDrainCapacity's WARNING-not-fatal stance.
 	ErrNegativeBudget = "MET-G5451"
+
+	// ErrCorruptHandoffCursor (BUG-689 round follow-up F6): a decoded
+	// deathservices.meta save record carried a negative handoffCursor. No
+	// code in this codebase ever WRITES one (snapshotForSave always mirrors
+	// d.handoffCursor, which only ever advances by len(deaths) in
+	// IntakeFromHandoff) -- this can only be a hand-edited or corrupt
+	// bundle, or a future format skew. applyLoadRecord clamps the installed
+	// value to 0 (never installs the negative verbatim) and logs this as a
+	// WARNING, not fatal (GR#17 diagnosability aid, mirrors
+	// ErrNegativeBudget/citizens.ErrNegativeDrainCapacity's stance): a
+	// clamped cursor of 0 re-delivers the whole handoff stream once, which
+	// IntakeFromHandoff's own duplicate-death guard renders safe, whereas
+	// installing the negative value verbatim left the module re-reading and
+	// silently discarding the entire stream every month forever (the F6
+	// finding this code closes).
+	ErrCorruptHandoffCursor = "MET-G5452"
 )
