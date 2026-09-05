@@ -7,6 +7,7 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/harness/replay"
+	"github.com/aaronukgarcia/Metropolis/internal/persist"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
@@ -143,6 +144,130 @@ type journalFailureErr struct{}
 
 func (e *journalFailureErr) Error() string {
 	return "journal_wire_test: simulated durable-append failure"
+}
+
+// TestJournalStatus_PersistWrappedRecorderReportsKnownCount is BUG-740's
+// fix proof: on the production path (Deps.PersistStore set), Wire wraps the
+// default *replay.Recorder in persistCommandJournaler
+// (persistjournal.go) before calling e.SetCommandJournaler, so
+// c.state.journaler is a *persistCommandJournaler, never a bare
+// *replay.Recorder. JournalStatus must chase that ONE level of wrapping
+// (persistCommandJournaler.Inner()) and still report the real Recorder's
+// count — EntriesKnown=true, EntriesErr=nil, Entries equal to the number of
+// accepted commands — rather than falling back to EntriesKnown=false
+// exactly where durability matters (attack_journalstatus_round_test.go's
+// TestAttackJournalStatus_PersistWrappedJournaler documented the pre-fix
+// gap; this test pins the honest post-fix answer).
+func TestJournalStatus_PersistWrappedRecorderReportsKnownCount(t *testing.T) {
+	mem := persist.NewMemStore()
+	e := core.NewEngine(core.WithWorldSeed(1), core.WithPoolSize(1))
+	comp, err := Wire(e, &Deps{PersistStore: mem})
+	if err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+
+	seq := journalTestSeq(t)
+	for _, cmd := range seq {
+		if r := e.HandleCommand(cmd); !r.Accepted {
+			t.Fatalf("HandleCommand(%s): rejected, error = %+v", cmd.Kind, r.Error)
+		}
+	}
+
+	st := comp.JournalStatus()
+	if !st.EntriesKnown {
+		t.Fatal("JournalStatus().EntriesKnown = false for the persist-wrapped Recorder, want true (BUG-740)")
+	}
+	if st.EntriesErr != nil {
+		t.Fatalf("JournalStatus().EntriesErr = %v, want nil", st.EntriesErr)
+	}
+	if want := len(seq); st.Entries != want {
+		t.Fatalf("JournalStatus().Entries = %d, want %d", st.Entries, want)
+	}
+	if st.PersistHalted {
+		t.Fatalf("JournalStatus().PersistHalted = true, want false (MemStore never fails here)")
+	}
+}
+
+// TestJournalStatus_PersistWrappedNonRecorderStillUnknown proves the chase
+// stops at exactly one level: a Deps.CommandJournaler override that is
+// itself NOT a *replay.Recorder (e.g. a test spy) still reports
+// EntriesKnown=false even once wrapped by persistCommandJournaler — the fix
+// finds the real Recorder when one exists, it never invents one.
+func TestJournalStatus_PersistWrappedNonRecorderStillUnknown(t *testing.T) {
+	spy := &spyComposeJournaler{}
+	mem := persist.NewMemStore()
+	e := core.NewEngine(core.WithWorldSeed(1), core.WithPoolSize(1))
+	comp, err := Wire(e, &Deps{CommandJournaler: spy, PersistStore: mem})
+	if err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+	if r := e.HandleCommand(journalTestSeq(t)[0]); !r.Accepted {
+		t.Fatalf("HandleCommand: rejected, error = %+v", r.Error)
+	}
+	st := comp.JournalStatus()
+	if st.EntriesKnown {
+		t.Fatalf("JournalStatus().EntriesKnown = true for a persist-wrapped non-Recorder override, want false (Entries=%d would be a guess)", st.Entries)
+	}
+	if len(spy.observed) != 1 {
+		t.Fatalf("spy.observed = %d, want 1 (sanity: the override itself must still be receiving commands)", len(spy.observed))
+	}
+}
+
+// TestJournalStatus_PersistWrappedCopiedRecorderStillSurfacesErr proves the
+// copied-Recorder case (SEC-037) survives the chase too: wrapping a
+// struct-copied *replay.Recorder in persistCommandJournaler must still
+// surface EntriesKnown=true + EntriesErr!=nil, never a silent zero.
+func TestJournalStatus_PersistWrappedCopiedRecorderStillSurfacesErr(t *testing.T) {
+	orig := replay.NewRecorder()
+	copied := recorderByteCopy(orig)
+	mem := persist.NewMemStore()
+	e := core.NewEngine(core.WithWorldSeed(1), core.WithPoolSize(1))
+	comp, err := Wire(e, &Deps{CommandJournaler: copied, PersistStore: mem})
+	if err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+	st := comp.JournalStatus()
+	if !st.EntriesKnown {
+		t.Fatalf("EntriesKnown=false for a persist-wrapped *replay.Recorder receiver, want true")
+	}
+	if st.EntriesErr == nil {
+		t.Fatalf("EntriesErr=nil for a persist-wrapped struct-copied Recorder — SEC-037 silent-zero regression (Entries=%d)", st.Entries)
+	}
+}
+
+// TestJournalStatus_PersistHaltPassthroughUnchangedWithPersistStore proves
+// the fix did not disturb the OTHER facet of JournalStatus: the persist-halt
+// passthrough still reads verbatim off e.PersistHalted() even when
+// Deps.PersistStore is configured (the failing journaler here is wrapped by
+// persistCommandJournaler too, since it is Deps.CommandJournaler with
+// PersistStore also set).
+func TestJournalStatus_PersistHaltPassthroughUnchangedWithPersistStore(t *testing.T) {
+	failing := &failingComposeJournaler{}
+	mem := persist.NewMemStore()
+	e := core.NewEngine(core.WithWorldSeed(1), core.WithPoolSize(1))
+	comp, err := Wire(e, &Deps{CommandJournaler: failing, PersistStore: mem})
+	if err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+
+	result := e.HandleCommand(journalTestSeq(t)[0])
+	if result.Accepted {
+		t.Fatal("HandleCommand with a failing journaler: accepted, want rejected (BUG-472 HALT+SURFACE)")
+	}
+
+	wantCode, wantCorrID, wantOK := e.PersistHalted()
+	if !wantOK {
+		t.Fatal("e.PersistHalted() ok=false after a failing journaler observed a command — the engine itself never latched")
+	}
+
+	st := comp.JournalStatus()
+	if !st.PersistHalted {
+		t.Fatal("JournalStatus().PersistHalted = false, want true")
+	}
+	if st.PersistHaltCode != wantCode || st.PersistHaltCorrelationID != wantCorrID {
+		t.Fatalf("JournalStatus() halt identity = (%q, %q), want the engine's own (%q, %q) — GR#3 second-source-of-truth drift",
+			st.PersistHaltCode, st.PersistHaltCorrelationID, wantCode, wantCorrID)
+	}
 }
 
 // TestWire_JournalerDeterministicAcrossPoolSizes generalises the existing

@@ -111,14 +111,35 @@ type JournalStatus struct {
 
 // JournalStatus reports the engine-owns-journal seam's current health
 // (GR#17): how many commands the wired journaler has captured (when it is
-// the concrete *replay.Recorder compose constructs or a caller override
-// of that same type) and whether the engine's durable-append halt
-// (BUG-472) has latched. c.state.e is the same *core.Engine SetCommandJournaler
-// was called on inside Wire — JournalStatus never re-derives that state
-// via a second path (GR#3).
+// the concrete *replay.Recorder compose constructs or a caller override of
+// that same type) and whether the engine's durable-append halt (BUG-472)
+// has latched.
+//
+// BUG-740: on the production path (Deps.PersistStore != nil, e.g.
+// metroserve -persist-dir) Wire wraps the resolved journaler in
+// persistCommandJournaler (persistjournal.go) BEFORE calling
+// e.SetCommandJournaler, so c.state.journaler is a *persistCommandJournaler,
+// never a bare *replay.Recorder, even though a real Recorder is sitting one
+// level underneath (persistCommandJournaler.inner). The original type
+// assertion below missed that wrap entirely and reported EntriesKnown=false
+// exactly where durability matters most. The fix chases ONE level of
+// wrapping via persistCommandJournaler.Inner() (GR#3: still the same single
+// Recorder.Len() call, just found through the wrapper rather than a second,
+// independently-tracked count) before giving up and reporting unknown — so
+// the three-way distinction stays honest: (1) no Recorder anywhere in the
+// chain (a genuine non-Recorder override, e.g. a test spy) ->
+// EntriesKnown=false; (2) a Recorder found but it refuses to answer (a
+// struct-copied Recorder, SEC-037) -> EntriesKnown=true, EntriesErr!=nil;
+// (3) a Recorder found and it answers -> EntriesKnown=true, Entries=n. c.state.e
+// is the same *core.Engine SetCommandJournaler was called on inside Wire —
+// JournalStatus never re-derives that state via a second path (GR#3).
 func (c *Composition) JournalStatus() JournalStatus {
 	var st JournalStatus
-	if rec, ok := c.state.journaler.(*replay.Recorder); ok {
+	journaler := c.state.journaler
+	if wrapped, ok := journaler.(*persistCommandJournaler); ok {
+		journaler = wrapped.Inner()
+	}
+	if rec, ok := journaler.(*replay.Recorder); ok {
 		st.EntriesKnown = true
 		n, err := rec.Len()
 		st.Entries = n

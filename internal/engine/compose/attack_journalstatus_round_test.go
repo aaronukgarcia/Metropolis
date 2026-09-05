@@ -151,13 +151,17 @@ func TestAttackJournalStatus_PersistWrappedJournaler(t *testing.T) {
 	st := comp.JournalStatus()
 	t.Logf("PERSIST-WRAPPED status = EntriesKnown=%v Entries=%d halted=%v (5 commands were journaled)",
 		st.EntriesKnown, st.Entries, st.PersistHalted)
-	if st.EntriesKnown {
-		t.Logf("wrapper is unwrapped by JournalStatus")
-	} else {
-		t.Logf("FINDING: the production persist path reports EntriesKnown=false; the GR#17 count is blind exactly where durability matters")
+	// BUG-740 fix: JournalStatus now chases the persistCommandJournaler wrap
+	// (persistjournal.go's Inner()) to find the real *replay.Recorder
+	// underneath, so the production persist path is no longer blind.
+	if !st.EntriesKnown {
+		t.Fatalf("EntriesKnown=false for the persist-wrapped Recorder — BUG-740 regression (the GR#17 count is blind exactly where durability matters)")
+	}
+	if st.EntriesErr != nil {
+		t.Fatalf("EntriesErr=%v, want nil", st.EntriesErr)
 	}
 	// Honesty bar (what this test ENFORCES): never a known-but-wrong count.
-	if st.EntriesKnown && st.Entries != len(journalTestSeq(t)) {
+	if st.Entries != len(journalTestSeq(t)) {
 		t.Fatalf("EntriesKnown=true but Entries=%d, want %d — a WRONG count is worse than unknown", st.Entries, len(journalTestSeq(t)))
 	}
 }

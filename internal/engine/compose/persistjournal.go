@@ -114,6 +114,20 @@ type persistCommandJournaler struct {
 // for the process lifetime).
 func (p *persistCommandJournaler) Dirty() bool { return p.dirty.Load() }
 
+// Inner returns the wrapped core.CommandJournaler this adapter durably
+// mirrors — the SAME instance Wire resolved before deciding whether to wrap
+// it (compose.go: journaler := deps.CommandJournaler, defaulting to
+// replay.NewRecorder(), THEN wrapped here when Deps.PersistStore != nil). It
+// exists solely so a caller holding only a core.CommandJournaler (e.g.
+// Composition.JournalStatus, compose_journal.go) can chase through exactly
+// one level of wrapping to reach the concrete *replay.Recorder underneath —
+// GR#17's "never a hardcoded second source of truth": the entry count still
+// comes from the one real Recorder.Len(), this is just the accessor that
+// lets JournalStatus find it on the production (Deps.PersistStore-backed)
+// path, where BUG-740 previously left it unreachable and EntriesKnown fell
+// back to false exactly where durability matters.
+func (p *persistCommandJournaler) Inner() core.CommandJournaler { return p.inner }
+
 // MarkDirtyLoggedOnce reports true exactly once — for whichever caller
 // first observes dirty==true — and false for every call after that,
 // including calls that race the first one (CompareAndSwap makes exactly one
