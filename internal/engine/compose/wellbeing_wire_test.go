@@ -14,17 +14,30 @@ import (
 // IMPORTANT — read compose_wellbeing.go's package doc comment first: the
 // four downstream-effect modifiers (MortalityModifier/ProductivityModifier/
 // SatisfactionModifier/EmigrationModifier) are COMPUTED every month
-// (WellbeingStatus) but NOT APPLIED to any real consumer, because none of
-// engine.citizens/engine.firms/engine.attract carry a registered outbound
-// edge to engine.wellbeing in code.json — applying any of them would need a
-// new edge this lane is not authorized to add (GR#25). So "the four
-// modifiers are observably applied" below means: the wired WellbeingAPI's
-// modifier accessors, reached through the SAME instance the monthly
-// reconstruction drives, respond in the spec-consistent direction to a
-// worse cohort — proving the ARITHMETIC wiring is correct and ready for a
-// follow-on ticket to thread through once the edge lands. It does NOT mean
-// a low-wellbeing city shows a different mortality/emigration RATE in the
-// live loop, because nothing consumes the modifier yet.
+// (WellbeingStatus) AND APPLIED to a real consumer at exactly one site each:
+//
+//   - MortalityModifier -> engine.citizens.CitizensAPI.SetMortalityModifier,
+//     folded into ColdPassParams.MortalityMultiplier (coldParamsLocked).
+//   - SatisfactionModifier/EmigrationModifier ->
+//     engine.attract.AttractAPI.SetWellbeingModifiers, scaling the
+//     attractiveness score A (ApplyMigration) and the per-resident
+//     emigration hazard (applyEmigration) respectively.
+//   - ProductivityModifier -> engine.firms.FirmsAPI.SetProductivityModifier,
+//     folded into each firm's Financial.OutputScale
+//     (applyInputScalingLocked). Filed as its own P2: OutputScale's only
+//     current consumer (ResolveMonth's credit-failure check) does not
+//     reach compose's money/population surfaces, so this application is
+//     real and tested at the firms-package level but not yet observable
+//     from a composed city's own money/population numbers the way the
+//     other three modifiers are — a follow-on ticket threads OutputScale
+//     into a real production/wage-bill consumer.
+//
+// So "the four modifiers are observably applied" below means what it says
+// for mortality/satisfaction/emigration: a low-wellbeing city shows a
+// measurably different mortality/emigration RATE and migration
+// attractiveness in the live loop. For productivity, it means the
+// arithmetic wiring into OutputScale is correct and tested, pending the
+// P2 follow-on to give it a compose-visible consumer.
 
 const wellbeingWireSeed = uint64(34034)
 
@@ -348,8 +361,18 @@ func TestWellbeingWire_SampleGrowsWithPopulationUnderCap(t *testing.T) {
 		// month CitizenAt is queried, which the !ok skip in
 		// reconstructWellbeing correctly excludes from the sample — this is
 		// not the P1-a bug, which pinned SampleSize at the CLOSED seed count
-		// regardless of how large the population grew).
-		if pop <= wellbeingSampleCap && status.SampleSize < pop-20 {
+		// regardless of how large the population grew). Widened 20 -> 30
+		// (MOD-034 downstream-effect application lane): once
+		// SetMortalityModifier/SetWellbeingModifiers/SetProductivityModifier
+		// are actually wired to real consumers, the mortality/emigration
+		// modifiers have a real (mild) accelerating effect on the oldest
+		// sampled ids, so a slightly larger share of the FIRST
+		// wellbeingSampleCap ids (ascending order, i.e. the oldest ever
+		// born/admitted) have died by month 36 than under the
+		// observability-only baseline this tolerance was originally set
+		// against — this is the expected downstream consequence of MOD-034
+		// finally being load-bearing, not a sampling regression.
+		if pop <= wellbeingSampleCap && status.SampleSize < pop-30 {
 			t.Fatalf("month %d: SampleSize=%d, want close to Population()=%d (pop below cap)", i+1, status.SampleSize, pop)
 		}
 		if status.SampleSize > seedPopulation {

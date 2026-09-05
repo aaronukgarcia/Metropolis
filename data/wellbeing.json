@@ -40,9 +40,9 @@
     "unemploymentCapMonths": 60
   },
   "modifiers": {
-    "mortalitySlope": 0.01,
-    "productivitySlope": 0.01,
-    "satisfactionSlope": 0.01,
-    "emigrationSlope": 0.01
+    "mortalitySlope": 0.001,
+    "productivitySlope": 0.001,
+    "satisfactionSlope": 0.001,
+    "emigrationSlope": 0.001
   }
 }

@@ -1381,6 +1381,39 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	// as one that always reads £0.
 	st.setTreasury(st.treasury)
 
+	// MOD-034 (engine.wellbeing downstream-effect application): wire the
+	// three consumer seams this lane closes — engine.citizens'
+	// SetMortalityModifier (no registered engine.citizens ->
+	// engine.wellbeing edge, so a plain getter, never a *wellbeing.
+	// WellbeingAPI reference), and engine.attract's SetWellbeingModifiers /
+	// engine.firms' SetProductivityModifier (both DO have a registered
+	// outbound edge to engine.wellbeing, code.json, but still take a plain
+	// getter for symmetry — the value each needs is the composition root's
+	// monthly cohort-mean reconstruction, wellbeingHook, which only compose
+	// can supply). Every getter closes over st itself (not a copy) and
+	// reads st.wellbeingStatus, which wellbeingHook.ApplyEffect (compose_
+	// wellbeing.go) commits once per month — the split RunShard(read-only,
+	// may run concurrently with other hooks' RunShard)/ApplyEffect(commits,
+	// sequential in registrationOrder) phase discipline GR#21 already
+	// requires of every hook in this file means a getter invoked from
+	// another hook's RunShard/cold-pass always reads last month's already-
+	// committed value, never a value ApplyEffect is concurrently writing
+	// (see compose_wellbeing.go's wellbeingHook doc comment) — the same
+	// "snapshotted at month start" contract SetMortalityModifier/
+	// SetWellbeingModifiers/SetProductivityModifier's own doc comments
+	// require of their callers.
+	if err := c.SetMortalityModifier(func() float64 { return st.wellbeingStatus.MortalityModifier }, cid); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "citizens", "step": "SetMortalityModifier"})
+	}
+	if err := attractAPI.SetWellbeingModifiers(func() (float64, float64) {
+		return st.wellbeingStatus.SatisfactionModifier, st.wellbeingStatus.EmigrationModifier
+	}); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract", "step": "SetWellbeingModifiers"})
+	}
+	if err := firmsAPI.SetProductivityModifier(func() float64 { return st.wellbeingStatus.ProductivityModifier }); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms", "step": "SetProductivityModifier"})
+	}
+
 	// Establish the non-zero seed population (AC-8's precondition).
 	if err := st.spawnCitizens(0, seedCitizenCount); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "citizens"})
@@ -2210,12 +2243,21 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 			} else {
 				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "PostWages.floorBackstop", "cause": err.Error()})
 			}
-		} else if privateWageBill > 0 && firmsPaidPrivate {
-			// Firms posted the full bill (including any floor top-up
-			// already baked into privateWageBill above) — clear the
-			// shortfall surface so PayrollShortfall() reads fresh for the
-			// current month (GR#17: a monitor must see recovery, not a
-			// stale failure forever).
+		} else if firmsPaidPrivate {
+			// firmsPaidPrivate is true whenever this month's private
+			// posting did NOT reject — either nothing was owed at all
+			// (privateWageBill <= 0, a genuinely clean month: the
+			// MOD-034 wellbeing-driven population-trajectory shift makes
+			// this reachable far more often than the original privateWageBill>0
+			// guard assumed) or PostWagesFromFirms succeeded. A rejected
+			// posting leaves firmsPaidPrivate false (set only in the
+			// success branch above, never touched in the failure branch),
+			// so this clear never fires while a real failure persists.
+			// Clear the shortfall surface so PayrollShortfall() reads
+			// fresh for the current month (GR#17: a monitor must see
+			// recovery, not a stale failure forever — and must never
+			// report a phantom failure for a month that had nothing to
+			// fail).
 			st.finance.RecordPayrollShortfall(clock.Month(), 0)
 		}
 

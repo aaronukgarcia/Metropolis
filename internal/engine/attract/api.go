@@ -66,6 +66,28 @@ type AttractAPI struct {
 	// prefix, so admitted migrants never collide with small seeded ids).
 	nextMigrantID uint64
 
+	// wellbeingModifiers is MOD-034's OPTIONAL injected seam (the registered
+	// engine.attract -> engine.wellbeing edge, code.json): a plain getter
+	// returning the two §18 downstream-effect modifiers this package's
+	// migration arithmetic consumes (SatisfactionModifier scales the A
+	// score, EmigrationModifier scales the per-resident emigration hazard —
+	// see ApplyMigration/applyEmigration). A plain func()(float64,float64)
+	// rather than a *wellbeing.WellbeingAPI reference: the two modifiers are
+	// functions of the composition root's monthly cohort-mean reconstruction
+	// (compose_wellbeing.go), which only the composition root can supply, so
+	// there is nothing this package would gain from importing the
+	// wellbeing package's types directly. Consulted exactly once per month,
+	// inside ApplyMigration's existing once-per-month idempotent block
+	// (never mid-month — the same snapshot-at-month-start discipline
+	// engine.citizens' SetMortalityModifier documents). nil (every existing
+	// New(...) caller) is a documented no-op returning the neutral (1.0,
+	// 1.0) pair — migration behaves exactly as before this seam existed.
+	// Deliberately NOT persisted: a live composition-root wire
+	// re-established on every load, mirroring SetCitizens/SetFinance/
+	// SetHouseholds's identical precedent, never simulation state of its
+	// own.
+	wellbeingModifiers func() (satisfaction, emigration float64)
+
 	// self is the SEC-020 copy guard (atomic.Pointer, mirroring
 	// engine.build's BuildAPI.self). Stored exactly once, in New, before
 	// the value is returned to any caller.
@@ -143,6 +165,28 @@ func (a *AttractAPI) SetHouseholds(h *households.HouseholdsAPI) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.households = h
+	return nil
+}
+
+// SetWellbeingModifiers wires MOD-034's (engine.wellbeing) satisfaction and
+// emigration modifier seam. Optional and idempotent-to-call-once, mirroring
+// SetCitizens/SetFinance/SetHouseholds's post-construction wiring
+// precedent — an AttractAPI never wired here (nil getter, every existing
+// New(...) call site) keeps the documented neutral (1.0, 1.0) pair, i.e.
+// exactly today's behaviour. Passing nil restores that default. The getter
+// itself must be a pure, deterministic function of already-committed state
+// (the month-start snapshot rule, mirroring citizens.SetMortalityModifier's
+// identical contract) — this method does not and cannot enforce that on
+// the caller, so the composition root is responsible for snapshotting the
+// wellbeing cohort value at month start (compose_wellbeing.go) rather than
+// reading a live, mutating value.
+func (a *AttractAPI) SetWellbeingModifiers(getter func() (satisfaction, emigration float64)) error {
+	if err := a.checkNotCopied("SetWellbeingModifiers"); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.wellbeingModifiers = getter
 	return nil
 }
 

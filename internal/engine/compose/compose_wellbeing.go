@@ -20,68 +20,58 @@ import (
 // registrationOrder entry.
 //
 // ============================================================================
-// GR#25 finding — the four downstream modifiers are COMPUTED but NOT APPLIED
+// GR#25 finding, RESOLVED (2026-09-05 follow-on lane) — the four downstream
+// modifiers are now COMPUTED and APPLIED
 // ============================================================================
 //
-// engine.wellbeing's four downstream-effect modifiers (MortalityModifier,
-// ProductivityModifier, SatisfactionModifier, EmigrationModifier) are
-// reconstructed every month by wellbeingHook below and exposed read-only via
-// Composition.WellbeingStatus() — but this wiring does NOT apply any of them
-// to a real consumer (citizens' mortality hazard, firms'/moneycirc's wage
-// bill, attract's satisfaction/migration arithmetic). This is a deliberate
-// STOP, not an oversight:
+// The finding above described the state BEFORE this lane: the
+// engine.citizens/engine.firms/engine.attract -> engine.wellbeing edges were
+// unregistered, so all four §18 downstream-effect modifiers were computed
+// for observability only (Composition.WellbeingStatus()) and applied
+// nowhere. Since then, a planning batch (2026-09-05, batch 3) registered
+// the engine.attract -> engine.wellbeing and engine.firms -> engine.wellbeing
+// outbound edges in code.json (verified live: both modules' outbound.calls
+// now list engine.wellbeing). engine.citizens -> engine.wellbeing is still
+// NOT registered (and would cycle — engine.wellbeing already calls
+// engine.citizens), so that consumer is wired via a plain injected getter
+// instead of an import, exactly as GR#20/GR#25 require for an
+// unregistered/cyclic edge.
 //
-//   - MortalityModifier's only consumer would be citizens.MortalityHazard's
-//     per-citizen hazard draw (internal/engine/citizens/mortality.go),
-//     invoked from WITHIN engine.citizens' own cold pass — compose never
-//     calls MortalityHazard directly, and CitizensAPI exposes exactly two
-//     Set* seams (SetSeason, SetDeathDrainCapacity), neither generic. Feeding
-//     a wellbeing-derived multiplier in would require a NEW inbound seam on
-//     engine.citizens (e.g. SetMortalityModifier), which is itself a new
-//     engine.citizens -> engine.wellbeing outbound edge.
-//   - ProductivityModifier's only plausible consumer is compose's own
-//     moneycirc.go wage-bill arithmetic (employedResidentCount() x the real
-//     UK gross wage) OR engine.firms' labour-market/production accounting —
-//     neither currently exposes a productivity-scaling input.
-//   - SatisfactionModifier's and EmigrationModifier's only plausible consumer
-//     is engine.attract's migration arithmetic (TermInputs / MigrationCommand,
-//     see applyMigration in compose.go) — attract.TermInputs/MigrationCommand
-//     carry no wellbeing-modifier field today.
+// All four modifiers are now applied, each via a plain
+// func()(float64[, float64]) getter Wire injects (never a raw
+// *wellbeing.WellbeingAPI reference threaded into the consumer — the value
+// each consumer needs is this file's monthly cohort-mean reconstruction,
+// which only compose can supply, so a getter is the right shape even for
+// attract/firms, which DO have the registered edge available):
 //
-// Mechanically verified (2026-09-05, this lane): code.json's outbound edges
-// for the three candidate consumer modules do NOT include engine.wellbeing —
+//   - MortalityModifier -> engine.citizens.CitizensAPI.SetMortalityModifier
+//     (registry.go), folded multiplicatively into the sample-derived
+//     ColdPassParams.MortalityMultiplier inside coldParamsLocked, consulted
+//     once per month (the same point monthParams is already recomputed).
+//   - ProductivityModifier -> engine.firms.FirmsAPI.SetProductivityModifier
+//     (firms.go), folded multiplicatively into each firm's
+//     Financial.OutputScale inside applyInputScalingLocked (lifecycle.go),
+//     consulted once per firm per ResolveMonth call.
+//   - SatisfactionModifier / EmigrationModifier ->
+//     engine.attract.AttractAPI.SetWellbeingModifiers (api.go): Satisfaction
+//     scales the A attractiveness score multiplicatively inside
+//     ApplyMigration before net is computed; Emigration scales the
+//     per-resident emigration hazard inside applyEmigration. Both consulted
+//     once per ApplyMigration call, which is itself compose's once-per-month
+//     migration step.
 //
-//	engine.citizens outbound: engine.core, int.serializer, engine.invariant,
-//	  foundation.det, foundation.errors, foundation.num
-//	engine.firms    outbound: engine.citizens, engine.finance, engine.market,
-//	  engine.build, engine.freight, foundation.data, foundation.det,
-//	  foundation.errors, foundation.num
-//	engine.attract  outbound: engine.citizens, engine.finance,
-//	  engine.households, foundation.det, foundation.errors, foundation.num,
-//	  engine.build, engine.logistics, engine.market, engine.season,
-//	  engine.world, int.serializer
-//
-// GR#25 is explicit: "If a specification requires a new dependency, the BA
-// must first coordinate with the Architect to register the new outbound
-// edge/contract in code.json before writing the prose." Wiring any of the
-// four modifiers into a real consumer needs one of:
-//
-//	engine.citizens -> engine.wellbeing   (MortalityModifier)
-//	engine.firms    -> engine.wellbeing   (ProductivityModifier, if firms
-//	                                       owns the consuming arithmetic) OR
-//	                                       a compose-owned moneycirc.go hook
-//	                                       (no new edge, but a moneycirc.go
-//	                                       change outside this file's remit)
-//	engine.attract  -> engine.wellbeing   (SatisfactionModifier,
-//	                                       EmigrationModifier)
-//
-// None of these are registered. Per this brief's own instruction ("if
-// applying a modifier needs an edge compose lacks... STOP that modifier and
-// report the exact edge"), all four modifiers are computed for observability
-// only (Composition.WellbeingStatus()) and applied nowhere. Escalated to the
-// architect (Bev) alongside this report; MOD-034 remains built-but-only-
-// partially-wired until the missing edge(s) land and a follow-on ticket
-// threads the multiplier through.
+// Every getter is wired just below (see the SetMortalityModifier/
+// SetWellbeingModifiers/SetProductivityModifier calls after
+// st.setTreasury(st.treasury) in Wire) and closes over st.wellbeingStatus —
+// wellbeingHook.ApplyEffect below commits a fresh WellbeingStatus once per
+// month; every consumer's own once-per-month consultation point means it
+// always reads a value already committed by an EARLIER month's ApplyEffect,
+// never a value being concurrently written (the split RunShard-read/
+// ApplyEffect-commit phase discipline GR#21 already requires of every hook
+// in compose.go). Before the hook first runs (or whenever the live resident
+// population is empty), WellbeingStatus.NoData is true and every modifier is
+// pinned to the documented neutral 1.0 (see computeWellbeingStatus below),
+// so an unwired or not-yet-run wellbeing pass changes nothing observable.
 
 // wellbeingSeamStatus records, for one wired WellbeingAPI input seam,
 // whether the real module was available at Wire time ("live") or the seam
@@ -96,9 +86,12 @@ type wellbeingSeamStatus struct {
 // WellbeingStatus is the GR#17 read-only status surface for MOD-034's
 // composition-root wiring: the reconstructed cohort's mean tracks, the four
 // downstream-effect modifier values computed from that mean (see this
-// file's package doc comment for why they are NOT applied to any consumer
-// yet), which input seams are live vs degraded, and how many citizens fed
-// the reconstruction.
+// file's "GR#25 finding, RESOLVED" section above for the four application
+// sites each modifier is now wired to — mortality/satisfaction/emigration
+// reach compose's money/population surfaces observably; productivity's
+// OutputScale application is real but not yet compose-visible, filed as
+// its own P2), which input seams are live vs degraded, and how many
+// citizens fed the reconstruction.
 type WellbeingStatus struct {
 	// SampleSize is the number of resident citizens whose attribution fed
 	// this month's mean (0 before the hook has run once, or if the LIVE
@@ -255,9 +248,14 @@ type wellbeingEffect struct {
 // bounded sample of resident citizens' wellbeing attribution (AC-18's
 // reconstruct-on-demand pattern — nothing durable is stored per citizen),
 // averages the two tracks, and computes the four downstream-effect
-// modifiers from that mean for the read-only WellbeingStatus() surface. It
-// applies no modifier to any consumer (see this file's package doc
-// comment).
+// modifiers from that mean, committing them to st.wellbeingStatus for the
+// read-only WellbeingStatus() surface AND for the three consumer seams
+// Wire injects right after construction (SetMortalityModifier/
+// SetWellbeingModifiers/SetProductivityModifier, compose.go — each reads
+// st.wellbeingStatus via its own getter). This hook's ApplyEffect is
+// therefore the single monthly WRITE point every consumer's next
+// once-per-month consultation reads from (see this file's "GR#25 finding,
+// RESOLVED" section above for the four application sites).
 type wellbeingHook struct {
 	st *simState
 }
@@ -405,9 +403,11 @@ func (c *Composition) Wellbeing() *wellbeing.WellbeingAPI {
 
 // WellbeingStatus returns the composed engine's MOD-034 read-only status
 // surface (GR#17): the last-reconstructed cohort mean tracks, the four
-// downstream-effect modifiers computed from that mean (NOT applied to any
-// consumer — see compose_wellbeing.go's package doc comment for the exact
-// missing edges), and each input seam's live/degraded state. Before the
+// downstream-effect modifiers computed from that mean and ALSO applied to
+// their consumer seams (see this file's "GR#25 finding, RESOLVED" section
+// above for the four application sites — this accessor and the consumer
+// seams read the same st.wellbeingStatus this hook commits monthly), and
+// each input seam's live/degraded state. Before the
 // monthly hook has run once (or whenever the live resident population is
 // empty), NoData is true, SampleSize is 0, MeanPhysical/MeanMental are 0,
 // and all four modifiers are pinned to the documented NEUTRAL value 1.0 —

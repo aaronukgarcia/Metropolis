@@ -91,6 +91,22 @@ type CitizensAPI struct {
 	// once at the start of each month and applied across its 30 day-ticks.
 	monthParams ColdPassParams
 
+	// mortalityModifier is MOD-034's OPTIONAL injected wellbeing seam
+	// (GR#25/GR#20: engine.citizens may NOT import engine.wellbeing — that
+	// edge is not registered and would cycle, since engine.wellbeing already
+	// calls engine.citizens — so the composition root injects a plain
+	// getter rather than a WellbeingAPI reference). Consulted exactly once
+	// per month inside coldParamsLocked (mirrors monthParams's own
+	// once-per-month recompute discipline), NEVER mid-month, so a
+	// reconstruction never perturbs an in-flight tick's already-drawn
+	// hazards. nil (every existing NewCitizensAPI call site, ~80 of them)
+	// is a documented no-op returning the neutral 1.0 — mortality behaves
+	// exactly as before this seam existed. Deliberately NOT persisted
+	// (participant.go): it is a live composition-root wire re-established
+	// on every load, mirroring SetSeason/SetDeathDrainCapacity's identical
+	// precedent, never simulation state of its own.
+	mortalityModifier func() float64
+
 	// pages is the OPTIONAL disk-backed paging seam (BUG-664, paging.go),
 	// wired in only via EnableDiskPaging. nil (the default for every
 	// existing NewCitizensAPI caller, ~80 call sites) means every shard
@@ -509,6 +525,33 @@ func (c *CitizensAPI) SetDeathDrainCapacity(d DrainCapacity, correlationID strin
 		return err
 	}
 	return c.deathQueue.SetDrainCapacity(d, correlationID)
+}
+
+// SetMortalityModifier wires MOD-034's (engine.wellbeing) mortality-hazard
+// multiplier seam: a plain getter (no *wellbeing.WellbeingAPI reference —
+// engine.citizens does not, and must not, import engine.wellbeing; that
+// outbound edge is unregistered and would cycle back through
+// engine.wellbeing's own engine.citizens dependency) that coldParamsLocked
+// consults exactly once per month, folded multiplicatively into the
+// existing sample-derived ColdPassParams.MortalityMultiplier. Optional and
+// idempotent-to-call-once, mirroring SetSeason/SetDeathDrainCapacity's
+// post-construction wiring precedent — a CitizensAPI never wired here
+// (nil getter, every existing NewCitizensAPI call site) keeps the
+// documented neutral 1.0, i.e. exactly today's behaviour. Passing nil
+// restores that default. The getter itself must be a pure, deterministic
+// function of already-committed state (the month-start snapshot rule) —
+// this method does not and cannot enforce that on the caller, so the
+// composition root is responsible for snapshotting the wellbeing cohort
+// value at month start (see compose_wellbeing.go) rather than reading a
+// live, mutating value.
+func (c *CitizensAPI) SetMortalityModifier(getter func() float64, correlationID string) error {
+	if err := c.checkNotCopied(correlationID, "SetMortalityModifier"); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mortalityModifier = getter
+	return nil
 }
 
 // DeathHandoff returns FEAT-088's ordered, flagged handoff stream so far
@@ -1608,7 +1651,18 @@ func (c *CitizensAPI) coldParamsLocked(correlationID string) ColdPassParams {
 		}
 		b.addRecords(buf)
 	}
-	return DeriveColdPassParams(b.build())
+	params := DeriveColdPassParams(b.build())
+
+	// MOD-034 seam: fold the injected wellbeing mortality modifier in
+	// multiplicatively with the sample-derived age multiplier, consulted
+	// exactly once here (the month-start snapshot point — never mid-month,
+	// per SetMortalityModifier's doc comment). nil getter (the default)
+	// leaves params.MortalityMultiplier exactly as DeriveColdPassParams
+	// computed it, i.e. today's behaviour.
+	if c.mortalityModifier != nil {
+		params.MortalityMultiplier *= c.mortalityModifier()
+	}
+	return params
 }
 
 // --- conversions ---

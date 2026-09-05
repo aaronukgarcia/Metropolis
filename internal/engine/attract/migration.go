@@ -217,6 +217,20 @@ func (a *AttractAPI) ApplyMigration(cmd MigrationCommand) (MigrationResult, erro
 	a.mu.Unlock()
 
 	score := weightedSum(w, terms, rep)
+
+	// MOD-034 seam: fold the injected wellbeing satisfaction modifier into
+	// the attractiveness score multiplicatively (SatisfactionModifier is
+	// 1.0 at perfect health, falling as the cohort's wellbeing worsens —
+	// wellbeing.WellbeingAPI.SatisfactionModifier's own doc comment), so a
+	// declining-wellbeing city becomes less attractive to migrants exactly
+	// the way a declining reputation or job market already does. Consulted
+	// once here per ApplyMigration call, which is itself the once-per-month
+	// migration step (see this file's package doc) — never re-consulted
+	// mid-month. nil getter (the default) leaves score unchanged, i.e.
+	// today's behaviour.
+	satisfactionMod, emigrationMod := a.wellbeingModifierPair()
+	score *= satisfactionMod
+
 	if !num.IsFinite(score) {
 		return MigrationResult{}, errs.New(ErrConfigInvalid, a.correlationID, map[string]any{
 			"field": "A",
@@ -245,7 +259,7 @@ func (a *AttractAPI) ApplyMigration(cmd MigrationCommand) (MigrationResult, erro
 		}
 		res.Inflow = inflow
 	case net < 0:
-		outflow, err := a.applyEmigration(cmd, net)
+		outflow, err := a.applyEmigration(cmd, net, emigrationMod)
 		if err != nil {
 			return MigrationResult{}, err
 		}
@@ -405,8 +419,14 @@ func neutralMigrantPersonality() citizens.Personality {
 // personality-weighted (ambition) hazards — AC-6's "ambitious citizens leave
 // sooner when opportunity dries up" — with each departure decided by the
 // counter-based hash stream hash(worldSeed, id, month, "emigrate") (AC-12).
-// Returns the number of citizens departed.
-func (a *AttractAPI) applyEmigration(cmd MigrationCommand, net float64) (int64, error) {
+// emigrationMod is MOD-034's wellbeing emigration multiplier (1.0 at
+// perfect health, rising as the cohort's wellbeing worsens —
+// ApplyMigration's caller already resolved it, via
+// wellbeingModifiersLocked, to the neutral 1.0 when no seam is wired),
+// folded in multiplicatively so a declining-wellbeing city loses residents
+// faster at the same ambition/decline shape. Returns the number of
+// citizens departed.
+func (a *AttractAPI) applyEmigration(cmd MigrationCommand, net float64, emigrationMod float64) (int64, error) {
 	if err := a.checkNotCopied("applyEmigration"); err != nil {
 		return 0, err
 	}
@@ -427,7 +447,7 @@ func (a *AttractAPI) applyEmigration(cmd MigrationCommand, net float64) (int64, 
 
 	var departed int64
 	for _, id := range cmd.ResidentIDs {
-		hazard := a.emigrationHazardLocked(cit, id, decline)
+		hazard := clampFloat(a.emigrationHazardLocked(cit, id, decline)*emigrationMod, 0, 1)
 		stream := det.NewStream(a.seed, id, cmd.Month, "emigrate")
 		if stream.Float64() >= hazard {
 			continue
@@ -446,6 +466,25 @@ func (a *AttractAPI) applyEmigration(cmd MigrationCommand, net float64) (int64, 
 		departed = num.SatAdd(departed, 1)
 	}
 	return departed, nil
+}
+
+// wellbeingModifierPair returns the MOD-034 satisfaction/emigration
+// modifier pair, resolving to the documented neutral (1.0, 1.0) when no
+// getter is wired (SetWellbeingModifiers never called, or called with
+// nil). Takes a.mu itself (RLock) — mirrors this package's other plain
+// accessors (Reputation, JobAvailability, etc.), never called with mu
+// already held.
+func (a *AttractAPI) wellbeingModifierPair() (satisfaction, emigration float64) {
+	if err := a.checkNotCopied("wellbeingModifierPair"); err != nil {
+		return 1.0, 1.0
+	}
+	a.mu.RLock()
+	getter := a.wellbeingModifiers
+	a.mu.RUnlock()
+	if getter == nil {
+		return 1.0, 1.0
+	}
+	return getter()
 }
 
 // emigrationHazardLocked is the per-resident emigration hazard, computed

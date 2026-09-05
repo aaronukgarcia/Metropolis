@@ -229,6 +229,27 @@ type FirmsAPI struct {
 
 	month int64
 
+	// productivityModifier is MOD-034's OPTIONAL injected seam (the
+	// registered engine.firms -> engine.wellbeing edge, code.json): a
+	// plain getter returning the §18 ProductivityModifier value (1.0 at
+	// perfect health, falling as the composition root's monthly cohort
+	// reconstruction — compose_wellbeing.go — worsens), folded
+	// multiplicatively into every firm's OutputScale by
+	// applyInputScalingLocked. A plain func() float64 rather than a
+	// *wellbeing.WellbeingAPI reference, mirroring engine.citizens'
+	// SetMortalityModifier and engine.attract's SetWellbeingModifiers:
+	// the modifier value is a function of the composition root's cohort
+	// mean, which only compose can supply, so nothing is gained by this
+	// package importing wellbeing's types directly. Consulted once per
+	// firm per ResolveMonth call (itself the once-per-month resolution
+	// pass — see ResolveMonth's doc comment), never mid-month. nil (every
+	// existing Load/LoadDefault caller) is a documented no-op returning
+	// the neutral 1.0 — output scaling behaves exactly as before this seam
+	// existed. Deliberately NOT persisted: a live composition-root wire
+	// re-established on every load, mirroring SetMarket/SetBuild's
+	// identical precedent, never simulation state of its own.
+	productivityModifier func() float64
+
 	self atomic.Pointer[FirmsAPI]
 }
 
@@ -313,6 +334,28 @@ func (f *FirmsAPI) SetBuild(b *build.BuildAPI) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.build = b
+	return nil
+}
+
+// SetProductivityModifier wires MOD-034's (engine.wellbeing) productivity
+// modifier seam. Optional and idempotent-to-call-once, mirroring
+// SetMarket/SetBuild's post-construction wiring precedent — a FirmsAPI
+// never wired here (nil getter, every existing Load/LoadDefault call
+// site) keeps the documented neutral 1.0, i.e. exactly today's behaviour.
+// Passing nil restores that default. The getter itself must be a pure,
+// deterministic function of already-committed state (the month-start
+// snapshot rule, mirroring citizens.SetMortalityModifier's identical
+// contract) — this method does not and cannot enforce that on the
+// caller, so the composition root is responsible for snapshotting the
+// wellbeing cohort value at month start (compose_wellbeing.go) rather
+// than reading a live, mutating value.
+func (f *FirmsAPI) SetProductivityModifier(getter func() float64) error {
+	if err := f.checkNotCopied("SetProductivityModifier"); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.productivityModifier = getter
 	return nil
 }
 

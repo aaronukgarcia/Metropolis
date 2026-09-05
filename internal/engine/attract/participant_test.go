@@ -64,18 +64,19 @@ func TestAttractWireFieldsMatchDomain(t *testing.T) {
 // participant.go's package doc).
 func TestAttractAPIFieldsAllClassified(t *testing.T) {
 	excluded := map[string]string{
-		"correlationID": "per-instance error correlation, not simulation state",
-		"weights":       "construction-time config (Config.Weights), re-supplied by New on every load",
-		"world":         "construction-time config (Config.World, a WorldPool seam), re-supplied by New",
-		"migrationRate": "construction-time config (Config.MigrationRate), re-supplied by New",
-		"repCfg":        "construction-time config (Config.Reputation), re-supplied by New",
-		"seed":          "construction-time config (the world seed New was called with; the counter-based hash draws AC-12 describes are STATELESS functions of this seed plus per-call inputs, never a persisted cursor -- see participant.go's package doc)",
-		"citizens":      "wired dependency pointer (SetCitizens), re-supplied by the composition root before Load runs",
-		"finance":       "wired dependency pointer (SetFinance), re-supplied by the composition root before Load runs",
-		"households":    "wired dependency pointer (SetHouseholds), re-supplied by the composition root before Load runs",
-		"mu":            "runtime lock, not state",
-		"termInputs":    "pushed-input snapshot (SetTermInputs); the composition root recomputes and re-pushes all five terms every month BEFORE calling ApplyMigration (compose.go's applyMigration), so a stale post-load value is always overwritten before it can influence a migration decision -- see compose/save_loadat_test.go's TestLoadAt_TickContinuity for the proof that only reputation/lastAdvancedMonth/nextMigrantID (this file's coverage) are load-bearing across a restore",
-		"self":          "SEC-020 copy-guard pointer, re-armed by New",
+		"correlationID":      "per-instance error correlation, not simulation state",
+		"weights":            "construction-time config (Config.Weights), re-supplied by New on every load",
+		"world":              "construction-time config (Config.World, a WorldPool seam), re-supplied by New",
+		"migrationRate":      "construction-time config (Config.MigrationRate), re-supplied by New",
+		"repCfg":             "construction-time config (Config.Reputation), re-supplied by New",
+		"seed":               "construction-time config (the world seed New was called with; the counter-based hash draws AC-12 describes are STATELESS functions of this seed plus per-call inputs, never a persisted cursor -- see participant.go's package doc)",
+		"citizens":           "wired dependency pointer (SetCitizens), re-supplied by the composition root before Load runs",
+		"finance":            "wired dependency pointer (SetFinance), re-supplied by the composition root before Load runs",
+		"households":         "wired dependency pointer (SetHouseholds), re-supplied by the composition root before Load runs",
+		"mu":                 "runtime lock, not state",
+		"termInputs":         "pushed-input snapshot (SetTermInputs); the composition root recomputes and re-pushes all five terms every month BEFORE calling ApplyMigration (compose.go's applyMigration), so a stale post-load value is always overwritten before it can influence a migration decision -- see compose/save_loadat_test.go's TestLoadAt_TickContinuity for the proof that only reputation/lastAdvancedMonth/nextMigrantID (this file's coverage) are load-bearing across a restore",
+		"self":               "SEC-020 copy-guard pointer, re-armed by New",
+		"wellbeingModifiers": "wired dependency getter (MOD-034's SetWellbeingModifiers), re-supplied by the composition root before Load runs -- a plain func()(float64,float64) closure over the composition root's own state (compose_wellbeing.go) can never be serialized (funcs are not JSON-marshallable) and would be meaningless after a restore anyway, mirroring termInputs'/citizens'/finance's/households' identical wired-dependency exclusion reasoning: compose re-wires this seam every load, BEFORE the first ApplyMigration call, so a stale/missing post-load value is always overwritten before it can influence a migration decision.",
 	}
 	covered := map[string]bool{
 		"reputation":        true,

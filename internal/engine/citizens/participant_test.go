@@ -424,6 +424,15 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 			"AdvanceDayTick call and reseeded by EnableDiskPaging/resetForLoad, " +
 			"never serialized state.",
 		"pagingMu": "runtime lock guarding pages/pageOrder/pageList/shardPins transitions, not state",
+		"mortalityModifier": "MOD-034 injected wellbeing seam (SetMortalityModifier) -- a " +
+			"plain func() float64 closure over the composition root's own state " +
+			"(compose_wellbeing.go), re-wired post-load exactly like SetSeason/ " +
+			"SetDeathDrainCapacity's own precedent, never simulation state this " +
+			"module owns. A func cannot be serialized (not JSON-marshallable) and " +
+			"would be meaningless after a restore anyway -- compose re-wires this " +
+			"seam every load, before the next coldParamsLocked recompute, so a " +
+			"stale/missing post-load value is always overwritten before it can " +
+			"influence a mortality draw.",
 	}
 	covered := map[string]bool{
 		"month": true, "dayTick": true, "cold": true, "hot": true,

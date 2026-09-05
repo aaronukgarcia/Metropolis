@@ -327,21 +327,32 @@ func (f *FirmsAPI) ResolveMonth(month int64) error {
 
 // applyInputScalingLocked reduces a firm's output scale by its §33-chain
 // input shortfall (AC-8): the available input (engine.market's
-// capacity-bounded availability) over the required input, in per-mille.
-// The caller holds f.mu.
+// capacity-bounded availability) over the required input, in per-mille,
+// then folds in MOD-034's injected wellbeing ProductivityModifier
+// multiplicatively (1.0 at perfect health, falling as the cohort's
+// wellbeing worsens — wellbeing.WellbeingAPI.ProductivityModifier's own
+// doc comment), so a declining-wellbeing workforce produces less output
+// at the same input-availability shape. The caller holds f.mu.
 func (f *FirmsAPI) applyInputScalingLocked(fs *firmState) {
+	var scale int64
 	if f.market == nil || fs.firm.InputRequired <= 0 {
-		fs.firm.Financial.OutputScale = 1000
-		return
+		scale = 1000
+	} else {
+		avail, err := f.market.Availability(fs.firm.InputCommodity, fs.firm.InputRequired)
+		if err != nil {
+			// An unknown commodity is a config error, not a shortfall; leave
+			// the input-scarcity term at full and let the caller's own error
+			// surface carry it.
+			scale = 1000
+		} else {
+			scale = satMul(avail.Available, 1000) / fs.firm.InputRequired
+		}
 	}
-	avail, err := f.market.Availability(fs.firm.InputCommodity, fs.firm.InputRequired)
-	if err != nil {
-		// An unknown commodity is a config error, not a shortfall; leave the
-		// scale at full and let the caller's own error surface carry it.
-		fs.firm.Financial.OutputScale = 1000
-		return
+
+	if f.productivityModifier != nil {
+		mod := f.productivityModifier()
+		scale = int64(float64(scale) * mod)
 	}
-	scale := satMul(avail.Available, 1000) / fs.firm.InputRequired
 	fs.firm.Financial.OutputScale = clampPerMille(scale)
 }
 

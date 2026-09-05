@@ -299,6 +299,28 @@ func TestBUG548R2_ShortfallSurfaceClearsOnAnAllPublicCleanMonth(t *testing.T) {
 		t.Fatalf("starved month did not set the shortfall surface (%d)", int64(amount))
 	}
 
+	// MOD-034 finding: refill the firms working-capital line BEFORE the
+	// clean-month attempts below. r2ExhaustFirms above deliberately
+	// starves AcctFirms down to a residue of 1_000 so the earlier "set
+	// the surface" step above can force a rejection — but sector churn
+	// (markEmploymentAndCount re-deciding a resident, and new
+	// private-sector migrants; see this function's own comment two blocks
+	// down) means a "forced all-public" month can still leak a SMALL
+	// residual private bill this same tick. With AcctFirms still drained,
+	// that residual bill REJECTS (insufficient funds) rather than posting
+	// — which still satisfies this test's byFirms==0 && credited>floor
+	// "clean" heuristic (the residual bill's rejection gets backstopped
+	// straight to the treasury, so byFirms stays 0), even though a real
+	// private posting was rejected this month. That is NOT the scenario
+	// this test means to exercise (a genuinely clean, nothing-rejected
+	// month) — it is exactly the "rejected posting still keeps/sets it"
+	// case financeHook.ApplyEffect's clear guard correctly refuses to
+	// clear. Refilling here means any such residual bill actually POSTS
+	// (byFirms becomes >0 for it, never silently rejected), so byFirms==0
+	// afterwards is unambiguous proof of zero private wage bill, not
+	// "private bill existed but reads as clean because it was rejected."
+	r2RefillFirms(t, f, 10_000_000_000)
+
 	// Now drive an unambiguously CLEAN all-public month. The month must
 	// satisfy BOTH: firms paid nothing (so no private bill existed) AND
 	// the posted bill is STRICTLY ABOVE monthlyWagesFloor (so no floor

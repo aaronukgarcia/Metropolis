@@ -308,6 +308,39 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	if err := c.state.buildAPI.RegisterCompletedServices(); err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "build", "step": "register-completed-services"})
 	}
+
+	// MOD-034 (engine.wellbeing downstream-effect application): eagerly
+	// reconstruct st.wellbeingStatus here too — this is the single choke
+	// point every restore path funnels through (this function's own doc
+	// comment above), so LoadAt's identical call (save_wire.go, after it
+	// seeds the clock to a possibly LATER tick than whatever Load leaves
+	// it at) is not a substitute for this one; a caller of bare Load (no
+	// LoadAt) needs the same eager recompute LoadAt documents, or the very
+	// first post-load mortality draw/migration step/firm output
+	// computation reads the freshly-Wired zero-count NoData (neutral)
+	// value instead of the real cohort value a live engine would have held
+	// at this point, diverging from a reference engine that never stopped
+	// (measured: TestAttackBUG720_SaveRestoreMidBatchContinuation, which
+	// exercises bare Load, not LoadAt).
+	if err := c.reconstructWellbeingForRestore(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// reconstructWellbeingForRestore reads the engine's current clock month
+// (the same source wellbeingHook.RunShard itself consults, compose_
+// wellbeing.go) and recomputes st.wellbeingStatus for it — see the two call
+// sites (Load, LoadAt) for why a plain Load's freshly-Wired zero-count
+// NoData default is not good enough once real consumer seams
+// (SetMortalityModifier/SetWellbeingModifiers/SetProductivityModifier)
+// read it every month.
+func (c *Composition) reconstructWellbeingForRestore() error {
+	clock, err := c.state.e.Clock()
+	if err != nil {
+		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "wellbeing", "step": "reconstruct-on-load"})
+	}
+	c.state.reconstructWellbeing(clock.Month())
 	return nil
 }
 
@@ -376,5 +409,39 @@ func (c *Composition) LoadAt(root string, tick int64, opts ...save.LoadOption) e
 	st.lastClosedTick = tick
 	st.previousClosingPop = int64(st.citizens.TotalPopulation(st.cid))
 	st.previousClosingMoney = num.SatAdd(st.treasury, st.citizenWealth)
-	return nil
+
+	// MOD-034 (engine.wellbeing downstream-effect application): eagerly
+	// reconstruct st.wellbeingStatus for the restored month, mirroring the
+	// lastClosedTick/previousClosingPop/previousClosingMoney re-establishment
+	// immediately above. wellbeingStatus is deliberately NOT a save
+	// participant field (AC-18's reconstruct-on-demand contract — see
+	// compose_wellbeing.go's reconstructWellbeing doc comment), so a plain
+	// Load leaves it at its freshly-Wired zero-count NoData value. That was
+	// harmless while wellbeingStatus fed only the read-only
+	// Composition.WellbeingStatus() observability surface, but since the
+	// citizens/attract/firms consumer seams this lane wires now read it via
+	// their injected getters (SetMortalityModifier/SetWellbeingModifiers/
+	// SetProductivityModifier) EVERY month, a load that leaves it neutral
+	// for one extra cycle diverges the very first post-load mortality
+	// draw/migration step/firm output computation from a reference engine
+	// that never stopped (measured: TestAttackBUG720_SaveRestoreMidBatchContinuation,
+	// TestAttack_LoadAt_AttractOwnStateMatchesReferenceAcrossMonthBoundary,
+	// TestBUG738_LoadAt_TickContinuity_LightFixture, and
+	// TestLoadAt_TickContinuity_AcrossMonthBoundary all reverted on the
+	// exact same restore-then-diverge shape until this call was added).
+	// Recomputing here from the just-restored (byte-exact) citizen
+	// population runs the hook-shaped reconstruction (reconstructWellbeing,
+	// compose_wellbeing.go — the same sampling/averaging/modifier-derivation
+	// logic wellbeingHook.ApplyEffect itself calls) AT THE RESTORED CLOCK
+	// MONTH (SeedClockForRestore's `tick`, just seeded above) — not a
+	// literal replay of whatever RunShard sampling order a still-running
+	// engine would have taken, only an equivalent-inputs recompute, at no
+	// durable-storage cost (nothing here is written back to the save — the
+	// next real month boundary recomputes it again regardless). Called
+	// again here (Load, just above via c.Load, already called it once AT
+	// MONTH 0 — Load's documented contract, see this method's doc comment
+	// above) because SeedClockForRestore just moved the clock to `tick`,
+	// possibly a different month than Load's own month-0 call used — this
+	// is the authoritative one for LoadAt's restored tick.
+	return c.reconstructWellbeingForRestore()
 }
