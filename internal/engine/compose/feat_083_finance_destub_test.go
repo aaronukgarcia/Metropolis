@@ -256,7 +256,7 @@ func TestFEAT083_ConsumptionAndCouncilTax_ScaleWithHouseholdCount(t *testing.T) 
 		if got != households {
 			t.Fatalf("formed %d households, want exactly %d", got, households)
 		}
-		return comp.state.postConsumptionAndTax()
+		return comp.state.postConsumptionAndTax(1000)
 	}
 
 	// households*2 must exceed seedCitizenCount for spawnCitizens to

@@ -520,7 +520,20 @@ func (st *simState) distributeWagesToResidents(creditPrivateSector bool) error {
 // approximation; population-count scaling was the alternative considered.
 // Following this ticket's brief (household-count scaling for both legs)
 // as the documented placeholder pending Aaron's balance-pass call.
-func (st *simState) postConsumptionAndTax() (flowed int64) {
+//
+// outputScalePerMille is BUG-745's fix (compose.go's financeHook.ApplyEffect
+// doc comment, resolveFirmsMonth below): engine.firms' city-wide
+// AggregateOutputScale, read fresh THIS month before this leg runs. It
+// scales the household-spend price actually posted — a productivity/input
+// shortfall means firms have less to sell, so less spend clears — which
+// then flows straight through into the commercial/industrial tax legs
+// below (both computed on the ACTUAL spendPosted, never the nominal
+// target, exactly as they already were pre-BUG-745). Council tax is a
+// PER-DWELLING civic levy, not a firm-output-funded transaction, so it is
+// deliberately left UNSCALED. 1000 (full output) is a no-op
+// (scaleByOutputPerMille's doc comment), so an unmodified/no-firms city
+// posts byte-identical to the pre-BUG-745 figure.
+func (st *simState) postConsumptionAndTax(outputScalePerMille int64) (flowed int64) {
 	households := int64(len(st.citizens.HouseholdIDs(st.cid)))
 	if households <= 0 {
 		// No households formed yet this month (should not happen once
@@ -531,7 +544,8 @@ func (st *simState) postConsumptionAndTax() (flowed int64) {
 		households = 1
 	}
 
-	spendPosted, err := st.finance.PostHouseholdSpend(households, finance.Money(monthlyConsumptionSpendMicropounds))
+	scaledSpendPrice := scaleByOutputPerMille(monthlyConsumptionSpendMicropounds, outputScalePerMille)
+	spendPosted, err := st.finance.PostHouseholdSpend(households, finance.Money(scaledSpendPrice))
 	if err != nil {
 		_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "PostHouseholdSpend", "cause": err.Error()})
 		spendPosted = 0
@@ -560,4 +574,92 @@ func (st *simState) postConsumptionAndTax() (flowed int64) {
 	}
 
 	return flowed
+}
+
+// resolveFirmsMonth is BUG-745's seam. Before this fix, engine.firms'
+// FirmsAPI.ResolveMonth — firms' own "monthly failure/churn resolution"
+// (lifecycle.go's doc comment) — was NEVER called from production compose
+// (only from firms' own package tests): Financial.OutputScale (AC-8's
+// market-input-availability scale) was computed nowhere in a real run, so
+// it sat pinned at its founding default (1000) forever, and even where a
+// test drove it directly, its only reader was ResolveMonth's own
+// credit-failure check. This runs ResolveMonth once per month from the
+// EXISTING PhaseFinance financeHook tick (no new phase hook — see
+// compose.go's financeHook.ApplyEffect call site) using the same clock
+// month already threaded through markEmploymentAndCount, then reads the
+// resulting city-wide FirmsAPI.AggregateOutputScale so
+// postConsumptionAndTax can finally scale the household-spend revenue
+// firms receive by it (compose.go's financeHook.ApplyEffect deliberately
+// does NOT also scale the private wage bill by this — see that call
+// site's own doc comment for the destructive credit-line/emigration
+// cascade scaling BOTH legs was measured to trigger).
+//
+// No new cross-module edge: engine.compose already consumes engine.firms
+// (code.json's feat.compositionroot -> engine.firms outbound edge,
+// exercised today via RegisterFirm/LabourMarket/SetCitizens etc.) —
+// ResolveMonth and AggregateOutputScale are new METHODS called over that
+// existing edge, not a new edge.
+//
+// Blast-radius note (verified against every firm compose registers today,
+// 2026-09-05): ResolveMonth's credit-failure branch only fires for a
+// Startup/Small firm with CreditOutstanding > 0, and CreditOutstanding is
+// set exclusively by firms' own credit.go ApproveCredit path — compose
+// never calls it for the builders'-merchant or freight stage firms it
+// registers, so CreditOutstanding is always 0 for them and the failure
+// branch never fires from this call. applyInputScalingLocked (the
+// OutputScale side) is a no-op (pins 1000) whenever InputRequired <= 0,
+// which every RegisterFirm(..., staff, ...) test call in this package uses
+// staff=0 for — so this call is a genuine no-op against the existing test
+// estate; only a firm with real staff and a real market wired (the
+// builders'-merchant auto-placement) can ever see a non-1000 scale, and
+// only if its InputCommodity's market capacity is actually short.
+//
+// A missing firms handle (a stub-engine test path with no FirmsAPI wired)
+// or either call failing both degrade to the documented NEUTRAL scale 1000
+// (GR#17 — a failed read must never fabricate a productivity collapse the
+// city never actually suffered), logged loudly (GR#1) rather than silently
+// swallowed.
+func (st *simState) resolveFirmsMonth(month int64) int64 {
+	if st.firms == nil {
+		return 1000
+	}
+	if err := st.firms.ResolveMonth(month); err != nil {
+		_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "firms", "op": "ResolveMonth", "cause": err.Error()})
+		return 1000
+	}
+	scale, err := st.firms.AggregateOutputScale()
+	if err != nil {
+		_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "firms", "op": "AggregateOutputScale", "cause": err.Error()})
+		return 1000
+	}
+	return scale
+}
+
+// scaleByOutputPerMille applies a per-mille output-scale factor (BUG-745:
+// engine.firms' AggregateOutputScale) to a money amount that funds FROM
+// firm output — the household-spend revenue firms receive
+// (postConsumptionAndTax) and the private-sector wage bill firms pay
+// (compose.go's financeHook). scalePerMille is clamped to [0,1000]
+// defensively (an out-of-range value from a future caller must degrade
+// toward the documented neutral bound, never overflow or invert the sign,
+// GR#16) — 1000 (full output) is a strict no-op: amount*1000/1000 ==
+// amount exactly, so a neutral scale never perturbs the pre-BUG-745 figure
+// by even one micropound (the x1.0 regression's byte-identical
+// requirement). The intermediate product is a saturating multiply (GR#16),
+// guarded before the division; an overflow falls back to the unscaled
+// amount rather than a corrupted saturated product divided by 1000 — the
+// same "degrade to the neutral/no-op reading, never a silently wrong
+// number" discipline as resolveFirmsMonth's own error paths.
+func scaleByOutputPerMille(amount, scalePerMille int64) int64 {
+	if scalePerMille < 0 {
+		scalePerMille = 0
+	}
+	if scalePerMille > 1000 {
+		scalePerMille = 1000
+	}
+	product, overflowed := num.SafeMul(amount, scalePerMille)
+	if overflowed {
+		return amount
+	}
+	return product / 1000
 }

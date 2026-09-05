@@ -1700,6 +1700,10 @@
     "reason": "Wave 2026-08-19 aggregate round (fuel/extcommute/prison/destination/tourism/firms/services astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex (f.mu) already held by an already-guarded entry point (TotalVacancies, reached only after checkNotCopied+RLock), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
   },
   {
+    "finding": "internal/engine/firms/aggregate.go|*FirmsAPI|receiver method|aggregateOutputScaleLocked|f|*FirmsAPI",
+    "reason": "BUG-745 (2026-09-05): unexported *Locked-suffixed helper, called with the candidate type's mutex (f.mu) already held by its ONLY caller, the already-guarded AggregateOutputScale entry point (checkNotCopied, then f.mu.RLock, exactly mirroring this same file's totalVacanciesLocked/TotalVacancies precedent immediately above). Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the public surface (AggregateOutputScale) is copy-guarded."
+  },
+  {
     "finding": "internal/engine/firms/labourmarket.go|*FirmsAPI|receiver method|bandCeiling|f|*FirmsAPI",
     "reason": "Wave 2026-08-19 aggregate round (fuel/extcommute/prison/destination/tourism/firms/services astgate triage): unexported helper method with no Locked suffix but reached only from totalVacanciesLocked, itself only reached with f.mu already held (RLock) by the already-guarded TotalVacancies entry point -- bandCeiling is a pure, lock-free read of f.cfg and f.stageConfigFor's data, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this transitively-guarded helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
   },

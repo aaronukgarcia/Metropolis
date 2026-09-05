@@ -2337,6 +2337,20 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "citizens", "op": "markEmploymentAndCount", "cause": empErr.Error()})
 		}
 
+		// BUG-745: run engine.firms' own monthly resolution and read the
+		// resulting city-wide output scale (moneycirc.go's
+		// resolveFirmsMonth doc comment) BEFORE sizing the consumption/tax
+		// leg below — a firm's OutputScale (AC-8's market-input-
+		// availability scale, now ALSO folded with MOD-034's wellbeing
+		// ProductivityModifier as of 57fc437's firms/lifecycle.go —
+		// applyInputScalingLocked multiplies the two) previously never
+		// reached anything compose posts; this is the seam that finally
+		// routes it into consumption revenue (postConsumptionAndTax). The
+		// private wage bill below is deliberately NOT scaled by this — see
+		// that leg's own doc comment for the destructive credit-line/
+		// emigration cascade this was measured to trigger.
+		outputScale := st.resolveFirmsMonth(clock.Month())
+
 		// FEAT-1972079927 Q4 + Aaron's 2026-08-31 diversify-the-base steer
 		// (BUG-391): monthly consumption spend (households -> firms) plus
 		// the commercial/industrial tax legs that bring money back from
@@ -2349,8 +2363,11 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 		// firmsWageCreditLineMicropounds's doc comment) reliance on the
 		// firms credit line. Neither leg reads the other's output, so the
 		// reorder changes only WHEN money moves within this same month's
-		// tick, not what moves.
-		flowed = num.SatAdd(flowed, st.postConsumptionAndTax())
+		// tick, not what moves. BUG-745: the revenue this leg posts is now
+		// scaled by outputScale (moneycirc.go's postConsumptionAndTax doc
+		// comment) — a productivity collapse means firms have less to
+		// sell, so less spend clears.
+		flowed = num.SatAdd(flowed, st.postConsumptionAndTax(outputScale))
 
 		// BUG-548: the treasury previously paid the ENTIRE wage bill
 		// regardless of sector, with no business->worker flow at all, and
@@ -2377,6 +2394,34 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 		// deducts per-citizen, so that 28% now lands in the treasury as
 		// real tax revenue instead of disappearing.
 		employedPrivate := employed - employedPublic
+		// BUG-745 FINDING (evaluated, deliberately NOT applied here — see
+		// moneycirc.go's resolveFirmsMonth doc comment): scaling
+		// privateWageBill by outputScale here, the same way
+		// postConsumptionAndTax's revenue leg is scaled above, was tried
+		// first. It compounds destructively: a sustained low outputScale
+		// reduces the consumption-leg revenue AcctFirms receives AND the
+		// wage bill firms must still cover from it, so PostWagesFromFirms
+		// starts rejecting (its credit line exhausts faster), which flips
+		// distributeWagesToResidents' creditPrivateSector gate off for
+		// private-sector citizens — starving their per-citizen Wealth and
+		// triggering the BUG-452 rent-burden emigration collapse this
+		// package's own tests already guard against elsewhere
+		// (TestBUG548Attack_ExhaustionIsPermanentAndUnrecoverable). Measured
+		// directly (this ticket's own round): a 24-month half-output run
+		// with this leg ALSO scaled collapsed population from 509 to 118
+		// relative to the full-output control — a real but wildly
+		// disproportionate, cascading consequence, not the contained
+		// "productivity change is observable" fix this ticket scopes.
+		// Left UNSCALED pending a follow-up that can bound the cascade
+		// (e.g. widening firmsWageCreditLineMicropounds in proportion, or
+		// decoupling the floor backstop from outputScale entirely) —
+		// flagged for Aaron rather than silently shipped. Flag this same
+		// finding for Aaron's balance list alongside 57fc437's own
+		// slope-tuning note (data/wellbeing.json's placeholder 0.001
+		// slope): now that ProductivityModifier genuinely reaches
+		// OutputScale (57fc437), a bad wellbeing month can drive this same
+		// cascade organically, not just via this ticket's synthetic
+		// market-shortfall fixture.
 		privateWageBill := int64(employedPrivate) * monthlyWageGrossPerEmployedMicropounds
 		publicWageBill := int64(employedPublic) * monthlyWageGrossPerEmployedMicropounds
 		// monthlyWagesFloor's doc comment: never post BELOW the
