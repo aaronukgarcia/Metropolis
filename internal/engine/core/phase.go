@@ -324,18 +324,20 @@ func (e *Engine) runPhaseForHookFast(correlationID string, hook PhaseHook) error
 
 	if len(effects) > 1 {
 		sort.Slice(effects, func(i, j int) bool { return effects[i].Sequence < effects[j].Sequence })
-		// BUG-287: the (Shard, Sequence) sort ApplyBarrier uses degenerates
-		// to Sequence-only here (every effect comes from shard 0), so a
-		// Sequence tie is this fast path's version of ApplyBarrier's
-		// duplicate-(Shard,Sequence) rejection. Validate BEFORE applying
-		// any effect — a partial apply on an invalid input is exactly the
-		// plausible-but-wrong result ApplyBarrier now refuses to produce.
+		// BUG-287/BUG-370: the (Shard, Sequence) sort ApplyBarrier uses
+		// degenerates to Sequence-only here (every effect comes from
+		// shard 0), so a Sequence tie is this fast path's version of
+		// ApplyBarrier's duplicate-(Shard,Sequence) rejection. Validate
+		// BEFORE applying any effect — a partial apply on an invalid
+		// input is exactly the plausible-but-wrong result ApplyBarrier
+		// now refuses to produce. Routed through det's ONE shared
+		// duplicate-key check (barrier.go's RejectAdjacentDuplicateKey)
+		// rather than re-implemented inline, per BUG-370's finding that
+		// integration.executeSingleShard's own inline copy of this sort
+		// had silently omitted the check.
 		for i := 1; i < len(effects); i++ {
-			if effects[i-1].Sequence == effects[i].Sequence {
-				return errs.New(det.ErrBarrierDuplicate, correlationID, map[string]any{
-					"shard":    0,
-					"sequence": effects[i].Sequence,
-				})
+			if err := det.RejectAdjacentDuplicateKey(correlationID, 0, effects[i].Sequence, 0, effects[i-1].Sequence); err != nil {
+				return err
 			}
 		}
 	}

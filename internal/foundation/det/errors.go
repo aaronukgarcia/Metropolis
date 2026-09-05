@@ -22,11 +22,19 @@ const (
 	// int64 overflow rather than silently wrapping/truncating (AC-11).
 	ErrMoneyOverflow = "MET-F220"
 
-	// ErrBarrierDuplicate: ApplyBarrier (or the single-shard fast path,
-	// engine/core's runPhaseForHookFast) was handed two messages with the
-	// same (Shard, Sequence) pair — BUG-287. Mirrors ErrShardDuplicate's
-	// semantic for MergeInOrder: a duplicate canonical key would make the
-	// applied order depend on submission order, so it is rejected before
-	// any message is applied rather than silently tolerated.
+	// ErrBarrierDuplicate: ApplyBarrier, or either single-shard fast path
+	// that replicates its sort inline (engine/core's runPhaseForHookFast,
+	// foundation/integration's executeSingleShard), was handed two
+	// messages/effects with the same (Shard, Sequence) pair. BUG-287
+	// closed the gap for ApplyBarrier and runPhaseForHookFast; BUG-370
+	// found executeSingleShard had replicated the sort WITHOUT the
+	// dedupe (silent last-message-wins on a fast path where the pooled
+	// path errored on the exact same input) and closed it by routing all
+	// three call sites through the one shared check,
+	// det.RejectAdjacentDuplicateKey (barrier.go). Mirrors
+	// ErrShardDuplicate's semantic for MergeInOrder: a duplicate
+	// canonical key would make the applied order depend on submission
+	// order, so it is rejected before any message is applied rather than
+	// silently tolerated.
 	ErrBarrierDuplicate = "MET-F203"
 )

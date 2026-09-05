@@ -299,8 +299,38 @@ func executeSingleShard[T any, M any](correlationID string, in Integration[T, M]
 	if len(msgs0) > 1 {
 		sorted := make([]det.Message[M], len(msgs0))
 		copy(sorted, msgs0)
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Sequence < sorted[j].Sequence })
+		// BUG-370 round 2: sort by the FULL (Shard, Sequence) tuple via
+		// the same shared comparator ApplyBarrier uses
+		// (det.LessCanonicalKey, barrier.go) — NOT by Sequence alone.
+		// det.Message.Shard is caller-supplied data, not something this
+		// executor enforces to be constant across a SingleShard()
+		// Integration's own emitted messages; a Sequence-only sort left
+		// a genuine duplicate (Shard, Sequence) key HIDDEN whenever a
+		// different-Shard message tied on Sequence landed between the
+		// two duplicates (e.g. {0,5},{1,5},{0,5}): sort.Slice is not
+		// stable, so the two {0,5} entries were not guaranteed adjacent,
+		// and the round's attacker test proved the pooled path (which
+		// already sorted on the full tuple via ApplyBarrier) rejected
+		// that exact input while this fast path silently applied all
+		// three. Sorting on the full tuple first guarantees any shared
+		// key is adjacent, so the duplicate check below (the same shared
+		// det.RejectAdjacentDuplicateKey ApplyBarrier and
+		// runPhaseForHookFast use) can no longer be defeated by an
+		// interleaved tie.
+		sort.Slice(sorted, func(i, j int) bool {
+			return det.LessCanonicalKey(sorted[i].Shard, sorted[i].Sequence, sorted[j].Shard, sorted[j].Sequence)
+		})
 		msgs0 = sorted
+
+		// Validate BEFORE applying any message — a partial apply on
+		// invalid input is exactly the plausible-but-wrong result
+		// ApplyBarrier refuses to produce (BUG-287), and this fast path
+		// must match that fail-closed contract exactly.
+		for i := 1; i < len(msgs0); i++ {
+			if err := det.RejectAdjacentDuplicateKey(correlationID, msgs0[i].Shard, msgs0[i].Sequence, msgs0[i-1].Shard, msgs0[i-1].Sequence); err != nil {
+				return in.Zero(), err
+			}
+		}
 	}
 	for _, m := range msgs0 {
 		in.ApplyMessage(m.Payload)
