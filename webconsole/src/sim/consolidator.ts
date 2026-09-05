@@ -310,6 +310,57 @@ const CONSOLIDATION_EXEMPT_KINDS: ReadonlySet<ZoneKind> = new Set<ZoneKind>([
   'landmark',
 ]);
 
+/**
+ * BUG-758 (Aaron's exact sentence: "rather than say the 12 hospitals it
+ * should be one teaching hospital, its not 40 kindergartens it's a city
+ * kindergarten that does 1000 children"). Every OTHER family in the ladder
+ * (residential/commercial/office/industrial/mine/power) is deliberately
+ * grouped PER 16x16 SECTION — a wind farm or a housing block consolidating
+ * only within its own local neighbourhood is the correct "fits the
+ * surrounding density" shape (AC-13's whole point). Civic SERVICE buildings
+ * are the opposite shape: a hospital or a kindergarten serves the WHOLE
+ * CITY, not just the 800m section it happens to sit in, so grouping them
+ * per-section structurally caps every civic family at
+ * `Math.floor(sectionMaxCount / groupSize)` opportunities no matter how many
+ * sections the family is spread across — measured on a dogfood-shaped city
+ * (2,292 buildings, 40 edu_nursery spread over >=8 sections): 30 in the
+ * fullest single section still produced 0 opportunities against
+ * edu_nursery_city's groupSize 33, because no ONE section ever held 33.
+ * hospitals "happened to work" only because groupSize 5 is small enough that
+ * a real city's own hospital clustering habit occasionally puts 5+ in one
+ * section by accident, not because the mechanism was city-wide.
+ *
+ * Kinds in this set skip the per-section path entirely (see findOpportunities
+ * below) and are instead grouped by `findCityWideOpportunities` over the
+ * WHOLE city's stock, matching a city's real administrative behaviour: you
+ * do not build a second teaching hospital because the first one is on the
+ * other side of town — you build it because the CITY needs the capacity. No
+ * district/borough concept exists anywhere in SimState/types.ts (grepped —
+ * `district`/`borough`/`ward` are absent), so "city-wide" is the correct,
+ * only available granularity per the task brief (district would be preferred
+ * if one existed). Deliberately scoped to exactly the two kinds Aaron named
+ * (`health`/`school`) and NOT generalised to every other "service" kind:
+ * `fire` (fire_post -> fire_station) already has a shipped, tested,
+ * PER-SECTION rung (attack-consolidator-mutation-round.test.mjs's whole
+ * fixture kit is built on it) and `transport`'s `bus_station ->
+ * grand_terminus` is F2/F3-adjudicated and pinned per-section by
+ * attack-civic-tier-reround2's RR2-F2 test — widening either here would be
+ * an undeclared behaviour change to an already-ACCEPTED/tested rung, out of
+ * this bug's scope. `police`/`civic` have no consolidation rungs in the
+ * current catalogue at all (no two specs share a family), so including them
+ * would be speculative; add them here if/when a real police/civic ladder
+ * rung is ever catalogued and Aaron confirms the same "one city X" shape.
+ */
+export const CITY_WIDE_CONSOLIDATION_KINDS: ReadonlySet<ZoneKind> = new Set<ZoneKind>([
+  'health',
+  'school',
+]);
+
+/** True iff `sp`'s family is grouped CITY-WIDE (BUG-758) rather than per-section. */
+export function isCityWideFamily(sp: Spec): boolean {
+  return CITY_WIDE_CONSOLIDATION_KINDS.has(sp.kind);
+}
+
 export function capacityFieldOf(sp: Spec): CapacityField | null {
   if (CONSOLIDATION_EXEMPT_KINDS.has(sp.kind)) return null;
   for (const field of CAPACITY_FIELD_ORDER) {
@@ -1042,10 +1093,150 @@ export { CONSOLIDATOR_SCRAP_FRACTION };
  * candidate, matching "services consolidate on need regardless" — an
  * all-zero slider-weight column degrades to the EXACT pre-inc2 order.
  */
+/**
+ * BUG-758: city-wide grouping for `isCityWideFamily` kinds — the read-only
+ * counterpart of the per-section loop below, over ALL occupied sections in
+ * `index` regardless of the caller's `sectionKeys` scope (a hospital
+ * shortfall is a whole-city fact, not a monthly-twelfth-rotation fact; the
+ * rotation exists for PERFORMANCE on the per-section density path, not as a
+ * correctness gate here). Reuses `index`'s existing per-section
+ * `buildingIdsBySpec` buckets (already computed by sectionIndexOf — no fresh
+ * O(buildings) scan), so this is O(occupied sections), not O(buildings).
+ *
+ * Determinism (GR#21): candidate ids are collected into a plain array and
+ * `.sort()`-ed ascending before any grouping — never consumed via a Map's
+ * insertion-order iteration or an early break mid-fold. As many FULL groups
+ * of `rung.groupSize` as the city-wide stock supports are formed (lowest ids
+ * first), one opportunity each; a same-tier remainder smaller than
+ * groupSize is left alone (AC-8 rule 3 — never a partial group), exactly the
+ * existing per-section floor semantics, just over a bigger pool.
+ *
+ * Anchor section (where the successor will be sited): the section holding
+ * the MOST of THIS group's own members (ties broken by lowest section key) —
+ * the section most likely to already have room once the group's own
+ * footprint is freed. engine.ts's applyConsolidatorPass site-search then
+ * rings outward from this anchor if it doesn't (findSuccessorSite), since a
+ * city-wide group's members are typically scattered across many sections and
+ * the anchor may hold only a handful of them.
+ */
+// Memoised on `s.buildings` identity (the sectionIndexOf/buildingByIdOf
+// idiom, BUG-602/FEAT-2326609761 inc2's perf lesson): this scans EVERY
+// occupied section regardless of the caller's twelfth/glide-window scope,
+// so without a cache it re-pays that cost on every glide-mode call (up to
+// once per game DAY) even on a day nothing changed. `s.buildings` only
+// changes reference when a transaction actually commits, so this is an O(1)
+// hit the rest of the time — measured regression on Aaron's 49k-building
+// savepoint before this cache: warm-cache glide-mode per-tick cost exceeded
+// the 700ms regression bound (consolidator-glide-perf.test.mjs).
+const cityWideOpportunitiesCache = new WeakMap<SimState['buildings'], ConsolidationOpportunity[]>();
+
+export function findCityWideOpportunities(
+  s: SimState,
+  index: Map<number, SectionAudit>,
+  ladder: readonly LadderEntry[],
+): ConsolidationOpportunity[] {
+  const cached = cityWideOpportunitiesCache.get(s.buildings);
+  if (cached) return cached;
+  const buildingById = buildingByIdOf(s.buildings);
+  const opportunities: ConsolidationOpportunity[] = [];
+
+  for (const rung of ladder) {
+    const fromSpec = SPECS[rung.from];
+    const toSpec = SPECS[rung.to];
+    if (!fromSpec || !toSpec) continue;
+    if (!isCityWideFamily(fromSpec)) continue;
+
+    const ids: number[] = [];
+    for (const audit of index.values()) {
+      const bucket = audit.buildingIdsBySpec[rung.from];
+      if (bucket && bucket.length > 0) ids.push(...bucket);
+    }
+    if (ids.length < rung.groupSize) continue;
+    // ROUND F1 (opus-round-bug758, 2026-09-05): sort by (capacity ASCENDING,
+    // id ascending), not id alone. A plain id sort can slice in an
+    // auto-scaled member (capacityTier > 0, so buildingCapacityOf > the
+    // tier-0 base) alongside tier-0 ones purely by luck of id order — on
+    // Aaron's PLAYED save nurseries DO auto-scale, so a single tier-1
+    // nursery (48 places instead of 30) in the chosen 33 can push the
+    // group's real combined capacity to 1,008 > edu_nursery_city's 1,000,
+    // and BUG-736's capacity-loss gate then correctly (but foreverly)
+    // refuses that exact group every single pass — deterministically
+    // stuck, even though 7 OTHER tier-0 members would have formed a valid
+    // group. Smallest-capacity-first exhausts every tier-0 (or otherwise
+    // cheaper) member before ever reaching for a scaled one, so a scaled
+    // member is only ever pulled in when there is truly no smaller-capacity
+    // alternative left — and id stays the tiebreak for two equal-capacity
+    // members, so this is still a total, deterministic order (GR#21).
+    const capacityOfId = new Map<number, number>();
+    for (const bid of ids) {
+      const b = buildingById.get(bid);
+      capacityOfId.set(bid, buildingCapacityOf(fromSpec, b?.capacityTier ?? 0));
+    }
+    ids.sort((a, b) => {
+      const ca = capacityOfId.get(a) ?? 0;
+      const cb = capacityOfId.get(b) ?? 0;
+      if (ca !== cb) return ca - cb;
+      return a - b;
+    });
+
+    const groupsAvailable = Math.floor(ids.length / rung.groupSize);
+    for (let g = 0; g < groupsAvailable; g++) {
+      const candidateIds = ids.slice(g * rung.groupSize, (g + 1) * rung.groupSize);
+
+      // Anchor: the section holding the most of THIS group's members,
+      // lowest section key as the deterministic tiebreak. Built via a
+      // materialised, sorted entry list — never a bare Map iteration order.
+      const countBySection = new Map<number, number>();
+      for (const id of candidateIds) {
+        const b = buildingById.get(id);
+        if (!b) continue;
+        const key = sectionKeyOf(b.x, b.y);
+        countBySection.set(key, (countBySection.get(key) ?? 0) + 1);
+      }
+      const orderedSections = [...countBySection.entries()].sort((a, b) => a[0] - b[0]);
+      let anchorKey: number | null = null;
+      let anchorCount = -1;
+      for (const [key, count] of orderedSections) {
+        if (count > anchorCount) {
+          anchorCount = count;
+          anchorKey = key;
+        }
+      }
+      if (anchorKey == null) continue; // defensive: every candidate id resolved to a real building above.
+
+      const buildCost = placementCost(toSpec);
+      const scrapRecovered = Math.round(placementCost(fromSpec) * CONSOLIDATOR_SCRAP_FRACTION) * rung.groupSize;
+
+      let groupCapacity = 0;
+      for (const id of candidateIds) {
+        const b = buildingById.get(id);
+        groupCapacity += buildingCapacityOf(fromSpec, b?.capacityTier ?? 0);
+      }
+      const capacityGain = capacityOf(toSpec) - groupCapacity;
+
+      opportunities.push({
+        sectionKey: anchorKey,
+        fromSpec: rung.from,
+        toSpec: rung.to,
+        groupCount: rung.groupSize,
+        buildingIds: candidateIds,
+        buildCost,
+        scrapRecovered,
+        netCost: buildCost - scrapRecovered,
+        capacityGain,
+        buildingCountReduction: rung.groupSize - 1,
+      });
+    }
+  }
+  cityWideOpportunitiesCache.set(s.buildings, opportunities);
+  return opportunities;
+}
+
 export function findOpportunities(
   s: SimState,
   sectionKeys: readonly number[],
   sliders?: ConsolidatorSliders,
+  options?: { includeCityWide?: boolean },
 ): ConsolidationOpportunity[] {
   const index = sectionIndexOf(s);
   const ladder = consolidationLadder();
@@ -1072,6 +1263,12 @@ export function findOpportunities(
       const fromSpec = SPECS[rung.from];
       const toSpec = SPECS[rung.to];
       if (!fromSpec || !toSpec) continue;
+      // BUG-758: civic/service families are grouped CITY-WIDE
+      // (findCityWideOpportunities below), never per-section — a per-section
+      // cap here is exactly the bug (30 kindergartens in one section, 0
+      // opportunities against groupSize 33, while 10 more sit unreachable in
+      // other sections).
+      if (isCityWideFamily(fromSpec)) continue;
 
       // Deterministic pick: the lowest-id N buildings of `fromSpec` in this
       // section, read directly from the pre-bucketed index — no scan over
@@ -1114,6 +1311,30 @@ export function findOpportunities(
         buildingCountReduction: rung.groupSize - 1,
       });
     }
+  }
+
+  // BUG-758: city-wide opportunities are a whole-city fact ("this city has
+  // 40 kindergartens"), not a monthly-twelfth-rotation fact, so correctness
+  // does not depend on `sectionKeys` scope at all. PERFORMANCE does, though:
+  // glide mode (Aaron's default, FEAT-2326609761 inc2) calls findOpportunities
+  // up to once per game DAY with a tiny (1-4 section) window, and evaluating
+  // every occupied section's health/school buckets on that hot path
+  // regressed Aaron's real 49k-building savepoint's warm-cache per-day cost
+  // past consolidator-glide-perf.test.mjs's 700ms bound (measured 837ms).
+  // `options.includeCityWide` defaults to true (every existing/direct call
+  // site — tests included — keeps getting the full, correct opportunity
+  // set); engine.ts's applyConsolidatorPass is the ONLY caller that passes
+  // `false`, and only for glide mode's small daily window pass. F4
+  // correction (opus-round-bug758, 2026-09-05): the monthly-twelfth-mode
+  // call omits `sectionKeysOverride` on EVERY one of its own once-a-month
+  // calls, so for that (non-default) mode this really is re-evaluated every
+  // month. In GLIDE MODE (Aaron's DEFAULT), every day's call carries a real
+  // override and is skipped — the only call that leaves it at the default
+  // is the month-12 boundary's extra whole-map pass, so for the default
+  // mode a whole-city fact is re-evaluated ONCE A MONTH (not once a day),
+  // never once a day and never "never".
+  if (options?.includeCityWide ?? true) {
+    opportunities.push(...findCityWideOpportunities(s, index, ladder));
   }
 
   // FEAT-2326609761 inc2: pre-compute each opportunity's slider-mix weight

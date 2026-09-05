@@ -118,6 +118,7 @@ import {
   sectionOriginOf,
   sectionKeyOf,
   sectionTilesOf,
+  isCityWideFamily,
   SECTIONS_X,
   SECTIONS_Y,
 } from './consolidator.ts';
@@ -1787,6 +1788,51 @@ function sectionNeighbourKeysOf(key: number): number[] {
 }
 
 /**
+ * BUG-758: ring search over the SECTION GRID (Chebyshev rings, deterministic
+ * nested-loop order — never a Map/Set iteration) for the nearest section,
+ * starting at `anchorKey` itself (radius 0), whose 16x16 box has room for
+ * `toSpec` against `occupied`. A per-section consolidation opportunity's
+ * anchor is always a real match at radius 0 (its own group's freed footprint
+ * sits inside it), so this is byte-identical to the pre-BUG-758 single-
+ * section scan for every one of those. A CITY-WIDE opportunity's group
+ * (consolidator.ts's findCityWideOpportunities) is chosen as "the section
+ * holding the MOST of the group's own members" but can still legitimately
+ * have no free tiles of its own (the group may be scattered thinly across
+ * many sections) — this widens the search outward exactly as far as needed
+ * instead of failing the whole consolidation with 'no site'. Bounded by the
+ * full section grid (never infinite), and still never a real path/road-aware
+ * search (consolidator.ts's own ringDistanceToConnectedRoad carries the same
+ * "lower bound, not a real route" caveat — this is a site probe, not a
+ * relocation cost estimate, so no caveat needs to reach the UI).
+ */
+function findSuccessorSite(
+  anchorKey: number,
+  toSpec: Spec,
+  occupied: Set<string>,
+): { x: number; y: number } | null {
+  const sx = anchorKey % SECTIONS_X;
+  const sy = Math.floor(anchorKey / SECTIONS_X);
+  const maxRadius = Math.max(SECTIONS_X, SECTIONS_Y);
+  for (let radius = 0; radius <= maxRadius; radius++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+        const nx = sx + dx;
+        const ny = sy + dy;
+        if (nx < 0 || ny < 0 || nx >= SECTIONS_X || ny >= SECTIONS_Y) continue;
+        const origin = sectionOriginOf(ny * SECTIONS_X + nx);
+        for (let y = origin.y0; y <= origin.y0 + origin.h - toSpec.h; y++) {
+          for (let x = origin.x0; x <= origin.x0 + origin.w - toSpec.w; x++) {
+            if (fits(occupied, toSpec.w, toSpec.h, x, y)) return { x, y };
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * One consolidator pass — the monthly-twelfth rotation's own monthly
  * cadence (AC-6/ruling 7, AC-12's one-transaction-per-section, AC-17's
  * atomic validate-then-mutate) OR, per FEAT-2326609761 inc2's GLIDE MODE
@@ -1831,7 +1877,20 @@ function applyConsolidatorPass(
   const sectionKeys = sectionKeysOverride ?? monthlyScopeOf(tick).sectionKeys;
   const sliders = s.consolidatorSliders ?? CONSOLIDATOR_SLIDERS_DEFAULT;
   const reconnectOpps = findReconnectionOpportunities(s, sectionKeys);
-  const consolidateOpps = findOpportunities(s, sectionKeys, sliders);
+  // BUG-758: city-wide (health/school) opportunities are skipped on glide
+  // mode's own small daily window pass (`sectionKeysOverride` set) — see
+  // findOpportunities' own doc comment on `options.includeCityWide` for the
+  // measured perf reason. F4 (opus-round-bug758, 2026-09-05): in GLIDE MODE
+  // (Aaron's DEFAULT) that means the city-wide re-evaluation only actually
+  // runs on the month-12 boundary's extra whole-map pass (`sectionKeysOverride`
+  // omitted there) — glide's every-other-day passes all carry a real
+  // override, so this is a once-a-month, NOT once-a-day, cadence for a
+  // player on the default mode. The legacy monthly-twelfth mode (non-default)
+  // omits `sectionKeysOverride` on every one of its own once-a-month calls,
+  // so for that mode it genuinely is every month.
+  const consolidateOpps = findOpportunities(s, sectionKeys, sliders, {
+    includeCityWide: sectionKeysOverride == null,
+  });
 
   let cur = s;
   // FEAT-2326609761 inc2 (glide-mode perf): seeded from the shared,
@@ -2199,7 +2258,19 @@ function applyConsolidatorPass(
       continue;
     }
     const familyTotalAfter = Math.max(0, familyTotalBefore - groupCapacityApprox) + successorCapacity;
-    if (successorCapacity > CONSOLIDATOR_MAX_FAMILY_SHARE * familyTotalAfter) {
+    // RULING (Aaron, 2026-09-05, BUG-758 follow-up): CEIL-3's 50% ceiling is
+    // a PER-SECTION-fitting protection ("one XXL nuke for the whole city" —
+    // the single-point-of-failure risk of a residential/commercial density
+    // successor swallowing most of its family). It does not apply to
+    // isCityWideFamily (health/school) civic successors: Aaron's own words
+    // are "it's not 40 kindergartens it's a city kindergarten that does
+    // 1000 children" — consolidating ALL of a city's nurseries (or
+    // hospitals) into the city-wide successor IS the intent, not a risk to
+    // be capped. Every other gate (capacity-loss/BUG-736, NaN fail-closed/
+    // BUG-742, protected-class, site, funds, one-per-city) still applies in
+    // full to civic families — only THIS per-section-fitting-specific
+    // ceiling is exempted.
+    if (!isCityWideFamily(toSpec) && successorCapacity > CONSOLIDATOR_MAX_FAMILY_SHARE * familyTotalAfter) {
       skipped.push({ sectionKey: opp.sectionKey, reason: 'family share ceiling' });
       continue;
     }
@@ -2224,13 +2295,12 @@ function applyConsolidatorPass(
         for (let dy = 0; dy < h; dy++) afterDemolishOccupied.delete(`${b.x + dx},${b.y + dy}`);
       }
     }
-    const origin = sectionOriginOf(opp.sectionKey);
-    let site: { x: number; y: number } | null = null;
-    for (let y = origin.y0; y <= origin.y0 + origin.h - toSpec.h && !site; y++) {
-      for (let x = origin.x0; x <= origin.x0 + origin.w - toSpec.w && !site; x++) {
-        if (fits(afterDemolishOccupied, toSpec.w, toSpec.h, x, y)) site = { x, y };
-      }
-    }
+    // BUG-758: ring-search outward from the opportunity's anchor section
+    // rather than a single-section scan — see findSuccessorSite's own doc
+    // comment. A per-section opportunity always matches at radius 0
+    // (identical behaviour to before); a city-wide opportunity's group can
+    // be scattered thinly enough that its anchor section alone has no room.
+    const site = findSuccessorSite(opp.sectionKey, toSpec, afterDemolishOccupied);
     if (!site) {
       skipped.push({ sectionKey: opp.sectionKey, reason: 'no site' });
       continue;
