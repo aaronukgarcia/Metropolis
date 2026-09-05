@@ -7065,7 +7065,19 @@ export function reducer(state: SimState, action: Action): SimState {
   return next;
 }
 
-export function approvalOf(s: SimState): number {
+// BUG-519 round r1 F2 (P1 perf): approvalOf() rebuilds serviceCoverageOf()'s
+// full O(buildings) aggregation plus a fresh Map on EVERY call, and it now
+// sits on the render path — populationTabs/store/debugjson/snapshot/
+// ragThresholds each call it at least once per render/tick, the same
+// BUG-602 multiplicity class buildWellbeingCoreParts was memoised for
+// (comment below). Measured on the devcity fixture: 0.9us cold -> ~144us/call
+// unmemoised at scale; memoOnState keyed on state identity makes every call
+// AFTER the first on the same `s` an O(1) WeakMap hit. Pure function of `s`
+// (no Date.now/storage reads — GR#21/BUG-602), so this is exact, not an
+// approximation. Re-entrancy is safe: buildWellbeingCoreParts (below) is
+// ALSO memoOnState and calls approvalOf(s) — two independent WeakMaps keyed
+// on the same `s`, neither recurses into the other's cache.
+export const approvalOf: (s: SimState) => number = memoOnState((s) => {
   const t = s.taxRates;
   const avgTax = (t.residential + t.commercial + t.industrial) / 3;
   let a = 62 - avgTax * 1.5;
@@ -7074,26 +7086,96 @@ export function approvalOf(s: SimState): number {
   if (s.policies.transitSubsidy) a += 8;
   if (s.policies.austerity) a -= 12;
   if (s.policies.recycling) a -= 2;
-  return Math.max(0, Math.min(100, Math.round(a)));
-}
 
-/**
- * FEAT-crime-mechanic-2026-09-02 — the wellbeing part list MINUS Crime.
- * Extracted verbatim from the pre-crime wellbeingOf() body so crimeRateOf()
- * (data.ts) has a wellbeing-feedback input that can NEVER recurse back into
- * itself: crimeRateOf() calls wellbeingCoreOf(), which builds this list and
- * never calls crimeRateOf() in return. wellbeingOf() below calls this SAME
- * function for its own core parts, then separately calls crimeRateOf() (which
- * internally recomputes this list again via wellbeingCoreOf() — a second,
- * cheap, pure call, not a cycle) to build the Crime part. See crimeRateOf's
- * doc comment (data.ts) for the full loop-breaking argument.
- */
-// BUG-602 (integration-soak perf cliff): memoised on state identity. Before
-// this, ONE wellbeingOf(s) call built this list TWICE (directly + via
-// crimeRateOf→wellbeingCoreOf), and advance()/UI/debugjson each rebuilt it
-// again for the same state — the soak measured ~700ms/tick at pop~700 from
-// exactly this multiplicity. Pure function of s, so memoOnState is exact.
-const buildWellbeingCoreParts: (s: SimState) => { label: string; value: number }[] =
+  // BUG-519 round r1 F3 (finite-population guard): every deficit term below
+  // divides by `s.population` (serviceCoverageOf's need = pop / pop*k). A
+  // non-finite population (NaN/Infinity — should never happen upstream, but
+  // this function has no control over that) would poison `need`, then
+  // `coverage`, then every deficit, then `a`, turning the WHOLE tile NaN
+  // instead of just the services/wellbeing addition this bug is scoped to.
+  // Bail out to the pre-fix (tax/station/water/policy-only) value, clamped
+  // exactly as the final return does, rather than let one bad input field
+  // blank the tile.
+  if (!Number.isFinite(s.population)) {
+    return Math.max(0, Math.min(100, Math.round(a)));
+  }
+
+  // BUG-519 FIX: services + wellbeing now feed Approval. Before this, the
+  // arrow ran ONLY approval->wellbeing (Approval is one of wellbeingOf's
+  // parts) — building health/police/schools had ZERO effect on this tile.
+  //
+  // Reads the SAME serviceCoverageOf() SSOT (data.ts, GR#3) the wellbeing
+  // parts already consume, NOT wellbeingOf()/wellbeingCoreOf() directly —
+  // those embed an 'Approval' part that calls THIS function, so reading them
+  // here would recurse (buildWellbeingCoreParts -> approvalOf ->
+  // wellbeingCoreOf -> buildWellbeingCoreParts -> ...). Coverage ratios
+  // depend only on buildings/population, never on approval/wellbeing, so
+  // this is a one-way services->approval edge with no cycle risk. Engine.ts
+  // already imports serviceCoverageOf from data.ts, so no new module edge.
+  //
+  // DEFICIT-ONLY design (not a coverage bonus): every term below is <= 0.
+  // At full coverage / at-or-above-baseline wellbeing the terms are exactly
+  // zero, so an already-well-served dogfood city's Approval is UNCHANGED
+  // from the pre-fix formula — no jump on this commit. Under-served cities
+  // get docked, and — the AC this bug exists for — building the missing
+  // service reduces the deficit and Approval rises next month.
+  //
+  // BUG-519 round r1 F4 (informational, Aaron's balance pass): health/police/
+  // education are counted TWICE in the overall feel of a city — once here
+  // (direct SERVICE_DEFICIT_WEIGHT term) and again indirectly via the
+  // wellbeing-index term below (buildServiceWellbeingParts' Healthcare/
+  // Hospital care/Safety/Education parts feed wellbeingPreApprovalOf). This
+  // is DELIBERATE (services matter twice: directly to how citizens judge
+  // the administration, and indirectly to how the city as a whole feels) but
+  // it means the effective weight on those three pillars is higher than
+  // SERVICE_DEFICIT_WEIGHT alone suggests — measured on the round's
+  // worst-case fixture, ~4.6 of the -22 total swing came from the indirect
+  // wellbeing path on top of the direct term. Left as-is pending Aaron's
+  // balance pass (placeholder weights throughout); flagged here so the
+  // double-counting is a documented choice, not a missed observation.
+  const covById = new Map(serviceCoverageOf(s).map((r) => [r.id, r.coverage]));
+  const covRatio = (id: string): number => Math.min(1, covById.get(id) ?? 1);
+  const deficit = (id: string): number => Math.max(0, 1 - covRatio(id));
+  // Health = worst of GP/hospital coverage (either gap is felt); Education =
+  // average of the three school stages (mirrors wellbeingOf's `education`).
+  const healthDeficit = Math.max(deficit('gp'), deficit('hosp'));
+  const policeDeficit = deficit('police');
+  const eduDeficit = (deficit('nursery') + deficit('primary') + deficit('college')) / 3;
+  // ⚠ BALANCE-NUMBER PLACEHOLDERS (Aaron's pass): up to 4 approval points
+  // docked per fully-uncovered pillar (health/police/education).
+  const SERVICE_DEFICIT_WEIGHT = 4;
+  a -= (healthDeficit + policeDeficit + eduDeficit) * SERVICE_DEFICIT_WEIGHT;
+
+  // Wellbeing index term: only docks approval when overall wellbeing (minus
+  // Approval itself, to avoid the same cycle) sits BELOW the early-game
+  // baseline (55) a healthy city sits at anyway — never AWARDS extra
+  // approval for high wellbeing, only penalises a struggling one. So an
+  // established city with wellbeing already >= baseline sees zero change
+  // from this term too.
+  const wbDeficit = Math.max(0, 55 - wellbeingPreApprovalOf(s));
+  // ⚠ BALANCE-NUMBER PLACEHOLDER (Aaron's pass): 0.2 approval points docked
+  // per wellbeing point below baseline, capped at -10.
+  const WELLBEING_DEFICIT_WEIGHT = 0.2;
+  const WELLBEING_DEFICIT_CAP = 10;
+  a -= Math.min(WELLBEING_DEFICIT_CAP, wbDeficit * WELLBEING_DEFICIT_WEIGHT);
+
+  return Math.max(0, Math.min(100, Math.round(a)));
+});
+
+// BUG-519: the non-Approval half of buildWellbeingCoreParts, split out so
+// approvalOf() has a wellbeing-shaped signal it can read WITHOUT calling
+// back into buildWellbeingCoreParts (which builds an 'Approval' part BY
+// CALLING approvalOf() — reading the full list from inside approvalOf would
+// recurse infinitely). Every part here depends only on buildings/population/
+// policies, never on approval or overall wellbeing, so this is a safe leaf
+// for approvalOf to consume. buildWellbeingCoreParts (below) prepends the
+// Approval part to this exact same list — the two functions produce
+// byte-identical output to before this split, just via a different
+// computation ORDER (Approval no longer has to be computed inline before
+// the rest of the list).
+// BUG-602 (integration-soak perf cliff): memoised on state identity — see
+// buildWellbeingCoreParts's memo comment below for the perf history.
+const buildServiceWellbeingParts: (s: SimState) => { label: string; value: number }[] =
   memoOnState((s) => {
   const pop = s.population;
   // Early-game blend toward a 55 baseline while pop < 50 — same ramp as the
@@ -7193,7 +7275,6 @@ const buildWellbeingCoreParts: (s: SimState) => { label: string; value: number }
   const congestion = part(congestionFactorOf(s));
 
   const parts = [
-    { label: 'Approval', value: approvalOf(s) },
     { label: 'Parks & leisure', value: parks },
     { label: 'Healthcare', value: part(ratio('gp')) },
     { label: 'Hospital care', value: part(ratio('hosp')) },
@@ -7218,6 +7299,44 @@ const buildWellbeingCoreParts: (s: SimState) => { label: string; value: number }
   ];
   return parts;
 });
+
+/**
+ * BUG-519: overall wellbeing WITHOUT the Approval part — the leaf approvalOf()
+ * reads to fold a "how are citizens feeling about city services" signal into
+ * Approval without recursing (see buildServiceWellbeingParts's doc comment).
+ * ⚠ BALANCE-NUMBER PLACEHOLDER: equal part weights, pending Aaron's pass.
+ */
+export function wellbeingPreApprovalOf(s: SimState): number {
+  const parts = buildServiceWellbeingParts(s);
+  return Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
+}
+
+/**
+ * FEAT-crime-mechanic-2026-09-02 — the wellbeing part list MINUS Crime.
+ * Extracted verbatim from the pre-crime wellbeingOf() body so crimeRateOf()
+ * (data.ts) has a wellbeing-feedback input that can NEVER recurse back into
+ * itself: crimeRateOf() calls wellbeingCoreOf(), which builds this list and
+ * never calls crimeRateOf() in return. wellbeingOf() below calls this SAME
+ * function for its own core parts, then separately calls crimeRateOf() (which
+ * internally recomputes this list again via wellbeingCoreOf() — a second,
+ * cheap, pure call, not a cycle) to build the Crime part. See crimeRateOf's
+ * doc comment (data.ts) for the full loop-breaking argument.
+ *
+ * BUG-519: prepends the Approval part (now itself services/wellbeing-aware
+ * via wellbeingPreApprovalOf, above) onto buildServiceWellbeingParts' list —
+ * same final part list/order as before the split, just assembled from two
+ * pieces instead of one so approvalOf() has a non-recursive leaf to read.
+ */
+// BUG-602 (integration-soak perf cliff): memoised on state identity. Before
+// this, ONE wellbeingOf(s) call built this list TWICE (directly + via
+// crimeRateOf→wellbeingCoreOf), and advance()/UI/debugjson each rebuilt it
+// again for the same state — the soak measured ~700ms/tick at pop~700 from
+// exactly this multiplicity. Pure function of s, so memoOnState is exact.
+const buildWellbeingCoreParts: (s: SimState) => { label: string; value: number }[] =
+  memoOnState((s) => [
+    { label: 'Approval', value: approvalOf(s) },
+    ...buildServiceWellbeingParts(s),
+  ]);
 
 /**
  * FEAT-crime-mechanic-2026-09-02 — wellbeing overall WITHOUT the Crime part.
