@@ -59,7 +59,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { runWithMutant } from './helpers/mutant.mjs';
+import { runWithMutant } from '../testsupport/mutant.mjs';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { SPECS, largestFirstFill, demandFixPlan, placementCost } from '../src/sim/data.ts';
 

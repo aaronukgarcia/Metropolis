@@ -1,6 +1,13 @@
 // Type declarations for mutant.mjs, so a .tsx test file (strict TS,
-// noImplicitAny) can statically `import { ... } from './helpers/mutant.mjs'`
+// noImplicitAny) can statically `import { ... } from '../testsupport/mutant.mjs'`
 // without tripping TS7016. See mutant.mjs for full behavioural documentation.
+//
+// Lives in webconsole/testsupport/ (NOT webconsole/test/) — CI's root
+// `node --test --test-shard=N/3` discovers every file under any test/-named
+// directory, and a bare ambient `export const X: T;` declaration is invalid
+// runtime JS/TS, so Node's type-stripping reds it if this file is ever
+// placed where that discovery glob can reach it (BUG-739 same-session P1,
+// 2026-09-05 — reproduced and fixed by this move).
 
 export const SRC_ROOT: string;
 

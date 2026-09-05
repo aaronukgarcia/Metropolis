@@ -33,7 +33,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { runMutantSelfReinvoke } from './helpers/mutant.mjs';
+import { runMutantSelfReinvoke } from '../testsupport/mutant.mjs';
 import { initialState } from '../src/sim/engine.ts';
 import { demandFixPlan, SPECS, AUTO_BUILD_DEMAND_FRACTION, LADDER_CREDIT_FRACTION, creditedUnitCapacity } from '../src/sim/data.ts';
 

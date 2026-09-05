@@ -1,5 +1,6 @@
-// webconsole/test/helpers/mutant.mjs — BUG-739 process-level mutation
-// isolation for GR#24 RED-PROOF tests.
+// webconsole/testsupport/mutant.mjs — BUG-739 process-level mutation
+// isolation for GR#24 RED-PROOF tests. Deliberately NOT under webconsole/test
+// — see the TESTSUPPORT_DIR comment below for why.
 //
 // THE DEFECT THIS REPLACES (BUG-739, independent round, 2026-09-05): CI's
 // node-test job runs the bare node test runner sharded 3 ways at the repo
@@ -101,11 +102,21 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
-const HELPERS_DIR = dirname(fileURLToPath(import.meta.url));
-// webconsole/test/helpers -> webconsole/src
-export const SRC_ROOT = join(HELPERS_DIR, '..', '..', 'src');
-// webconsole/test/helpers -> webconsole
-const WEBCONSOLE_ROOT = join(HELPERS_DIR, '..', '..');
+// BUG-739 CI-shape follow-up (2026-09-05, same-session P1): this file used
+// to live at webconsole/test/helpers/mutant.mjs (and its .d.mts sibling) —
+// CI's root `node --test --test-shard=N/3` discovers EVERY file under any
+// `test/`-named directory tree, so it auto-discovered mutant.d.mts, tried to
+// run it AS a test, and Node's TypeScript type-stripping choked on a bare
+// `export const X: T;` ambient declaration (`'const' declarations must be
+// initialized`) — a same-session CI red (run 33970897836, node-test shard
+// 3). Moved BOTH files here, to webconsole/testsupport/ (a directory NOT
+// named test/ or __tests__/, so CI's discovery glob never reaches it) — see
+// the reproduction/fix proof in this round's own verification notes.
+const TESTSUPPORT_DIR = dirname(fileURLToPath(import.meta.url));
+// webconsole/testsupport -> webconsole/src
+export const SRC_ROOT = join(TESTSUPPORT_DIR, '..', 'src');
+// webconsole/testsupport -> webconsole
+const WEBCONSOLE_ROOT = join(TESTSUPPORT_DIR, '..');
 const WEBCONSOLE_TEST_ROOT = join(WEBCONSOLE_ROOT, 'test');
 
 // R5 (BUG-739 round REJECT, 2026-09-05): createMutantShadow() hands its
@@ -322,6 +333,13 @@ export function runMutantSelfReinvoke({ targetRelPath, mutate, testFileAbsPath, 
   try {
     cpSync(SRC_ROOT, join(shadowRoot, 'src'), { recursive: true });
     cpSync(WEBCONSOLE_TEST_ROOT, join(shadowRoot, 'test'), { recursive: true });
+    // The re-invoked test FILE's own top-level `import ... from
+    // '../testsupport/mutant.mjs'` (this very module) executes on load
+    // regardless of which single test --test-name-pattern selects, so the
+    // shadow needs a testsupport/ sibling too or the whole file fails to
+    // load with ERR_MODULE_NOT_FOUND (BUG-739 CI-shape follow-up, same move
+    // that relocated this helper out of webconsole/test/).
+    cpSync(join(WEBCONSOLE_ROOT, 'testsupport'), join(shadowRoot, 'testsupport'), { recursive: true });
     writeFileSync(join(shadowRoot, 'src', targetRelPath), mutated, 'utf8');
     const shadowTestPath = join(shadowRoot, 'test', relTestPath);
     return runNodeTestChild(shadowTestPath, testNamePattern, shadowRoot, timeoutMs);

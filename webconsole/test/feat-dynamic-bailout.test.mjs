@@ -530,7 +530,7 @@ test('RED self-proof: AC-7 fails if the once-only latch is not migrated on load 
   // engine.ts — a distinct shadow path is its own cache-miss for
   // `await import(...)`, so the old cache-busting query-string trick against
   // the REAL file is no longer needed either.
-  const { createMutantShadow } = await import('./helpers/mutant.mjs');
+  const { createMutantShadow } = await import('../testsupport/mutant.mjs');
   const shadow = createMutantShadow({
     targetRelPath: 'sim/engine.ts',
     mutate: (original) => {

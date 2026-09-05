@@ -211,12 +211,17 @@ test('serial: the concurrency injection exists and is gated on the allowlist', (
 // been: by requiring the WRITE CALL's own argument to resolve to a src path,
 // not by requiring the two substrings to be textually close.
 //
-// Any file that imports webconsole/test/helpers/mutant.mjs is exempted
-// outright — it is trusted to route its mutation through the helper's own
-// shadow-copy safety net (which independently asserts the real file is
-// byte-identical after every run, BUG-708-style), so this heuristic does not
-// need to (and, being purely textual, cannot reliably) verify HOW the helper
-// itself is used inside that file.
+// Any file that imports webconsole/testsupport/mutant.mjs (static `from` or
+// dynamic `await import(...)`) is exempted outright — it is trusted to route
+// its mutation through the helper's own shadow-copy safety net (which
+// independently asserts the real file is byte-identical after every run,
+// BUG-708-style), so this heuristic does not need to (and, being purely
+// textual, cannot reliably) verify HOW the helper itself is used inside that
+// file. (The helper lives at webconsole/testsupport/, NOT webconsole/test/ —
+// moved there same-session, BUG-739 follow-up P1, because CI's root
+// `node --test --test-shard=N/3` discovers every file under any test/-named
+// directory and choked on the helper's own ambient .d.mts type declarations
+// as if they were a test.)
 //
 // Same honesty caveat as every version of this check: it is PATTERN-MATCHED,
 // not a real interpreter — it would still miss a mutation performed by a
@@ -226,7 +231,7 @@ test('serial: the concurrency injection exists and is gated on the allowlist', (
 test('forbidden: NO test writes into webconsole/src [F1, superseded by BUG-739]', () => {
   const testDir = join(REPO, 'webconsole', 'test');
   const offenders = [];
-  const usesHelper = /from\s+['"]\.\/helpers\/mutant\.mjs['"]/;
+  const usesHelper = /(?:from\s+['"]|import\(\s*['"])\.\.\/testsupport\/mutant\.mjs['"]/;
   const mutatingApiCall = /(?:writeFileSync|writeFile|copyFileSync)\s*\(\s*([^,)]+)/g;
   // Tolerate both contiguous paths (src/sim/data.ts) and path.join-style
   // comma/quote-separated segments (path.join('src', 'sim', 'data.ts')) — a
@@ -308,7 +313,7 @@ test('R3: the F1 target-expression trace actually catches an aliased-path-with-a
     'writeFileSync(ENGINE_ALIAS, original.replace("a", "b"), "utf8");',
   ].join('\n');
 
-  const usesHelper = /from\s+['"]\.\/helpers\/mutant\.mjs['"]/;
+  const usesHelper = /(?:from\s+['"]|import\(\s*['"])\.\.\/testsupport\/mutant\.mjs['"]/;
   const mutatingApiCall = /(?:writeFileSync|writeFile|copyFileSync)\s*\(\s*([^,)]+)/g;
   const srcPath = /src[\\/'",\s]{0,5}(?:sim|components)[\\/'",\s]{0,5}[\w.-]+\.tsx?|_TS_PATH|engineTsPath|dataTsPath/i;
   const declPattern = /(?:const|let|var)\s+(\w+)\s*=\s*([^;\n]+)/g;
@@ -453,15 +458,16 @@ test('drift: WEBCONSOLE_TSX_FILES matches the webconsole package script [F5]', (
 // node picks by default.
 //
 // SAFETY: this whole reproduction runs against a DISPOSABLE SCRATCH COPY of
-// webconsole (src/ + test/, cpSync'd into a temp dir), never the real repo
-// tree — including for the deliberately-unsafe mutation-testing proof below,
-// which sets MUTANT_UNSAFE_WRITE_IN_PLACE=1 specifically to reintroduce
-// BUG-739's original in-place-write race. That knob's writes still land
-// inside webconsole/test/helpers/mutant.mjs's own SRC_ROOT computation
-// (relative to ITS OWN file location), so copying the whole webconsole tree
-// — helpers/mutant.mjs included — is what makes "in place" mean "in the
-// scratch copy" for this proof rather than "in the real, live repository
-// source". (History: the first version of this proof pointed the unsafe
+// webconsole (src/ + test/ + testsupport/, cpSync'd into a temp dir), never
+// the real repo tree — including for the deliberately-unsafe
+// mutation-testing proof below, which sets MUTANT_UNSAFE_WRITE_IN_PLACE=1
+// specifically to reintroduce BUG-739's original in-place-write race. That
+// knob's writes still land inside webconsole/testsupport/mutant.mjs's own
+// SRC_ROOT computation (relative to ITS OWN file location), so copying the
+// whole webconsole tree — testsupport/mutant.mjs included — is what makes
+// "in place" mean "in the scratch copy" for this proof rather than "in the
+// real, live repository source". (History: the first version of this proof
+// pointed the unsafe
 // knob at the REAL webconsole/src directly and the race it deliberately
 // provoked left the real src/sim/data.ts genuinely corrupted on disk after
 // the run — caught immediately by the very next `node --test` on the real
@@ -471,6 +477,13 @@ function buildScratchWebconsole() {
   const scratchDir = mkdtempSync(join(tmpdir(), 'scoped-attack-ci-shape-webconsole-'));
   cpSync(join(REPO, 'webconsole', 'src'), join(scratchDir, 'src'), { recursive: true });
   cpSync(join(REPO, 'webconsole', 'test'), join(scratchDir, 'test'), { recursive: true });
+  // testsupport/ (mutant.mjs + its .d.mts) is a SIBLING of src/ and test/,
+  // not nested under either — the real mutator files import it via
+  // '../testsupport/mutant.mjs' relative to their own location under test/,
+  // so the scratch copy needs the same sibling layout or that import fails
+  // to resolve inside the scratch run (BUG-739 CI-shape follow-up, same
+  // move that relocated the helper out of CI's test/-directory discovery).
+  cpSync(join(REPO, 'webconsole', 'testsupport'), join(scratchDir, 'testsupport'), { recursive: true });
   return scratchDir;
 }
 

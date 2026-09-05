@@ -15,7 +15,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runWithMutant, runBaselineProbe } from './helpers/mutant.mjs';
+import { runWithMutant, runBaselineProbe } from '../testsupport/mutant.mjs';
 import { initialState } from '../src/sim/engine.ts';
 import { demandOf } from '../src/sim/engine.ts';
 import { SPECS, totalJobs, WORKING_AGE_FRACTION } from '../src/sim/data.ts';

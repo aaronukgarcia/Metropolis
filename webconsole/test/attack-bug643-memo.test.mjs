@@ -39,7 +39,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { runWithMutant } from './helpers/mutant.mjs';
+import { runWithMutant } from '../testsupport/mutant.mjs';
 import {
   isOnline,
   wasteGeneratedOf,

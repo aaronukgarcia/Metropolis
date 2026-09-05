@@ -24,7 +24,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { runMutantSelfReinvoke } from './helpers/mutant.mjs';
+import { runMutantSelfReinvoke } from '../testsupport/mutant.mjs';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { demandFixPlan, orderedDemandFixPlan, SPECS, placementCost } from '../src/sim/data.ts';
 

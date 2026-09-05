@@ -41,7 +41,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { runMutantSelfReinvoke } from './helpers/mutant.mjs';
+import { runMutantSelfReinvoke } from '../testsupport/mutant.mjs';
 import { SPECS, capacityAtTier, serviceCoverageOf, demandFixPlan } from '../src/sim/data.ts';
 import { initialState } from '../src/sim/engine.ts';
 
