@@ -71,6 +71,18 @@ type FinanceAPI struct {
 	insolvencyMonths int
 	gameOver         bool
 
+	// lastPayrollShortfall/lastPayrollShortfallMonth (BUG-548, 2026-09-05,
+	// GR#17): the USER-VISIBLE surface for a private-sector payroll
+	// shortfall — set by RecordPayrollShortfall when compose.go's
+	// financeHook falls back to a treasury top-up because
+	// PostWagesFromFirms rejected the month's bill, cleared to zero the
+	// next time a month posts its FULL private wage bill without a
+	// shortfall. A monitor (news feed, status line, or a test) polls
+	// PayrollShortfall() rather than grepping the errs.New log line —
+	// see MET-G217's doc comment (errors.go).
+	lastPayrollShortfall      Money
+	lastPayrollShortfallMonth int64
+
 	// v1 registries.
 	firms        map[FirmID]*SimpleFirm
 	nextFirmID   FirmID

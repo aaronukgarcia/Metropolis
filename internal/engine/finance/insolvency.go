@@ -76,3 +76,34 @@ func (f *FinanceAPI) AvailableCredit() Money {
 	defer f.mu.RUnlock()
 	return f.totalCreditLine
 }
+
+// RecordPayrollShortfall (BUG-548, GR#17) sets the USER-VISIBLE payroll-
+// shortfall surface for the given month: the composition root calls this
+// when PostWagesFromFirms rejected the private-sector wage bill and the
+// monthlyWagesFloor safety net had to be topped up from the treasury
+// instead. shortfall is the amount that failed to post from firms.
+// Passing a zero shortfall for the current month clears the surface (the
+// month posted its full private bill with no gap) — see PayrollShortfall.
+func (f *FinanceAPI) RecordPayrollShortfall(month int64, shortfall Money) {
+	if err := f.checkNotCopied("RecordPayrollShortfall"); err != nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastPayrollShortfall = shortfall
+	f.lastPayrollShortfallMonth = month
+}
+
+// PayrollShortfall returns the most recently recorded private-sector
+// payroll shortfall and the month it was recorded for (BUG-548, GR#17) —
+// the monitorable status surface a news feed or status line polls instead
+// of grepping the MET-G217 log line. A zero amount means the most recent
+// month posted its full private wage bill.
+func (f *FinanceAPI) PayrollShortfall() (month int64, shortfall Money) {
+	if err := f.checkNotCopied("PayrollShortfall"); err != nil {
+		return 0, 0
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.lastPayrollShortfallMonth, f.lastPayrollShortfall
+}

@@ -93,6 +93,72 @@ const (
 	// threshold's edge. Retiring this floor entirely is a genuine
 	// balance-pass call, not solved here.
 	monthlyWagesFloor = 150_000_000 // money-unit base (£150,000, ratio-preserved)
+
+	// firmsWageCreditLineMicropoundsRunwayMonths (BUG-548 round finding
+	// #2, 2026-09-05) is the number of months of payroll-at-scale the
+	// firms working-capital line is sized to cover. The round's
+	// TestBUG548Attack_ExhaustionIsPermanentAndUnrecoverable measured the
+	// PRIOR "1000x initialTreasury" constant as NOT actually
+	// population/payroll-derived at all (a flat multiple of a starting
+	// balance, unrelated to headcount) and its "generous headroom for
+	// dogfood scales" doc comment as measurably wrong — a 60k-employed
+	// city exhausts it in ~12 months because payroll scales with
+	// population while the old cap did not scale with anything. This
+	// replacement is GR#15 data-driven: it derives the cap from the same
+	// real per-employed wage figure (monthlyWageGrossPerEmployedMicropounds)
+	// times a documented population ceiling and runway, rather than an
+	// arbitrary multiplier.
+	firmsWageCreditLineMicropoundsRunwayMonths = 24
+
+	// firmsWageCreditLinePopulationCeiling (BUG-548 finding #2) is the
+	// employed-population scale this ticket sizes the credit line
+	// against — the "100m individual citizens" northstar's nearer-term
+	// dogfood milestone (docs/planning/northstar.md), not baseline-one's
+	// current seed scale. Still a FIXED cap (auto-extending it from the
+	// live employed count is the cleaner follow-up, flagged below) that a
+	// sufficiently large employed population will eventually exceed, but
+	// now an honestly-derived one: at this ceiling the line covers
+	// firmsWageCreditLineMicropoundsRunwayMonths months of payroll, not
+	// an arbitrary multiple of a starting balance.
+	firmsWageCreditLinePopulationCeiling = 100_000
+
+	// firmsWageCreditLineMicropounds (BUG-548, 2026-09-05) is the working-
+	// capital line SetCreditLine grants AcctFirms so PRIVATE-sector wages
+	// can be posted FROM firms rather than the treasury (see
+	// moneycirc.go's PostWagesFromFirms usage in financeHook.ApplyEffect).
+	// Documented placeholder pending the full firms P&L/revenue model
+	// (deferred to FEAT-1972079929/engine.firms scope — the same "no
+	// per-firm P&L tracking yet" gap industrialTaxRateBp's doc comment
+	// already flags): baseline-one's only modelled firm REVENUE today is
+	// the utility-consumption-spend leg (postConsumptionAndTax, ~£55/
+	// household/month), far below any realistic payroll (employed x
+	// monthlyWageGrossPerEmployedMicropounds, ~£2,100/employed/month) —
+	// without a credit line, PostWagesFromFirms would overdraft-reject
+	// (MET-G201) almost every month and wages would silently stop, which
+	// is a worse regression than the bug this fixes (treasury paying
+	// 100% of wages regardless of sector).
+	//
+	// Sized as firmsWageCreditLinePopulationCeiling employed residents x
+	// the real gross wage x firmsWageCreditLineMicropoundsRunwayMonths
+	// months of runway — GR#15 derived from data already in this file,
+	// not an arbitrary multiplier. This is STILL a fixed cap that a large
+	// enough employed population will eventually exceed (the round's
+	// TestBUG548Attack_ExhaustionIsPermanentAndUnrecoverable proves
+	// exhaustion is permanent once it happens, because the only modelled
+	// firm revenue is orders of magnitude below payroll) — the
+	// monthlyWagesFloor safety net is now UNCONDITIONAL (financeHook
+	// falls back to the treasury when this line rejects, see
+	// financeHook.ApplyEffect's wage-posting comment) specifically
+	// because this cap is known to be exceedable, not a claim that it
+	// never will be. Auto-extending the line from the LIVE employed
+	// count each month (rather than a fixed ceiling) is the cleaner
+	// long-term fix, flagged for Aaron's balance pass alongside
+	// monthlyWagesFloor's own flagged tension — not solved here because
+	// it changes the credit-line-exhaustion attack's reproduction shape
+	// (a growing cap can outrun a fixed drain), which is out of this
+	// round's scope.
+	firmsWageCreditLineMicropounds = firmsWageCreditLinePopulationCeiling *
+		monthlyWageGrossPerEmployedMicropounds * firmsWageCreditLineMicropoundsRunwayMonths
 )
 
 // baseline-one real-module placeholders. Like the block above, these are
@@ -768,6 +834,13 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	financeAPI := finance.NewFinanceAPI(cid)
 	if err := seedOpeningBalances(financeAPI, initialTreasury, initialCitizenWealth); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "finance", "step": "seedOpeningBalances"})
+	}
+	// BUG-548: grant AcctFirms a working-capital credit line so
+	// financeHook can post PRIVATE-sector wages FROM firms (see
+	// firmsWageCreditLineMicropounds's doc comment) instead of the
+	// treasury paying every wage regardless of sector.
+	if err := financeAPI.SetCreditLine(finance.AcctFirms, finance.Money(firmsWageCreditLineMicropounds)); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "finance", "step": "SetCreditLine.AcctFirms"})
 	}
 	householdsAPI, err := households.LoadDefault(cid)
 	if err != nil {
@@ -1717,39 +1790,149 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 		// sizing the wage bill (moneycirc.go's markEmploymentAndCount doc
 		// comment) — the wage bill is employedCount x the real UK gross
 		// wage, not a flat constant, so employment must be decided first.
-		employed, empErr := st.markEmploymentAndCount(clock.Month())
+		employed, employedPublic, empErr := st.markEmploymentAndCount(clock.Month())
 		if empErr != nil {
 			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "citizens", "op": "markEmploymentAndCount", "cause": empErr.Error()})
-		}
-		wageBill := int64(employed) * monthlyWageGrossPerEmployedMicropounds
-		// monthlyWagesFloor's doc comment: never post BELOW the
-		// already-validated safe floor (avoids reproducing the BUG-452
-		// rent-burden emigration collapse at baseline-one's seed scale) —
-		// population-scaling only takes over once it would exceed the floor.
-		if wageBill < monthlyWagesFloor {
-			wageBill = monthlyWagesFloor
-		}
-		if _, err := st.finance.PostWages(finance.Money(wageBill)); err == nil {
-			flowed = wageBill
-			if receipts, err := st.finance.CollectTax(finance.TaxRates{IncomeRate: 10000}, finance.Money(wageBill), 0, 0); err == nil {
-				flowed = num.SatAdd(flowed, int64(receipts.Income))
-			}
 		}
 
 		// FEAT-1972079927 Q4 + Aaron's 2026-08-31 diversify-the-base steer
 		// (BUG-391): monthly consumption spend (households -> firms) plus
 		// the commercial/industrial tax legs that bring money back from
 		// firms to the treasury, and the flat residential council-tax leg
-		// — see moneycirc.go's postConsumptionAndTax doc comment.
+		// — see moneycirc.go's postConsumptionAndTax doc comment. BUG-548
+		// (2026-09-05): moved AHEAD of the wage posting below (was after)
+		// so firms hold this month's household-spend revenue BEFORE
+		// PostWagesFromFirms draws on AcctFirms — real payroll-after-
+		// revenue ordering, and it shrinks (never eliminates — see
+		// firmsWageCreditLineMicropounds's doc comment) reliance on the
+		// firms credit line. Neither leg reads the other's output, so the
+		// reorder changes only WHEN money moves within this same month's
+		// tick, not what moves.
 		flowed = num.SatAdd(flowed, st.postConsumptionAndTax())
+
+		// BUG-548: the treasury previously paid the ENTIRE wage bill
+		// regardless of sector, with no business->worker flow at all, and
+		// then immediately clawed back 100% of it via a fake IncomeRate:
+		// 10000 (100%) "tax" — a self-cancelling round-trip that inflated
+		// the gross-flow metric (AC-9) while doing nothing real, while
+		// distributeWagesToResidents (below) separately credited citizens'
+		// per-citizen Wealth net of a real 28% (incomeNITaxRateBp)
+		// deduction that was never posted anywhere — it simply vanished.
+		// Fixed flow: PRIVATE-sector wages (employedPublic's complement)
+		// are paid FROM FIRMS (PostWagesFromFirms — businesses pay
+		// employees from revenue/working capital, never the treasury);
+		// PUBLIC-sector wages (employedPublic) are paid from the treasury
+		// via PostWages, as intended. employedPublic is not always zero:
+		// this package's OWN employedSectorPlaceholder never assigns
+		// SectorPublic (see markEmploymentAndCount's doc comment), but
+		// citizens.ColdShard's separate, pre-existing matchJob (coldpass.go)
+		// independently draws SectorPublic for some cold citizens well
+		// before markEmploymentAndCount ever runs — a real, if usually
+		// small, public headcount this split correctly picks up and bills
+		// to the treasury rather than firms. Income tax is then collected
+		// at the REAL blended rate (incomeNITaxRateBp, 28%) on the ACTUAL
+		// posted bill — the same rate distributeWagesToResidents already
+		// deducts per-citizen, so that 28% now lands in the treasury as
+		// real tax revenue instead of disappearing.
+		employedPrivate := employed - employedPublic
+		privateWageBill := int64(employedPrivate) * monthlyWageGrossPerEmployedMicropounds
+		publicWageBill := int64(employedPublic) * monthlyWageGrossPerEmployedMicropounds
+		// monthlyWagesFloor's doc comment: never post BELOW the
+		// already-validated safe floor (avoids reproducing the BUG-452
+		// rent-burden emigration collapse at baseline-one's seed scale) —
+		// population-scaling only takes over once it would exceed the
+		// floor. The shortfall is attributed to the PRIVATE bucket as a
+		// simplification (the floor's original intent was always a wage
+		// SAFETY NET, not a sector-specific subsidy) — a real, usually
+		// small, public headcount (see employedPublic's doc comment above)
+		// means this is not always byte-identical to the pre-fix flat
+		// figure, but stays within the same documented placeholder spirit.
+		if totalWageBill := privateWageBill + publicWageBill; totalWageBill < monthlyWagesFloor {
+			privateWageBill += monthlyWagesFloor - totalWageBill
+		}
+		var wagePosted int64
+		// firmsPaidPrivate tracks whether PostWagesFromFirms actually
+		// landed the private-sector bill on the ledger this month (BUG-548
+		// fix #4): distributeWagesToResidents below must never credit a
+		// private-sector citizen's Wealth for a wage the ledger did not
+		// pay — the round's finding was exactly this: firms posted ZERO
+		// wages while every employed citizen was still credited off-ledger.
+		firmsPaidPrivate := privateWageBill <= 0 // nothing owed => trivially satisfied
+		if privateWageBill > 0 {
+			if posted, err := st.finance.PostWagesFromFirms(finance.Money(privateWageBill)); err == nil {
+				wagePosted = int64(posted)
+				firmsPaidPrivate = true
+			} else {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "PostWagesFromFirms", "cause": err.Error()})
+				// BUG-548 fix #3 (GR#17): a payroll shortfall is a real,
+				// user-visible failure, not just a debug log line — record
+				// it on FinanceAPI's monitorable PayrollShortfall surface
+				// AND raise the registered MET-G217 error (never a bare
+				// errs.New with no registry code, GR#7).
+				_ = errs.New(finance.ErrPrivateWagePayrollShortfall, st.cid, map[string]any{
+					"amountMicropounds": privateWageBill,
+					"employedPrivate":   employedPrivate,
+					"correlationID":     st.cid,
+				})
+				st.finance.RecordPayrollShortfall(clock.Month(), finance.Money(privateWageBill))
+			}
+		}
+		if publicWageBill > 0 {
+			if posted, err := st.finance.PostWages(finance.Money(publicWageBill)); err == nil {
+				wagePosted = num.SatAdd(wagePosted, int64(posted))
+			} else {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "PostWages", "cause": err.Error()})
+			}
+		}
+
+		// BUG-548 fix #1: the monthlyWagesFloor safety net (BUG-452) must
+		// stay UNCONDITIONAL — it must never be breached just because the
+		// firms leg above was rejected (the round's
+		// TestBUG548Attack_ExhaustionIsPermanentAndUnrecoverable measured
+		// the floor breached 12/12 months once the firms credit line was
+		// exhausted, because the topped-up amount was baked into
+		// privateWageBill and lost together with it). Whatever actually
+		// landed on the ledger this month (wagePosted, firms + treasury)
+		// is compared against the floor directly; any gap is topped up
+		// from the treasury as a real, visible, separately-posted wage
+		// leg — never a silent citizen-side-only credit.
+		if wagePosted < monthlyWagesFloor {
+			floorShortfall := monthlyWagesFloor - wagePosted
+			if posted, err := st.finance.PostWages(finance.Money(floorShortfall)); err == nil {
+				wagePosted = num.SatAdd(wagePosted, int64(posted))
+			} else {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "PostWages.floorBackstop", "cause": err.Error()})
+			}
+		} else if privateWageBill > 0 && firmsPaidPrivate {
+			// Firms posted the full bill (including any floor top-up
+			// already baked into privateWageBill above) — clear the
+			// shortfall surface so PayrollShortfall() reads fresh for the
+			// current month (GR#17: a monitor must see recovery, not a
+			// stale failure forever).
+			st.finance.RecordPayrollShortfall(clock.Month(), 0)
+		}
+
+		if wagePosted > 0 {
+			flowed = num.SatAdd(flowed, wagePosted)
+			if receipts, err := st.finance.CollectTax(finance.TaxRates{IncomeRate: incomeNITaxRateBp}, finance.Money(wagePosted), 0, 0); err == nil {
+				flowed = num.SatAdd(flowed, int64(receipts.Income))
+			} else {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "CollectTax.income", "cause": err.Error()})
+			}
+		}
 
 		// FEAT-1972079927 Q5: distribute this month's wage to every
 		// resident's own Wealth field (per-citizen, not the ledger — see
 		// moneycirc.go's distributeWagesToResidents doc comment). A
 		// failure here is logged loudly (GR#1) but never blocks the
-		// ledger legs above, which have already posted.
+		// ledger legs above, which have already posted. BUG-548 fix #4:
+		// firmsPaidPrivate gates whether PRIVATE-sector citizens are
+		// credited at all — a citizen must never receive Wealth for a
+		// wage the ledger did not actually pay from firms. Public-sector
+		// citizens are unaffected (PostWages/treasury is not the account
+		// under attack here and is not gated).
 		if st.citizens != nil {
-			if err := st.distributeWagesToResidents(); err != nil {
+			if err := st.distributeWagesToResidents(firmsPaidPrivate); err != nil {
 				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "citizens", "op": "distributeWagesToResidents", "cause": err.Error()})
 			}
 		}

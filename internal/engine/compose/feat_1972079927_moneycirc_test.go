@@ -75,8 +75,17 @@ func TestFEAT1972079927_MoneyCirculates_AllThreePotsChange(t *testing.T) {
 	if closingFirms == openingFirms {
 		t.Fatalf("AcctFirms unchanged after %d months: %d (Q4 consumption spend never reached firms)", testMonths, closingFirms)
 	}
-	if closingFirms <= openingFirms {
-		t.Fatalf("AcctFirms did not GROW (opening %d -> closing %d) — household spend never credited firms", openingFirms, closingFirms)
+	// BUG-548 (2026-09-05): firms now ALSO pay private-sector wages out of
+	// AcctFirms (PostWagesFromFirms, financeHook.ApplyEffect) — an outflow
+	// that dwarfs the consumption-spend inflow at baseline-one's scale
+	// (~£55/household/month utility spend vs ~£2,100/employed/month
+	// payroll — see firmsWageCreditLineMicropounds's doc comment), so
+	// AcctFirms now runs a working-capital deficit (covered by its credit
+	// line) rather than growing. The direction flipped; "money reaches
+	// firms at all" (the check above) is this test's real subject and
+	// still holds.
+	if closingFirms >= openingFirms {
+		t.Fatalf("AcctFirms did not shrink (opening %d -> closing %d) — expected private-sector wages (PostWagesFromFirms) to outpace consumption-spend inflow at this population scale", openingFirms, closingFirms)
 	}
 }
 

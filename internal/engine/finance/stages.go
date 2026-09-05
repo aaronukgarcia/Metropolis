@@ -23,10 +23,16 @@ func (r BasisPoints) apply(amount Money) Money {
 // taxOf is a shorthand for a rate applied to a base figure.
 func taxOf(base Money, rate BasisPoints) Money { return rate.apply(base) }
 
-// PostWages posts household income (the aggregate wage bill) as a
-// transfer from the city treasury to the household account, and returns
-// the posted amount. It is stage (1) of the §7 money-flow chain —
-// wages→spend→tax→budget→opex/imports/debt/construction (AC-3).
+// PostWages posts PUBLIC-sector household income (the civil-service wage
+// bill) as a transfer from the city treasury to the household account,
+// and returns the posted amount. It is stage (1) of the §7 money-flow
+// chain — wages→spend→tax→budget→opex/imports/debt/construction (AC-3).
+//
+// BUG-548 (2026-09-05): before this fix, compose.go's financeHook posted
+// the ENTIRE wage bill through this call regardless of sector — the
+// treasury paid every wage, public or private, with no business flow at
+// all. This primitive is now reserved for the public-sector share only;
+// see [PostWagesFromFirms] for the private-sector (firms-paid) leg.
 func (f *FinanceAPI) PostWages(total Money) (Money, error) {
 	if err := f.checkNotCopied("PostWages"); err != nil {
 		return 0, err
@@ -35,9 +41,41 @@ func (f *FinanceAPI) PostWages(total Money) (Money, error) {
 		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "wages", "amount": int64(total)})
 	}
 	if _, err := f.Post(Transaction{
-		Description: "household wages by sector/skill",
+		Description: "public-sector household wages",
 		Entries: []Entry{
 			{Account: AcctTreasury, Side: SideDebit, Amount: total, Category: CatWages},
+			{Account: AcctHouseholds, Side: SideCredit, Amount: total, Category: CatWages},
+		},
+	}); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// PostWagesFromFirms posts PRIVATE-sector household income as a transfer
+// from the aggregate firm-cash account to the household account, and
+// returns the posted amount — the business->worker wage flow BUG-548
+// found entirely missing (every wage, public or private, was previously
+// paid by the treasury via [PostWages]). Same shape/validation/category
+// (CatWages) as PostWages so [FinanceAPI.WagesPosted] (which sums
+// AcctHouseholds credits by category, not by payer) counts both legs
+// identically; only the debited account differs. Firms are expected to
+// carry a working-capital credit line (compose.go's
+// firmsWageCreditLineMicropounds) covering the gap between baseline-one's
+// still-partial firm revenue model and a realistic payroll — an
+// insufficient-funds rejection here is a real, loud failure (GR#1), never
+// silently substituted with a treasury post.
+func (f *FinanceAPI) PostWagesFromFirms(total Money) (Money, error) {
+	if err := f.checkNotCopied("PostWagesFromFirms"); err != nil {
+		return 0, err
+	}
+	if total < 0 {
+		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "wages", "amount": int64(total)})
+	}
+	if _, err := f.Post(Transaction{
+		Description: "private-sector household wages (firms)",
+		Entries: []Entry{
+			{Account: AcctFirms, Side: SideDebit, Amount: total, Category: CatWages},
 			{Account: AcctHouseholds, Side: SideCredit, Amount: total, Category: CatWages},
 		},
 	}); err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
@@ -400,16 +401,45 @@ func TestBUG355_PartialPost_TaxRejectionStillMirrorsLedger(t *testing.T) {
 	households := int64(len(comp.state.citizens.HouseholdIDs(comp.state.cid)))
 	spend := households * monthlyConsumptionSpendMicropounds
 	councilTax := households * monthlyCouncilTaxMicropounds
-	wantHH := int64(wageBill - 1 - spend - councilTax)
+	// BUG-548 (2026-09-05): the wage/tax pair no longer nets zero on
+	// households. wageBill is entirely PRIVATE-sector at this population
+	// scale (employedPublic is always 0 under employedSectorPlaceholder —
+	// see markEmploymentAndCount's doc comment), so it is posted via
+	// PostWagesFromFirms (firms -> households, an inflow to this tracked
+	// pot from the untracked firms pot) and taxed at the REAL blended
+	// rate (incomeNITaxRateBp, 28%) rather than the old fake 100%
+	// clawback — households keep the net (72%) of the wage bill instead
+	// of the whole pair cancelling out.
+	incomeTax := wageBill * incomeNITaxRateBp / 10_000
+	wantHH := int64(wageBill - 1 + wageBill - incomeTax - spend - councilTax)
 	if led, st := ledgerBalance(comp.state.finance, finance.AcctHouseholds), comp.CitizenWealth(); led != st || led != wantHH {
 		t.Fatalf("month end: FinanceAPI households = %d, Composition.CitizenWealth = %d, want both %d", led, st, wantHH)
 	}
 	// Treasury gains the commercial+industrial tax on the posted spend,
-	// plus council tax (the old wage/tax pair nets zero on treasury,
-	// unchanged from before this increment).
+	// council tax, AND (post-BUG-548) the real 28% income tax on the wage
+	// bill — the wage/tax pair used to net zero on treasury only because
+	// PostWages debited treasury for the SAME amount CollectTax's 100%
+	// clawback credited back; now that PRIVATE wages are debited from
+	// firms instead, the income-tax credit is a genuine net gain to
+	// treasury, MINUS whatever PUBLIC-sector wage bill still debits the
+	// treasury via PostWages. That public share is NOT necessarily zero
+	// here (GR#15 — derive from data, never assume): citizens.ColdShard's
+	// own pre-existing matchJob (coldpass.go) independently assigns
+	// SectorPublic to some cold citizens (a uniform 1-in-4 draw across
+	// Primary/Secondary/Tertiary/Public) well before markEmploymentAndCount
+	// ever runs, so a real (if usually small) public headcount can exist
+	// even though this package's OWN employedSectorPlaceholder never
+	// assigns SectorPublic itself. Read the actual public-sector debit
+	// straight off the ledger's CatWages entries rather than assuming it.
+	var publicWageDebit int64
+	for _, e := range comp.state.finance.LinesByCategory(finance.CatWages) {
+		if e.Account == finance.AcctTreasury && e.Side == finance.SideDebit {
+			publicWageDebit = num.SatAdd(publicWageDebit, int64(e.Amount))
+		}
+	}
 	commercial := spend * commercialTaxRateBp / 10_000
 	industrial := spend * industrialTaxRateBp / 10_000
-	wantTr := int64(initialTreasury + commercial + industrial + councilTax)
+	wantTr := int64(initialTreasury) - publicWageDebit + commercial + industrial + councilTax + incomeTax
 	if led, st := ledgerBalance(comp.state.finance, finance.AcctTreasury), comp.Treasury(); led != st || led != wantTr {
 		t.Fatalf("month end: FinanceAPI treasury = %d, Composition.Treasury = %d, want both %d", led, st, wantTr)
 	}

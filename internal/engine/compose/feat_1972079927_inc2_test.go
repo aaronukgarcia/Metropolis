@@ -8,6 +8,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
@@ -215,8 +216,6 @@ func TestFEAT1972079927_Inc2_LocalSourcing_CreditsFirms(t *testing.T) {
 		t.Fatalf("Build rejected: %+v", res.Error)
 	}
 
-	firmsBefore := ledgerBalance(comp.state.finance, finance.AcctFirms)
-
 	if err := e.AdvanceTicks(errsCorr("inc2-loc-day1"), 1); err != nil {
 		t.Fatalf("AdvanceTicks(day1): %v", err)
 	}
@@ -228,8 +227,21 @@ func TestFEAT1972079927_Inc2_LocalSourcing_CreditsFirms(t *testing.T) {
 		t.Fatalf("constructionAccrualExternal after day 1 = %d, want 0 (a merchant exists — nothing should route external)", comp.state.constructionAccrualExternal)
 	}
 
-	if err := e.AdvanceTicks(errsCorr("inc2-loc-to90"), 89); err != nil {
-		t.Fatalf("AdvanceTicks(to day90): %v", err)
+	// BUG-548 (2026-09-05): stop 1 tick short of the day-90 settlement so
+	// the settlement's OWN effect on AcctFirms can be isolated from that
+	// same day's OTHER legs (financeHook's monthly wage/consumption
+	// postings also land on day 90 — commercialPaymentTermTicks=90 is an
+	// exact multiple of DailyTicksPerMonth=30). AcctFirms now also pays
+	// PRIVATE-sector wages every month (PostWagesFromFirms), so a plain
+	// "balance grew" check across the whole 89-day gap no longer isolates
+	// this test's subject.
+	if err := e.AdvanceTicks(errsCorr("inc2-loc-to89"), 88); err != nil {
+		t.Fatalf("AdvanceTicks(to day89): %v", err)
+	}
+	firmsBeforeDay90 := ledgerBalance(comp.state.finance, finance.AcctFirms)
+
+	if err := e.AdvanceTicks(errsCorr("inc2-loc-day90"), 1); err != nil {
+		t.Fatalf("AdvanceTicks(day90): %v", err)
 	}
 	if comp.state.constructionSettledLocal != wantCost {
 		t.Fatalf("constructionSettledLocal at day 90 = %d, want %d", comp.state.constructionSettledLocal, wantCost)
@@ -237,8 +249,57 @@ func TestFEAT1972079927_Inc2_LocalSourcing_CreditsFirms(t *testing.T) {
 	if comp.state.constructionSettledExternal != 0 {
 		t.Fatalf("constructionSettledExternal = %d, want 0 (this order was sourced locally throughout)", comp.state.constructionSettledExternal)
 	}
-	if got := ledgerBalance(comp.state.finance, finance.AcctFirms); got <= firmsBefore {
-		t.Fatalf("AcctFirms balance = %d, want > opening %d (local construction settlement must land IN-CITY)", got, firmsBefore)
+	firmsAfterDay90 := ledgerBalance(comp.state.finance, finance.AcctFirms)
+
+	// day 90's OTHER AcctFirms legs (financeHook's own wage debit and
+	// consumption-spend credit) are read straight off the ledger (GR#15 —
+	// derive from data, never assume a figure) rather than re-derived by
+	// formula, since financeHook's own BeginMonth call resets the
+	// category log AFTER the (earlier-phase) construction settlement
+	// posts — LinesByCategory(CatConstruction) can no longer see the
+	// settlement itself by the time this test reads it, but it CAN still
+	// see financeHook's own subsequent postings, which is exactly what's
+	// needed to net them out of the balance delta below.
+	var otherFirmsDelta int64
+	for _, entry := range comp.state.finance.LinesByCategory(finance.CatWages) {
+		if entry.Account != finance.AcctFirms {
+			continue
+		}
+		if entry.Side == finance.SideDebit {
+			otherFirmsDelta = num.SatSub(otherFirmsDelta, int64(entry.Amount))
+		} else {
+			otherFirmsDelta = num.SatAdd(otherFirmsDelta, int64(entry.Amount))
+		}
+	}
+	for _, entry := range comp.state.finance.LinesByCategory(finance.CatSpend) {
+		if entry.Account != finance.AcctFirms {
+			continue
+		}
+		if entry.Side == finance.SideCredit {
+			otherFirmsDelta = num.SatAdd(otherFirmsDelta, int64(entry.Amount))
+		} else {
+			otherFirmsDelta = num.SatSub(otherFirmsDelta, int64(entry.Amount))
+		}
+	}
+	// The commercial (sales) + industrial (corp) tax legs also debit
+	// AcctFirms directly (finance/stages.go's CollectTax) on the same
+	// day's consumption spend.
+	for _, cat := range []finance.Category{finance.CatTaxSales, finance.CatTaxCorp} {
+		for _, entry := range comp.state.finance.LinesByCategory(cat) {
+			if entry.Account != finance.AcctFirms {
+				continue
+			}
+			if entry.Side == finance.SideDebit {
+				otherFirmsDelta = num.SatSub(otherFirmsDelta, int64(entry.Amount))
+			} else {
+				otherFirmsDelta = num.SatAdd(otherFirmsDelta, int64(entry.Amount))
+			}
+		}
+	}
+	gotDelta := firmsAfterDay90 - firmsBeforeDay90
+	wantDelta := otherFirmsDelta + wantCost
+	if gotDelta != wantDelta {
+		t.Fatalf("AcctFirms day-90 delta = %d, want %d (otherFirmsDelta=%d + settlement wantCost=%d) — local construction settlement must land IN-CITY", gotDelta, wantDelta, otherFirmsDelta, wantCost)
 	}
 }
 

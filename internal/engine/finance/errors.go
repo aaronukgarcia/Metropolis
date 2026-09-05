@@ -92,4 +92,16 @@ const (
 	// capital cost — a refit/rebuild with no declared capital cost is not
 	// a capital event (AC-11).
 	ErrCapexUnclassified = "MET-G215"
+	// ErrPrivateWagePayrollShortfall (BUG-548, 2026-09-05; re-minted from
+	// the originally-claimed MET-G211 after FEAT-094's fully-verdicted
+	// estate landed first and independently claimed MET-G211-MET-G216 in
+	// this same package — MET-G217 is the next free code above that
+	// block): AcctFirms' working-capital credit line rejected this
+	// month's private-sector wage post (PostWagesFromFirms). The
+	// monthlyWagesFloor safety net is still guaranteed via a treasury
+	// top-up (compose.go's financeHook.ApplyEffect), so households are
+	// never left fully unpaid, but a real payroll shortfall occurred and
+	// must be USER-VISIBLE (GR#17) — compose.go surfaces this on the
+	// news/status feed, not just a log line.
+	ErrPrivateWagePayrollShortfall = "MET-G217"
 )

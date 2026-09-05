@@ -2099,6 +2099,12 @@
       "message": "invalid OPEX integration data: {field} fails {rule}",
       "remedy": "check data/opexintegration.json (or the METROPOLIS_DATA_DIR resolution) against its schema; the named field failed the named validation rule"
     },
+    "MET-G217": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "private-sector payroll shortfall: firms working-capital line rejected {amountMicropounds} of wages for {employedPrivate} employed residents this month, correlation {correlationID}",
+      "remedy": "AcctFirms' working-capital credit line (compose.go's firmsWageCreditLineMicropounds) was exhausted or insufficient to cover this month's private-sector wage bill; the monthlyWagesFloor safety net has been topped up from the treasury so households are never fully unpaid, but the shortfall is a real payroll failure that must surface on a monitorable status/news surface (GR#17), not just this log line — check AcctFirms' balance/revenue model (engine.firms P&L, FEAT-1972079929) and consider a credit-line resize."
+    },
     "MET-G300": {
       "severity": "error",
       "module": "engine.consumption",

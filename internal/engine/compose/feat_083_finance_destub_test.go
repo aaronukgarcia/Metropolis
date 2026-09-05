@@ -41,7 +41,7 @@ func TestFEAT083_EmploymentMarking_Deterministic(t *testing.T) {
 		if err := comp.state.spawnCitizens(0, n); err != nil {
 			t.Fatalf("spawnCitizens: %v", err)
 		}
-		if _, err := comp.state.markEmploymentAndCount(0); err != nil {
+		if _, _, err := comp.state.markEmploymentAndCount(0); err != nil {
 			t.Fatalf("markEmploymentAndCount: %v", err)
 		}
 		states := make([]citizens.EmploymentState, 0, n)
@@ -91,7 +91,7 @@ func TestFEAT083_MoreEmployed_StrictlyMoreWagesAndTax(t *testing.T) {
 				t.Fatalf("spawnCitizens(%d): %v", extra, err)
 			}
 		}
-		n, err := comp.state.markEmploymentAndCount(0)
+		n, _, err := comp.state.markEmploymentAndCount(0)
 		if err != nil {
 			t.Fatalf("markEmploymentAndCount: %v", err)
 		}
@@ -121,9 +121,13 @@ func TestFEAT083_MoreEmployed_StrictlyMoreWagesAndTax(t *testing.T) {
 		t.Fatalf("wage bill did not scale with population: 300 residents -> %d, 600 residents -> %d, want strictly increasing (this is exactly what the old flat monthlyWages stub could never do)", billSmall, billLarge)
 	}
 
-	// Income tax is 100% of the posted wage bill (financeHook's
-	// IncomeRate=10000bp pairing) — it must scale in lockstep, never a
-	// separate flat monthlyTax figure.
+	// Income tax scales in lockstep with the posted wage bill, never a
+	// separate flat monthlyTax figure. BUG-548 (2026-09-05) replaced
+	// financeHook's old fake IncomeRate:10000 (100%) self-cancelling
+	// clawback with the real blended UK rate (incomeNITaxRateBp, 28%) —
+	// this primitive-level test now exercises that same real rate so it
+	// stays representative of production rather than the retired 100%
+	// stub.
 	fSmall := finance.NewFinanceAPI("test-small")
 	fLarge := finance.NewFinanceAPI("test-large")
 	seedLedger := func(f *finance.FinanceAPI) {
@@ -148,11 +152,11 @@ func TestFEAT083_MoreEmployed_StrictlyMoreWagesAndTax(t *testing.T) {
 	if _, err := fLarge.PostWages(finance.Money(billLarge)); err != nil {
 		t.Fatalf("PostWages(large): %v", err)
 	}
-	rSmall, err := fSmall.CollectTax(finance.TaxRates{IncomeRate: 10000}, finance.Money(billSmall), 0, 0)
+	rSmall, err := fSmall.CollectTax(finance.TaxRates{IncomeRate: incomeNITaxRateBp}, finance.Money(billSmall), 0, 0)
 	if err != nil {
 		t.Fatalf("CollectTax(small): %v", err)
 	}
-	rLarge, err := fLarge.CollectTax(finance.TaxRates{IncomeRate: 10000}, finance.Money(billLarge), 0, 0)
+	rLarge, err := fLarge.CollectTax(finance.TaxRates{IncomeRate: incomeNITaxRateBp}, finance.Money(billLarge), 0, 0)
 	if err != nil {
 		t.Fatalf("CollectTax(large): %v", err)
 	}
@@ -176,7 +180,7 @@ func TestFEAT083_UnemployedResidentsReceiveNoWage(t *testing.T) {
 	if err := comp.state.spawnCitizens(0, 100); err != nil {
 		t.Fatalf("spawnCitizens: %v", err)
 	}
-	if _, err := comp.state.markEmploymentAndCount(0); err != nil {
+	if _, _, err := comp.state.markEmploymentAndCount(0); err != nil {
 		t.Fatalf("markEmploymentAndCount: %v", err)
 	}
 
@@ -210,7 +214,7 @@ func TestFEAT083_UnemployedResidentsReceiveNoWage(t *testing.T) {
 	}
 	beforeEmployed, beforeUnemployed := before(employedID), before(unemployedID)
 
-	if err := comp.state.distributeWagesToResidents(); err != nil {
+	if err := comp.state.distributeWagesToResidents(true); err != nil {
 		t.Fatalf("distributeWagesToResidents: %v", err)
 	}
 

@@ -303,16 +303,34 @@ func desiredEmployment(seed, id uint64, age int64, cur citizens.Employment) (cit
 // particular already has a real off-map job (engine.extcommute, see
 // citizens/types.go's EmploymentOffMap doc comment) and must never be
 // overwritten by this on-map-only marking. Returns the resulting Employed
-// count (the wage bill's basis — see financeHook.ApplyEffect), counted in
-// the SAME pass so the wage bill and the marking can never observe two
-// different snapshots of the same month.
+// count AND, of those, the count already sitting in citizens.SectorPublic
+// (BUG-548's public/private wage split — see financeHook.ApplyEffect),
+// counted in the SAME pass so the wage bill and the marking can never
+// observe two different snapshots of the same month.
+//
+// employedSectorPlaceholder (this file's const block) always assigns
+// SectorTertiary to a resident freshly decided BY THIS PASS, so
+// markEmploymentAndCount itself never mints a new SectorPublic assignment
+// — but employedPublic is not always 0: citizens.ColdShard's separate,
+// pre-existing matchJob (coldpass.go) independently draws a sector
+// (uniformly SectorPrimary..SectorPublic) for cold citizens well before
+// this pass ever runs, so a real, if usually small, public headcount can
+// already exist on a resident this pass merely leaves untouched (the
+// "already decided" branch below). A DEDICATED public-sector assignment
+// path (e.g. engine.staffing, not yet wired into compose — see
+// staffing/api.go's SectorPublic assignment) would make the split more
+// load-bearing still, once wired. `sector` here is desiredEmployment's
+// returned sector for EVERY branch (including the "already decided,
+// unchanged" branch, which returns cur.Sector), so it always reflects the
+// resident's CURRENT actual sector, never the employmentDecision draw
+// alone.
 //
 // BUG-529: iterates liveResidentIDs() (compose.go), which enumerates the
 // FULL live population (seed + migrants + fertility children), not just the
 // closed seed cohort residentIDs() alone stays scoped to — see
 // liveResidentIDs' doc comment for why a migrant/child was previously
 // invisible to this pass regardless of its Employment.State.
-func (st *simState) markEmploymentAndCount(month int64) (employed int, err error) {
+func (st *simState) markEmploymentAndCount(month int64) (employed int, employedPublic int, err error) {
 	for _, id := range st.liveResidentIDs() {
 		cit, ok := st.citizens.CitizenAt(id, st.cid)
 		if !ok {
@@ -328,14 +346,17 @@ func (st *simState) markEmploymentAndCount(month int64) (employed int, err error
 				Employment:    desired,
 				Sector:        sector,
 			}); applyErr != nil {
-				return employed, errs.Wrap(ErrModuleFailed, st.cid, applyErr, map[string]any{"module": "citizens", "op": "markEmploymentAndCount", "id": id, "month": month})
+				return employed, employedPublic, errs.Wrap(ErrModuleFailed, st.cid, applyErr, map[string]any{"module": "citizens", "op": "markEmploymentAndCount", "id": id, "month": month})
 			}
 		}
 		if desired == citizens.EmploymentEmployed {
 			employed++
+			if sector == citizens.SectorPublic {
+				employedPublic++
+			}
 		}
 	}
-	return employed, nil
+	return employed, employedPublic, nil
 }
 
 // employedResidentCount is a read-only re-count of the current Employed
@@ -434,13 +455,31 @@ func (st *simState) formResidentHouseholds(month int64) error {
 // (see this file's ledger-scale doc comment), so crediting it every month
 // at the real per-capita wage figure is safe and does not affect
 // StockMoney's conservation check.
-func (st *simState) distributeWagesToResidents() error {
+//
+// creditPrivateSector (BUG-548 fix #4, 2026-09-05) couples this per-citizen
+// accounting to the LEDGER: the round's independent Destructive attack
+// (TestBUG548Attack_CreditLineExhaustion_FailureModeIsBoundedButSilent)
+// found firms posting ZERO wages to the ledger while every employed
+// citizen still had Wealth credited here regardless — a payroll failure
+// invisible to the citizen view. When false (financeHook.ApplyEffect's
+// PostWagesFromFirms rejected this month's private-sector bill), every
+// resident NOT in citizens.SectorPublic is skipped entirely — a citizen
+// must never receive Wealth for a wage the ledger did not actually pay.
+// Public-sector residents are unaffected by this gate: their wage is paid
+// via PostWages (treasury), a separate leg this ticket does not attack.
+func (st *simState) distributeWagesToResidents(creditPrivateSector bool) error {
 	for _, id := range st.liveResidentIDs() {
 		cit, ok := st.citizens.CitizenAt(id, st.cid)
 		if !ok {
 			continue
 		}
 		if cit.Employment.State != citizens.EmploymentEmployed {
+			continue
+		}
+		if !creditPrivateSector && cit.Employment.Sector != citizens.SectorPublic {
+			// The ledger did not actually pay this citizen's wage this
+			// month (firms' working-capital line rejected the post) —
+			// never credit Wealth for money that was never posted.
 			continue
 		}
 		newWealth := num.SatAdd(cit.Wealth, monthlyWageNetPerCitizenMicropounds)
