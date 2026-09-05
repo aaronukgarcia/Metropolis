@@ -291,29 +291,41 @@ jobs:
               --set-env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret"
           else
             echo "Container App does not exist — creating it (first inc1 deploy)."
-            # ACR PULL AUTH (BUG-717): the Container Apps runtime pulls the image
-            # from metropolisacr and the create step never passed registry creds,
-            # so the first real provision failed 'UNAUTHORIZED: authentication
-            # required'. Admin user is enabled on the registry (FEAT-2326609775),
-            # so read the admin cred at deploy time and pass it. (The cleaner
-            # --registry-identity system-managed-identity migration stays the
-            # tracked follow-up.)
+            # ACR PULL AUTH (BUG-717): az containerapp create validates the private
+            # image pull at the ARM control plane BEFORE it attaches registry creds,
+            # so a single create --image <ACR> --registry-* fails 'UNAUTHORIZED'
+            # (metropolisacr admin IS enabled and readable - not a creds problem,
+            # a create-time ordering race). Bulletproof three-step: (1) create on a
+            # PUBLIC bootstrap image so no pull auth is needed, (2) attach the ACR
+            # admin cred via 'registry set', (3) update to the real image, which now
+            # pulls authenticated. (--registry-identity system MI stays the follow-up.)
             ACR_USER="$(az acr credential show --name "${{ env.ACR_NAME }}" --query username -o tsv)"
             ACR_PASS="$(az acr credential show --name "${{ env.ACR_NAME }}" --query 'passwords[0].value' -o tsv)"
+            if [ -z "$ACR_USER" ] || [ -z "$ACR_PASS" ]; then
+              echo "::error::Empty ACR admin credential for ${{ env.ACR_NAME }} - the deploy SP needs listCredentials (Contributor/Owner on the registry's RG) and admin-user must be enabled."
+              exit 1
+            fi
             az containerapp create \
               --name "${{ env.CONTAINER_APP_NAME }}" \
               --resource-group "${{ env.RESOURCE_GROUP }}" \
               --environment "${{ env.CONTAINER_APP_ENV }}" \
-              --image "$IMAGE" \
-              --registry-server "${{ env.ACR_LOGIN_SERVER }}" \
-              --registry-username "$ACR_USER" \
-              --registry-password "$ACR_PASS" \
+              --image "mcr.microsoft.com/k8se/quickstart:latest" \
               --cpu 0.5 --memory 1.0Gi \
               --min-replicas 0 --max-replicas 1 \
               --ingress external --target-port 8080 --transport auto \
-              --args="-addr 0.0.0.0:8080 -persist-dir /data -city ${{ github.event.inputs.city }} -tick-interval 1s -snapshot-every 360" \
               --secrets "metroserve-shared-secret=REPLACE-BEFORE-FIRST-RUN" \
               --env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret"
+            az containerapp registry set \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --server "${{ env.ACR_LOGIN_SERVER }}" \
+              --username "$ACR_USER" \
+              --password "$ACR_PASS"
+            az containerapp update \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --image "$IMAGE" \
+              --args="-addr 0.0.0.0:8080 -persist-dir /data -city ${{ github.event.inputs.city }} -tick-interval 1s -snapshot-every 360"
             # DURABLE VOLUME DEFERRED (BUG-716): the --azure-file-volume-* flags are
             # unrecognized by this runner's az containerapp extension version (the
             # 'RE-VERIFY before first run' note above, adjudicated by the deploy run).
