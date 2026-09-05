@@ -493,7 +493,12 @@ test('ATTACK (j): RED-PROOF documented (see report) — reverting the waterCaps 
   // BUG-642-fixed) state right now, as a tripwire that the red-proof
   // procedure always restores data.ts correctly.
   const src = fs.readFileSync(DATA_TS_PATH, 'utf8');
-  assert.match(src, /memoOnState\(\(s\) => \{\s*\n\s*const out = new Map<object, boolean>/, 'data.ts must currently contain the memoised onlineByBuilding implementation');
+  // BUG-674 superseded onlineByBuilding's whole-state memoOnState keying with
+  // a narrower (buildings, roadConnectivity) cache (roadGateMapOf) plus a
+  // fresh-every-call G1 construction check in isOnline() itself — see that
+  // item's comment in data.ts for the full read-set proof. Tripwire updated
+  // to match; still asserts the memoised (not reverted-to-unmemoised) shape.
+  assert.match(src, /function roadGateMapOf\(s: SimState\): Map<object, boolean> \{/, 'data.ts must currently contain the memoised roadGateMapOf implementation (BUG-674)');
   assert.match(src, /export const waterCaps: \(s: SimState\) => \{ clean: number; waste: number \} = memoOnState/, 'data.ts must currently contain the memoised waterCaps implementation');
   assert.equal(fs.existsSync(BACKUP_PATH), false, 'no stray .bak file should be left over from a prior red-proof run');
 });

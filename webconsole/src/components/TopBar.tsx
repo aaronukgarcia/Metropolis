@@ -14,7 +14,7 @@ import { LiveEngineBadge } from './LiveEngineBadge';
 import { engineLagTracker, engineLagClassOf, type EngineLagSnapshot } from '../sim/engineLag';
 import { webWorkerOffloadEnabled } from '../sim/webWorkerFlag';
 import { getGlobalWorkerQueueTracker } from '../sim/workerQueueDepth';
-// import { StaleBuildBanner } from './StaleBuildBanner'; // BUG-564: unmounted, see comment at the former mount site below
+import { StaleBuildBanner } from './StaleBuildBanner'; // BUG-564: re-mounted 2026-09-04, see comment at the mount site below
 
 const SPEEDS: { v: 0 | 1 | 2 | 3; label: string }[] = [
   { v: 0, label: 'Pause' },
@@ -189,17 +189,19 @@ export function TopBar() {
   const underConstruction = residentialConstructionSummary(state);
   return (
     <header className="topbar">
-      {/* FEAT-2326609725 / BUG-564: StaleBuildBanner UNMOUNTED (Aaron, 2026-09-02).
-          The detection misfires in active dev: "running" (APP_VERSION_SHA) is
-          frozen at dev-server START while "disk" (live git HEAD, recomputed by
-          the /version.json middleware) advances on every commit — so after any
-          commit the banner shows a permanent mismatch that Reload can NEVER
-          clear (only a dev-server restart re-stamps the running sha), even
-          though vite HMR has kept the actual running code current. A warning
-          the player cannot act on is worse than none. The component + its
-          tests stay; re-mount only after the BUG-564 rework (detect genuine
-          staleness via HMR-connection liveness, not sha comparison).
-      <StaleBuildBanner /> */}
+      {/* FEAT-2326609725 / BUG-564: re-mounted 2026-09-04 after the rework.
+          It was UNMOUNTED 2026-09-02 because "running" (APP_VERSION_SHA) is
+          frozen at dev-server START while "disk" (live git HEAD, recomputed
+          by the /version.json middleware) advances on every commit — so
+          after any commit the sha comparison alone showed a permanent
+          mismatch that Reload could NEVER clear, even though vite HMR had
+          kept the actual running code current. StaleBuildBanner now consults
+          staleBuildGuard.ts's resolveStaleBuild, which is quiet in dev as
+          long as the HMR websocket is connected (see hmrLiveness.ts) and
+          falls back to the exact prior sha-comparison behaviour whenever
+          HMR is genuinely down or this is a production build — the real
+          dead-server case the banner exists for. */}
+      <StaleBuildBanner />
       <div className="brand">
         <span className="brand-mark" />
         Metropolis

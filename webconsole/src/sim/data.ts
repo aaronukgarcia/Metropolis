@@ -639,22 +639,85 @@ export function unlockedAtLevel(level: number): string[] {
 // id) so a caller passing a building that is not in s.buildings (a placement
 // candidate, a ghost) falls through to the direct computation below —
 // semantics are byte-identical to the unmemoised function for every input.
-const onlineByBuilding: (s: SimState) => Map<object, boolean> = memoOnState((s) => {
-  const out = new Map<object, boolean>();
-  for (const b of s.buildings) out.set(b, computeIsOnline(s, b));
-  return out;
-});
+//
+// BUG-674 — the BUG-642 memo above was keyed on the WHOLE state object `s`
+// (memoOnState's usual WeakMap<SimState, T> idiom), which is safe but too
+// coarse here: `s` is a brand-new top-level object EVERY tick/commit (the
+// codebase's immutable-replace discipline), even on a glide day whose only
+// change is funds, citizens, or a notice — none of which computeIsOnline
+// reads. So the O(buildings) fold re-ran on every single commit regardless
+// of relevance ("whole-engine blast radius" per the item). FIX: split the
+// two gates by their ACTUAL read-set instead of hand-guessing one composite
+// key for the whole function (the shape the 2026-09-02 independent round
+// REJECTED for serviceCapacityAggregates — see memoOnState's own doc comment
+// above — because a hand-picked field list silently missed pipeTier):
+//
+//   G1 (construction, below) reads ONLY `s.tick` and `b.builtTick` — an O(1)
+//   subtraction, cheap enough to evaluate FRESH on every isOnline() call
+//   rather than fold into any memo, so it can never go stale and never needs
+//   to appear in an invalidation key.
+//
+//   G2/G3 (road gates, roadGateMapOf below) go through isRoadAdjacent/
+//   isRoadConnected, which are THEMSELVES memoised (roadTileSetOf keyed on
+//   s.buildings, connectedRoadTileSet keyed on s.roadConnectivity — see their
+//   own doc comments a few hundred lines up) and, by direct inspection, read
+//   NOTHING else: no pipeTier, no funds, no citizens. So caching the road-
+//   gate fold on the pair (s.buildings identity, s.roadConnectivity identity)
+//   is exact, not a guess — it is provably the complete read-set of the two
+//   functions being folded, the same standard the rejected serviceCapacity
+//   attempt failed to meet. A change to funds/citizens/notices/pipeTier
+//   leaves both identities untouched -> cache hit -> zero-cost. A change to
+//   buildings (place/demolish/grow) or a roadConnectivity recompute (which
+//   itself only fires when buildings changed — computeRoadConnectivity is
+//   ALSO keyed on s.buildings) correctly invalidates.
+const roadGateCache = new WeakMap<SimState['buildings'], WeakMap<object, Map<object, boolean>>>();
+// Stable stand-in key for the "connectivity not yet computed" bespoke/legacy
+// case (WeakMap keys must be objects) — safe because computeRoadGates' answer
+// when s.roadConnectivity is absent never depends on which absent state it
+// was (the gate is unconditionally skipped), only on s.buildings.
+const NO_ROAD_CONNECTIVITY: object = {};
 
-export function isOnline(s: SimState, b: SimState['buildings'][number]): boolean {
-  const known = onlineByBuilding(s).get(b);
-  return known === undefined ? computeIsOnline(s, b) : known;
+// TEST INSTRUMENTATION (BUG-674): incremented once per ACTUAL O(buildings)
+// fold — i.e. once per distinct (buildings, roadConnectivity) pair ever seen,
+// never on a cache hit. O(1) overhead (one counter bump per fold, not per
+// building), always on — this is how the attack round proves a claimed
+// "unrelated change never recomputes" without timing noise. See
+// bug-674-online-memo.test.mjs.
+export let __roadGateFoldCount = 0;
+export function __resetRoadGateFoldCountForTest(): void {
+  __roadGateFoldCount = 0;
 }
 
-function computeIsOnline(s: SimState, b: SimState['buildings'][number]): boolean {
+function roadGateMapOf(s: SimState): Map<object, boolean> {
+  let byConnectivity = roadGateCache.get(s.buildings);
+  if (!byConnectivity) {
+    byConnectivity = new WeakMap<object, Map<object, boolean>>();
+    roadGateCache.set(s.buildings, byConnectivity);
+  }
+  const connKey: object = s.roadConnectivity ?? NO_ROAD_CONNECTIVITY;
+  let map = byConnectivity.get(connKey);
+  if (!map) {
+    __roadGateFoldCount++;
+    map = new Map<object, boolean>();
+    for (const b of s.buildings) map.set(b, computeRoadGates(s, b));
+    byConnectivity.set(connKey, map);
+  }
+  return map;
+}
+
+export function isOnline(s: SimState, b: SimState['buildings'][number]): boolean {
   if (b.builtTick == null) return true;
   const sp = SPECS[b.spec];
-  // G1 (construction time) — unchanged.
+  // G1 (construction time) — evaluated fresh every call (see BUG-674 comment
+  // above): O(1), and its only inputs (s.tick, b.builtTick) are exactly the
+  // two things the road-gate cache below deliberately does NOT key on.
   if (s.tick - b.builtTick < constructionTicks(sp)) return false;
+  const known = roadGateMapOf(s).get(b);
+  return known === undefined ? computeRoadGates(s, b) : known;
+}
+
+function computeRoadGates(s: SimState, b: SimState['buildings'][number]): boolean {
+  const sp = SPECS[b.spec];
   // FEAT-1972079891 inc1 — ROAD ACTIVATION GATES (G2 road-adjacent, G3 road-connected).
   // A non-infrastructure building only operates if it sits beside a road tile that
   // reaches the connected road network (map edges + trunk m20/hs1/rail/stations).
@@ -1682,7 +1745,22 @@ export const SPECS: Record<string, Spec> = {
   // £/MW rate x 2%/year-over-360-ticks formula the BUG-452 header above uses
   // (rate unchanged per technology, so megapower-inc1.test.mjs's cost/mw
   // ratio-ordering assertions are untouched by this mw-only-formula change).
-  pow_wind: P('pow_wind', 'power', 'Wind Turbine', '6 MW · clean', 1, 1, 3600000, 200, '#7fb2e5', 'services', 2, { mw: 6 }),
+  //
+  // BUG-477 (2026-09-05) ⚠ PLACEHOLDER-balance, pending Aaron's row-by-row —
+  // the catalogue coherence pass found pow_wind sitting at 600k/MW, BELOW
+  // Aaron's own 08-31 UK-realism anchor band (0.75-1.5M/MW). Raised to
+  // 1.2M/MW — the SAME onshore-wind anchor this file's BUG-648 sourcing
+  // block above already cites (RENA/GWEC 2025 + DOE) — which also removes
+  // wind's status as simultaneously the cheapest-per-MW AND (post-BUG-648)
+  // one of the least-dense generators, a combination BUG-685/686's
+  // largest-first provisioning was over-selecting on cost alone. upkeep
+  // RECOMPUTED via the SAME unchanged 2%/year-over-360-ticks rate
+  // (7,200,000 * 0.02 / 360 = 400). Does NOT resolve the deeper BUG-477
+  // finding (fiscal.ts's GRID_EXPORT/IMPORT tariffs sit ~2 orders of
+  // magnitude below ANY plant's amortised £/MW/tick under a realistic
+  // capex anchor — see verifyGridTariffInvariant's doc comment) — that
+  // needs a cross-module ruling, not a catalogue nudge.
+  pow_wind: P('pow_wind', 'power', 'Wind Turbine', '6 MW · clean', 1, 1, 7200000, 400, '#7fb2e5', 'services', 2, { mw: 6 }),
   pow_coal: P('pow_coal', 'power', 'Coal Plant', '80 MW · polluting', 2, 2, 68000000, 3778, '#f0883e', 'services', 3, { mw: 80, tag: 'pollution' }),
   // FEAT-1972079901 realistic power costs: nuclear is the priciest generator to
   // BUILD (Aaron's ask — nuclear VERY expensive up front). Capex raised 150k→560k
@@ -1720,6 +1798,38 @@ export const SPECS: Record<string, Spec> = {
   // capacityTiers reactor ladder (fewer, bigger reactor complexes), not by
   // this spec out-densifying gas per tile — see bug648-power-density.test.mjs
   // for the regression pinning pow_nuke's footprint at 13x13 forever.
+  //
+  // BUG-477 (2026-09-05) coherence finding, PROPOSED — NOT landed here.
+  // pow_nuke sits at 1.4M/MW — INSIDE Aaron's 08-31 0.75-1.5M conventional
+  // band, when his own ruling on that same date explicitly asked for
+  // nuclear/fusion to carry "a prestige premium ABOVE that band" (real UK
+  // nuclear capex is nowhere near this cheap either — Hinkley Point C
+  // prices out around £9-14M/MW). A directionally-correct fix is roughly
+  // ~3M/MW (cost 1,568,000,000 -> 3,360,000,000; upkeep 186,667, same
+  // unchanged 2%/year-over-360-ticks rate). TRIED AND REVERTED in this pass
+  // — the measured blast radius was materially larger than the "one
+  // hardcoded literal" case pow_offshore/pow_windfarm carry, because
+  // raising `cost` also raises constructionTicks() (cost /
+  // CONSTRUCTION_COST_DIVISOR), pushing the real build-out from 1,045 to
+  // 2,240 ticks:
+  //   1. megapower-inc1.test.mjs "nuclear £/MW must exceed offshore £/MW"
+  //      — only reddens if pow_offshore is ALSO bumped (coupled change).
+  //   2. q100092-construction-display.test.tsx — its NUKE_TICKS literal
+  //      (1045-tick-derived) desyncs from the real building's now-2240-tick
+  //      construction gate; halfway/completion assertions fail (confirmed
+  //      via `node ../tools/test/scoped.mjs
+  //      test/q100092-construction-display.test.tsx`).
+  //   3. attack-autoscale-ladder.test.mjs "NPP: pow_nuke is height-exempt…"
+  //      — its fixture reactor (builtTick -2000) falls OFFLINE under the
+  //      new 2240-tick requirement, failing the "sanity: reactor is online"
+  //      precondition before the real assertion under test even runs.
+  // Recommend a dedicated follow-up BOW item covering pow_nuke AND
+  // pow_fusion (see below — coupled) together, sized against this full
+  // list plus a fresh full-suite construction-timing sweep (any OTHER
+  // fixture with a builtTick offset sized to the OLD nuke/fusion
+  // construction time is equally at risk and was not exhaustively found in
+  // this pass's time budget), not folded into the same commit as the
+  // lower-risk wind/windfarm rescale this pass DID land.
   pow_nuke: P('pow_nuke', 'power', 'Nuclear Plant', 'Twin AGR · 1,120 MW · Dungeness-scale', 13, 13, 1568000000, 87111, '#e05d38', 'services', 5, { mw: 1120, tag: 'pollution', capacityTiers: reactorLadder(1120) }),
 
   wat_clean: P('wat_clean', 'water', 'Water Works', 'Clean water for 20,000', 2, 2, 4680000, 260, '#39c5cf', 'services', 3, { tag: 'clean', served: 20000 }),
@@ -1847,11 +1957,49 @@ export const SPECS: Record<string, Spec> = {
   // ---- Power additions ----
   pow_substation: P('pow_substation', 'power', 'Substation', 'Grid step-down node', 1, 1, 2160000, 120, '#9aa4ae', 'services', 3),
   pow_solar: P('pow_solar', 'power', 'Solar Farm', '25 MW · clean', 3, 3, 16250000, 903, '#f6c744', 'services', 6, { mw: 25 }),
-  pow_windfarm: P('pow_windfarm', 'power', 'Onshore Wind Farm', '60 MW · clean', 3, 3, 42000000, 2333, '#7fb2e5', 'services', 7, { mw: 60 }),
+  // BUG-477 (2026-09-05) ⚠ PLACEHOLDER-balance — same onshore-wind anchor
+  // (1.2M/MW) as pow_wind above, for the same reason (was 700k/MW, below
+  // the 0.75-1.5M band): cost 42,000,000 -> 72,000,000, upkeep recomputed
+  // (72,000,000 * 0.02 / 360 = 4,000).
+  pow_windfarm: P('pow_windfarm', 'power', 'Onshore Wind Farm', '60 MW · clean', 3, 3, 72000000, 4000, '#7fb2e5', 'services', 7, { mw: 60 }),
   pow_ccgt: P('pow_ccgt', 'power', 'CCGT Gas Plant', '420 MW · fast response', 3, 3, 336000000, 18667, '#f0883e', 'services', 8, { mw: 420, tag: 'pollution' }),
+  // BUG-477 (2026-09-05) coherence finding, PROPOSED — NOT landed here.
+  // Currently 750k/MW, near-parity with onshore wind/wind-farm's NEW
+  // 1.2M/MW anchor (was near-parity with their OLD 600-700k/MW too). Real
+  // UK offshore wind capex runs roughly 1.5-2x onshore (marine
+  // foundations/cabling), so near-parity is incoherent either way — a
+  // directionally-correct fix is ~2.0M/MW (cost 225,000,000 ->
+  // 600,000,000; upkeep 33,333). NOT LANDED because it was tried and
+  // measurably cascades: at 2.0M/MW, offshore's £/MW (2.0M) overtakes
+  // pow_nuke's UNCHANGED 1.4M/MW, reddening megapower-inc1.test.mjs's
+  // "nuclear £/MW must exceed offshore" invariant — fixing that in turn
+  // requires bumping pow_nuke/pow_fusion, which cascades further (see the
+  // pow_nuke comment below for the full chain: construction-tick timing
+  // shifts redden attack-autoscale-ladder.test.mjs's NPP online-sanity
+  // check and consolidator-mutation.test.mjs's fusion-consolidation
+  // fixture, on top of attack-consolidator-inc1-round.test.mjs:132's
+  // hardcoded 225000000 literal). Offshore's rescale is coupled to nuke's
+  // — recommend one dedicated follow-up BOW item that lands both together,
+  // round-tested against the FULL blast-radius list above, rather than
+  // three uncoordinated partial passes.
   pow_offshore: P('pow_offshore', 'power', 'Offshore Wind Array', '300 MW · clean', 3, 3, 225000000, 12500, '#5b8fc9', 'services', 12, { mw: 300 }),
   // FEAT-1972079901 realistic power costs: experimental mega-plant, dearest per-MW
   // capex of all generators (400k→520k, ~£650/MW; opex 900→1500). `mw` UNCHANGED.
+  // BUG-477 (2026-09-05) coherence finding, PROPOSED — NOT landed here.
+  // Currently 1.6M/MW, only marginally above pow_nuke's own (also-flagged)
+  // 1.4M/MW; an experimental first-of-kind fusion pilot should carry a
+  // clearer premium over commercial fission (~3.5M/MW: cost 1,280,000,000
+  // -> 2,800,000,000; upkeep 155,556). No hardcoded-literal fixture
+  // references this spec's exact cost, BUT TRIED-AND-REVERTED alongside
+  // pow_nuke above: raising this spec's cost pushes its
+  // constructionTicks() from 853 to 1,867 ticks, which desyncs
+  // consolidator-mutation.test.mjs's "control: consolidates pow_fusion
+  // into a Five Gorges Dam" fixture (its 7-turbine pow_fusion group is
+  // placed at builtTick:-1000 — under the old 853-tick requirement they
+  // are long since online; under 1,867 they are STILL under construction,
+  // so the consolidation pass never sees them as eligible source buildings
+  // and the dam never gets built — "the dam was built": 0 !== 1). Coupled
+  // to pow_nuke's deferral above — land together, one follow-up BOW item.
   pow_fusion: P('pow_fusion', 'power', 'Fusion Pilot Plant', '800 MW · experimental', 4, 4, 1280000000, 71111, '#ff9f43', 'services', 19, { mw: 800 }),
 
   // FEAT-1972079901 — FIVE GORGES DAM (GRADUATED from a roadmap placeholder to a

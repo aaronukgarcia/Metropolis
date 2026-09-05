@@ -129,7 +129,9 @@
       "P040-P049": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
       "V856-V856": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V858-V863": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "G5440-G5479": "reserved for engine.deathservices (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 40-wide block found after scanning existing codes and reservations on layer \"G\")"
+      "G5440-G5479": "reserved for engine.deathservices (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 40-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "V857-V857": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V864-V864": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5444,6 +5446,18 @@
       "module": "engine.deathservices",
       "message": "a negative or zero throughput budget was supplied ({budget})",
       "remedy": "supply a non-negative monthly throughput budget sourced from data/deathservices.json"
+    },
+    "MET-V857": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "Debug sink unreachable at {url} -- commit queued locally instead of reaching the metro MariaDB debug sink (see the {id}/drain action context for which commit)",
+      "remedy": "The metro debug sink (tools/debugsink/server.js) is not running or did not respond within the timeout. The commit was queued locally (Debug tab shows pending count) and is not lost -- start/restart the sink, then Commit again (or just wait: the next successful commit opportunistically drains the queue). This error fires every time a commit falls back to the queue, even when queuing itself succeeds, so a downed sink is never silent."
+    },
+    "MET-V864": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "Debug commit {id} payload cannot be serialized: {reason}",
+      "remedy": "The commit payload itself contains a non-JSON-serializable value (a circular reference or similar) -- this is a defect in what was captured, not a network or sink problem. The sink was never contacted and its reachability status is unchanged. Report this payload shape; the frame was NOT queued or sent."
     }
   }
 }

@@ -625,44 +625,196 @@ async function postToSink(id: string, at: string, payload: unknown): Promise<boo
  * never inside this synchronous span. See the regression test
  * "commitDebug: a commit enqueued mid-drain (between an await resolving and
  * the write) survives the drain" in test/debugtab.test.mjs.
+ *
+ * REJECT-round fix (F2/F3, 2026-09-04): two further findings against this
+ * same function.
+ *   F2 — the removal step used to be `filter(e => e.id !== entry.id)`, which
+ *        deletes EVERY entry sharing that id. Two distinct queued commits
+ *        that collided on id (F1) meant POSTing the first successfully wiped
+ *        BOTH off disk — the second was never sunk and never queued again,
+ *        pure data loss behind an all-clear "0 pending" reading. F1's
+ *        collision-free id minting (backend.ts's commitId counter) means
+ *        this should no longer happen in practice, but the removal here is
+ *        now index-based and removes AT MOST ONE matching entry regardless —
+ *        a future id collision (or a legacy persisted queue from before the
+ *        F1 fix) can never delete more than the one entry that was actually
+ *        just confirmed sunk.
+ *   F3 — this function used to be silent on its OWN postToSink failures: a
+ *        sink that answers the live commit but dies mid-drain left the
+ *        stranded entries queued with NOTHING recorded and (worse)
+ *        commitDebug had already cleared the "sink down" indicator before
+ *        this ran. Every drain failure now records its own MET-V857 row and
+ *        re-stamps the module-level unreachable timestamp; the return value
+ *        tells commitDebug whether the drain was fully clean so it can
+ *        decide whether clearing the indicator is honest.
  */
-async function drainQueue(): Promise<void> {
+async function drainQueue(): Promise<boolean> {
+  let allClean = true;
   try {
     const storage = queueStorage();
     // Snapshot for ITERATION ORDER + the (id, at, payload) to re-POST only —
     // never written back directly (see the fix note above).
     const toDrain = readQueue(storage);
-    if (toDrain.length === 0) return;
+    if (toDrain.length === 0) return true;
     for (const entry of toDrain) {
       const ok = await postToSink(entry.id, entry.at, entry.payload);
-      if (!ok) continue; // leave this one queued; try the rest in case only this entry is problematic
+      if (!ok) {
+        // F3: a drain failure is a sink-down event too — never silent, and
+        // the indicator must reflect it (re-stamped, not left cleared by
+        // whatever set it null before this drain started).
+        allClean = false;
+        sinkLastUnreachableAt = Date.now();
+        recordError(
+          `Debug sink unreachable at ${DEBUGSINK_URL} -- commit remains queued locally instead of reaching the metro MariaDB debug sink (drain retry failed)`,
+          { type: 'app', action: `drain ${entry.id}`, code: 'MET-V857' },
+        );
+        continue; // leave this one queued; try the rest in case only this entry is problematic
+      }
       // Synchronous read-filter-write, no await inside this block: atomic
       // with respect to any other code that only ever mutates the queue via
       // enqueueCommit/writeQueue (both synchronous). Always derives from the
       // CURRENT on-disk queue, so a commit enqueued while the POST above was
       // in flight is present in `current` and survives untouched.
       const current = readQueue(storage);
-      const next = current.filter((e) => e.id !== entry.id);
-      writeQueue(storage, next);
+      // F2: remove AT MOST ONE entry (the first matching this id), never a
+      // blanket filter — a colliding id must not delete a sibling entry that
+      // has not itself been confirmed sunk.
+      const idx = current.findIndex((e) => e.id === entry.id);
+      if (idx !== -1) {
+        const next = current.slice();
+        next.splice(idx, 1);
+        writeQueue(storage, next);
+      }
     }
   } catch {
     // Best-effort only — the queue is the source of truth on disk and this
     // function never removes an entry it didn't confirm was sunk.
+    allClean = false;
   }
+  return allClean;
+}
+
+// BUG-691 (Aaron, 2026-09-04, "this should be an error that is trapped"): the
+// sink's last-known reachability, tracked at module scope so the Debug tab can
+// show an HONEST current status on every mount/refresh — not just the local
+// `status` state in debugTab.tsx, which is a one-shot string that resets to
+// "no commit this session" the instant the tab remounts or ANOTHER commit
+// runs, and which nobody sees at all if the Debug tab isn't open when the
+// sink actually goes down. This is the GR#1 "selectable display" pillar for
+// sink health: `debugSinkStatus()` lets any caller ask the current state
+// without re-attempting a network call.
+//
+// REJECT-round fix (F4, 2026-09-04): the comment above overclaimed "an HONEST
+// current status on every mount/refresh" — module state does NOT survive a
+// real page reload (a fresh module instance starts at `null` regardless of
+// what the persisted queue holds), so a player reopening a session with the
+// sink still down and a non-empty queue used to see a false-healthy chip.
+// This is module state ACROSS COMPONENT REMOUNTS within one page load only;
+// across a reload it is reseeded below from the one signal that DOES
+// survive — the persisted queue itself. A non-empty queue at module-init
+// time means the last thing that happened was an unreached sink (nothing
+// else leaves entries queued), so seed "unreachable" from that rather than
+// from a timestamp we have no way to recover.
+let sinkLastUnreachableAt: number | null = pendingCommits() > 0 ? Date.now() : null;
+
+/** BUG-691: current debug-sink reachability, derived from the most recent
+ * commitDebug attempt (there is no separate polling — the sink is only ever
+ * probed when the player actually commits, so "reachable" here means "the
+ * last attempt succeeded", not "definitely up right now").
+ *
+ * F5 fix (2026-09-04): `sinceMs` used to return the raw absolute epoch
+ * timestamp `sinkLastUnreachableAt` under a name ("since-Ms") that reads as
+ * an ELAPSED duration — any consumer rendering "down for {sinceMs}ms" would
+ * have printed ~1.7e12 (roughly 55,000 years). It is now genuinely elapsed
+ * milliseconds since the outage was first noticed. */
+export function debugSinkStatus(): { unreachable: boolean; sinceMs: number | null } {
+  if (sinkLastUnreachableAt === null) return { unreachable: false, sinceMs: null };
+  return { unreachable: true, sinceMs: Date.now() - sinkLastUnreachableAt };
+}
+
+// BUG-691 F1 (2026-09-04): the commit id used to be minted as
+// `DBG-${Date.now().toString(36)}` alone — 1ms resolution, so two commits
+// fired in the same millisecond (trivially reachable on a fast machine, or
+// two debug-tab clicks close together) got the IDENTICAL id. That collision
+// was the root cause behind two separate defects: the id-bearing MET-V857
+// message deduping a second genuine failure into a mere count bump (see the
+// message change below), and drainQueue's old id-keyed filter deleting BOTH
+// colliding queue entries after sinking only one (F2, commitqueue.ts/this
+// file's drainQueue). A monotonic per-module counter suffix makes the id
+// collision-free regardless of how many commits land in the same
+// millisecond, for the life of this module instance.
+let commitIdCounter = 0;
+function mintCommitId(): string {
+  commitIdCounter += 1;
+  return `DBG-${Date.now().toString(36).toUpperCase()}-${commitIdCounter.toString(36).toUpperCase()}`;
 }
 
 export async function commitDebug(payload: unknown): Promise<CommitResult> {
-  const id = `DBG-${Date.now().toString(36).toUpperCase()}`;
+  const id = mintCommitId();
+
+  // BUG-691 F6 (2026-09-04): screen for an unserializable payload BEFORE
+  // touching the network or the sink-health indicator. The round proved that
+  // without this guard, a circular payload's JSON.stringify throw happened
+  // deep inside enqueueCommit (reached only after postToSink's own throw was
+  // already swallowed as "unreachable") -- so a PAYLOAD defect got blamed on
+  // the NETWORK (a healthy sink was marked down), and commitDebug rejected
+  // outright despite enqueueCommit's "never throws" contract. This is a
+  // defect in what was captured, not in the sink or the queue, so it gets
+  // its own registry code and never touches sinkLastUnreachableAt.
+  try {
+    JSON.stringify(payload);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : safeStringifyAny(e);
+    recordError(`Debug commit ${id} payload cannot be serialized: ${reason}`, {
+      type: 'app',
+      action: `commit ${id}`,
+      code: 'MET-V864',
+    });
+    return {
+      ok: false,
+      queued: false,
+      id,
+      message: `Debug commit ${id} was NOT sent or queued -- its payload cannot be serialized (${reason}). This is a captured-data defect, not a network/sink problem; the sink status is unaffected.`,
+    };
+  }
+
   const at = new Date().toISOString();
   const sunk = await postToSink(id, at, payload);
   if (sunk) {
-    // Opportunistically drain anything queued from before the sink was
-    // reachable. Awaited so the caller's result reflects post-drain state,
-    // but its own failures never affect THIS commit's success.
-    await drainQueue();
+    // BUG-691 F3 (2026-09-04): this used to clear sinkLastUnreachableAt
+    // BEFORE awaiting drainQueue -- a sink that answers the live commit but
+    // then dies mid-drain left the indicator showing healthy (and recorded
+    // nothing) while entries stayed silently stranded on the queue. Only
+    // clear once the drain itself confirms every stranded entry was ALSO
+    // sunk; drainQueue re-stamps/records its own failures otherwise.
+    const drainedClean = await drainQueue();
+    if (drainedClean) sinkLastUnreachableAt = null;
     return { ok: true, queued: false, id, message: `Committed to metro MariaDB debug sink as ${id}` };
   }
   // ASM-453: sink unreachable/timed out — queue locally and report honestly.
+  // BUG-691: this used to fall straight into the "queue locally" branch below
+  // with NOTHING recorded to the registry/error ring — a queued-and-later-
+  // drained commit is not data loss, but a downed sink is exactly the kind of
+  // silent degradation GR#1/GR#17 exist to catch (Aaron: "the sink died
+  // tonight and commits vanished with no registry error or UI signal"). Record
+  // it EVERY time the sink is unreachable, regardless of whether the local
+  // queue write below succeeds or fails — those are separate, additional
+  // failure modes (MET-V854/V855) layered on top of this one.
+  //
+  // F1 fix: the id is no longer embedded in this MESSAGE — dedupeKey is
+  // msg+componentStack, so an id-bearing message forced every distinct
+  // outage attempt into its own row (fine on its own) but MASKED an id
+  // collision (F1's actual bug) by making two genuinely different failures
+  // look identical only when their ids happened to clash. A stable message
+  // lets recordError's normal dedup do its job (repeats bump `count`,
+  // exactly as designed for a recurring identical-cause failure); the
+  // per-commit id is still captured, just in `action` where it cannot affect
+  // dedup.
+  sinkLastUnreachableAt = Date.now();
+  recordError(
+    `Debug sink unreachable at ${DEBUGSINK_URL} -- commit queued locally instead of reaching the metro MariaDB debug sink`,
+    { type: 'app', action: `commit ${id}`, code: 'MET-V857' },
+  );
   // BUG-607: enqueueCommit never throws (byte-budget eviction + a
   // quota-degrade retry are internal to commitqueue.ts), but it CAN fail to
   // persist the entry at all — that failure must reach the player and the

@@ -60,3 +60,54 @@ export function checkStaleBuild(
 
   return { stale: running !== disk, runningSha: running, diskSha: disk };
 }
+
+// ---------------------------------------------------------------------------
+// BUG-564 rework (2026-09-04): the banner above was unmounted (6f69e28,
+// 2026-09-02) because it misfired in active dev — `runningSha`
+// (APP_VERSION_SHA) is frozen at dev-server START while `diskSha` (live git
+// HEAD) advances on every commit, so after the FIRST commit of any dev
+// session the comparison shows a PERMANENT mismatch that only a dev-server
+// RESTART can clear (Reload does nothing — the module the sha comes from
+// isn't re-evaluated by a reload) — even though Vite's HMR has been patching
+// the module graph in place the whole time and the code actually running is
+// perfectly current. A warning nobody can act on is worse than none.
+//
+// The real signature of the incident this guard exists for (a long-lived dev
+// server whose module graph has gone stale) is NOT "sha differs" — sha
+// differs on every commit by design in dev — it is "HMR has stopped
+// delivering updates", i.e. the dev-server websocket connection is down (see
+// hmrLiveness.ts). So:
+//   - production build (no HMR at all, isDevServer=false): sha comparison is
+//     exactly right and UNCHANGED — this falls straight through to
+//     checkStaleBuild above, still pinned by this file's existing tests.
+//   - dev server, HMR connected: never stale, no matter what the shas say —
+//     HMR is doing its job, so the build-time-frozen sha is not a valid
+//     staleness proxy while it's connected.
+//   - dev server, HMR genuinely disconnected: this IS the dead-server case —
+//     fall back to the sha comparison, which is trustworthy here because no
+//     further live patches are coming and only a restart + reload fixes it.
+
+export interface DevAwareStaleInputs {
+  runningSha: string | null | undefined;
+  diskSha: string | null | undefined;
+  /** True under the Vite dev server (import.meta.env.DEV); false for a production build. */
+  isDevServer: boolean;
+  /**
+   * True while the HMR websocket is connected. Meaningless (and ignored) when
+   * `isDevServer` is false — a production build has no HMR to lose.
+   */
+  hmrConnected: boolean;
+}
+
+/**
+ * Dev-aware wrapper around {@link checkStaleBuild} — use this from the live
+ * component. Use `checkStaleBuild` directly only where sha comparison alone
+ * is the intended, unconditional check (this file's prod-pinning tests).
+ */
+export function resolveStaleBuild(inputs: DevAwareStaleInputs): StaleBuildResult {
+  const { runningSha, diskSha, isDevServer, hmrConnected } = inputs;
+  if (isDevServer && hmrConnected) {
+    return { stale: false, runningSha: runningSha ?? '', diskSha: diskSha ?? null };
+  }
+  return checkStaleBuild(runningSha, diskSha);
+}

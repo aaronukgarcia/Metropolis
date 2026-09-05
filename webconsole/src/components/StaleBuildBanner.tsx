@@ -41,10 +41,22 @@
 // server) or an incomparable 'dev'/'unknown' sha on either side NEVER shows
 // the banner (see staleBuildGuard.ts's isComparable) — a false positive here
 // would train users to ignore it, which is worse than missing a real one.
+//
+// BUG-564 rework (2026-09-04): re-mounted after being neutered 2026-09-02
+// because it misfired throughout active dev (sha comparison alone always
+// mismatches after the first commit of any dev session, permanently, even
+// though HMR kept the running code current). The container below now feeds
+// `resolveStaleBuild` (staleBuildGuard.ts) BOTH signals it needs: whether
+// this is a dev server at all (import.meta.env.DEV) and whether the HMR
+// websocket is actually connected right now (hmrLiveness.ts). In prod this
+// degrades to plain checkStaleBuild, unchanged. In dev, the banner stays
+// quiet while HMR is doing its job and only fires on a genuinely dead
+// connection — the real dead-server signature.
 
 import { useEffect, useState } from 'react';
 import { APP_VERSION_SHA } from '../generated/version';
-import { checkStaleBuild, type StaleBuildResult } from '../sim/staleBuildGuard';
+import { resolveStaleBuild, type StaleBuildResult } from '../sim/staleBuildGuard';
+import { subscribeHmrConnection } from '../sim/hmrLiveness';
 
 /** How often to poll for drift. Cheap: a tiny JSON, cache-busted server-side. */
 const POLL_MS = 25_000;
@@ -101,8 +113,18 @@ export function StaleBuildBannerView({
   );
 }
 
+/** Vite always exposes import.meta.env; optional-chain defensively for any
+ *  non-Vite consumer of this module (mirrors the idiom already used at
+ *  ConfigMenu.tsx:273 / debugTab.tsx for the same reason). */
+const IS_DEV_SERVER = !!(import.meta as any).env?.DEV;
+
 export function StaleBuildBanner() {
   const [diskSha, setDiskSha] = useState<string | null>(null);
+  // BUG-564: starts true (see hmrLiveness.subscribeHmrConnection's contract —
+  // it reports the current best guess synchronously before any real
+  // disconnect could have happened), so the banner never has a spurious
+  // "stale" flash on first mount while a dev session is healthy.
+  const [hmrConnected, setHmrConnected] = useState(true);
 
   useEffect(() => {
     let alive = true;
@@ -126,6 +148,18 @@ export function StaleBuildBanner() {
     };
   }, []);
 
-  const result = checkStaleBuild(APP_VERSION_SHA, diskSha);
+  useEffect(() => {
+    // No-op in production (subscribeHmrConnection reports true once and
+    // returns a no-op unsubscribe when there is no HMR client) — cheap to
+    // always subscribe rather than branch on IS_DEV_SERVER here too.
+    return subscribeHmrConnection(setHmrConnected);
+  }, []);
+
+  const result = resolveStaleBuild({
+    runningSha: APP_VERSION_SHA,
+    diskSha,
+    isDevServer: IS_DEV_SERVER,
+    hmrConnected,
+  });
   return <StaleBuildBannerView result={result} />;
 }

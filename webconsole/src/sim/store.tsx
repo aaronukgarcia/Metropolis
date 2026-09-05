@@ -45,6 +45,7 @@ import {
   mintLineageId,
   migrateLegacySavepointsInPlace,
   persistSavepointWithReason,
+  persistSavepointForced,
   type Savepoint,
   type StorageLike,
   type SavepointRejectReason,
@@ -2609,7 +2610,79 @@ export function SimProvider({ children }: { children: ReactNode }) {
             const rebuildLineageId = readCurrentLineageId(window.localStorage);
             result.state = { ...result.state, lineageId: rebuildLineageId };
             const rebuiltSave = createSavepoint(result.state, [], new Date(), running, decision.camera ?? currentCamera(), nextSaveSeq());
-            persistSavepoint(window.localStorage, rebuiltSave);
+            // BUG-436 FIX: `persistSavepoint`'s boolean was previously discarded
+            // here — the ONLY completion-path call site in this file that still
+            // ignored it (every other persist site follows the `mirrorAfterPersist`
+            // single-call-site pattern documented above at its definition). The
+            // rebuilt city never gets swapped into React state directly; Resume
+            // reloads from the disk savepoint written HERE. So a swallowed persist
+            // failure (storage quota, or BUG-469's stale-overwrite guard) produced
+            // exactly BUG-436's symptom: the report modal claims success, but
+            // Resume/reload then restores the OLD (pre-rebuild) savepoint — the
+            // rebuild "completes" yet the rebuilt city never actually exists on
+            // disk.
+            //
+            // BUG-436 round-4 fix (fix contract item 1, superseding the round
+            // F1/F2 "try-then-fallback" approach below): rebuild is a
+            // DELIBERATE replace-the-city boundary, not a competing autosave
+            // — take the FORCED path UNCONDITIONALLY rather than trying the
+            // plain fail-closed gate first and only forcing when THAT gate
+            // happens to refuse for staleness. The round-3 F-R3-1/F-R3-1b
+            // attack proved that fallback never even fires on a legacy
+            // install with any FREE or torn/corrupt slot: the plain gate
+            // skips its staleness check entirely for an empty target and
+            // succeeds outright, so `persistSavepointForced` — and the
+            // re-stamp walk that keeps every OTHER occupied slot's saveSeq
+            // coherent with the new lineage-authority value — never ran.
+            // Forcing unconditionally means the walk always runs at this
+            // boundary, regardless of which slot the write lands in.
+            // `persistSavepointForced` mints a coherent saveSeq that
+            // supersedes every occupied slot of this lineage rather than
+            // silently bypassing anything, because the rebuilt city IS the
+            // new lineage authority by construction.
+            const rebuildResult = persistSavepointForced(window.localStorage, rebuiltSave);
+            const rebuildPersisted = rebuildResult.ok;
+            if (!rebuildPersisted) {
+              // F3 fix: do NOT mirror a failed primary write into IndexedDB —
+              // that is the PRIMARY boot store (FEAT-2326609780). Mirroring
+              // only ever happens on the success path below now.
+              //
+              // Round-4: `persistSavepointForced` skips the staleness check
+              // entirely by construction, so it can only ever return
+              // `ok:true` (optionally carrying `restampFailures`, below) or
+              // `ok:false, reason:'storage-error'` — no `stale-overwrite`
+              // case is reachable here any more. Message stays reason-aware
+              // rather than hardcoding "storage quota" regardless.
+              const msg = `Rebuild completed but saving the rebuilt city failed (${rebuildResult.reason ?? 'storage-error'}). The rebuilt city was NOT written to disk — resuming would restore the OLD city. Free up storage space (Config > Clear journal, or delete old saves) and rebuild again.`;
+              recordError(msg, { type: 'app', action: 'rebuild' });
+              // F5 fix: mirror the `crashed` branch above (returns before
+              // `setRebuildReportState(report)`) — clear the now-abandoned
+              // rebuild's state rather than leaving a stale report behind.
+              setRebuildReportState(null);
+              setRebuildDecision(null);
+              setRebuildPhase('prompt');
+              return;
+            }
+            // F-R3-2 fix (round 4): the re-stamp walk is best-effort per slot
+            // (one-shot retry inside persistSavepointWithReason) — a PARTIAL
+            // walk still lands the rebuild (the primary write is what
+            // `ok:true` reports), but must not be reported as unqualified
+            // success: a surviving un-restamped slot can still refuse a
+            // future autosave (RR-1, one layer down). Report and proceed —
+            // a warning beats prompting the player to retry forever.
+            if (rebuildResult.restampFailures && rebuildResult.restampFailures.length > 0) {
+              recordError(
+                `Rebuild landed, but ${rebuildResult.restampFailures.length} history slot(s) could not be re-stamped — future autosaves may be refused until storage frees up.`,
+                { type: 'app', action: 'rebuild' }
+              );
+            }
+            // RR-1 point 2: `persistSavepointForced` may have minted a
+            // saveSeq HIGHER than `nextSaveSeq()` handed to `rebuiltSave`
+            // above. Re-seed the ambient counter — never LOWERS it.
+            if (Number.isFinite(rebuiltSave.saveSeq) && (rebuiltSave.saveSeq as number) > saveSeqRef.current) {
+              saveSeqRef.current = rebuiltSave.saveSeq as number;
+            }
+            mirrorAfterPersist(true, rebuiltSave);
             persistStashedCamera(window.localStorage, decision.camera ?? currentCamera());
             // BUG-458: flush (not schedule) — a rebuild is a wipe/replace boundary.
             if (hotJournalRef.current) journalPersisterRef.current?.flush(hotJournalRef.current);

@@ -182,6 +182,25 @@ export interface EnqueueOutcome {
   droppedOversize?: boolean;
   /** True: storage.setItem hit quota; recovered by evicting the oldest half and retrying once. */
   quotaRecovered?: boolean;
+  /** BUG-691 F6: true when `payload` itself could not be JSON.stringify'd (e.g.
+   * a circular reference). This module's doc comment promises callers "never
+   * throws" -- the round proved that false (the un-guarded
+   * `JSON.stringify(entry)` below escaped straight to the caller). Callers
+   * (backend.ts) should already screen for this before ever reaching here
+   * (a payload defect is not a queue-capacity problem), but this flag keeps
+   * the promise true even for a caller that does not. */
+  unserializable?: boolean;
+}
+
+/** Best-effort JSON.stringify that reports failure instead of throwing
+ * (BUG-691 F6: a circular/unserializable value must degrade to `null`, never
+ * escape to the caller). */
+function safeStringify(v: unknown): { text: string | null; ok: boolean } {
+  try {
+    return { text: JSON.stringify(v), ok: true };
+  } catch {
+    return { text: null, ok: false };
+  }
 }
 
 /**
@@ -199,7 +218,14 @@ export function enqueueCommit(
   atIso: string
 ): EnqueueOutcome {
   const entry: QueuedCommit = { id, at: atIso, payload: compactPayload(payload) };
-  const entryBytes = byteLength(JSON.stringify(entry));
+  // BUG-691 F6: this used to be a bare `JSON.stringify(entry)` -- a circular
+  // (or otherwise unserializable) payload threw straight out of a function
+  // whose own doc comment promises "never throws". Guard it explicitly.
+  const measured = safeStringify(entry);
+  if (!measured.ok) {
+    return { length: pendingCount(storage), ok: false, unserializable: true };
+  }
+  const entryBytes = byteLength(measured.text as string);
 
   if (entryBytes > QUEUE_BYTE_BUDGET) {
     // Even compacted, this ONE frame alone blows the whole budget — drop it
@@ -212,7 +238,13 @@ export function enqueueCommit(
   q = q.slice(-QUEUE_CAP);
   q = evictToByteBudget(q, QUEUE_BYTE_BUDGET);
 
-  const first = safeSetItem(storage, QUEUE_KEY, JSON.stringify(q));
+  const serializedQ = safeStringify(q);
+  if (!serializedQ.ok) {
+    // Extremely unlikely given the single-entry check above already passed,
+    // but stay consistent with the "never throws" contract regardless.
+    return { length: pendingCount(storage), ok: false, unserializable: true };
+  }
+  const first = safeSetItem(storage, QUEUE_KEY, serializedQ.text as string);
   if (first.ok) return { length: q.length, ok: true };
 
   if (!first.quota) {
@@ -224,7 +256,11 @@ export function enqueueCommit(
   // QuotaExceeded: drop the OLDEST half of the candidate queue (keep the
   // newer ceil(n/2), including the just-appended entry) and retry ONCE.
   const halved = q.slice(Math.floor(q.length / 2));
-  const second = safeSetItem(storage, QUEUE_KEY, JSON.stringify(halved));
+  const serializedHalved = safeStringify(halved);
+  if (!serializedHalved.ok) {
+    return { length: pendingCount(storage), ok: false, unserializable: true };
+  }
+  const second = safeSetItem(storage, QUEUE_KEY, serializedHalved.text as string);
   if (second.ok) return { length: halved.length, ok: true, quotaRecovered: true };
 
   return { length: pendingCount(storage), ok: false };

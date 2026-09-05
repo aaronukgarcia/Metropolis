@@ -269,6 +269,21 @@ export type SavepointRejectReason = 'stale-overwrite' | 'storage-error';
 export interface PersistSavepointResult {
   ok: boolean;
   reason?: SavepointRejectReason;
+  /**
+   * BUG-436 round-4 fix (F-R3-2): per-slot re-stamp failures from a forced
+   * write's history walk (see `PersistSavepointOptions.force`) that survived
+   * an internal retry. Present ONLY when `ok:true` and the walk was
+   * PARTIALLY successful — the primary requested write still landed (that
+   * is what `ok:true` reports), but one or more OTHER occupied slots could
+   * not be re-stamped below the new lineage-authority ceiling, so a future
+   * ordinary (unforced) autosave MAY fall back to the tick comparison
+   * against that stale slot and be refused. Never set on the unforced path.
+   * Callers that care (the rebuild completion path) must surface this
+   * honestly rather than reporting unqualified success — reporting a
+   * partial failure beats leaving the player to discover it as a
+   * permanently-refused autosave with no signal (RR-1/F-R3-2).
+   */
+  restampFailures?: Array<{ slot: number; reason: string }>;
 }
 
 /**
@@ -336,10 +351,35 @@ function isIncomingSavepointNewerOrEqual(incoming: Savepoint, existing: Savepoin
  * surface loudly, not the quiet autosave dot) use
  * `persistSavepointWithReason` directly.
  */
+export interface PersistSavepointOptions {
+  /**
+   * BUG-436 round F1/F2 fix (lead ruling): the rebuild boundary is a
+   * DELIBERATE replace-the-city event, not a competing autosave — a legacy
+   * install's freshness gate falling back to tick comparison (neither side
+   * carries a `saveSeq`) refuses a perfectly healthy rebuild whose tick is
+   * lower ONLY because journal-cap eviction rolled off the ticks in between
+   * (see the class doc comment above and ATTACK 1's F1 repro in
+   * attack-bug-436-round.test.mjs). `force: true` skips the
+   * `isIncomingSavepointNewerOrEqual` staleness check for an OCCUPIED slot
+   * entirely and instead MINTS a coherent `saveSeq` that is guaranteed to
+   * supersede every occupied slot of this lineage — never overriding an
+   * already-higher explicit `saveSeq` the caller supplied. This is a
+   * deliberate lineage-authority stamp, not a silent bypass: the resulting
+   * savepoint is still internally consistent with the lineage's own
+   * `saveSeq` numbering, so every OTHER freshness comparison in the estate
+   * (the IDB boot-swap, the next ordinary autosave) still orders correctly
+   * against it. Reserved for the rebuild call site ONLY — every other
+   * persist call site (autosave/save/self-heal/load) must keep `force`
+   * unset so a genuinely stale write is still rejected.
+   */
+  force?: boolean;
+}
+
 export function persistSavepointWithReason(
   storage: StorageLike,
   savepoint: Savepoint,
-  now: Date = new Date()
+  now: Date = new Date(),
+  opts?: PersistSavepointOptions
 ): PersistSavepointResult {
   try {
     // F2 fix (P0 lineage round): a savepoint arriving here with NO lineageId
@@ -389,12 +429,70 @@ export function persistSavepointWithReason(
     const emptySlot = slots.find((s) => s.sp === null);
     const target = emptySlot ?? slots.reduce((oldest, s) => (s.sp!.savedAt < oldest.sp!.savedAt ? s : oldest));
 
-    if (target.sp) {
-      if (!isIncomingSavepointNewerOrEqual(savepoint, target.sp)) {
-        // BUG-469 overwrite protection: reject the stale write outright.
-        // The prior (fresher, SAME-lineage) savepoint in this slot is left intact.
-        return { ok: false, reason: 'stale-overwrite' };
+    const restampFailures: Array<{ slot: number; reason: string }> = [];
+
+    if (opts?.force) {
+      // Round-4 fix (F-R3-1/F-R3-1b): this block used to live INSIDE
+      // `if (target.sp)`, so a FREE or torn target slot (reads as `sp ===
+      // null`, see `emptySlot` above) let the unforced write succeed
+      // outright and skipped the mint + re-stamp walk entirely — the other
+      // occupied slots kept their legacy shape and every subsequent
+      // autosave was refused forever (RR-1, one layer down). The walk now
+      // runs on `opts?.force` alone, regardless of which slot the write
+      // lands in.
+      //
+      // F1/F2: mint a coherent saveSeq that supersedes every occupied slot
+      // of this lineage — the rebuilt city IS the new lineage authority by
+      // construction. Never lowers an already-higher explicit saveSeq.
+      const maxOccupiedSeq = slots.reduce((m, s) => {
+        const seq = s.sp?.saveSeq;
+        return Number.isFinite(seq) && (seq as number) > m ? (seq as number) : m;
+      }, 0);
+      if (!Number.isFinite(savepoint.saveSeq) || (savepoint.saveSeq as number) <= maxOccupiedSeq) {
+        savepoint.saveSeq = maxOccupiedSeq + 1;
       }
+      // RR-1 (re-round 3, P1): minting a seq for the TARGET slot alone is
+      // not enough — the other occupied slots of this lineage can still be
+      // legacy entries with NO saveSeq at a HIGH tick, so the next ordinary
+      // autosave would fall back to the tick comparison against one of
+      // THOSE slots and be refused forever. RE-STAMP the surviving slots'
+      // `saveSeq` DOWN below the newly minted ceiling — content untouched,
+      // only `saveSeq` moves, oldest-savedAt gets the lowest re-stamped seq.
+      const others = slots
+        .filter((s) => s.slot !== target.slot && s.sp)
+        .sort((a, b) => (a.sp!.savedAt < b.sp!.savedAt ? -1 : a.sp!.savedAt > b.sp!.savedAt ? 1 : 0));
+      let ceiling = savepoint.saveSeq as number;
+      for (let i = others.length - 1; i >= 0; i--) {
+        const o = others[i];
+        const sp = o.sp!;
+        if (!Number.isFinite(sp.saveSeq) || (sp.saveSeq as number) >= ceiling) {
+          const restamped: Savepoint = { ...sp, saveSeq: ceiling - 1 };
+          const key = savepointKey(o.slot, lineageId);
+          const encoded = encode(JSON.stringify(restamped));
+          let res = safeSetItem(storage, key, encoded);
+          if (!res.ok) {
+            // F-R3-2 fix: a bare `if (res.ok)` here used to swallow the
+            // failure completely — no record, no retry — leaving this slot
+            // permanently un-restamped and the install in the exact RR-1
+            // "autosaves refused forever" shape, SILENTLY. The purge-on-write
+            // step earlier in this same call may have just freed slots, and
+            // browser quota conditions are frequently transient, so retry
+            // ONCE before treating this slot as a genuine failure.
+            res = safeSetItem(storage, key, encoded);
+          }
+          if (res.ok) {
+            ceiling = restamped.saveSeq as number;
+          } else {
+            restampFailures.push({ slot: o.slot, reason: res.error ?? 'storage-error' });
+          }
+        } else {
+          ceiling = sp.saveSeq as number;
+        }
+      }
+    } else if (target.sp && !isIncomingSavepointNewerOrEqual(savepoint, target.sp)) {
+      // BUG-469 overwrite protection: reject the stale write outright.
+      // The prior (fresher, SAME-lineage) savepoint in this slot is left intact.
+      return { ok: false, reason: 'stale-overwrite' };
     }
 
     // BUG-457: route through the shared quota-safe helper instead of a bare
@@ -402,7 +500,8 @@ export function persistSavepointWithReason(
     // FEAT-1972079935: encode() compresses the (large) serialized savepoint
     // before it hits localStorage — smaller payload, same quota-safe path.
     const result = safeSetItem(storage, savepointKey(target.slot, lineageId), encode(JSON.stringify(savepoint)));
-    return result.ok ? { ok: true } : { ok: false, reason: 'storage-error' };
+    if (!result.ok) return { ok: false, reason: 'storage-error' };
+    return restampFailures.length > 0 ? { ok: true, restampFailures } : { ok: true };
   } catch {
     return { ok: false, reason: 'storage-error' };
   }
@@ -421,6 +520,25 @@ export function persistSavepoint(
   now: Date = new Date()
 ): boolean {
   return persistSavepointWithReason(storage, savepoint, now).ok;
+}
+
+/**
+ * BUG-436 round F1/F2 fix (lead ruling): force-write a savepoint at a
+ * deliberate replace-the-city boundary (the rebuild boundary — see
+ * `PersistSavepointOptions.force`'s doc comment). Equivalent to
+ * `persistSavepointWithReason(storage, savepoint, now, { force: true })`,
+ * exposed as its own named entry point so a call site never has to spell
+ * out `{ force: true }` inline — the name alone documents that this is the
+ * narrow, sanctioned bypass, not a generic option any caller can reach for.
+ * Still fails closed on a genuine storage error (`reason: 'storage-error'`)
+ * — forcing only skips the STALENESS comparison, never the write itself.
+ */
+export function persistSavepointForced(
+  storage: StorageLike,
+  savepoint: Savepoint,
+  now: Date = new Date()
+): PersistSavepointResult {
+  return persistSavepointWithReason(storage, savepoint, now, { force: true });
 }
 
 /**

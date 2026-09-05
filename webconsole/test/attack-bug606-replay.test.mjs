@@ -112,15 +112,38 @@ test('ATTACK: isStateAffecting classifies resolveDemandAll as journaled', () => 
  *  fills it in gradually via the real growth simulation, not instantly).
  *  BUG-646 (cap 250 -> 2000, Aaron 2026-09-03): scaled from the original 50
  *  blocks/200 ticks (which planned 353 units, no longer enough to exceed the
- *  new 2000 cap) up to 800 blocks/250 ticks (measured 2,255 planned units —
- *  over 2000 with margin, preserving this test's whole point, while keeping
- *  the tick count as low as the cap raise allows — this test already pays a
- *  real 'resolveDemandAll' at the new cap TWICE over via genesis replay). */
+ *  new 2000 cap) up to 800 blocks/250 ticks (measured 2,255 planned units at
+ *  the time).
+ *
+ *  BUG-477 fixture-side follow-up (round rejection, 2026-09-05): the
+ *  wind/windfarm repricing this estate lands (pow_wind/pow_windfarm raised
+ *  toward the realistic capex anchor) shifted orderedDemandFixPlan's overall
+ *  mix enough that the FIXED 800-block fixture only plans 1,731 units under
+ *  the new prices — UNDER the 2000 cap, silently defeating this test's whole
+ *  point (never asserted as flaky; it just stopped exercising the cap).
+ *  BLOCK_COUNT is now DERIVED from RESOLVE_DEMAND_ALL_MAX_UNITS itself (GR#15
+ *  — no bare re-guessed literal) via a calibration ratio measured once
+ *  against the CURRENT catalogue (800 blocks / 250 ticks -> 1,731 planned
+ *  units under the post-BUG-477 wind prices), scaled up by TARGET_MARGIN so
+ *  the scenario stays comfortably over whatever the cap is even after
+ *  ordinary future balance/price tuning, instead of sitting right at the
+ *  edge the way the original fixed 800 did. If the catalogue moves far
+ *  enough that this calibration itself goes stale, the precondition assert
+ *  below will say so explicitly (not a silent pass). */
+const CAP_FIXTURE_CALIBRATION_BLOCKS = 800;
+const CAP_FIXTURE_CALIBRATION_TICKS = 250;
+const CAP_FIXTURE_CALIBRATION_UNITS = 1731; // measured at the block/tick counts above, post-BUG-477 wind repricing
+const CAP_FIXTURE_TARGET_MARGIN = 1.3; // aim ~30% clear of the cap, not right at its edge
+const CAP_FIXTURE_BLOCK_COUNT = Math.ceil(
+  (CAP_FIXTURE_CALIBRATION_BLOCKS * RESOLVE_DEMAND_ALL_MAX_UNITS * CAP_FIXTURE_TARGET_MARGIN) /
+    CAP_FIXTURE_CALIBRATION_UNITS
+);
+
 function capTriggerScript() {
   const tiles = [];
   let x = 5;
   let y = 5;
-  for (let i = 0; i < 800; i++) {
+  for (let i = 0; i < CAP_FIXTURE_BLOCK_COUNT; i++) {
     tiles.push({ x, y });
     x += 3;
     if (x > 430) {
@@ -132,7 +155,7 @@ function capTriggerScript() {
     { type: 'debugFunds', amount: 5_000_000_000 },
     { type: 'unlockAll' },
     { type: 'placeMany', spec: 'res_estate', tiles },
-    ...ticks(250),
+    ...ticks(CAP_FIXTURE_CALIBRATION_TICKS),
     { type: 'debugFunds', amount: -5_000_000_000 },
     { type: 'debugFunds', amount: 1_000_000_000_000 },
     { type: 'resolveDemandAll' },

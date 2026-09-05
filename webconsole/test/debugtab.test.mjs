@@ -22,7 +22,7 @@ import {
   enqueueCommit,
   compactPayload,
 } from '../src/sim/commitqueue.ts';
-import { errorListModel, commitDebug } from '../src/sim/backend.ts';
+import { errorListModel, commitDebug, debugSinkStatus, recentErrors } from '../src/sim/backend.ts';
 import {
   debugActions,
   DEBUG_FUNDS_GRANT,
@@ -398,6 +398,98 @@ test(
       }
     )
   )
+);
+
+// ---------- BUG-691: a downed sink must never be silent (GR#1/GR#17) ----------
+//
+// Aaron: "the sink died tonight and commits vanished with no registry error
+// or UI signal" — even though the entry itself queues fine locally (ASM-453),
+// nothing previously reached the registry-sourced error ring, and the only
+// UI signal was debugTab's own ephemeral `status` string, which resets on
+// every remount. RED before the fix: recordError was never called on this
+// path (no MET-V857 row ever appeared) and debugSinkStatus() didn't exist at
+// all. GREEN after: every sink-unreachable commitDebug call records a
+// MET-V857 row AND flips debugSinkStatus().unreachable, in addition to the
+// pre-existing queue behavior (proved unchanged by the tests above).
+
+test(
+  'BUG-691: sink down records a MET-V857 registry error and flips debugSinkStatus().unreachable',
+  withFakeLocalStorage(
+    withFakeFetch(
+      async () => ({ ok: false, status: 503 }),
+      async (calls, mem) => {
+        // REJECT-round fix F1 (2026-09-04): the commit id is deliberately NOT
+        // embedded in the dedupe-bearing message any more (an id-bearing
+        // message masked an id collision as a false dedupe -- see
+        // attack-bug691-sink-silence.test.mjs). That means every direct
+        // sink-down failure across this WHOLE test file now shares one
+        // message and dedupes into a single row via `count` -- so this test
+        // tracks that row's `count` (order-independent) rather than assuming
+        // its own failure always creates a brand-new array entry.
+        const isDirectFailureRow = (e) => e.code === 'MET-V857' && !/drain retry failed/.test(e.msg);
+        const countBefore = recentErrors()
+          .filter(isDirectFailureRow)
+          .reduce((n, e) => n + e.count, 0);
+
+        const result = await commitDebug({ bug691: 1 });
+        assert.equal(result.queued, true, 'unchanged behavior: still falls back to the local queue');
+        const q = JSON.parse(mem.get(QUEUE_KEY));
+        assert.equal(q.length, 1, 'unchanged behavior: the commit is still queued exactly once');
+
+        const rows = recentErrors().filter(isDirectFailureRow);
+        assert.equal(rows.length, 1, 'exactly one direct-failure row exists (message is stable across calls)');
+        const countAfter = rows.reduce((n, e) => n + e.count, 0);
+        assert.equal(countAfter, countBefore + 1, 'this failure was recorded (count advanced by exactly one)');
+        assert.equal(rows[0].code, 'MET-V857');
+        assert.match(rows[0].msg, /Debug sink unreachable/);
+        // The id is still captured, just in `action` (not part of
+        // dedupeKey) -- whichever occurrence FIRST created this row set it,
+        // so only assert the shape, not this call's exact id.
+        assert.match(rows[0].action, /^commit DBG-/, 'the commit id is captured in action, not the message');
+
+        const status = debugSinkStatus();
+        assert.equal(status.unreachable, true, 'a quiet, persistent indicator must be raisable outside debugTab state');
+        assert.equal(typeof status.sinceMs, 'number');
+        assert.ok(status.sinceMs >= 0 && status.sinceMs < 5000, 'F5: sinceMs is ELAPSED ms, not an absolute epoch');
+      }
+    )
+  )
+);
+
+test(
+  'BUG-691: sink up records NO error and clears debugSinkStatus().unreachable (behavior unchanged when healthy)',
+  withFakeLocalStorage(async (mem) => {
+    // A controllable fetch fake — down first, so we can prove a SUBSEQUENT
+    // healthy commit actually clears the indicator rather than it simply
+    // having never been set.
+    const originalFetch = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+    const controller = { down: true };
+    Object.defineProperty(globalThis, 'fetch', {
+      value: async () => (controller.down ? { ok: false, status: 503 } : { ok: true, status: 200 }),
+      configurable: true,
+      writable: true,
+    });
+    try {
+      await commitDebug({ warmup: true });
+      assert.equal(debugSinkStatus().unreachable, true, 'precondition: sink is down');
+
+      controller.down = false;
+      const before = recentErrors().length;
+      const result = await commitDebug({ bug691: 2 });
+      assert.equal(result.ok, true);
+      assert.equal(result.queued, false, 'unchanged behavior: a live sink is reported directly');
+
+      const after = recentErrors();
+      assert.equal(after.length, before, 'no new registry error on a healthy commit');
+      assert.equal(debugSinkStatus().unreachable, false, 'the quiet indicator clears once the sink is reachable again');
+    } finally {
+      if (originalFetch) {
+        Object.defineProperty(globalThis, 'fetch', originalFetch);
+      } else {
+        delete globalThis.fetch;
+      }
+    }
+  })
 );
 
 test(

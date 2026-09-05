@@ -13,7 +13,7 @@
     "preview": "vite preview",
     "dogfood:build": "npm run build",
     "dogfood": "npm run build && node scripts/serve-bundle.mjs 4173",
-    "test": "node --test \"test/*.test.mjs\" && tsx --test test/mount.test.tsx test/rebuild-prompt.test.tsx test/rebuild-regression-bug468.test.tsx test/store-dispatch.test.tsx test/error-boundary.test.tsx test/store-reset-capture.test.tsx test/population-sankey.test.tsx test/arrivals-by-mode-sankey.test.tsx test/bug501-second-bailout-banner.test.tsx test/bug500-advisor-click-overlap.test.tsx test/bug498-forced-sales-dismiss.test.tsx test/bug499-queue-depth-overlap.test.tsx test/bug512-bug513-save-error-robustness.test.tsx test/keybindings.test.tsx",
+    "test": "node --test \"test/*.test.mjs\" && tsx --test test/mount.test.tsx test/rebuild-prompt.test.tsx test/rebuild-regression-bug468.test.tsx test/store-dispatch.test.tsx test/error-boundary.test.tsx test/store-reset-capture.test.tsx test/population-sankey.test.tsx test/arrivals-by-mode-sankey.test.tsx test/bug501-second-bailout-banner.test.tsx test/bug500-advisor-click-overlap.test.tsx test/bug498-forced-sales-dismiss.test.tsx test/bug499-queue-depth-overlap.test.tsx test/bug512-bug513-save-error-robustness.test.tsx test/keybindings.test.tsx test/stale-build-guard.test.tsx test/attack-bug564-hmr-liveness.test.tsx test/attack-bug691-indicator-render.test.tsx",
     "test:mount": "tsx --test test/mount.test.tsx"
   },
   "dependencies": {

@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSim } from '../../../sim/simContext';
 import { useBusy } from '../../Busy';
-import { commitDebug, errorListModel, pendingCommits, recentErrors } from '../../../sim/backend';
+import { commitDebug, debugSinkStatus, errorListModel, pendingCommits, recentErrors } from '../../../sim/backend';
 import { debugActions } from '../../../sim/debugactions';
 import { buildDebugJson, debugJsonText } from '../../../sim/debugjson';
 import { foldGraceHistory, GRACE_RATE_WINDOW_SIZE } from '../../../sim/consistency';
@@ -34,6 +34,12 @@ export function DebugTab() {
   const { run } = useBusy();
   const [status, setStatus] = useState<string | null>(null);
   const [pending, setPending] = useState(pendingCommits());
+  // BUG-691: seed from backend.ts's module-level last-known reachability (NOT
+  // component state) so a tab that was closed while the sink went down still
+  // shows the true current status on mount, rather than resetting to "no
+  // commit this session" and hiding the fact that the last real attempt
+  // failed. Mirrors the quiet-indicator idiom store.tsx uses for autoSaveError.
+  const [sinkDown, setSinkDown] = useState(() => debugSinkStatus().unreachable);
 
   // BUG-624/BUG-640: a rolling queue of PAST refreshes' raw (ungraced)
   // flows-check failure snapshots, held in a component ref — NOT SimState,
@@ -140,6 +146,7 @@ export function DebugTab() {
       const r = await commitDebug(frame.dj);
       setStatus(r.message);
       setPending(pendingCommits());
+      setSinkDown(debugSinkStatus().unreachable);
     });
   }
 
@@ -199,6 +206,15 @@ export function DebugTab() {
         <span className="hint">
           {pending} queued · {status ?? 'no commit this session'}
         </span>
+        {/* BUG-691: a quiet, PERSISTENT indicator (survives tab remounts —
+            sourced from backend.ts's module state, not the ephemeral `status`
+            string above) so a downed debug sink is never silent. Mirrors the
+            "⚠ save" quiet-indicator idiom store.tsx uses for autoSaveError. */}
+        {sinkDown && (
+          <span className="hint" style={{ color: 'var(--warn, #d97706)' }} title="The metro MariaDB debug sink did not respond on the last commit attempt — commits are queuing locally (see MET-V857 in Errors captured below).">
+            ⚠ debug sink down
+          </span>
+        )}
       </div>
       <h4>Errors captured</h4>
       {errList.empty ? (

@@ -19,7 +19,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkStaleBuild } from '../src/sim/staleBuildGuard';
+import { checkStaleBuild, resolveStaleBuild } from '../src/sim/staleBuildGuard';
 
 test('checkStaleBuild: matching shas are NOT stale', () => {
   const r = checkStaleBuild('abc1234', 'abc1234');
@@ -56,6 +56,93 @@ test("checkStaleBuild: 'unknown' disk sha (git describe failed) is NOT stale", (
 test('checkStaleBuild: empty-string shas are NOT stale', () => {
   assert.equal(checkStaleBuild('', 'abc1234').stale, false);
   assert.equal(checkStaleBuild('abc1234', '').stale, false);
+});
+
+// ---------------------------------------------------------------------------
+// BUG-564 (2026-09-02 -> 2026-09-04 rework): checkStaleBuild's plain sha
+// comparison misfires throughout active dev because the frozen build-time
+// runningSha necessarily differs from live disk after the FIRST commit of any
+// dev session — a permanent false positive Reload can never clear. The fix
+// is resolveStaleBuild: dev-aware, but production behaviour must stay
+// IDENTICAL to checkStaleBuild (pinned below), and the genuine dead-server
+// case (HMR actually down) must still fire.
+
+test('resolveStaleBuild: DEV MODE MISFIRE FIX — sha differs but HMR is connected -> NOT stale', () => {
+  // This is the exact BUG-564 shape: a commit landed, disk sha moved on,
+  // running sha is still the dev-server-start value, but HMR has been
+  // patching the module graph live the whole time.
+  const r = resolveStaleBuild({
+    runningSha: 'abc1234',
+    diskSha: 'def5678',
+    isDevServer: true,
+    hmrConnected: true,
+  });
+  assert.equal(r.stale, false, 'dev + HMR connected must never misfire on sha drift alone');
+});
+
+test('resolveStaleBuild: dev server with HMR genuinely DISCONNECTED still fires on a real sha mismatch', () => {
+  // The actual dead-server incident this guard exists for: HMR has stopped
+  // delivering patches, so the sha comparison is trustworthy again.
+  const r = resolveStaleBuild({
+    runningSha: 'abc1234',
+    diskSha: 'def5678',
+    isDevServer: true,
+    hmrConnected: false,
+  });
+  assert.equal(r.stale, true, 'dev + HMR disconnected must still catch a genuinely stale build');
+  assert.equal(r.runningSha, 'abc1234');
+  assert.equal(r.diskSha, 'def5678');
+});
+
+test('resolveStaleBuild: dev server, HMR connected, matching shas -> not stale (unsurprising)', () => {
+  const r = resolveStaleBuild({
+    runningSha: 'abc1234',
+    diskSha: 'abc1234',
+    isDevServer: true,
+    hmrConnected: true,
+  });
+  assert.equal(r.stale, false);
+});
+
+test('resolveStaleBuild: PROD PATH PINNED — isDevServer:false with a sha mismatch behaves EXACTLY like checkStaleBuild, regardless of hmrConnected', () => {
+  const direct = checkStaleBuild('abc1234', 'def5678');
+  const viaResolve = resolveStaleBuild({
+    runningSha: 'abc1234',
+    diskSha: 'def5678',
+    isDevServer: false,
+    hmrConnected: true, // must be ignored outright in prod
+  });
+  assert.deepEqual(viaResolve, direct, 'prod must not be weakened by the dev-mode fix');
+  assert.equal(viaResolve.stale, true, 'prod staleness detection must remain intact');
+
+  const viaResolveHmrFalse = resolveStaleBuild({
+    runningSha: 'abc1234',
+    diskSha: 'def5678',
+    isDevServer: false,
+    hmrConnected: false,
+  });
+  assert.deepEqual(viaResolveHmrFalse, direct, 'hmrConnected must be irrelevant outside dev, either way');
+});
+
+test('resolveStaleBuild: PROD PATH PINNED — isDevServer:false with matching shas is not stale', () => {
+  const viaResolve = resolveStaleBuild({
+    runningSha: 'abc1234',
+    diskSha: 'abc1234',
+    isDevServer: false,
+    hmrConnected: false,
+  });
+  assert.equal(viaResolve.stale, false);
+});
+
+test("resolveStaleBuild: PROD PATH PINNED — uncomparable 'dev'/'unknown' shas stay non-stale in prod too", () => {
+  assert.equal(
+    resolveStaleBuild({ runningSha: 'dev', diskSha: 'def5678', isDevServer: false, hmrConnected: false }).stale,
+    false,
+  );
+  assert.equal(
+    resolveStaleBuild({ runningSha: 'abc1234', diskSha: 'unknown', isDevServer: false, hmrConnected: false }).stale,
+    false,
+  );
 });
 
 // --- Component-level: the presentational view renders (or doesn't) from the
