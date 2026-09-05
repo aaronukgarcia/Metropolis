@@ -802,6 +802,10 @@
             "outboundGuid": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6"
           },
           {
+            "key": "engine.firms",
+            "outboundGuid": "fd65035a-1204-45e0-bdb7-5b9196c77b4f"
+          },
+          {
             "key": "engine.logistics",
             "outboundGuid": "1cd17147-10d9-41c6-ae98-27cbaa121a2d"
           },
@@ -5174,6 +5178,11 @@
             "key": "feat.gameinit",
             "moduleGuid": "939179db-288c-42d4-8dc0-4ba794acfda5",
             "inboundGuid": "828a958d-df24-4d6c-8108-7ced7c9af7d7"
+          },
+          {
+            "key": "engine.spiral",
+            "moduleGuid": "3a339420-be56-4126-bae7-086e7d20fdb8",
+            "inboundGuid": "839b5566-8881-4322-adc8-461381e039ad"
           }
         ]
       },
@@ -5204,6 +5213,10 @@
           {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
@@ -8858,6 +8871,11 @@
             "key": "engine.wellbeing",
             "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
             "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },

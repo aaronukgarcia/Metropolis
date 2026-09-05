@@ -1795,7 +1795,8 @@
         "int.serializer",
         "engine.deathservices",
         "engine.wellbeing",
-        "feat.gameinit"
+        "feat.gameinit",
+        "engine.spiral"
       ],
       "sprint": 6
     },
@@ -3423,7 +3424,8 @@
         "foundation.det",
         "foundation.errors",
         "foundation.num",
-        "engine.wellbeing"
+        "engine.wellbeing",
+        "int.serializer"
       ],
       "sprint": 10
     },
