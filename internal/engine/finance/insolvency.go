@@ -23,6 +23,24 @@ type MonthResult struct {
 // If either is true the consecutive-failure counter resets to 0; if both
 // are false it increments, and at exactly insolvencyMonthsForGameOver the
 // game-over signal fires. It returns the updated state.
+//
+// BUG-759 lead ruling (opus-reround-bug759's own re-bounce, F3): a caller
+// must NEVER derive creditAvailable as an independent, always-sampled
+// signal once obligationsMet is already false. A rejected wage post or
+// an unpaid debt IS the proof that neither funds nor credit sufficed at
+// the moment it mattered — a later, POST-HOC "is there any headroom
+// anywhere right now" reading can trivially go positive from revenue
+// that landed AFTER the failure was already real (e.g. next month's
+// opening receipts, or — the concrete production case that surfaced
+// this — the SAME month's own consumption/tax legs posting before the
+// wage debit that then rejects), which would silently paper over a
+// genuine, already-proven miss. The correct shape at any call site is
+// `creditAvailable := obligationsMet && <real headroom> > 0` — i.e.
+// compute a real headroom reading ONLY to see whether an
+// already-met month also had spare capacity, never as an independent
+// second chance for a month that already failed. See compose.go's
+// financeHook.ApplyEffect call site for the concrete derivation and its
+// own account-set rationale (AvailableCredit, this package).
 func (f *FinanceAPI) RecordMonthResult(obligationsMet, creditAvailable bool) MonthResult {
 	if err := f.checkNotCopied("RecordMonthResult"); err != nil {
 		return MonthResult{}
@@ -75,17 +93,76 @@ func (f *FinanceAPI) InsolvencyMonths() int {
 	return f.insolvencyMonths
 }
 
-// AvailableCredit returns the total unused credit line across accounts
-// (the running total, never a map-iteration sum — AC-14). A positive
-// value means credit was available this month even if unused, which
-// resets the insolvency counter (AC-7).
+// cityObligationAccounts is the FIXED, deterministic set of accounts
+// AvailableCredit sums over (BUG-759 round re-REJECT, opus-reround-
+// bug759): the accounts the CITY itself can actually draw on to settle
+// its own obligations — AcctTreasury (the city's cash), AcctFirms (the
+// working-capital pot PostWagesFromFirms pays private wages from, and
+// the only account compose.go ever grants a credit line to), and
+// AcctReserves (baseline one's unused-today reserve account, included
+// for completeness since creditScoreLocked already reads it as part of
+// the SAME "can the city cover its own bills" question). AcctHouseholds
+// is DELIBERATELY EXCLUDED even though it is a RoleMoney account: it is
+// citizens' own private wealth (seeded 750M at Wire, replenished every
+// month by wage postings — finance_publish.go's own balance-sheet view
+// excludes it from the city's Assets for the identical reason, see that
+// file's doc comment), not money the CITY can spend to meet ITS
+// obligations. Proven live by the round: with this fix absent, a city
+// with an empty treasury and a fully-drawn firms line still reported
+// AvailableCredit()=750,000,000 off Households alone, so InsolvencyMonths
+// stayed at 0 through twelve consecutive failed payrolls — a fat
+// citizens' savings balance was masking real city bankruptcy. A literal
+// slice, never derived from f.role's map (GR#21/AC-14) — order here does
+// not even affect the sum, but is kept ascending by AccountID for
+// consistency with sortedMoneyAccounts' convention.
+var cityObligationAccounts = [...]AccountID{AcctReserves, AcctTreasury, AcctFirms}
+
+// AvailableCredit returns the city's total REAL, currently-unused
+// headroom across the accounts the city itself can draw on to meet its
+// OWN obligations (cityObligationAccounts, above — NOT every RoleMoney
+// account, and specifically NOT AcctHouseholds): sum of (balance + that
+// account's granted credit line), each floored at 0.
+//
+// BUG-759 round REJECT (opus-round-bug759, F1): this used to return
+// f.totalCreditLine — the GRANTED overdraft ceiling set once at Wire
+// time (compose.go's SetCreditLine(AcctFirms, ...)) and never reduced by
+// drawdown — mislabelled "unused" in this very doc comment. Proven live:
+// AcctFirms driven to exactly -totalCreditLine (a further debit already
+// rejects, i.e. genuinely zero headroom left) still reported the full
+// granted line as "available".
+//
+// BUG-759 re-REJECT (opus-reround-bug759, same round's F1 follow-up):
+// the FIRST fix summed over EVERY RoleMoney account, which silently
+// re-introduced the identical false-positive failure mode through
+// AcctHouseholds — citizens' private wealth, which the city cannot
+// spend, was still counted as if it were city headroom. See
+// cityObligationAccounts' own doc comment for the fix and rationale.
+//
+// A positive result now means the CITY genuinely has real spare capacity
+// somewhere in ITS OWN accounts right now — the literal AC-7 reading
+// ("credit was available this month even if unused"), never a facility
+// that merely EXISTS regardless of drawdown, and never citizens' own
+// money masking the city's inability to pay its own bills.
+// balance+line is never allowed to go negative per account by
+// construction (Post's own overdraft check refuses a debit that would
+// push balance below -creditLines[account]), so the per-account max(0,…)
+// floor only guards a would-be future invariant break from ever
+// wrapping this sum negative (GR#16), it is not expected to fire today.
 func (f *FinanceAPI) AvailableCredit() Money {
 	if err := f.checkNotCopied("AvailableCredit"); err != nil {
 		return 0
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return f.totalCreditLine
+	var total Money
+	for _, id := range cityObligationAccounts {
+		headroom, _ := satAddMoney(f.accountBalanceLocked(id), f.creditLines[id])
+		if headroom < 0 {
+			headroom = 0
+		}
+		total, _ = satAddMoney(total, headroom)
+	}
+	return total
 }
 
 // RecordPayrollShortfall (BUG-548, GR#17) sets the USER-VISIBLE payroll-

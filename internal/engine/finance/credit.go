@@ -243,6 +243,15 @@ func (f *FinanceAPI) MissPayment(id LoanID) error {
 // from its live state: outstanding debt, this tick's tax revenue,
 // reserve months (reserves ÷ monthly revenue), and the missed-payment
 // counter.
+//
+// BUG-759 round REJECT (opus-round-bug759): on a copy-guard violation
+// (checkNotCopied — SEC-020, unreachable in production, only a hostile
+// test hand-copies a *FinanceAPI struct) this returns creditScoreMin
+// (0) — the worst possible rating, indistinguishable from a genuinely
+// bankrupt city. A publisher that cannot tell the two apart must not
+// forward 0 as if it were a real reading; call [FinanceAPI.Valid] FIRST
+// and skip publishing entirely on false — see finance_publish.go's own
+// use of this pairing.
 func (f *FinanceAPI) CreditRatingNow() CreditScore {
 	if err := f.checkNotCopied("CreditRatingNow"); err != nil {
 		return creditScoreMin
@@ -250,6 +259,16 @@ func (f *FinanceAPI) CreditRatingNow() CreditScore {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.creditScoreLocked()
+}
+
+// Valid reports whether this *FinanceAPI is the live, non-copied
+// instance (SEC-020's copy guard, exported read-only so a caller like
+// compose's publish path can distinguish "the handle is fine, the score
+// is really 0" from "the handle was copied, every reading here is
+// meaningless" BEFORE forwarding a getter's degraded zero-value onward —
+// see CreditRatingNow's doc comment).
+func (f *FinanceAPI) Valid() bool {
+	return f.checkNotCopied("Valid") == nil
 }
 
 // CurrentInterestRate returns the annual rate the city would pay if it
@@ -321,11 +340,25 @@ func (f *FinanceAPI) reduceLoanBookLocked(principal Money) {
 }
 
 // creditScoreLocked derives the credit score from live state (f.mu held).
+//
+// BUG-759: the debt figure feeding CreditRating is the loan book
+// (totalDebtLocked, unchanged — OutstandingDebt()'s own documented
+// contract stays "total outstanding loan principal" and is NOT widened
+// here) PLUS the running unfunded-cremation balance
+// (f.cremationShortfall). BUG-733's own ruling is explicit that an
+// unfunded cremation is real, un-deferred city debt, not a free pass —
+// so a city that lets that balance run up must rate worse exactly as it
+// would for an equivalent amount of loan principal, even though it is
+// never counted twice on the published Outstanding Debt liability line
+// (compose's finance_publish.go reads OutstandingDebt() only). Saturating
+// add mirrors every other money combination in this package (GR#16: a
+// huge shortfall must never wrap the sum into a good-looking low debt
+// figure).
 func (f *FinanceAPI) creditScoreLocked() CreditScore {
 	if err := f.checkNotCopied("creditScoreLocked"); err != nil {
 		return creditScoreMin
 	}
-	debt := f.totalDebtLocked()
+	debt, _ := satAddMoney(f.totalDebtLocked(), f.cremationShortfall)
 	revenue := f.taxRevenueLocked()
 	reserves := f.accountBalanceLocked(AcctReserves)
 

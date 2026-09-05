@@ -318,14 +318,24 @@ export interface FinancePayrollShortfallView {
 }
 
 /** Mirrors finance_publish.go's financeBalanceSheetWirePatch
- * field-for-field. Every field beyond balanceSheet/payrollShortfall is a
- * documented fast-follow on the Go side (PL/loans/creditRating/
- * taxSliders/publicPayroll/sankey) and is therefore optional here too —
- * additive, no schemaVersion bump needed when they land, mirroring the
- * Go comment's own claim exactly. */
+ * field-for-field. Every field beyond balanceSheet is a documented
+ * fast-follow on the Go side (PL/loans/taxSliders/publicPayroll/sankey)
+ * and is therefore optional here too — additive, no schemaVersion bump
+ * needed when they land, mirroring the Go comment's own claim exactly.
+ * creditRating (BUG-759) landed: FinanceAPI.CreditRatingNow(), a 0-1000
+ * int score (credit.go), sent live every publish tick. undefined ONLY on
+ * the Go side's FinanceAPI.Valid() copy-guard check failing
+ * (finance_publish.go — unreachable in production, never a placeholder
+ * zero); round REJECT (opus-round-bug759) caught an earlier draft of
+ * this same comment claiming that gate before the Go side actually had
+ * one, when the field was in fact sent unconditionally — verify against
+ * finance_publish.go's buildFinanceBalanceSheetPatch, not this comment,
+ * if the two are ever suspected to have drifted. */
 export interface FinanceBalanceSheetPatch {
   schemaVersion: number;
   balanceSheet?: FinanceBalanceSheetView;
+  unlimitedMoney?: boolean;
+  creditRating?: number;
   /** BUG-723 round finding F6: explicitly `| null` (not just optional) —
    * the Go side's `*financePayrollShortfallView` with `omitempty` will
    * never actually MARSHAL a literal JSON `null` (a nil pointer is

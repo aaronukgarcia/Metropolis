@@ -2544,6 +2544,74 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "citizens", "op": "distributeWagesToResidents", "cause": err.Error()})
 			}
 		}
+
+		// BUG-759: FinanceAPI.RecordMonthResult had ZERO production
+		// callers — InsolvencyMonths/IsInsolvent (AC-7's 3-consecutive-
+		// months game-over signal, consumed by engine.spiral's own
+		// EvaluateInsolvency) never advanced no matter how badly a city
+		// missed its obligations. Called here, once per month, LAST in
+		// PhaseFinance (this hook's own doc comment above: PhaseFinance is
+		// the final monthly phase, and this call is the final statement in
+		// this branch) so every one of this month's real postings has
+		// already landed:
+		//
+		//   - obligationsMet derives from the SAME two monitorable
+		//     shortfall surfaces this package already maintains for the
+		//     player (never an invented number, GR#15): PayrollShortfall()
+		//     for THIS month (set/cleared moments ago, above) — GATED on
+		//     payrollMonth == clock.Month() (round finding, P3): the floor-
+		//     backstop branch above does not clear the surface (it is an
+		//     else-if sibling of the branch that does), so a month that
+		//     took the floor-backstop path would otherwise still see a
+		//     STALE amount left over from an earlier month's real failure
+		//     and wrongly charge it against this, possibly clean, month —
+		//     and CremationShortfallOwed() (BUG-733's running unfunded-
+		//     cremation debt, read live — any balance still owed, even one
+		//     accrued in an earlier month and never repaid, means the city
+		//     has not met its obligations this month either; this one has
+		//     no month to gate on by design — see its own doc comment).
+		//   - creditAvailable is DELIBERATELY NOT an independent
+		//     AvailableCredit()-derived signal (BUG-759 lead ruling,
+		//     opus-reround-bug759's own re-bounce, F3): a rejected wage
+		//     post (PayrollShortfall recorded for THIS month) or an unpaid
+		//     cremation debt is ITSELF the proof that neither funds nor
+		//     credit sufficed at the moment they were actually needed —
+		//     moneycirc.go's postConsumptionAndTax always lands SOME
+		//     revenue into the city's own accounts before that same
+		//     month's wage debit is attempted (unconditional
+		//     PostCouncilTax, plus a small consumption-spend leg), so a
+		//     POST-HOC AvailableCredit() sample taken here, after that
+		//     revenue has already landed, reads positive even in a
+		//     genuinely bankrupt city — sampling it independently would
+		//     let that residual override a real, already-proven failure
+		//     (exactly BUG-759's F3 finding: 12 consecutive real wage
+		//     failures, InsolvencyMonths stuck at 0). So: when
+		//     obligationsMet is already false, creditAvailable is forced
+		//     false too — the city's own attempt to pay already answered
+		//     "was credit available" and the answer was no, full stop.
+		//     AvailableCredit() is consulted ONLY to decide whether a
+		//     genuinely met-obligations month ALSO had spare headroom
+		//     (a distinction RecordMonthResult's docs draw but this call
+		//     site's obligationsMet==false branch can never reach zero
+		//     production impact from, since obligationsMet||creditAvailable
+		//     already resets on obligationsMet alone) — kept as its own
+		//     read for RecordMonthResult's documented two-input contract
+		//     and so a future consumer of MonthResult's fields is never
+		//     handed a is-credit-available answer manufactured from an
+		//     already-failed month's leftover revenue.
+		//
+		// FEAT-143 AC-2's Unlimited-Money inertness is handled entirely
+		// inside RecordMonthResult itself (insolvency.go's
+		// unlimitedLocked() gate) — this call site passes the real,
+		// ungated inputs on every mode.
+		payrollMonth, payrollShortfallNow := st.finance.PayrollShortfall()
+		obligationsMet := payrollObligationMet(payrollMonth, payrollShortfallNow, clock.Month()) &&
+			st.finance.CremationShortfallOwed() <= 0
+		var creditAvailable bool
+		if obligationsMet {
+			creditAvailable = st.finance.AvailableCredit() > 0
+		}
+		st.finance.RecordMonthResult(obligationsMet, creditAvailable)
 	}
 	// Mirror the LEDGER unconditionally — on success and on rejection
 	// alike. A rejected Post leaves the ledger unchanged by contract
@@ -2622,6 +2690,23 @@ func (st *simState) syncMoneyFromLedger() {
 // returns (nil, nil) for every shard except 0 (see above) — the only
 // Effect ever emitted comes from shard 0.
 func (h *financeHook) SingleShard() bool { return true }
+
+// payrollObligationMet reports whether the payroll leg of this month's
+// obligations was met, given FinanceAPI.PayrollShortfall()'s (month,
+// shortfall) pair and the CURRENT month (BUG-759 round finding P3,
+// pulled out to its own testable function rather than left inline in
+// financeHook.ApplyEffect): a positive shortfall counts against
+// obligationsMet ONLY when it was recorded for currentMonth. The
+// floor-backstop branch above (financeHook.ApplyEffect) does not clear
+// PayrollShortfall's surface — it is an else-if sibling of the branch
+// that does — so a month that takes that branch would otherwise still
+// see a STALE amount left over from an EARLIER month's real failure and
+// wrongly charge it against this, possibly clean, month. See this
+// package's bug759_recordmonth_test.go for the table-driven proof this
+// month check is load-bearing.
+func payrollObligationMet(payrollMonth int64, payrollShortfall finance.Money, currentMonth int64) bool {
+	return payrollShortfall <= 0 || payrollMonth != currentMonth
+}
 
 // --- consumption hook (MOD-021, real) ---
 

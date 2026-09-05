@@ -87,6 +87,25 @@ type financeBalanceSheetWirePatch struct {
 	// publish tick in production — the `omitempty` tag exists purely
 	// for wire-shape symmetry with the other optional sections.
 	PayrollShortfall *financePayrollShortfallView `json:"payrollShortfall,omitempty"`
+
+	// CreditRating is BUG-759's wiring of a REAL, already-consumed gap:
+	// internal/ui/screens/finance's own wirePatch/Screen (wire.go/screen.go)
+	// have carried a CreditRating field and a Screen.CreditRating()
+	// accessor (read by cmd/metropolis/boot.go) since before this fix, but
+	// compose's independent wire-patch copy (this struct, per this file's
+	// own doc comment on why it duplicates rather than imports
+	// internal/ui/screens/finance, GR#20) never populated or sent the
+	// field — the UI's ApplyDelta `if p.CreditRating != nil` branch could
+	// never fire. Same *int JSON shape as the UI side field-for-field;
+	// value is FinanceAPI.CreditRatingNow() read live every publish tick
+	// (never cached — mirrors UnlimitedMoney's own live-read rationale
+	// above), nil ONLY on FinanceAPI's SEC-020 copy-guard violation
+	// (st.finance.Valid() — see buildFinanceBalanceSheetPatch, unreachable
+	// in production; st.finance itself is never nil after Wire, unlike
+	// st.gameInit above). CreditRatingHistory is a documented separate
+	// fast-follow (trend tracking is a distinct feature from publishing
+	// the current score) and stays unpopulated here.
+	CreditRating *int `json:"creditRating,omitempty"`
 }
 
 // financePayrollShortfallView mirrors internal/ui/screens/finance/wire.go's
@@ -208,10 +227,27 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 		Months:            shortfallMonths,
 	}
 
+	// BUG-759 round REJECT (opus-round-bug759): CreditRatingNow() returns
+	// creditScoreMin (0) on a SEC-020 copy-guard violation, the same
+	// value a genuinely bankrupt city would report — publishing that
+	// unconditionally would read as "worst possible rating" instead of
+	// "unavailable". st.finance.Valid() distinguishes the two BEFORE the
+	// read; only sent (non-nil, via the omitempty tag) when the handle
+	// really is live. st.finance is itself never nil after a successful
+	// Wire (unlike st.gameInit above, which a hand-constructed test
+	// simState can leave nil) — the copy-guard is the only degraded path
+	// here.
+	var creditRating *int
+	if st.finance.Valid() {
+		rating := int(st.finance.CreditRatingNow())
+		creditRating = &rating
+	}
+
 	patch := financeBalanceSheetWirePatch{
 		SchemaVersion:    financeWireSchemaVersion,
 		UnlimitedMoney:   unlimitedMoney,
 		PayrollShortfall: payrollShortfall,
+		CreditRating:     creditRating,
 		BalanceSheet: &financeBalanceSheetView{
 			Assets: []financeBalanceItem{
 				{Label: "Treasury", ValueMicropounds: int64(treasury)},
