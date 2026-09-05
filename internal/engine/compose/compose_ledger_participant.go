@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
 
@@ -90,6 +91,25 @@ import (
 //	                          registration bridge. No module holds this; it is
 //	                          compose's own record of how much of EACH feed
 //	                          runDeathServiceBuildingRegistry has consumed.
+//	  - buildersMerchantFirmID (BUG-752): the auto-placed builders'-merchant
+//	                          firm's id, held ONLY by compose's simState
+//	                          (moneycirc_inc2.go's maybeAutoPlaceBuildersMerchant
+//	                          — engine.firms itself has no concept of "the
+//	                          builders' merchant", that is a compose-level
+//	                          designation over an ordinary firm). Without
+//	                          this, a save/load boundary left the field at
+//	                          its fresh-Wire zero value, so
+//	                          maybeAutoPlaceBuildersMerchant's idempotency
+//	                          guard (buildersMerchantFirmID != 0) failed to
+//	                          recognise the restored city already had one —
+//	                          registering a SECOND merchant firm on the next
+//	                          qualifying zone command. Serialized here, not
+//	                          in engine.firms' own participant, because GR#3
+//	                          puts state where its OWNER is: the firm itself
+//	                          round-trips via firms.SaveParticipant like any
+//	                          other registered firm, but the "this FirmID is
+//	                          THE builders' merchant" designation is
+//	                          compose's own bookkeeping.
 //	  - deathServiceBridgeCemeteryIDs/deathServiceBridgeCrematoriumIDs
 //	                          (BUG-743): the sorted roster of cemetery/
 //	                          crematorium ids THIS composition has registered
@@ -172,6 +192,13 @@ type composeLedgerWire struct {
 	// distinguishable on the wire from "field absent, decode zero-value".
 	DeathServiceBridgeCemeteryIDs    []string `json:"deathServiceBridgeCemeteryIDs"`
 	DeathServiceBridgeCrematoriumIDs []string `json:"deathServiceBridgeCrematoriumIDs"`
+	// BuildersMerchantFirmID (BUG-752): see this file's own doc comment's
+	// DURABLE list entry. omitempty: a save taken before this fix existed
+	// (or a city where the Industry&Farms trigger never fired) decodes to
+	// 0, which is the CORRECT "no merchant placed yet" value, never a
+	// backfill-ambiguous case (FirmID 0 is never a valid firm id --
+	// firmIDForLocked's det.NewStream draw is remapped away from 0).
+	BuildersMerchantFirmID uint64 `json:"buildersMerchantFirmID,omitempty"`
 }
 
 // composeLedgerToWire projects the durable ledger fields off the live
@@ -198,6 +225,7 @@ func composeLedgerToWire(st *simState) composeLedgerWire {
 		// to json.Marshal by the time this function returns.
 		DeathServiceBridgeCemeteryIDs:    append([]string(nil), st.deathServiceBridgeCemeteryIDs...),
 		DeathServiceBridgeCrematoriumIDs: append([]string(nil), st.deathServiceBridgeCrematoriumIDs...),
+		BuildersMerchantFirmID:           uint64(st.buildersMerchantFirmID),
 	}
 }
 
@@ -226,6 +254,7 @@ func composeLedgerFromWire(st *simState, w composeLedgerWire) {
 	// for engine.services).
 	st.deathServiceBridgeCemeteryIDs = append([]string(nil), w.DeathServiceBridgeCemeteryIDs...)
 	st.deathServiceBridgeCrematoriumIDs = append([]string(nil), w.DeathServiceBridgeCrematoriumIDs...)
+	st.buildersMerchantFirmID = firms.FirmID(w.BuildersMerchantFirmID)
 }
 
 // composeLedgerParticipant adapts the composition root's own simState ledgers

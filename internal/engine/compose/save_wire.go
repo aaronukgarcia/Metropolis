@@ -8,6 +8,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/deathservices"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/save"
@@ -134,6 +135,16 @@ func (c *Composition) Participants() []save.Participant {
 		// restore once the monthly Intake hook (compose.go's
 		// deathServicesHook) is live.
 		deathservices.NewSaveParticipant(st.deathServices),
+		// BUG-752: engine.firms' own firm registry (id, spec/kind, staff,
+		// Financial incl. OutputScale/CreditOutstanding/cash, founder
+		// history, foundedEvents/CultureIndex window, lifecycle events) —
+		// see firms/participant.go's doc comment. Without this, a Load
+		// silently dropped the whole registry: BUG-745's
+		// AggregateOutputScale reverted to neutral, and the builders'
+		// merchant firm (compose_ledger_participant.go's own
+		// BuildersMerchantFirmID field, registered just below) re-founded
+		// under a new id because its old firm no longer existed to find.
+		firms.NewSaveParticipant(st.firms),
 		newComposeLedgerParticipant(st),
 	}
 }
