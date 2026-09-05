@@ -442,6 +442,10 @@ const WEBCONSOLE_TSX_FILES = [
   'test/bug499-queue-depth-overlap.test.tsx',
   'test/bug512-bug513-save-error-robustness.test.tsx',
   'test/keybindings.test.tsx',
+  'test/stale-build-guard.test.tsx',
+  'test/attack-bug564-hmr-liveness.test.tsx',
+  'test/attack-bug691-indicator-render.test.tsx',
+  'test/bug-397-rework-financetab.test.tsx',
 ];
 
 function parseArgs(argv) {

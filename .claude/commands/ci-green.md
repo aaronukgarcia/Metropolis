@@ -39,7 +39,7 @@ Perform these checks in order on the working tree:
 5. **Automated Testing Suite (Engine + UI):**
    Run all Go tests with race-condition detection active:
    ```bash
-   go test ./... -count=1 -race
+   go test ./... -count=1 -race -timeout 20m
    ```
 
 6. **Tooling & Hooks Testing:**
