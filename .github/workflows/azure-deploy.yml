@@ -287,8 +287,14 @@ jobs:
               --name "${{ env.CONTAINER_APP_NAME }}" \
               --resource-group "${{ env.RESOURCE_GROUP }}" \
               --image "$IMAGE" \
-              --args="-addr 0.0.0.0:8080 -persist-dir /data -city ${{ github.event.inputs.city }} -tick-interval 1s -snapshot-every 360" \
               --set-env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret"
+            # NO --args (BUG-718): az never splits --args into separate container
+            # argv (space OR =-bound), so passing metroserve's -addr/-persist-dir/
+            # etc. through --args delivers ONE malformed token and the container
+            # dies 'flag provided but not defined'. The runtime flags live in the
+            # image's Dockerfile CMD exec-array (a real argv list) instead - the
+            # workflow never overrides args. City is baked to 'dogfood' in CMD; a
+            # per-deploy city override needs a YAML args-array patch (BUG-718).
           else
             echo "Container App does not exist — creating it (first inc1 deploy)."
             # ACR PULL AUTH (BUG-717): az containerapp create validates the private
@@ -324,8 +330,11 @@ jobs:
             az containerapp update \
               --name "${{ env.CONTAINER_APP_NAME }}" \
               --resource-group "${{ env.RESOURCE_GROUP }}" \
-              --image "$IMAGE" \
-              --args="-addr 0.0.0.0:8080 -persist-dir /data -city ${{ github.event.inputs.city }} -tick-interval 1s -snapshot-every 360"
+              --image "$IMAGE"
+            # NO --args (BUG-718): runtime flags come from the image's Dockerfile
+            # CMD exec-array (a real argv list), because az never splits --args into
+            # separate container argv. This create-path update swaps the bootstrap
+            # image for the real one; args stay unset so the CMD applies.
             # DURABLE VOLUME DEFERRED (BUG-716): the --azure-file-volume-* flags are
             # unrecognized by this runner's az containerapp extension version (the
             # 'RE-VERIFY before first run' note above, adjudicated by the deploy run).

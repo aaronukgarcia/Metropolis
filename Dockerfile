@@ -161,4 +161,4 @@ ENTRYPOINT ["/metroserve"]
 # tick-interval, snapshot-every, addr); -city is deliberately NOT
 # defaulted here so the Container App's own command/args override picks
 # the real city id per the deploy config, not a value buried in the image.
-CMD ["-addr", "0.0.0.0:8080", "-persist-dir", "/data", "-tick-interval", "1s", "-snapshot-every", "360"]
+CMD ["-addr", "0.0.0.0:8080", "-persist-dir", "/data", "-city", "dogfood", "-tick-interval", "1s", "-snapshot-every", "360"]
