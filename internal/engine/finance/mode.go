@@ -49,6 +49,14 @@ type ModeGate interface {
 // failure is recorded via ErrModeGateFailed (GR#17: a monitoring/gate
 // FAILURE must itself write a registry error, never fail silently).
 func (f *FinanceAPI) unlimitedLocked() bool {
+	// SEC-020 copy guard on this receiver too (astgate checks each receiver
+	// method syntactically, so the entry points' guards do not cover a
+	// *Locked helper — the push-5 CI red). A copied FinanceAPI fails CLOSED
+	// to Real and records the failure, same policy as a failing gate.
+	if err := f.checkNotCopied("unlimitedLocked"); err != nil {
+		f.lastModeGateErr = errs.New(ErrModeGateFailed, f.correlationID, map[string]any{"cause": err.Error()})
+		return false
+	}
 	if f.modeGate == nil {
 		f.lastModeGateErr = nil
 		return false
