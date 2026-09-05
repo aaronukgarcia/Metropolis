@@ -4824,7 +4824,16 @@ function reduceCore(
       // dispatch, replay, genesis-replay, debug console), not just the disabled UI
       // button. Mirrors isPlaceable() in data.ts (UI defence-in-depth).
       if (!canEnterSim(sp)) return state;
-      if (!specUnlocked(state, sp)) return state;
+      // BUG-490 FIX: a level-locked spec reaching the reducer used to return
+      // `state` unchanged with ZERO feedback — the exact "click has no
+      // observable effect" report (Aaron, A2Bev001.md Q100021/Q100023/Q100037:
+      // the webconsole placement funnel's silent no-op branches). Mirrors the
+      // allowance/admin/funds notices immediately below — same placeNotice
+      // field, same NewsFeed reader (FEAT-2326609784) — so this reason is no
+      // longer silent.
+      if (!specUnlocked(state, sp)) {
+        return { ...state, placeNotice: `Locked — ${sp.name} not unlocked yet` };
+      }
       // FEAT-2326609761 AC-29 (Aaron R4, "unplaceable by hand"): defence in
       // depth mirroring isPlaceable()'s UI gate — a unique building (e.g. the
       // Five Gorges Dam, maxPerCity: 1) refuses a placement past its cap
@@ -4859,20 +4868,35 @@ function reduceCore(
       if (cost > 0 && state.funds < cost) {
         return { ...state, placeNotice: `Insufficient funds — ${fmtMoney(cost)} needed` };
       }
+      // BUG-490 FIX: out-of-bounds used to silently no-op (no placeNotice).
+      // Every real UI dispatch site clamps ax/ay before dispatching (MapView's
+      // act()), so this is effectively unreachable from the map-click path —
+      // kept as an honest, non-silent guard for any other/future caller
+      // (batch replay, debug console) rather than leaving a fifth silent
+      // branch in the same reducer case.
       if (
         action.x < 0 ||
         action.y < 0 ||
         action.x + sp.w > MAP_W ||
         action.y + sp.h > MAP_H
       )
-        return state;
+        return { ...state, placeNotice: `Can't build here — out of bounds` };
       // BUG-660: a batch caller's shared board (see placePlanItem's doc
       // comment) is kept in perfect sync with occupiedSet(state) at every
       // step of the batch, so reading it here instead of occupiedSet(state)
       // is contents-identical — it just avoids the O(buildings) cache-miss
       // rebuild that a batch's own connector-laying triggers on `state`.
       const fitsOcc = batchBoard ? batchBoard.occupied : occupiedSet(state);
-      if (!fits(fitsOcc, sp.w, sp.h, action.x, action.y)) return state;
+      // BUG-490 FIX (the primary reported repro): clicking to place on an
+      // already-occupied tile used to silently no-op — no placeNotice, no
+      // NewsFeed entry, nothing the player could observe. The batch sibling
+      // ('placeMany', below) already reports "some tiles already occupied";
+      // this single-placement path did not. Matches the hover-hint's own
+      // `!fits(...)` check (MapView.tsx) so a blocked-red hover that gets
+      // clicked anyway now explains itself instead of doing nothing.
+      if (!fits(fitsOcc, sp.w, sp.h, action.x, action.y)) {
+        return { ...state, placeNotice: `Can't build here — tile already occupied` };
+      }
       // ROUND r3 FIX (2026-09-04, F1/F2): NO affordability gate here — see
       // the Action union's 'place' case doc comment above for the full
       // rationale. The reducer always places once it reaches this point.

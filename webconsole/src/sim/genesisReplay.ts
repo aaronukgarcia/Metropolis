@@ -653,6 +653,33 @@ export interface ProgressSample {
  * from LIVE actions/sec, never a canned animation). */
 const MIN_ETA_SAMPLE_WINDOW_MS = 1000;
 
+/**
+ * BUG-714 (Aaron, 2026-09-05, "rebuilding your city takes much longer than
+ * expected; use this to better forecast the eta which is way off"): the rate
+ * is now derived from a TRAILING window of recent samples, not the full
+ * cumulative history since the replay started. Per-action cost in a genesis
+ * replay is wildly heterogeneous and grows sharply through the run — cheap
+ * 'place' actions on a near-empty city give way to expensive 'tick' actions
+ * on a mature, full-scale city (the O(buildings) cost documented on
+ * CHUNK_TIME_BUDGET_MS above and measured directly by BUG-617). A cumulative
+ * average-since-start rate stays anchored to that early, fast history and
+ * systematically UNDER-estimates the remainder once the slow tail begins —
+ * measured on a realistic growth-then-mature-tail journal (webconsole's own
+ * BUG-714 audit script) at 76-100% under-estimate in the back half of the
+ * replay, i.e. the model said "~0s remaining"/"~1s remaining" while the
+ * actual remainder was 5-12 SECONDS. A trailing window tracks the CURRENT
+ * throughput instead, so the estimate re-calibrates within a couple of
+ * chunks of a slowdown rather than staying wrong for the rest of the run.
+ */
+const RECENT_RATE_WINDOW_MS = 1000;
+
+/** The trailing window must itself span at least this much wall-clock before
+ * its rate is trusted over the full-history fallback — otherwise a single
+ * noisy recent chunk (a GC pause, a cheap one-off action) could swing the
+ * estimate wildly. Below this, fall back to the full-history rate rather than
+ * refusing to estimate at all. */
+const MIN_RECENT_WINDOW_MS = 200;
+
 /** Format a millisecond duration as a short "1m 10s" / "45s" label. */
 function formatDurationShort(ms: number): string {
   const totalSec = Math.max(0, Math.round(ms / 1000));
@@ -662,11 +689,39 @@ function formatDurationShort(ms: number): string {
 }
 
 /**
- * Derive a human "~Xm Ys remaining" label from a history of progress samples,
- * using the observed actions/sec between the earliest and latest sample as the
- * rate. Returns null when there isn't yet enough signal to trust (fewer than 2
- * samples, no time elapsed, an under-window sample set, or no forward
- * progress) — callers should render "estimating…" or nothing in that case.
+ * Elapsed time and actions-done delta across the trailing `windowMs` of
+ * `samples` (measured back from the latest sample). Always includes at least
+ * the two most recent samples so a caller with exactly 2 samples degrades to
+ * the same "whole span" behaviour as before this fix. Pure, no clock reads.
+ */
+function recentWindow(
+  samples: ProgressSample[],
+  windowMs: number
+): { elapsedMs: number; doneDelta: number } {
+  const last = samples[samples.length - 1];
+  let start = samples[samples.length - 2] ?? samples[0];
+  for (let i = samples.length - 2; i >= 0; i--) {
+    if (last.timestamp - samples[i].timestamp > windowMs) break;
+    start = samples[i];
+  }
+  return {
+    elapsedMs: last.timestamp - start.timestamp,
+    doneDelta: last.actionsDone - start.actionsDone,
+  };
+}
+
+/**
+ * Derive a human "~Xm Ys remaining" label from a history of progress samples.
+ * The rate is taken from a RECENT trailing window (RECENT_RATE_WINDOW_MS) so
+ * the estimate tracks CURRENT throughput rather than a cumulative average
+ * that stays anchored to the replay's (often much cheaper) opening actions —
+ * see RECENT_RATE_WINDOW_MS's doc comment (BUG-714). Falls back to the full
+ * history when the recent window alone doesn't carry enough signal (too
+ * little elapsed time in-window, or no forward progress in-window — e.g. a
+ * momentary plateau) rather than reporting nothing. Returns null when there
+ * isn't yet enough signal to trust AT ALL (fewer than 2 samples, under the
+ * overall minimum sample window, or no forward progress anywhere) — callers
+ * should render "estimating…" or nothing in that case.
  *
  * Pure: takes timestamps in, never reads a clock itself.
  */
@@ -677,9 +732,17 @@ export function estimateRemainingLabel(
   if (samples.length < 2 || actionsTotal <= 0) return null;
   const first = samples[0];
   const last = samples[samples.length - 1];
-  const elapsedMs = last.timestamp - first.timestamp;
-  const doneDelta = last.actionsDone - first.actionsDone;
-  if (elapsedMs < MIN_ETA_SAMPLE_WINDOW_MS || doneDelta <= 0) return null;
+  const totalElapsedMs = last.timestamp - first.timestamp;
+  if (totalElapsedMs < MIN_ETA_SAMPLE_WINDOW_MS) return null;
+
+  let { elapsedMs, doneDelta } = recentWindow(samples, RECENT_RATE_WINDOW_MS);
+  if (elapsedMs < MIN_RECENT_WINDOW_MS || doneDelta <= 0) {
+    // Not enough recent signal — fall back to the full-history rate.
+    elapsedMs = totalElapsedMs;
+    doneDelta = last.actionsDone - first.actionsDone;
+  }
+  if (doneDelta <= 0) return null;
+
   const rate = doneDelta / elapsedMs; // actions per ms
   const remaining = actionsTotal - last.actionsDone;
   if (remaining <= 0) return '~0s remaining';

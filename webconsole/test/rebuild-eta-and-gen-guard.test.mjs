@@ -83,6 +83,99 @@ describe('BAR-2: estimateRemainingLabel derives ETA from LIVE observed rate', ()
   });
 });
 
+// BUG-714 (Aaron, 2026-09-05, "rebuilding your city takes much longer than
+// expected; use this to better forecast the eta which is way off"): a live
+// audit (webconsole's own BUG-714 measurement script, run against a realistic
+// growth-then-mature-tail journal) found the OLD cumulative-average-since-
+// start rate under-estimated the remaining time by 76-100% through the back
+// half of a real rebuild, because per-action cost climbs sharply as the city
+// fills up (cheap early 'place' actions vs. expensive 'tick' actions on a
+// mature, full-scale city — the O(buildings) cost BUG-617 measured directly).
+// The fix (a TRAILING rate window, see RECENT_RATE_WINDOW_MS in
+// genesisReplay.ts) tracks CURRENT throughput instead of the whole history,
+// so the estimate re-calibrates within about a second of a slowdown rather
+// than staying anchored to the replay's faster opening actions for its
+// entire remaining run.
+describe('BUG-714: estimateRemainingLabel converges on an accelerating-cost workload', () => {
+  // A synthetic two-phase run: a FAST phase (800 of 1000 actions in the first
+  // 1000ms) followed by a SLOW phase (the remaining 200 actions over 4000ms —
+  // a 16x per-action slowdown), sampled every 500ms — the same shape a real
+  // genesis replay takes when a cheap growth phase gives way to an expensive
+  // mature-city tail. Piecewise-linear by construction so the TRUE remaining
+  // time at any sample is exactly computable, not just directionally checked.
+  // Timestamps scaled 10x vs. the raw shape (fast phase: 800/1000 actions in
+  // the first 10s; slow phase: the remaining 200 over the next 40s) so the
+  // remaining-time assertions land well clear of formatDurationShort's
+  // nearest-second display rounding at small values.
+  const total = 1000;
+  const samples = [
+    { actionsDone: 0, timestamp: 0 },
+    { actionsDone: 800, timestamp: 10_000 }, // end of the fast phase
+    { actionsDone: 825, timestamp: 15_000 },
+    { actionsDone: 850, timestamp: 20_000 },
+    { actionsDone: 875, timestamp: 25_000 },
+    { actionsDone: 900, timestamp: 30_000 },
+    { actionsDone: 925, timestamp: 35_000 },
+    { actionsDone: 950, timestamp: 40_000 },
+    { actionsDone: 975, timestamp: 45_000 }, // 97.5% done by ACTION COUNT
+    { actionsDone: 1000, timestamp: 50_000 },
+  ];
+  const RUN_END_MS = 50_000;
+
+  const secondsOf = (s) => {
+    const m = s.match(/(?:(\d+)m\s*)?(\d+)s/);
+    return Number(m[1] ?? 0) * 60 + Number(m[2]);
+  };
+
+  test('the OLD cumulative-since-start rate would badly under-estimate deep in the slow phase', () => {
+    // Reproduce the PRE-FIX formula directly (first sample vs latest, no
+    // window) to document exactly the defect this fix closes — this is NOT
+    // testing production code, just pinning the historical bad-forecast shape
+    // for contrast with the assertion below.
+    const upToDeepSlow = samples.slice(0, 9); // through t=4500, actionsDone=975
+    const first = upToDeepSlow[0];
+    const last = upToDeepSlow[upToDeepSlow.length - 1];
+    const oldRate = (last.actionsDone - first.actionsDone) / (last.timestamp - first.timestamp);
+    const oldRemainingMs = (total - last.actionsDone) / oldRate;
+    const actualRemainingMs = RUN_END_MS - last.timestamp; // 500ms
+    const underEstimatePct = ((actualRemainingMs - oldRemainingMs) / actualRemainingMs) * 100;
+    assert.ok(
+      underEstimatePct > 50,
+      `expected the old cumulative model to badly under-estimate (>50%) at 97.5% action-progress deep in the slow phase, got ${underEstimatePct.toFixed(0)}% (old predicted ${oldRemainingMs.toFixed(0)}ms vs actual ${actualRemainingMs}ms)`
+    );
+  });
+
+  test('the NEW trailing-window rate converges tightly to the true remaining time', () => {
+    // Same 97.5%-progress point as above, but through the real (fixed) helper.
+    const upToDeepSlow = samples.slice(0, 9); // through t=4500, actionsDone=975
+    const label = estimateRemainingLabel(upToDeepSlow, total);
+    assert.ok(label, 'must produce an estimate once the slow phase has held for a full window');
+    const actualRemainingMs = RUN_END_MS - upToDeepSlow[upToDeepSlow.length - 1].timestamp; // 500ms
+    const predictedMs = secondsOf(label) * 1000;
+    const errorPct = (Math.abs(predictedMs - actualRemainingMs) / actualRemainingMs) * 100;
+    assert.ok(
+      errorPct <= 25,
+      `expected the windowed estimate to land within 25% of the true remaining time (500ms) once the slow phase has held for a full window, got "${label}" (${errorPct.toFixed(0)}% error)`
+    );
+  });
+
+  test('the estimate keeps re-converging as the slow phase continues (not a one-off lucky sample)', () => {
+    for (let cut = 8; cut <= samples.length; cut++) {
+      const upTo = samples.slice(0, cut);
+      const label = estimateRemainingLabel(upTo, total);
+      if (!label) continue; // early cuts may still be within the min-window guard
+      const actualRemainingMs = RUN_END_MS - upTo[upTo.length - 1].timestamp;
+      if (actualRemainingMs <= 0) continue;
+      const predictedMs = secondsOf(label) * 1000;
+      const errorPct = (Math.abs(predictedMs - actualRemainingMs) / actualRemainingMs) * 100;
+      assert.ok(
+        errorPct <= 30,
+        `estimate at cut=${cut} ("${label}") must stay within 30% of actual remaining (${actualRemainingMs}ms), got ${errorPct.toFixed(0)}% error`
+      );
+    }
+  });
+});
+
 describe('BAR-3: isStaleRebuildChain generation guard', () => {
   test('same generation: chain is NOT stale', () => {
     assert.equal(isStaleRebuildChain(3, 3), false);
