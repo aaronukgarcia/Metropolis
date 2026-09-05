@@ -3750,7 +3750,15 @@ export function isBrownoutActive(s: SimState): boolean {
  * stamp existed never carries this field, so it falls through to the
  * ordinary jobsAtTier() logic below and reads its spec's real job count.
  */
-function effectiveJobsOf(sp: Spec, b: { jobsOverride?: number; capacityTier?: number }): number {
+/**
+ * BUG-391 round REJECT (opus-round-bug391, B2): exported so engine.ts's
+ * Office Tax basis can route through the SAME SSOT jobsOverride/capacityTier
+ * derivation totalJobs()/totalJobsBySector() already use, instead of reading
+ * raw `sp.jobs` directly — the pre-fix office sum bypassed this and mis-taxed
+ * a capacityTier-grown off_tower on its base 300 jobs instead of its real
+ * (possibly grandfathered-override or tier-scaled) effective count.
+ */
+export function effectiveJobsOf(sp: Spec, b: { jobsOverride?: number; capacityTier?: number }): number {
   if (b.jobsOverride != null) return b.jobsOverride;
   return jobsAtTier(sp, b.capacityTier ?? 0);
 }

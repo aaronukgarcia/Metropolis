@@ -99,7 +99,9 @@ import { runConsistencyChecks } from './consistency.ts';
 import {
   businessTaxPerTick,
   councilTaxPerTick,
+  FREIGHT_INDUSTRIAL_FRACTION,
   GRID_IMPORT_ENABLED_DEFAULT,
+  INSTITUTIONAL_KINDS,
   UPKEEP_BUCKET,
 } from './fiscal.ts';
 import { getPerformanceSnapshot } from './perfhud.ts';
@@ -817,7 +819,11 @@ export function buildDebugJson(
   const yieldsPerTick: TaxRates = {
     residential: councilTaxPerTick(s.population, t.residential),
     commercial: businessTaxPerTick(c.commercial, t.commercial),
-    industrial: Math.round(c.industrial * t.industrial * 0.55),
+    // BUG-391: kept in sync with fiscal.ts's FREIGHT_INDUSTRIAL_FRACTION (this
+    // display row was always an approximation — it omits mine zones/harbour
+    // boost that computeFlows()'s real freightTaxPerTick() includes — but the
+    // per-industrial-zone RATE itself must not silently drift from the SSOT).
+    industrial: Math.round(c.industrial * t.industrial * FREIGHT_INDUSTRIAL_FRACTION),
   };
 
   // Water tab plants
@@ -851,10 +857,18 @@ export function buildDebugJson(
   const inflowValue = (label: string) =>
     s.lastFlows.inflows.find((f) => f.label === label)?.value ?? 0;
   const officeCount = s.buildings.filter((b) => SPECS[b.spec]?.kind === 'office').length;
+  // BUG-391 (Aaron ruling, 2026-09-05): institutional buildings (airports/
+  // universities/stations/stadiums — see fiscal.ts's INSTITUTIONAL_KINDS) get
+  // their own Earnings-tab row, mirroring 'Offices' exactly.
+  const institutionalCount = s.buildings.filter((b) => {
+    const sp = SPECS[b.spec];
+    return sp && INSTITUTIONAL_KINDS.has(sp.kind);
+  }).length;
   const earningsRows = [
     { type: 'Residential', basisCount: Math.max(s.population, 1), basisUnit: 'per citizen', grossPerTick: inflowValue('Council Tax') },
     { type: 'Commercial', basisCount: Math.max(c.commercial, 1), basisUnit: 'per zone', grossPerTick: inflowValue('Business Tax') },
     { type: 'Offices', basisCount: Math.max(officeCount, 1), basisUnit: 'per block', grossPerTick: inflowValue('Office Tax') },
+    { type: 'Institutional', basisCount: Math.max(institutionalCount, 1), basisUnit: 'per building', grossPerTick: inflowValue('Institutional Tax') },
     { type: 'Industrial', basisCount: Math.max(c.industrial, 1), basisUnit: 'per plant', grossPerTick: inflowValue('Freight Tax') },
     { type: 'Tourism', basisCount: s.policies.tourismDrive ? Math.max(s.population, 1) : 0, basisUnit: 'policy-driven', grossPerTick: inflowValue('Tourism') },
   ].map((r) => ({

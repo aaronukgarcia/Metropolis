@@ -229,14 +229,32 @@ export function transitSubsidyCostPerTick(population: number): number {
 }
 
 /**
- * Freight Tax per tick: industrial zones * rate * 0.55, PLUS mine zones *
- * rate * 0.9 (mines are weighted higher — extraction, not just throughput),
- * the whole scaled by the harbour export-boost multiplier (1.4 while an
- * online land_harbour building exists, 1 otherwise — see engine.ts's
- * `harbourBoost`). Factored out of engine.ts's computeFlows() (GR#3) so
- * BUG-397 F2's reference-rate cap-base calculation (taxIncomeAtRate below)
- * reuses the IDENTICAL formula instead of a hand-duplicated copy that could
- * silently drift from the real one. Pure/deterministic (GR#21).
+ * BUG-391 (Aaron ruling, 2026-08-31, "DIVERSIFY THE BASE" — residential,
+ * commercial and industrial must each contribute meaningfully, offices
+ * strong but not dominant): the industrial/mine fractions below were 0.55/0.9
+ * — roughly 6-7x SMALLER than businessTaxFraction (3.4815) for no
+ * documented reason, so Freight Tax was structurally starved regardless of
+ * industrial zone count (measured: ~1-3% of tax income on a representative
+ * mixed city even with a realistic industrial building count). Rescaled up
+ * to bring Freight Tax into the same order of magnitude as Business Tax so
+ * industrial zoning is a real income lever again. ⚠ PLACEHOLDER (balance-
+ * number regime): directional only, exact values pending Aaron's row-by-row
+ * balance pass — see bug-391-tax-diversification.test.mjs for the measured
+ * before/after share table this was tuned against.
+ */
+export const FREIGHT_INDUSTRIAL_FRACTION = 2.0;
+export const FREIGHT_MINE_FRACTION = 3.3;
+
+/**
+ * Freight Tax per tick: industrial zones * rate * FREIGHT_INDUSTRIAL_FRACTION,
+ * PLUS mine zones * rate * FREIGHT_MINE_FRACTION (mines are weighted higher —
+ * extraction, not just throughput), the whole scaled by the harbour
+ * export-boost multiplier (1.4 while an online land_harbour building exists,
+ * 1 otherwise — see engine.ts's `harbourBoost`). Factored out of engine.ts's
+ * computeFlows() (GR#3) so BUG-397 F2's reference-rate cap-base calculation
+ * (taxIncomeAtRate below) reuses the IDENTICAL formula instead of a
+ * hand-duplicated copy that could silently drift from the real one.
+ * Pure/deterministic (GR#21).
  */
 export function freightTaxPerTick(
   industrialZones: number,
@@ -244,8 +262,89 @@ export function freightTaxPerTick(
   taxRate: number,
   harbourBoost: number,
 ): number {
-  return Math.round((industrialZones * taxRate * 0.55 + mineZones * taxRate * 0.9) * harbourBoost);
+  return Math.round(
+    (industrialZones * taxRate * FREIGHT_INDUSTRIAL_FRACTION +
+      mineZones * taxRate * FREIGHT_MINE_FRACTION) *
+      harbourBoost,
+  );
 }
+
+/**
+ * BUG-391 — Office Tax's yield-per-actual-office-job factor. Companion fix to
+ * the rescale above: engine.ts's old officeJobs basis was
+ * `totalJobs(s) - commercial*12 - industrial*18`, a residual that silently
+ * swept up EVERY OTHER job-bearing building's jobs not already crudely
+ * subtracted — stations, universities, landmarks (a single land_airport
+ * carries 76,000 jobs), mines — and taxed the lot at the office rate. That
+ * mis-attribution, not merely a low factor, was the actual cause of the
+ * measured 92.8% office-tax monoculture (BUG-391's original report). engine.ts
+ * now sums ONLY real office-kind buildings' jobs; this factor is the
+ * corresponding yield rate against that MUCH smaller, correctly-scoped base,
+ * retuned so Office Tax stays "strong but not dominant" per Aaron's ruling.
+ * ⚠ PLACEHOLDER (balance-number regime) — exact value pending the balance pass.
+ */
+export const OFFICE_TAX_YIELD_FACTOR = 0.17;
+
+// ════════════════════════════════════════════════════════════════════════════
+// BUG-391 — INSTITUTIONAL TAX (Aaron ruling, 2026-09-05, live mid-round):
+// once Office Tax was correctly scoped to real office-kind buildings only
+// (the B2 fix above), the P2 round finding surfaced a NEW council-tax
+// monoculture on realistic "dogfood" cities: airports/universities/stations/
+// stadiums carry huge job counts (a single land_airport: 76,000) that used to
+// be swept into Office Tax by the old bug and are now, correctly, taxed
+// NOWHERE — so on a city with few commercial/industrial zones but a major
+// airport/university/station cluster, Council Tax alone can dominate again
+// (measured: 85.9% on the dogfood-shaped fixture, see
+// bug-391-tax-diversification.test.mjs's dogfood share table).
+//
+// Aaron's ruling: give these major-employer, non-office/commercial/
+// industrial buildings THEIR OWN tax line, 'Institutional Tax'. Membership is
+// decided BY SPEC KIND (never a hardcoded id list — GR#15/GR#3), matching the
+// ruling's own examples: airports and regional stadiums are kind 'landmark';
+// universities/colleges are kind 'school'; train/rail/metro stations are kind
+// 'station'; bus/tram depots and the Grand Terminus are kind 'transport' (the
+// same network-operations employment family as stations — included for the
+// same reason, not a separate carve-out). 'health'/'police'/'fire'/'civic'/
+// 'power'/'water'/'road'/'pylon' are DELIBERATELY excluded — none of Aaron's
+// named examples fall in those kinds, and (per KIND_TO_WAGE_SECTOR's own
+// long-standing doc above) almost none of them carry a `sp.jobs` field in
+// today's live catalogue anyway (hea_teaching is the sole exception; its jobs
+// are intentionally left untaxed by any of the four zone-tax lines today,
+// same as before this feature — a future ruling can extend this set).
+// ════════════════════════════════════════════════════════════════════════════
+
+/** SSOT label for the Institutional Tax inflow — mirrors every other
+ * SSOT-label constant in this file (GRID_IMPORT_OUTFLOW_LABEL etc.) so the
+ * generic sum-based conservation/label-uniqueness checks need no per-label
+ * recompute, and engine.ts/debugjson.ts can never disagree on the string. */
+export const INSTITUTIONAL_TAX_LABEL = 'Institutional Tax';
+
+/**
+ * The spec kinds that qualify a job-bearing building as "institutional" for
+ * Institutional Tax purposes — see the module-level doc block above for the
+ * full rationale of each kind's inclusion/exclusion. A `ZoneKind` string
+ * literal set (not `ZoneKind[]`) kept local to this constant's own type so
+ * engine.ts's per-building walk can test membership with a single `.has()`
+ * call, exactly like RECYCLING_DISCOUNT_LABELS/ONE_OFF_INFLOW_LABELS above.
+ */
+export const INSTITUTIONAL_KINDS: ReadonlySet<ZoneKind> = new Set<ZoneKind>([
+  'landmark',
+  'school',
+  'station',
+  'transport',
+]);
+
+/**
+ * Institutional Tax's yield-per-effective-job factor — the SAME `t.commercial`
+ * rate lever and effectiveJobsOf() job basis Office Tax uses (GR#3: one
+ * job-counting rule, applied to two disjoint building populations). Tuned so
+ * the dogfood-shaped fixture (airport + uni + 4 stations + stadium + 30
+ * offices, pop 40k — bug-391-tax-diversification.test.mjs) lands with NO
+ * class above ~50% of tax income and Council Tax no longer the dominant
+ * class, per Aaron's explicit acceptance bar for this ruling.
+ * ⚠ PLACEHOLDER (balance-number regime) — exact value pending the balance pass.
+ */
+export const INSTITUTIONAL_TAX_YIELD_FACTOR = 0.07;
 
 /**
  * BUG-397 F2 exploit fix — LEAD RULING (Bev, 2026-09-05, flagged for Aaron's

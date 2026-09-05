@@ -30,6 +30,7 @@ import {
   BROWNOUT_WELLBEING_K,
   stationLinks,
   totalJobs,
+  effectiveJobsOf,
   unemploymentOf,
   waterBalanceOf,
   unlockedAtLevel,
@@ -101,7 +102,7 @@ import type {
   BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL, INSOLVENCY_WARNING_THRESHOLD, POLICY_COST_CAP_FRACTION, transitSubsidyCostPerTick, transitFareRevenuePerTick, TRANSIT_FARE_RATE_PER_RIDER, TRANSIT_FARE_REVENUE_LABEL, freightTaxPerTick, taxIncomeAtRate, POLICY_CAP_REFERENCE_TAX_RATE } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL, INSOLVENCY_WARNING_THRESHOLD, POLICY_COST_CAP_FRACTION, transitSubsidyCostPerTick, transitFareRevenuePerTick, TRANSIT_FARE_RATE_PER_RIDER, TRANSIT_FARE_REVENUE_LABEL, freightTaxPerTick, taxIncomeAtRate, POLICY_CAP_REFERENCE_TAX_RATE, OFFICE_TAX_YIELD_FACTOR, INSTITUTIONAL_KINDS, INSTITUTIONAL_TAX_LABEL, INSTITUTIONAL_TAX_YIELD_FACTOR } from './fiscal.ts';
 // FEAT-2326609761 (CONSOLIDATOR mutation lane) — read-only discovery/opportunity
 // functions from the PARALLEL read-only lane's module. Safe one-directional
 // import: consolidator.ts is a LEAF (mirrors TICKS_PER_MONTH/CONNECT_EXEMPT_KINDS
@@ -630,10 +631,59 @@ export function computeFlows(
     });
   }
 
-  const c2 = countByKindOnline(s);
-  const officeJobs = totalJobs(s) - c2.commercial * 12 - c2.industrial * 18;
-  const officeTax = Math.max(0, officeJobs) * t.commercial * 0.05;
+  // BUG-391 FIX (Aaron ruling 2026-08-31, "DIVERSIFY THE BASE"): the old
+  // officeJobs basis was `totalJobs(s) - commercial*12 - industrial*18` — a
+  // residual that silently swept up EVERY OTHER job-bearing building not
+  // already crudely subtracted (stations, universities, landmarks — a single
+  // land_airport carries 76,000 jobs — mines, transport depots) and taxed the
+  // lot at the office rate. That mis-attribution was the actual cause of the
+  // reported 92.8% office-tax monoculture, not merely a high rate. Office Tax
+  // now sums ONLY real online office-kind buildings' jobs (mirrors the
+  // isOnline-gated per-building walks used elsewhere in this function, e.g.
+  // the upkeep buckets loop below) — see fiscal.ts's OFFICE_TAX_YIELD_FACTOR
+  // doc for the companion yield-rate rescale.
+  //
+  // BUG-391 round REJECT (opus-round-bug391, B2, money divergence): the
+  // FIRST cut of this fix read raw `sp.jobs` directly, bypassing the SAME
+  // jobsOverride/capacityTier SSOT derivation (data.ts's effectiveJobsOf())
+  // that totalJobs()/totalJobsBySector() already use for wages/employment —
+  // an off_tower grown to a higher capacityTier was WAGED on its real
+  // (larger) tier-scaled job count but TAXED on its base 300, and a
+  // BUG-652-grandfathered building with jobsOverride:0 was still taxed on
+  // 300 phantom jobs. Routed through effectiveJobsOf(sp, b) now, so Office
+  // Tax and wages always agree on how many jobs an office building carries.
+  let officeJobs = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'office' && sp.jobs) officeJobs += effectiveJobsOf(sp, b);
+  }
+  const officeTax = officeJobs * t.commercial * OFFICE_TAX_YIELD_FACTOR;
   if (officeTax > 0) inflows.push({ label: 'Office Tax', value: Math.round(officeTax) });
+
+  // BUG-391 (Aaron ruling, 2026-09-05, live mid-round): major-employer
+  // buildings that are NOT office/commercial/industrial — airports,
+  // universities, stations, stadiums — used to have their jobs swept into
+  // the old buggy Office Tax; correctly excluding them (the B2 fix above)
+  // left them taxed nowhere, which surfaced a NEW Council Tax monoculture on
+  // realistic ("dogfood") cities. Institutional Tax gives them their own
+  // line, decided by fiscal.ts's INSTITUTIONAL_KINDS spec-kind set (never a
+  // hardcoded id list — see its doc for the full membership rule), using the
+  // SAME effectiveJobsOf() SSOT basis as Office Tax (B2). An office building
+  // can never appear here (its kind is 'office', not in INSTITUTIONAL_KINDS)
+  // and an institutional building can never appear in Office Tax (the loop
+  // above gates on kind === 'office' exactly) — the two bases are disjoint by
+  // construction.
+  let institutionalJobs = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (sp && INSTITUTIONAL_KINDS.has(sp.kind) && sp.jobs) institutionalJobs += effectiveJobsOf(sp, b);
+  }
+  const institutionalTax = institutionalJobs * t.commercial * INSTITUTIONAL_TAX_YIELD_FACTOR;
+  if (institutionalTax > 0) {
+    inflows.push({ label: INSTITUTIONAL_TAX_LABEL, value: Math.round(institutionalTax) });
+  }
 
   // BUG-404 FIX: unified tourism calculation (SSOT style per GR#3).
   // tourismDrive policy and building tourism both feed into ONE stream.
@@ -749,7 +799,7 @@ export function computeFlows(
   // from the wellbeing/UI consumers of the same predicate (GR#3).
   const brownout = brownoutOf(s);
   if (isBrownoutActive(s)) {
-    const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);
+    const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax', INSTITUTIONAL_TAX_LABEL]);
     for (const fl of inflows) {
       if (poweredIncome.has(fl.label)) fl.value = Math.round(fl.value * brownout.incomeFactor);
     }
@@ -776,7 +826,7 @@ export function computeFlows(
   const congestionFactor = congestionFactorOf(s);
   if (congestionFactor < 1) {
     const congestionIncomeFactor = 1 - (1 - congestionFactor) * CONGESTION_CONSTANTS.CONGESTION_INCOME_K;
-    const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);
+    const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax', INSTITUTIONAL_TAX_LABEL]);
     for (const fl of inflows) {
       if (poweredIncome.has(fl.label)) fl.value = Math.round(fl.value * congestionIncomeFactor);
     }
