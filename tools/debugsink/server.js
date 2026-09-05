@@ -78,6 +78,19 @@ const path = require('path');
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 8642; // fixed port for the local debug sink — documented in this header + report
 
+// BUG-703 (Aaron/round F8, 2026-09-05): the client used to treat ANY 2xx from
+// ANY listener on 127.0.0.1:8642 as "frame sunk" — a wrong service (or a
+// stray dev tool) answering plain 200 on that port made a debug frame vanish
+// behind a green indicator, with nothing left locally to recover it. The fix
+// is a tiny, verifiable JSON ack on BOTH sides of the wire (this constant is
+// the shared identity string, echoed on every successful commit/audit POST):
+// the CLIENT (webconsole/src/sim/backend.ts postToSink) now requires
+// `sink === SINK_NAME` AND the response `id` to equal the id it sent before
+// it will discard the local copy. A 2xx from some other service will almost
+// never happen to carry both, so the ack is deliberately minimal (no new
+// dependency, no schema migration) rather than cryptographic.
+const SINK_NAME = 'metropolis-debugsink';
+
 // Retention window (FEAT-2326609718's stated intent, shared by this FEAT).
 const RETENTION_DAYS = 31;
 
@@ -529,7 +542,9 @@ function createHandler(deps = {}) {
           conn = await connect();
           await ensureSchema(conn);
           await upsertCommit(conn, { id, at, payload });
-          sendJson(res, 200, { ok: true, id });
+          // BUG-703: the ack the client validates before discarding its
+          // local copy — see SINK_NAME's doc comment above.
+          sendJson(res, 200, { ok: true, sink: SINK_NAME, id });
         } finally {
           if (conn && typeof conn.end === 'function') await conn.end().catch(() => {});
         }
@@ -663,6 +678,7 @@ module.exports = {
   DEFAULT_PORT,
   RETENTION_DAYS,
   MAX_BODY_BYTES,
+  SINK_NAME,
   // Consolidator audit trail (Aaron's ruling, FEAT-2326609761).
   ensureAuditSchema,
   ensureAuditCompositeKey,

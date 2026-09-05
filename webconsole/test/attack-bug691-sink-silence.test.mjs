@@ -103,6 +103,18 @@ function installFetch(impl) {
   };
 }
 
+/**
+ * BUG-703: a genuine sink success now requires a verifiable ack, not just a
+ * 2xx status — see backend.ts's postToSink. Every fake "the real sink is up"
+ * response in this file uses this helper so it echoes the exact id the
+ * client sent (mirroring tools/debugsink/server.js's real ack shape:
+ * `{ ok: true, sink: 'metropolis-debugsink', id }`).
+ */
+function sinkAck(init) {
+  const body = JSON.parse(init.body);
+  return { ok: true, status: 200, json: async () => ({ sink: 'metropolis-debugsink', id: body.id }) };
+}
+
 /** Freeze Date.now to a fixed value so "same millisecond" is deterministic,
  * not a race we hope to win. This is exactly the real-world shape when two
  * commits are fired back to back on a fast machine. */
@@ -185,7 +197,7 @@ test(
     const f = installFetch(async (url, init) => {
       n += 1;
       posted.push(JSON.parse(init.body));
-      return n <= 2 ? { ok: true, status: 200 } : { ok: false, status: 503 };
+      return n <= 2 ? sinkAck(init) : { ok: false, status: 503 };
     });
     try {
       await commitDebug({ live: true });
@@ -238,9 +250,9 @@ test(
     // Now: the NEXT live commit succeeds (sink briefly alive), but the sink
     // dies again for the drain of the stranded entry.
     let n = 0;
-    const flaky = installFetch(async () => {
+    const flaky = installFetch(async (url, init) => {
       n += 1;
-      return n === 1 ? { ok: true, status: 200 } : { ok: false, status: 503 };
+      return n === 1 ? sinkAck(init) : { ok: false, status: 503 };
     });
     try {
       const r = await commitDebug({ live: true });
@@ -341,7 +353,7 @@ test(
   'ATTACK BUG-691: an honest flap (down -> up -> down) re-arms the outage-start stamp -- elapsed sinceMs resets to ~0 for the NEW outage rather than keeping accumulating from the first one',
   withFakeLocalStorage(async () => {
     const ctl = { down: true };
-    const f = installFetch(async () => (ctl.down ? { ok: false, status: 503 } : { ok: true, status: 200 }));
+    const f = installFetch(async (url, init) => (ctl.down ? { ok: false, status: 503 } : sinkAck(init)));
     const realNow = Date.now;
     let clock = 1_757_100_000_000;
     Date.now = () => clock;
@@ -374,21 +386,127 @@ test(
   })
 );
 
+/**
+ * BUG-703 (round F8, 2026-09-04 -- "a wrong service answering 200 loses debug
+ * frames behind a green indicator"): this test used to PIN the defect (a 2xx
+ * with a garbage/empty body was blindly trusted as "sunk", the frame
+ * destroyed, the indicator green). The fix (backend.ts's postToSink) now
+ * requires the ack shape the real sink echoes -- {sink:'metropolis-debugsink',
+ * id:<echoed>} -- before discarding the local copy. Flipped in place (per the
+ * round protocol) to assert the CORRECTED contract across the three attack
+ * shapes named in the fix brief: a plain 2xx with an unparsable body, a 2xx
+ * with an HTML body, and a 2xx with well-formed JSON from some OTHER local
+ * tool (right shape, wrong identity / wrong id).
+ */
 test(
-  'ATTACK BUG-691: a 2xx with a garbage/empty body is treated as a SUCCESS — the sink ack is never validated (inherited gap, pinned)',
+  'FIX BUG-703: a 2xx with an unparsable (garbage) body is NOT trusted -- the frame stays queued locally, the indicator flips to warning (never green), and a DISTINCT MET-V867 row is recorded',
   withFakeLocalStorage(async (mem) => {
-    const f = installFetch(async () => ({ ok: true, status: 200, text: async () => 'not json at all' }));
+    const f = installFetch(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token in JSON');
+      },
+    }));
     const before = recentErrors().length;
+    let r;
     try {
-      const r = await commitDebug({ x: 1 });
-      assert.equal(r.ok, true);
-      assert.equal(r.queued, false, 'a 200 from ANY listener on 127.0.0.1:8642 counts as sunk');
+      r = await commitDebug({ x: 1 });
     } finally {
       f.restore();
     }
-    assert.equal(recentErrors().length, before, 'no error is recorded, and the indicator stays green');
-    assert.equal(debugSinkStatus().unreachable, false);
-    assert.equal(mem.has(QUEUE_KEY), false, 'nothing is kept locally — if that 200 was not the real sink, the frame is gone');
+    assert.equal(r.queued, true, 'FIX BUG-703: an unparsable ack is NOT trusted as sunk -- the frame is kept locally instead of destroyed');
+    assert.equal(mem.has(QUEUE_KEY), true, 'FIX BUG-703: the frame really is persisted, not lost');
+    assert.equal(JSON.parse(mem.get(QUEUE_KEY)).length, 1);
+    const rows = recentErrors();
+    assert.equal(rows.length, before + 1, 'exactly one new row');
+    assert.equal(rows[0].code, 'MET-V867', 'FIX BUG-703: a DISTINCT invalid-ack code, not the plain-unreachable MET-V857');
+    assert.equal(debugSinkStatus().unreachable, true, 'FIX BUG-703: the indicator flips to the warning state -- never green on an unverified 2xx');
+  })
+);
+
+test(
+  'FIX BUG-703: a 2xx with an HTML body (some other local web server answering on the port) is NOT trusted -- frame kept, warning indicator, MET-V867',
+  withFakeLocalStorage(async (mem) => {
+    const f = installFetch(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON');
+      },
+    }));
+    let r;
+    try {
+      r = await commitDebug({ x: 2 });
+    } finally {
+      f.restore();
+    }
+    assert.equal(r.queued, true, 'FIX BUG-703: an HTML-serving impostor on the port never gets to discard the frame');
+    assert.equal(debugSinkStatus().unreachable, true);
+    assert.ok(recentErrors().some((e) => e.code === 'MET-V867'));
+  })
+);
+
+test(
+  'FIX BUG-703: a 2xx with well-formed JSON from a DIFFERENT tool (right shape, wrong sink identity) is NOT trusted -- frame kept, warning indicator, MET-V867',
+  withFakeLocalStorage(async (mem) => {
+    // A plausible-looking JSON body from some unrelated local dev tool that
+    // happens to also answer {ok:true, id:...} on port 8642 -- exactly the
+    // "wrong service" collision BUG-703 is about, distinguished ONLY by the
+    // missing/incorrect `sink` identity.
+    const f = installFetch(async (url, init) => {
+      const sentId = JSON.parse(init.body).id;
+      return { ok: true, status: 200, json: async () => ({ ok: true, id: sentId }) }; // no `sink` field at all
+    });
+    let r;
+    try {
+      r = await commitDebug({ x: 3 });
+    } finally {
+      f.restore();
+    }
+    assert.equal(r.queued, true, 'FIX BUG-703: a same-shaped ack missing the sink identity is still rejected');
+    assert.equal(debugSinkStatus().unreachable, true);
+    assert.ok(recentErrors().some((e) => e.code === 'MET-V867'));
+  })
+);
+
+test(
+  'FIX BUG-703: an ack with the RIGHT sink identity but a MISMATCHED id (a stale/crossed response) is NOT trusted -- frame kept, warning indicator, MET-V867',
+  withFakeLocalStorage(async (mem) => {
+    const f = installFetch(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ sink: 'metropolis-debugsink', id: 'DBG-SOME-OTHER-COMMIT' }),
+    }));
+    let r;
+    try {
+      r = await commitDebug({ x: 4 });
+    } finally {
+      f.restore();
+    }
+    assert.equal(r.queued, true, 'FIX BUG-703: the ack must echo THIS commit\'s own id, not merely carry the right sink name');
+    assert.equal(debugSinkStatus().unreachable, true);
+    assert.ok(recentErrors().some((e) => e.code === 'MET-V867'));
+  })
+);
+
+test(
+  'FIX BUG-703: a 2xx carrying the CORRECT ack (matching sink + echoed id) IS trusted -- frame discarded locally, indicator clears',
+  withFakeLocalStorage(async (mem) => {
+    const f = installFetch(async (url, init) => {
+      const sentId = JSON.parse(init.body).id;
+      return { ok: true, status: 200, json: async () => ({ sink: 'metropolis-debugsink', id: sentId }) };
+    });
+    let r;
+    try {
+      r = await commitDebug({ x: 5 });
+    } finally {
+      f.restore();
+    }
+    assert.equal(r.ok, true);
+    assert.equal(r.queued, false, 'FIX BUG-703: a genuinely verified ack still discards the local copy exactly as before');
+    assert.equal(mem.has(QUEUE_KEY), false, 'nothing left queued for a real successful sink');
+    assert.equal(debugSinkStatus().unreachable, false, 'a verified ack is a real success -- the indicator stays/returns green');
   })
 );
 

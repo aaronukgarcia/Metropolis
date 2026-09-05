@@ -571,12 +571,61 @@ const DEBUGSINK_URL = 'http://127.0.0.1:8642';
 // local queue rather than stalling the Commit button.
 const DEBUGSINK_TIMEOUT_MS = 1500;
 
+// BUG-703 (Aaron/round F8, 2026-09-04, "a wrong service answering 200 loses
+// debug frames behind a green indicator"): `res.ok` alone used to be treated
+// as proof the frame was durably sunk into the metro MariaDB debug sink.
+// ANY listener on 127.0.0.1:8642 -- a stray dev tool, a misconfigured proxy,
+// even a generic "It works!" placeholder page some HTTP server serves by
+// default -- answering plain 200 was indistinguishable from the real sink,
+// and the frame was destroyed locally on the strength of that alone. The
+// real sink (tools/debugsink/server.js) now echoes a small, verifiable JSON
+// ack on every successful commit: `{ ok: true, sink: SINK_NAME, id }`. This
+// name MUST match tools/debugsink/server.js's own SINK_NAME constant exactly
+// -- there is deliberately no shared module between the Go^H^H^HNode sink and
+// this browser bundle (loopback-only local tool, no build-time coupling), so
+// both sides carry the literal string and the pinned attack test
+// (attack-bug691-sink-silence.test.mjs) is what keeps them honest.
+const SINK_NAME = 'metropolis-debugsink';
+
+/** The shape this module trusts from a 2xx /api/debug/commit response, after
+ * GR#16 safe coercion of the untrusted response body -- never assume the
+ * JSON matches this shape just because the HTTP status was 2xx. */
+interface SinkAck {
+  sink: unknown;
+  id: unknown;
+}
+
+/** GR#16: coerce an arbitrary parsed-JSON value into the two fields this
+ * module actually reads, without ever trusting its declared shape. A
+ * non-object body (string/number/array/null) yields two `undefined` fields,
+ * which fails ack validation exactly like a missing ack should. */
+function coerceAck(raw: unknown): SinkAck {
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    return { sink: o.sink, id: o.id };
+  }
+  return { sink: undefined, id: undefined };
+}
+
+/** Outcome of one POST attempt to the sink. */
+interface SinkPostResult {
+  /** True ONLY when the response was a 2xx AND carried a verifiable ack
+   * (the correct sink identity, echoing the exact frame id sent) -- the
+   * frame may be safely discarded locally only when this is true. */
+  sunk: boolean;
+  /** True when a 2xx response came back but failed ack validation -- BUG-703's
+   * "wrong service on the port" case, distinct from no response at all
+   * (network error/timeout/non-2xx) so the two get separate registry codes
+   * and the player can tell "nothing is listening" from "something else is". */
+  invalidAck: boolean;
+}
+
 /**
- * POST one commit to the sink with a short timeout. Returns true on any 2xx,
- * false on any failure (network error, non-2xx, or timeout/abort) — never
- * throws, so callers never need their own try/catch around this.
+ * POST one commit to the sink with a short timeout. `sunk` is true only when
+ * the response is a 2xx carrying a verified ack (BUG-703) -- never throws, so
+ * callers never need their own try/catch around this.
  */
-async function postToSink(id: string, at: string, payload: unknown): Promise<boolean> {
+async function postToSink(id: string, at: string, payload: unknown): Promise<SinkPostResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEBUGSINK_TIMEOUT_MS);
   try {
@@ -586,9 +635,18 @@ async function postToSink(id: string, at: string, payload: unknown): Promise<boo
       body: JSON.stringify({ id, at, payload }),
       signal: controller.signal,
     });
-    return res.ok;
+    if (!res.ok) return { sunk: false, invalidAck: false };
+    let rawAck: unknown = null;
+    try {
+      rawAck = await res.json();
+    } catch {
+      rawAck = null; // GR#16: an unparsable body is an invalid ack, not a crash
+    }
+    const ack = coerceAck(rawAck);
+    const valid = ack.sink === SINK_NAME && ack.id === id;
+    return { sunk: valid, invalidAck: !valid };
   } catch {
-    return false;
+    return { sunk: false, invalidAck: false };
   } finally {
     clearTimeout(timer);
   }
@@ -657,17 +715,27 @@ async function drainQueue(): Promise<boolean> {
     const toDrain = readQueue(storage);
     if (toDrain.length === 0) return true;
     for (const entry of toDrain) {
-      const ok = await postToSink(entry.id, entry.at, entry.payload);
-      if (!ok) {
+      const result = await postToSink(entry.id, entry.at, entry.payload);
+      if (!result.sunk) {
         // F3: a drain failure is a sink-down event too — never silent, and
         // the indicator must reflect it (re-stamped, not left cleared by
         // whatever set it null before this drain started).
         allClean = false;
         sinkLastUnreachableAt = Date.now();
-        recordError(
-          `Debug sink unreachable at ${DEBUGSINK_URL} -- commit remains queued locally instead of reaching the metro MariaDB debug sink (drain retry failed)`,
-          { type: 'app', action: `drain ${entry.id}`, code: 'MET-V857' },
-        );
+        // BUG-703: a 2xx that fails ack validation is a DIFFERENT failure
+        // mode from no response at all (some other service is answering on
+        // the port) — distinct registry code so the two are never conflated.
+        if (result.invalidAck) {
+          recordError(
+            `Debug sink at ${DEBUGSINK_URL} answered with a 2xx but not a valid ack (expected sink=${SINK_NAME} id=${entry.id}) -- a different service may be listening on 127.0.0.1:8642; commit remains queued locally instead of being trusted as sunk (drain retry)`,
+            { type: 'app', action: `drain ${entry.id}`, code: 'MET-V867' },
+          );
+        } else {
+          recordError(
+            `Debug sink unreachable at ${DEBUGSINK_URL} -- commit remains queued locally instead of reaching the metro MariaDB debug sink (drain retry failed)`,
+            { type: 'app', action: `drain ${entry.id}`, code: 'MET-V857' },
+          );
+        }
         continue; // leave this one queued; try the rest in case only this entry is problematic
       }
       // Synchronous read-filter-write, no await inside this block: atomic
@@ -779,8 +847,8 @@ export async function commitDebug(payload: unknown): Promise<CommitResult> {
   }
 
   const at = new Date().toISOString();
-  const sunk = await postToSink(id, at, payload);
-  if (sunk) {
+  const sinkResult = await postToSink(id, at, payload);
+  if (sinkResult.sunk) {
     // BUG-691 F3 (2026-09-04): this used to clear sinkLastUnreachableAt
     // BEFORE awaiting drainQueue -- a sink that answers the live commit but
     // then dies mid-drain left the indicator showing healthy (and recorded
@@ -811,10 +879,22 @@ export async function commitDebug(payload: unknown): Promise<CommitResult> {
   // per-commit id is still captured, just in `action` where it cannot affect
   // dedup.
   sinkLastUnreachableAt = Date.now();
-  recordError(
-    `Debug sink unreachable at ${DEBUGSINK_URL} -- commit queued locally instead of reaching the metro MariaDB debug sink`,
-    { type: 'app', action: `commit ${id}`, code: 'MET-V857' },
-  );
+  // BUG-703: a 2xx that fails ack validation (some other service answering
+  // on 127.0.0.1:8642) is recorded under a DISTINCT code from "nothing
+  // answered at all" -- both leave the frame queued and the indicator
+  // showing the same warning state, but only the invalid-ack case points at
+  // a wrong-service collision rather than a simply-not-running sink.
+  if (sinkResult.invalidAck) {
+    recordError(
+      `Debug sink at ${DEBUGSINK_URL} answered with a 2xx but not a valid ack (expected sink=${SINK_NAME} id=${id}) -- a different service may be listening on 127.0.0.1:8642; commit queued locally instead of being trusted as sunk`,
+      { type: 'app', action: `commit ${id}`, code: 'MET-V867' },
+    );
+  } else {
+    recordError(
+      `Debug sink unreachable at ${DEBUGSINK_URL} -- commit queued locally instead of reaching the metro MariaDB debug sink`,
+      { type: 'app', action: `commit ${id}`, code: 'MET-V857' },
+    );
+  }
   // BUG-607: enqueueCommit never throws (byte-budget eviction + a
   // quota-degrade retry are internal to commitqueue.ts), but it CAN fail to
   // persist the entry at all — that failure must reach the player and the

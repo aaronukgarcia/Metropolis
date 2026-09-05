@@ -335,6 +335,18 @@ function withFakeLocalStorage(fn) {
   };
 }
 
+/**
+ * BUG-703: a genuine sink success now requires a verifiable ack, not just a
+ * 2xx status — see backend.ts's postToSink. Every fake "the real sink is up"
+ * response in this file uses this helper so it echoes the exact id the
+ * client sent (mirroring tools/debugsink/server.js's real ack shape:
+ * `{ ok: true, sink: 'metropolis-debugsink', id }`).
+ */
+function sinkAck(init) {
+  const body = JSON.parse(init.body);
+  return { ok: true, status: 200, json: async () => ({ sink: 'metropolis-debugsink', id: body.id }) };
+}
+
 /** Install a fake global.fetch for the duration of the wrapped test. */
 function withFakeFetch(impl, fn) {
   return async (...args) => {
@@ -364,7 +376,7 @@ test(
   'commitDebug: a 2xx from the sink is reported directly, never touches the local queue',
   withFakeLocalStorage(
     withFakeFetch(
-      async () => ({ ok: true, status: 200 }),
+      async (url, init) => sinkAck(init),
       async (calls, mem) => {
         const result = await commitDebug({ meta: { appVersion: '9.9.9' }, hello: 'world' });
         assert.equal(result.ok, true);
@@ -465,7 +477,7 @@ test(
     const originalFetch = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
     const controller = { down: true };
     Object.defineProperty(globalThis, 'fetch', {
-      value: async () => (controller.down ? { ok: false, status: 503 } : { ok: true, status: 200 }),
+      value: async (url, init) => (controller.down ? { ok: false, status: 503 } : sinkAck(init)),
       configurable: true,
       writable: true,
     });
@@ -542,7 +554,7 @@ test(
   'commitDebug: a live success drains any pre-existing queued commits, oldest first, 2xx-only removal',
   withFakeLocalStorage(
     withFakeFetch(
-      async () => ({ ok: true, status: 200 }),
+      async (url, init) => sinkAck(init),
       async (calls, mem) => {
         // Seed the queue as if two earlier commits had queued locally while
         // the sink was unreachable (commitqueue.ts schema: {id, at, payload}).
@@ -577,9 +589,9 @@ test(
       // First call (the live commit) succeeds; subsequent drain calls fail.
       (() => {
         let n = 0;
-        return async () => {
+        return async (url, init) => {
           n += 1;
-          return n === 1 ? { ok: true, status: 200 } : { ok: false, status: 503 };
+          return n === 1 ? sinkAck(init) : { ok: false, status: 503 };
         };
       })(),
       async (calls, mem) => {
@@ -633,7 +645,7 @@ test('commitDebug: a commit enqueued mid-drain (during an in-flight POST) surviv
 
   let call = 0;
   Object.defineProperty(globalThis, 'fetch', {
-    value: async () => {
+    value: async (url, init) => {
       call += 1;
       if (call === 2) {
         // This is the drain's POST for DBG-OLD-1. Before resolving it,
@@ -646,7 +658,7 @@ test('commitDebug: a commit enqueued mid-drain (during an in-flight POST) surviv
         current.push({ id: 'DBG-CONCURRENT', at: '2026-09-03T00:00:00.000Z', payload: { concurrent: true } });
         mem.set(QUEUE_KEY, JSON.stringify(current));
       }
-      return { ok: true, status: 200 };
+      return sinkAck(init);
     },
     configurable: true,
     writable: true,

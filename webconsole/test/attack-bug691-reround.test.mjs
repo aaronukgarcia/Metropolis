@@ -81,6 +81,18 @@ function readQueue(mem) {
   return raw ? JSON.parse(raw) : [];
 }
 
+/**
+ * BUG-703: a genuine sink success now requires a verifiable ack, not just a
+ * 2xx status — see backend.ts's postToSink. Every fake "the real sink is up"
+ * response in this file uses this helper so it echoes the exact id the
+ * client sent (mirroring tools/debugsink/server.js's real ack shape:
+ * `{ ok: true, sink: 'metropolis-debugsink', id }`).
+ */
+function sinkAck(init) {
+  const body = JSON.parse(init.body);
+  return { ok: true, status: 200, json: async () => ({ sink: 'metropolis-debugsink', id: body.id }) };
+}
+
 let freshCounter = 0;
 /** A "page reload" / second execution context: a genuinely fresh module
  * instance with its own commitIdCounter, errorLog and sink-state module vars. */
@@ -129,7 +141,7 @@ test(
     const flaky = installFetch(async (url, init) => {
       n += 1;
       bodies.push(JSON.parse(init.body));
-      return n <= 2 ? { ok: true, status: 200 } : { ok: false, status: 503 };
+      return n <= 2 ? sinkAck(init) : { ok: false, status: 503 };
     });
     try {
       const C = await freshBackend();
@@ -229,9 +241,9 @@ test(
     // Phase 2: PARTIAL drain. Live commit sinks (POST #1), first queued entry
     // sinks (POST #2), second queued entry is refused (POST #3).
     let n = 0;
-    const partial = installFetch(async () => {
+    const partial = installFetch(async (url, init) => {
       n += 1;
-      return n <= 2 ? { ok: true, status: 200 } : { ok: false, status: 503 };
+      return n <= 2 ? sinkAck(init) : { ok: false, status: 503 };
     });
     try {
       const r = await A.commitDebug({ live: 1 });
@@ -255,7 +267,7 @@ test(
     assert.equal(drainRows[0].count, 1);
 
     // Phase 3: the sink is genuinely back. Live commit + a fully clean drain.
-    const up = installFetch(async () => ({ ok: true, status: 200 }));
+    const up = installFetch(async (url, init) => sinkAck(init));
     try {
       const r = await A.commitDebug({ live: 2 });
       assert.equal(r.ok, true);
@@ -294,7 +306,7 @@ test(
     // Now a commit whose payload cannot be serialized at all.
     const circular = { tag: 'BAD' };
     circular.self = circular;
-    const up = installFetch(async () => ({ ok: true, status: 200 }));
+    const up = installFetch(async (url, init) => sinkAck(init));
     let bad;
     try {
       bad = await A.commitDebug(circular);
@@ -320,7 +332,7 @@ test(
     assert.doesNotMatch(v864[0].msg, /unreachable/, 'R4: a payload defect is never reported as a network outage');
 
     // And the good entries still drain normally on the next healthy commit.
-    const up2 = installFetch(async () => ({ ok: true, status: 200 }));
+    const up2 = installFetch(async (url, init) => sinkAck(init));
     try {
       await A.commitDebug({ live: true });
     } finally {
@@ -359,7 +371,7 @@ test(
   'RE-ROUND R5b: a payload whose toJSON() throws is handled on the same path (MET-V864, sink untouched, promise resolves)',
   withFakeLocalStorage(async (mem) => {
     const A = await freshBackend();
-    const up = installFetch(async () => ({ ok: true, status: 200 }));
+    const up = installFetch(async (url, init) => sinkAck(init));
     try {
       const nasty = {
         toJSON() {

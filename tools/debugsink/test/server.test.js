@@ -29,6 +29,7 @@ const {
   RETENTION_DAYS,
   SCHEMA_SQL,
   MAX_BODY_BYTES,
+  SINK_NAME,
 } = require('../server.js');
 
 /**
@@ -157,7 +158,7 @@ test('GET /api/debug/health returns {ok:true, rows:N}', async () => {
   assert.ok(conn.ended, 'connection must be closed after the request');
 });
 
-test('POST /api/debug/commit with a valid body upserts and returns 200 {ok:true,id}', async () => {
+test('POST /api/debug/commit with a valid body upserts and returns 200 {ok:true,sink,id} (BUG-703 verifiable ack)', async () => {
   const conn = fakeConnection();
   const handler = createHandler({ connect: async () => conn });
   const res = await requestHandler(handler, {
@@ -166,7 +167,8 @@ test('POST /api/debug/commit with a valid body upserts and returns 200 {ok:true,
     body: { id: 'DBG-ABC', at: new Date().toISOString(), payload: { hello: 'world' } },
   });
   assert.equal(res.status, 200);
-  assert.deepEqual(res.json, { ok: true, id: 'DBG-ABC' });
+  assert.deepEqual(res.json, { ok: true, sink: SINK_NAME, id: 'DBG-ABC' });
+  assert.equal(res.json.sink, 'metropolis-debugsink', 'BUG-703: the client validates this exact sink identity before trusting the ack');
   assert.ok(conn.calls.some((c) => /INSERT INTO debug_commits/.test(c.sql)));
   assert.ok(conn.ended);
 });
