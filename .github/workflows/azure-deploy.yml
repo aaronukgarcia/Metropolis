@@ -76,7 +76,7 @@ env:
   # bound). Confirm the RG name with Aaron/the lead before the first run —
   # this is a recommendation baked into the workflow, not yet a ruling.
   RESOURCE_GROUP: rg-metropolis-dev
-  CONTAINER_APP_ENV: prixsix-env
+  CONTAINER_APP_ENV: metropolis-env
   CONTAINER_APP_NAME: metropolis-metroserve
   AZURE_REGION: uksouth
   STORAGE_ACCOUNT: metropolisdatadev
