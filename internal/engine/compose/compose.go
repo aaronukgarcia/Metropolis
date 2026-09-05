@@ -26,6 +26,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/unlocks"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/wellbeing"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
@@ -490,6 +491,13 @@ var registrationOrder = []moduleRegistration{
 	// then intaken (this monthly hook) never observes a same-tick
 	// ordering ambiguity with the population-affecting hooks above it.
 	{name: "deathservices", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &deathServicesHook{st: st} }},
+	// MOD-034 (engine.wellbeing, compose_wellbeing.go): monthly cohort
+	// reconstruction, placed after deathservices on the same PhasePopulation
+	// slot — it only reads the live citizen population and this month's
+	// index, never anything the hooks above it produce, so its position
+	// relative to them carries no ordering meaning (mirrors deathservices'
+	// own doc comment on this point).
+	{name: "wellbeing", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &wellbeingHook{st: st} }},
 	{name: "invariant", phase: core.PhaseDailyTick, hook: nil},
 }
 
@@ -1161,6 +1169,19 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "deathservices", "step": "WireDrainCapacity"})
 	}
 
+	// MOD-034 (engine.wellbeing, compose_wellbeing.go): construct and wire
+	// the composed WellbeingAPI. Resolved BEFORE the first hook registers,
+	// like every other required module above (AC-4 — no partially-wired
+	// engine on a construction failure). See compose_wellbeing.go's package
+	// doc comment for exactly which seams are live vs degraded, and for the
+	// GR#25 finding that the four downstream modifiers are computed but not
+	// yet applied to any consumer (the missing engine.citizens/engine.firms/
+	// engine.attract -> engine.wellbeing edges).
+	wellbeingAPI, wellbeingSeams, err := wireWellbeing(e.WorldSeed(), w, seasonAPI, trafficAPI, cid)
+	if err != nil {
+		return nil, err
+	}
+
 	invReg := invariant.NewRegistry()
 	for _, inv := range []invariant.Invariant{
 		invariant.NewPeopleInvariant(),
@@ -1193,6 +1214,9 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		services:                servicesAPI,
 		firms:                   firmsAPI,
 		deathServices:           deathServicesAPI,
+		wellbeingAPI:            wellbeingAPI,
+		wellbeingSeams:          wellbeingSeams,
+		wellbeingStatus:         computeWellbeingStatus(wellbeingAPI, wellbeingSeams, 0, 0, 0),
 		traffic:                 trafficAPI,
 		extCommute:              extCommuteAPI,
 		unlocks:                 unlocksAPI,
@@ -1459,6 +1483,15 @@ type simState struct {
 	// (save_wire.go) and Composition.DeathServices() (test/inspection
 	// accessor) can reach the same instance.
 	deathServices *deathservices.DeathServicesAPI
+
+	// MOD-034 (engine.wellbeing, compose_wellbeing.go): wellbeingAPI is the
+	// composed WellbeingAPI instance, wellbeingSeams is the fixed-order
+	// live/degraded report from wireWellbeing, and wellbeingStatus is the
+	// last monthly reconstruction's cohort mean + computed (not applied —
+	// see compose_wellbeing.go's package doc comment) downstream modifiers.
+	wellbeingAPI    *wellbeing.WellbeingAPI
+	wellbeingSeams  []wellbeingSeamStatus
+	wellbeingStatus WellbeingStatus
 
 	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): the composed
 	// engine.traffic dependency (traffic_wire.go). trafficTickHook calls
