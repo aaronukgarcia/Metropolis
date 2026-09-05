@@ -92,7 +92,20 @@ test('ATTACK/ALT-DISTINCT: alternative is never the chosen spec, and message is 
   }
 });
 
-test('ATTACK/MONEY: Fix All never goes negative and spends EXACTLY sum(placed * placementCost)', () => {
+test('ATTACK/MONEY: Fix All never goes negative and spends EXACTLY the NET cost of every building-count change', () => {
+  // BUG-660 (2026-09-03, "the r3 round reproduced the 15,000 in-place-upgrade
+  // case and fixed its own test's reconstruction formula to exact equality"):
+  // autoConnect's road batching can UPGRADE an existing tile in place (e.g.
+  // a plain 'road' tile absorbed into a new arterial run becomes 'rd_aroad'),
+  // which shows up as a NEGATIVE delta on the old spec alongside a positive
+  // delta on the new one. The real economics bill the NET cost of that swap
+  // (crediting the removed tile's own cost, never double-charging it), so
+  // the reconstruction here must sum signed deltas across every touched
+  // spec, not just positive ones — summing only positive deltas overcounts
+  // by exactly the removed tile's cost whenever autoConnect upgrades a road
+  // in place (reproduced live: a 12,000 road tile absorbed into a 54,000
+  // rd_aroad run reads as "spent 216,000" under the old positive-only
+  // formula vs the real, correct 204,000 charged).
   const bad: string[] = [];
   for (const funds of [0, 1, 999, 25_000, 250_000, 2_500_000, 40_000_000, 1e12]) {
     const s: any = grow(funds);
@@ -100,13 +113,14 @@ test('ATTACK/MONEY: Fix All never goes negative and spends EXACTLY sum(placed * 
     if (after.funds < 0) bad.push(`funds=${funds}: went NEGATIVE (${after.funds})`);
     const before = specCounts(s);
     const post = specCounts(after);
+    const ids = new Set([...before.keys(), ...post.keys()]);
     let spent = 0;
-    for (const [id, n] of post) {
-      const delta = n - (before.get(id) ?? 0);
-      if (delta > 0) spent += delta * placementCost(SPECS[id]);
+    for (const id of ids) {
+      const delta = (post.get(id) ?? 0) - (before.get(id) ?? 0);
+      if (delta !== 0) spent += delta * placementCost(SPECS[id]);
     }
     const actual = s.funds - after.funds;
-    if (actual !== spent) bad.push(`funds=${funds}: treasury moved ${actual} but placed buildings cost ${spent}`);
+    if (actual !== spent) bad.push(`funds=${funds}: treasury moved ${actual} but the net building-count change costs ${spent}`);
   }
   assert.deepEqual(bad, [], bad.join('\n'));
 });

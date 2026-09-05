@@ -12,6 +12,15 @@
 // dependency array is now `[]` (it never needs to be recreated to see a new
 // flag value).
 //
+// FEAT-2326609771 (2026-09-04, landed same day as this file): the flag
+// flipped from opt-in/default-OFF to default-ON (unset/junk now resolves to
+// ON — see webWorkerFlag.ts's header). This test used to start from an UNSET
+// flag (`removeItem`) to get the OFF state; unset now means ON, so the
+// mount/flip/flip-back sequence below uses EXPLICIT 'off'/'on' spellings
+// throughout instead of relying on "unset" to mean off. The bug this test
+// guards (fresh-read-per-tick vs baked-in-at-effect-creation) is unchanged by
+// the default flip.
+//
 // RED PROOF (documented, not re-run here — GR#24 forbids destructive git):
 // scratch-copy QueueDepthHud.tsx, revert the `const workerOn = ...` line back
 // to the top-level `const workerOn = webWorkerOffloadEnabled();` (evaluated
@@ -63,8 +72,9 @@ function installJsdom() {
 test('BUG-615: flipping the webworker flag mid-session updates the worker line within one poll tick, with no other re-render', async () => {
   const dom: any = await installJsdom();
   try {
-    // Start with the flag OFF (default).
-    dom.window.localStorage.removeItem('metropolis.webworker');
+    // Start with the flag explicitly OFF (FEAT-2326609771: unset now means
+    // ON, so the OFF starting state must be written explicitly).
+    dom.window.localStorage.setItem('metropolis.webworker', 'off');
 
     const React = await import('react');
     const { createRoot } = await import('react-dom/client');
@@ -111,7 +121,7 @@ test('BUG-615: flipping the webworker flag mid-session updates the worker line w
 
       // Flip back OFF and confirm the reverse direction also updates within
       // one tick.
-      dom.window.localStorage.removeItem('metropolis.webworker');
+      dom.window.localStorage.setItem('metropolis.webworker', 'off');
       await act(async () => {
         mock.timers.tick(1000);
       });

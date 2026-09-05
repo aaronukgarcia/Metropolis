@@ -14,8 +14,16 @@
 //
 // Uses the same jsdom + react-dom/client + act() mounting recipe as
 // bug512-bug513-save-error-robustness.test.tsx. ConfigMenu reads/writes
-// window.localStorage directly and does not use useSim/SimProvider, so it is
-// mounted standalone here.
+// window.localStorage directly for its storage-management buttons; it also
+// now calls useSim() (FEAT-2326609761, 2026-08-?: the Consolidator on/off
+// toggle is journalled sim state dispatched from ConfigMenu, not
+// localStorage), so it must be mounted inside a real SimProvider — a bare
+// <ConfigMenu/> throws "useSim must be used inside SimProvider" (MET-V800).
+//
+// TEARDOWN DISCIPLINE (per bug512-bug513-save-error-robustness.test.tsx's own
+// warning): SimProvider's autosave/tick-loop useEffects register real
+// setInterval timers that only clear via root.unmount()'s effect cleanup —
+// every mounted test below keeps root.unmount() in an unconditional finally.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -40,6 +48,17 @@ function installJsdom() {
   (globalThis as any).requestAnimationFrame = window.requestAnimationFrame.bind(window);
   (globalThis as any).cancelAnimationFrame = window.cancelAnimationFrame.bind(window);
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  if (typeof (globalThis as any).ResizeObserver === 'undefined') {
+    (globalThis as any).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  }
+  // backend.ts's queueStorage() reads the BARE `localStorage` global (see
+  // feat-2326609771-webworker-default-on.test.tsx's BUG-597 note) — needed
+  // now that ConfigMenu mounts inside a real SimProvider.
+  (globalThis as any).localStorage = window.localStorage;
   return dom;
 }
 
@@ -55,7 +74,8 @@ async function mountConfigMenu() {
   const { createRoot } = await import('react-dom/client');
   const { act } = await import('react-dom/test-utils');
   const { ConfigMenu } = await import('../src/components/ConfigMenu.tsx');
-  return { React, createRoot, act, ConfigMenu };
+  const { SimProvider } = await import('../src/sim/store.tsx');
+  return { React, createRoot, act, ConfigMenu, SimProvider };
 }
 
 test(
@@ -65,7 +85,7 @@ test(
     const dom = installJsdom();
     try {
       const { NAMED_SAVES_INDEX_KEY, NAMED_SAVE_SLOT_PREFIX } = await import('../src/sim/namedsaves.ts');
-      const { React, createRoot, act, ConfigMenu } = await mountConfigMenu();
+      const { React, createRoot, act, ConfigMenu, SimProvider } = await mountConfigMenu();
 
       dom.window.localStorage.setItem(NAMED_SAVES_INDEX_KEY, JSON.stringify(['fixture-city']));
       dom.window.localStorage.setItem(`${NAMED_SAVE_SLOT_PREFIX}fixture-city`, JSON.stringify({ name: 'Fixture City' }));
@@ -74,7 +94,7 @@ test(
       const root = createRoot(container);
       try {
         await act(async () => {
-          root.render(React.default.createElement(ConfigMenu));
+          root.render(React.default.createElement(SimProvider, { children: React.default.createElement(ConfigMenu) }));
         });
         await act(async () => {
           findButtonByText(container, 'Config').dispatchEvent(
@@ -140,16 +160,31 @@ test(
   async () => {
     const dom = installJsdom();
     try {
-      const { SAVEPOINT_KEY_PREFIX } = await import('../src/sim/replay.ts');
-      const { React, createRoot, act, ConfigMenu } = await mountConfigMenu();
+      const { SAVEPOINT_KEY_PREFIX, createSavepoint } = await import('../src/sim/replay.ts');
+      const { initialState } = await import('../src/sim/engine.ts');
+      const { React, createRoot, act, ConfigMenu, SimProvider } = await mountConfigMenu();
 
-      dom.window.localStorage.setItem(`${SAVEPOINT_KEY_PREFIX}.0`, JSON.stringify({ tick: 1 }));
+      // FEAT-2326609780 (P0 lineage-blind savepoints, 2026-09-04, landed same
+      // day as this file): a bare `{tick:1}` placeholder is not a real
+      // Savepoint (no `snapshot`/consistency-checkable state), so
+      // restoreFromSavepoint rejects it and SimProvider's boot mints a FRESH
+      // lineage id instead of staying on the legacy one — "Clear autosave
+      // slots" then correctly refuses to touch a DIFFERENT lineage's slot
+      // (the whole point of the P0 fix), leaving this fixture in place for
+      // a reason that has nothing to do with the confirm-gate under test.
+      // A genuine legacy savepoint (no lineageId, real state) restores
+      // successfully, keeps the ambient "current lineage" at legacy, and so
+      // exercises the ACTUAL BUG-575 confirm-gate path this test targets.
+      dom.window.localStorage.setItem(
+        `${SAVEPOINT_KEY_PREFIX}.0`,
+        JSON.stringify(createSavepoint(initialState(), [], new Date())),
+      );
 
       const container = dom.window.document.getElementById('root')!;
       const root = createRoot(container);
       try {
         await act(async () => {
-          root.render(React.default.createElement(ConfigMenu));
+          root.render(React.default.createElement(SimProvider, { children: React.default.createElement(ConfigMenu) }));
         });
         await act(async () => {
           findButtonByText(container, 'Config').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
@@ -193,7 +228,7 @@ test(
       const { JOURNAL_KEY } = await import('../src/sim/journal.ts');
       const { PREWIPE_ARCHIVE_KEY } = await import('../src/sim/captureBeforeWipe.ts');
       const { QUEUE_KEY } = await import('../src/sim/commitqueue.ts');
-      const { React, createRoot, act, ConfigMenu } = await mountConfigMenu();
+      const { React, createRoot, act, ConfigMenu, SimProvider } = await mountConfigMenu();
 
       dom.window.localStorage.setItem(JOURNAL_KEY, JSON.stringify({ entries: [] }));
       dom.window.localStorage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify([]));
@@ -203,7 +238,7 @@ test(
       const root = createRoot(container);
       try {
         await act(async () => {
-          root.render(React.default.createElement(ConfigMenu));
+          root.render(React.default.createElement(SimProvider, { children: React.default.createElement(ConfigMenu) }));
         });
         await act(async () => {
           findButtonByText(container, 'Config').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));

@@ -18,7 +18,14 @@ const POP_FOR_PARKS_OVER_CAP = 8_000_000;
 test('ATTACK r3/PERF: one resolveDemandAll at pop 3M completes fast and places at most the cap', () => {
   const s: any = big(3_000_000);
   const planned = orderedDemandFixPlan(s).reduce((a, p) => a + p.count, 0);
-  assert.ok(planned > 10_000, `precondition: an uncapped plan is huge (${planned})`);
+  // BUG-685/BUG-686 (largest-first service provision, 2026-09-04): Fix-All now
+  // picks the densest adequate candidate instead of the cheapest-per-unit one,
+  // so most services satisfy demand with far fewer, bigger buildings than
+  // before (this plan dropped from >10,000 to ~2,583 units at pop 3M). The
+  // precondition only needs the uncapped plan to still EXCEED the cap itself
+  // (GR#15: derive from data, not a hardcoded magic number) so the test below
+  // is actually exercising the cap, not a stale pre-largest-first magnitude.
+  assert.ok(planned > RESOLVE_DEMAND_ALL_MAX_UNITS, `precondition: an uncapped plan (${planned}) must still exceed the cap (${RESOLVE_DEMAND_ALL_MAX_UNITS})`);
   const t0 = Date.now();
   const r: any = reducer(s, { type: 'resolveDemandAll' } as never);
   const secs = (Date.now() - t0) / 1000;

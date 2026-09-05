@@ -297,7 +297,7 @@ test('FEAT-2326609771: a throwing Worker constructor falls back silently-but-vis
     const { SimProvider, useSim } = await import('../src/sim/store.tsx');
 
     getGlobalWorkerFallbackTracker().reset();
-    const errorCountBefore = readErrorRing(dom).length;
+    const workerErrorCountBefore = readErrorRing(dom).filter((e) => e.code === 'MET-V856').length;
 
     // Plain `number` (no `| null`), sentinelled at -1: Probe() always runs
     // synchronously as part of the `act(async () => { root.render(...) })`
@@ -325,9 +325,19 @@ test('FEAT-2326609771: a throwing Worker constructor falls back silently-but-vis
       'a throwing constructor must report construct-failed, not silently vanish'
     );
 
+    // FEAT-2326609780 (P0 lineage + IDB-primary boot, landed 2026-09-04/05,
+    // after this file): SimProvider now ALSO reports a loud, registry-sourced
+    // MET-V858 the instant `indexedDB` is unavailable (GR#17 silent-failure
+    // detection for the new IDB-primary store) — unconditionally on every
+    // mount, completely independent of the Worker construction path under
+    // test here. jsdom provides no `indexedDB` global, so every mount in
+    // this suite now ALSO appends one MET-V858 alongside whatever this test
+    // is actually proving. Filtering by code (exactly like the
+    // handshake-timeout test below already does) isolates the Worker-
+    // fallback error this assertion cares about from that orthogonal one.
     const errorsAfter = readErrorRing(dom);
-    assert.equal(errorsAfter.length, errorCountBefore + 1, 'exactly one registry-sourced error must be recorded for a throwing Worker constructor (GR#1/GR#7)');
-    assert.equal(errorsAfter[0].code, 'MET-V856');
+    const workerErrors = errorsAfter.filter((e) => e.code === 'MET-V856');
+    assert.equal(workerErrors.length, workerErrorCountBefore + 1, 'exactly one registry-sourced MET-V856 error must be recorded for a throwing Worker constructor (GR#1/GR#7)');
 
     const tickCallback = spy.get();
     assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount');
