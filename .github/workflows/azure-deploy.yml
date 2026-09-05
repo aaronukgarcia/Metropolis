@@ -79,7 +79,7 @@ env:
   CONTAINER_APP_ENV: prixsix-env
   CONTAINER_APP_NAME: metropolis-metroserve
   AZURE_REGION: uksouth
-  STORAGE_ACCOUNT: garcialtdstorage
+  STORAGE_ACCOUNT: metropolisdatadev
   FILE_SHARE_NAME: metropolis-metroserve-data
   CONTAINERAPP_STORAGE_NAME: metroserve-data
 
@@ -250,7 +250,7 @@ jobs:
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --query '[0].value' -o tsv 2>/dev/null || true)"
           if [ -z "$ACCOUNT_KEY" ]; then
-            echo "::error::Could not read a key for storage account ${{ env.STORAGE_ACCOUNT }} in resource group ${{ env.RESOURCE_GROUP }}. If the storage account lives in a DIFFERENT resource group (e.g. the shared 'garcia' RG), override --resource-group here before the first real run."
+            echo "::error::Could not read a key for storage account ${{ env.STORAGE_ACCOUNT }} in resource group ${{ env.RESOURCE_GROUP }}. This account is Metropolis-owned inside rg-metropolis-dev (BUG-715, created 2026-09-05) so a missing key means the account was deleted (e.g. by az group delete) - recreate it: az storage account create --name ${{ env.STORAGE_ACCOUNT }} --resource-group ${{ env.RESOURCE_GROUP }} --location ${{ env.AZURE_REGION }} --sku Standard_LRS --kind StorageV2. The deploy identity has Contributor on the RG so it can read the key once the account exists."
             exit 1
           fi
           az storage share-rm create \
