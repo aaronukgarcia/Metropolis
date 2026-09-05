@@ -399,10 +399,18 @@ test('A4b (F2 FIX-PROOF): there is nothing left to go stale — SimState carries
 // A5 — F3: placementAffordability bypasses the estate's own jobsAtTier SSOT.
 // ══════════════════════════════════════════════════════════════════════════
 
-test('A5 (F3 FIX-PROOF): placementAffordability now costs hea_teaching at its REAL job count (1,450) via jobsAtTier(), not its unrelated SERVED tier value (120,000) — the quote matches the estate\'s own wage SSOT exactly', () => {
+test('A5 (F3 FIX-PROOF): placementAffordability now costs hea_teaching at its REAL job count (1,450) via jobsAtTier(), not its unrelated SERVED tier value — the quote matches the estate\'s own wage SSOT exactly', () => {
   const sp = SPECS.hea_teaching;
   assert.equal(sp.jobs, 1450, 'catalogue: the teaching hospital employs 1,450');
-  assert.equal(capacityAtTier(sp, 0), 120_000, 'sanity: its capacityTiers ladder really is sized for `served`, not jobs — the trap is still there for a naive reader');
+  // FEAT-2326609761 (2026-09-05): served/capacityTiers balance-bumped
+  // 120,000 -> 200,000 so hea_hospital -> hea_teaching clears the
+  // consolidator's 4x group-size floor (Aaron's own consolidation example).
+  // The sanity check below reads the CURRENT served-tier-0 value directly
+  // off the spec rather than a stale hardcoded figure — the point of the
+  // assertion (capacityTiers is sized for `served`, not `jobs`, and a naive
+  // capacityAtTier(sp, 0) read would silently use it as a job count) is
+  // unaffected by which served figure is currently in the catalogue.
+  assert.equal(capacityAtTier(sp, 0), sp.served, 'sanity: its capacityTiers ladder really is sized for `served`, not jobs — the trap is still there for a naive reader');
 
   // An empty city with a big workforce isolates the arithmetic.
   const s = { ...initialState(), buildings: [], population: 60_000, lastFlows: { inflows: [{ label: 'x', value: 100_000 }], outflows: [] } };

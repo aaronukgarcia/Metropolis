@@ -239,9 +239,48 @@ export type CapacityField =
   | 'tourism'
   | 'capacity';
 
+// FEAT-2326609761 (Aaron, 2026-09-05, dogfood gap round): `jobs` moved to
+// LAST place, below its original position ahead of `children`/`served`.
+// BUG-652 (and the equivalent grandfathering for uni/station_ashford/
+// land_stadium/land_airport/grand_terminus/land_tunnel) gave several specs a
+// SECOND, secondary `jobs` field purely for wage/employment accounting
+// alongside their real capacity field (hea_teaching: `served: 120000` is the
+// hospital's true capacity, `jobs: 1450` is just its staff headcount for
+// KIND_TO_WAGE_SECTOR; same shape for uni's `children`). With `jobs` ahead of
+// `children`/`served` in this order, capacityFieldOf(hea_teaching) silently
+// returned 'jobs' instead of 'served' — putting hea_teaching in family
+// `health|jobs||` while hea_hospital sits in `health|served||`, so the two
+// NEVER shared a family and hea_hospital -> hea_teaching (Aaron's own "one
+// teaching hospital" example) could never be a consolidation successor at
+// all, independent of any capacity-ratio tuning. Confirmed by direct probe
+// (isConsolidationSuccessor returned false purely on the family mismatch,
+// before the ratio rule was even reached). Moving `jobs` to the end means it
+// is only ever picked when NOTHING else on the AC-7 list is present — true
+// for every genuine jobs-only spec (off_suite, off_tower, ind_factory-class
+// specs, etc.) and now also correctly falls through to `served`/`children`
+// for hea_teaching/uni, matching their REAL capacity semantics. `station_
+// ashford` (kind 'station') and `land_stadium`/`land_airport`/`land_tunnel`
+// (kind 'landmark') are unaffected in practice — those THREE kinds are
+// already excluded by CONSOLIDATION_EXEMPT_KINDS above.
+//
+// F3 CORRECTION (FEAT-2326609761 civic-tier round, 2026-09-05): this
+// paragraph previously also claimed `grand_terminus` was exempt "via kind
+// 'station'" — that was FALSE. grand_terminus's real ZoneKind is
+// 'transport' (see its P(...) catalogue entry), which is NOT in
+// CONSOLIDATION_EXEMPT_KINDS, so it was never actually protected by kind at
+// all. The reorder's real effect on it: bus_station and grand_terminus both
+// key on `served` under either field order (grand_terminus never carried a
+// competing earlier-order field), so this reorder did not CREATE that rung
+// — but the false "already exempt" comment is exactly why the resulting
+// `bus_station -> grand_terminus x6` rung went unnoticed and undeclared
+// until this round's audit. It is now exempted explicitly, by spec id, in
+// CONSOLIDATION_EXEMPT_SPEC_IDS's own doc comment (F2 adjudication) —
+// grand_terminus is a one-off rail landmark, not a kind-exempt station. The
+// reorder itself is still the structurally correct fix for hea_teaching/uni
+// (AC-10's "capacity-field hygiene" spirit: a spec's consolidation family
+// must key on its REAL capacity, not an incidental secondary field).
 const CAPACITY_FIELD_ORDER: CapacityField[] = [
   'residents',
-  'jobs',
   'children',
   'served',
   'mw',
@@ -249,6 +288,7 @@ const CAPACITY_FIELD_ORDER: CapacityField[] = [
   'processCapacity',
   'tourism',
   'capacity',
+  'jobs',
 ];
 
 /** First present capacity field on a spec, in the AC-7 order. Null for specs with no capacity field at all (civic, shops, factories, most parks — AC-11). */
@@ -313,9 +353,22 @@ export function tileDensityOf(sp: Spec): number {
   return tiles > 0 ? capacityOf(sp) / tiles : 0;
 }
 
-/** The `tag`/`stage` components are load-bearing (AC-7): wat_clean vs wat_waste, edu_nursery vs edu_primary must never share a family despite matching kind+capacityField. */
+/**
+ * The `tag`/`stage` components are load-bearing (AC-7): wat_clean vs
+ * wat_waste, edu_nursery vs edu_primary must never share a family despite
+ * matching kind+capacityField. The trailing `careTier` component is the F1
+ * fix (FEAT-2326609761 civic-tier round, 2026-09-05): hea_clinic/
+ * hea_ambulance (careTier 'local') and hea_hospital/hea_teaching (careTier
+ * 'regional') all key on kind:'health'+capacityField:'served' with no
+ * tag/stage at all — without this discriminator they collapse into ONE
+ * family and the consolidator silently deletes emergency/primary-care
+ * coverage into a hospital (13 Ambulance Stations -> 0 ambulances + 1
+ * Teaching Hospital was reproduced before this fix). `careTier` is
+ * `undefined` on every non-health spec, so this segment is a no-op '' there
+ * — zero behaviour change outside health.
+ */
 export function familyKeyOf(sp: Spec): string {
-  return `${sp.kind}|${capacityFieldOf(sp) ?? ''}|${sp.tag ?? ''}|${sp.stage ?? ''}`;
+  return `${sp.kind}|${capacityFieldOf(sp) ?? ''}|${sp.tag ?? ''}|${sp.stage ?? ''}|${sp.careTier ?? ''}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -425,8 +478,42 @@ export const CONSOLIDATOR_MIN_GROUP = 4;
  * mismatch. Excluded here by the explicit, commented exception the BA doc
  * recommended for inc1, pending the balance-pass fix (a distinct capacity
  * field for eldercare beds).
+ *
+ * `grand_terminus`/`col_sixth`/`uni` are NOT listed here — see the F2
+ * adjudication comment directly below this const: both of the reorder's
+ * undeclared rungs (`col_sixth -> uni`, `bus_station -> grand_terminus`)
+ * are adjudicated ACCEPT and left DECLARED, not exempted.
  */
 const CONSOLIDATION_EXEMPT_SPEC_IDS: ReadonlySet<string> = new Set(['hea_eldercare']);
+
+/**
+ * F2 adjudication (FEAT-2326609761 civic-tier round, 2026-09-05): the
+ * jobs-last reorder surfaced TWO rungs the author never explicitly declared.
+ * Both are adjudicated here and DECLARED (kept, not exempted) — ATTACK-11
+ * (attack-civic-tier-round3.test.mjs) pins both as present.
+ *
+ * `col_sixth -> uni x4` (both kind 'school', stage 'tertiary', capacityField
+ * 'children'): a sixth-form college escalating into a university campus is
+ * the same "many small -> one big, same education stage" shape already
+ * sanctioned for edu_nursery -> edu_nursery_city (single-stage escalation,
+ * never cross-stage — `stage` stays load-bearing in familyKeyOf precisely so
+ * a nursery can never merge into a primary school). Ratio 6000/1500 = 4x
+ * clears CONSOLIDATOR_MIN_GROUP with no headroom to spare; if college/
+ * university capacities are ever balance-tuned this rung is the first one
+ * to re-check.
+ *
+ * `bus_station -> grand_terminus x6` (both kind 'transport', capacityField
+ * 'served', no tag/stage/careTier): the estate's own prior doc comment
+ * claimed grand_terminus was already unaffected because it sits in the
+ * exempt kind 'station' — that claim was FALSE (F3 fix, see the correction
+ * on CAPACITY_FIELD_ORDER's comment above: grand_terminus's real ZoneKind is
+ * 'transport', not 'station'), which is exactly how this rung went
+ * undeclared rather than genuinely blocked. Adjudicated ACCEPT on the merits
+ * too: "Victorian rail cathedral" reads as a single grand multi-modal
+ * interchange absorbing several regional bus interchanges into one civic
+ * transport hub — the same many-small-to-one-big shape as the rest of the
+ * ladder, not a mode mismatch worth a special-case exemption.
+ */
 
 export function isConsolidationSuccessor(a: Spec, b: Spec): boolean {
   if (a.id === b.id) return false;

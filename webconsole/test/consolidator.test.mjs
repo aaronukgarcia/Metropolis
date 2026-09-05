@@ -35,6 +35,7 @@ import {
   familyKeyOf,
   isConsolidationSuccessor,
   consolidationLadder,
+  CONSOLIDATOR_MIN_GROUP,
   monthlyScopeOf,
   twelfthIndexOf,
   findOpportunities,
@@ -284,6 +285,81 @@ test('AC-9: the ladder is derived (never hand-listed) and every entry satisfies 
   // Sorted, deterministic output (from asc, then to asc).
   const sorted = ladder.slice().sort((x, y) => (x.from < y.from ? -1 : x.from > y.from ? 1 : x.to < y.to ? -1 : x.to > y.to ? 1 : 0));
   assert.deepEqual(ladder, sorted);
+});
+
+// ---------------------------------------------------------------------------
+// §E.1 Aaron's own dogfood-gap examples (2026-09-05, FEAT-2326609761):
+// "ONE teaching hospital replaces many [hospitals]" and "ONE city
+// kindergarten doing 1000 children, not 40 kindergartens" — both refused by
+// the ladder before the hea_teaching served-capacity bump and the
+// edu_nursery_city catalogue addition. These tests are the MUTATION-PROOF:
+// reverting either catalogue change (hea_teaching's served back to 120,000,
+// or deleting edu_nursery_city) makes the corresponding test red.
+// ---------------------------------------------------------------------------
+
+test("AARON'S EXAMPLE 1: hea_hospital -> hea_teaching is a real ladder rung and a real opportunity (\"one teaching hospital replaces many\")", () => {
+  const ladder = consolidationLadder();
+  const rung = ladder.find((r) => r.from === 'hea_hospital' && r.to === 'hea_teaching');
+  assert.ok(rung, 'hea_hospital -> hea_teaching must be a derived ladder rung — MUTATION-PROOF: reverting hea_teaching.served to 120,000 (3x hea_hospital, below CONSOLIDATOR_MIN_GROUP=4x) makes this fail');
+  assert.equal(rung.groupSize, Math.floor(capacityOf(SPECS.hea_teaching) / capacityOf(SPECS.hea_hospital)));
+  assert.ok(rung.groupSize >= CONSOLIDATOR_MIN_GROUP, 'must replace a group, not a pair');
+
+  // Pack exactly rung.groupSize hea_hospital instances into one section and
+  // prove findOpportunities actually surfaces the consolidation toward
+  // hea_teaching — not just that the ladder table contains the rung.
+  const groupSize = rung.groupSize;
+  const tilesPerRow = Math.max(1, Math.floor(SECTION_TILES / SPECS.hea_hospital.w));
+  const buildings = [];
+  for (let i = 0; i < groupSize; i++) {
+    const dx = (i % tilesPerRow) * SPECS.hea_hospital.w;
+    const dy = Math.floor(i / tilesPerRow) * SPECS.hea_hospital.h;
+    buildings.push({ id: 1 + i, spec: 'hea_hospital', x: dx, y: dy, builtTick: 0 });
+  }
+  const s = baseState({ buildings, tick: 0 });
+  const opportunities = findOpportunities(s, Array.from(sectionIndexOf(s).keys()));
+  const hit = opportunities.find((o) => o.fromSpec === 'hea_hospital' && o.toSpec === 'hea_teaching');
+  assert.ok(hit, 'a section holding enough hea_hospital instances must produce a real hea_hospital -> hea_teaching opportunity');
+  assert.equal(hit.groupCount, groupSize);
+  assert.ok(hit.capacityGain >= 0, 'consolidating toward the teaching hospital must never lose served capacity');
+});
+
+test("AARON'S EXAMPLE 2: edu_nursery -> City Kindergarten is a real ladder rung and a real opportunity (\"one city kindergarten doing 1000 children, not 40 kindergartens\")", () => {
+  assert.ok(SPECS.edu_nursery_city, 'the City Kindergarten spec must exist in the catalogue');
+  assert.equal(SPECS.edu_nursery_city.stage, 'nursery', 'must share edu_nursery\'s stage to be a same-family successor (AC-7)');
+  assert.equal(familyKeyOf(SPECS.edu_nursery_city), familyKeyOf(SPECS.edu_nursery));
+
+  const ladder = consolidationLadder();
+  const rung = ladder.find((r) => r.from === 'edu_nursery' && r.to === 'edu_nursery_city');
+  assert.ok(rung, 'edu_nursery -> edu_nursery_city must be a derived ladder rung — MUTATION-PROOF: removing edu_nursery_city from SPECS makes this fail');
+  assert.equal(rung.groupSize, Math.floor(capacityOf(SPECS.edu_nursery_city) / capacityOf(SPECS.edu_nursery)));
+  assert.ok(rung.groupSize >= CONSOLIDATOR_MIN_GROUP, 'must replace a group, not a pair');
+
+  const groupSize = rung.groupSize;
+  const tilesPerRow = Math.max(1, Math.floor(SECTION_TILES / SPECS.edu_nursery.w));
+  const buildings = [];
+  for (let i = 0; i < groupSize; i++) {
+    const dx = (i % tilesPerRow) * SPECS.edu_nursery.w;
+    const dy = Math.floor(i / tilesPerRow) * SPECS.edu_nursery.h;
+    buildings.push({ id: 1 + i, spec: 'edu_nursery', x: dx, y: dy, builtTick: 0 });
+  }
+  const s = baseState({ buildings, tick: 0 });
+  const opportunities = findOpportunities(s, Array.from(sectionIndexOf(s).keys()));
+  const hit = opportunities.find((o) => o.fromSpec === 'edu_nursery' && o.toSpec === 'edu_nursery_city');
+  assert.ok(hit, 'a section holding enough edu_nursery instances must produce a real edu_nursery -> edu_nursery_city opportunity');
+  assert.equal(hit.groupCount, groupSize);
+  assert.ok(hit.capacityGain >= 0, 'consolidating toward the City Kindergarten must never lose children capacity');
+});
+
+test('capacityFieldOf prefers a spec\'s TRUE capacity field over an incidental secondary `jobs` field (hea_teaching, uni)', () => {
+  // Regression guard for the family-mismatch bug this round found: with
+  // `jobs` ahead of `served`/`children` in CAPACITY_FIELD_ORDER, hea_teaching
+  // (served + a grandfathered jobs field, BUG-652) silently bucketed into a
+  // DIFFERENT family than hea_hospital/hea_clinic, so hea_hospital ->
+  // hea_teaching could never be a successor regardless of any ratio tuning.
+  assert.equal(capacityFieldOf(SPECS.hea_teaching), 'served', 'hea_teaching\'s real capacity is `served`, not its grandfathered staffing `jobs` field');
+  if (SPECS.uni) {
+    assert.equal(capacityFieldOf(SPECS.uni), 'children', 'uni\'s real capacity is `children`, not its secondary `jobs` field');
+  }
 });
 
 // ---------------------------------------------------------------------------

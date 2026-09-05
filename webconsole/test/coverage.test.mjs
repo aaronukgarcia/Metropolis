@@ -107,12 +107,17 @@ test('coverage rows: need and cap share units — full provision yields coverage
   assert.ok(gp.need > 100, 'need must be in people, not clinic count (pop/800 would be 25)');
 });
 
-test('BUG-418: teaching hospital is hospital-class coverage (served 120000 → coverage 1)', () => {
-  const s = city(120000, { hea_teaching: 1 });
+test('BUG-418: teaching hospital is hospital-class coverage (served 200000 → coverage 1)', () => {
+  // FEAT-2326609761 (2026-09-05): hea_teaching's `served` was balance-bumped
+  // 120,000 -> 200,000 so it clears CONSOLIDATOR_MIN_GROUP(4)x hea_hospital's
+  // 40,000 — Aaron's "one teaching hospital replaces many" consolidation
+  // example. This test's population figure moves with it; the ASSERTION
+  // (coverage 1 at exactly pop === served) is unchanged.
+  const s = city(200000, { hea_teaching: 1 });
   const hosp = coverageOfService(s, 'hosp');
-  assert.equal(hosp.need, 120000);
-  assert.equal(hosp.cap, 120000, 'hea_teaching served must count toward Hospital cap');
-  assert.equal(hosp.coverage, 1, 'only hea_teaching at pop 120000 must read hospital coverage 1, not 0');
+  assert.equal(hosp.need, 200000);
+  assert.equal(hosp.cap, 200000, 'hea_teaching served must count toward Hospital cap');
+  assert.equal(hosp.coverage, 1, 'only hea_teaching at pop 200000 must read hospital coverage 1, not 0');
   assert.equal(coverageOfService(s, 'gp').cap, 0, 'teaching hospital must not inflate GP cap');
 });
 

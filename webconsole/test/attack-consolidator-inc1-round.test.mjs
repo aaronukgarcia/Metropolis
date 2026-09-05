@@ -27,6 +27,7 @@ import {
   capacityOf,
   tilesOf,
   consolidationLadder,
+  familyKeyOf,
   findOpportunities,
   findReconnectionOpportunities,
   strandedCapacityReport,
@@ -174,39 +175,38 @@ test('HAND RECOST 2 (the "free residential" rung, POST-FIX): res_hut -> res_bloc
   console.log(`[POST-FIX] res_hut->res_block (x7): netCost=0 (zoning is free), TRUE capacity delta=${trueDelta}, PANEL capacityGain=${opp.capacityGain}. A background process can no longer delete resident capacity for GBP 0.`);
 });
 
-test('HAND RECOST 3 (the clinic rung, task-assigned, a CONTROL CASE that is exact): 8x hea_clinic -> hea_hospital is capacity-exact, and the panel numbers are correct here', () => {
+// SUPERSEDED (FEAT-2326609761 civic-tier round, F1, 2026-09-05): this test
+// originally asserted "8x hea_clinic -> hea_hospital" as an exact-capacity
+// CONTROL CASE, on the assumption that sharing kind:'health' +
+// capacityField:'served' was sufficient to make clinic a legitimate
+// successor of hospital. That assumption is Aaron's own explicit design
+// ruling in reverse: "clinics/ambulances are local coverage, never merge
+// them into one hospital." The civic-tier round added a `careTier` data
+// discriminator ('local' for hea_clinic/hea_ambulance, 'regional' for
+// hea_hospital/hea_teaching) that familyKeyOf now folds in, so clinic and
+// hospital are no longer the same family and this rung no longer exists —
+// correctly, per the corrected design. The assertions below are the
+// mutation-proof for that fix: deleting `careTier` from the catalogue (or
+// removing it from familyKeyOf) makes this test RED again by resurrecting
+// the old (wrong) rung.
+test('HAND RECOST 3 SUPERSEDED (F1 fix): hea_clinic -> hea_hospital is NO LONGER a successor — careTier separates local coverage from hospital-tier', () => {
   const clinic = SPECS.hea_clinic;
   const hospital = SPECS.hea_hospital;
   assert.equal(capacityOf(clinic), 5000);
   assert.equal(capacityOf(hospital), 40000);
+  assert.equal(clinic.careTier, 'local', 'hea_clinic must be tagged local-coverage');
+  assert.equal(hospital.careTier, 'regional', 'hea_hospital must be tagged hospital-tier');
+  assert.notEqual(familyKeyOf(clinic), familyKeyOf(hospital), 'careTier must split the family despite matching kind+capacityField');
+
   const ladder = consolidationLadder();
   const rung = ladder.find((r) => r.from === 'hea_clinic' && r.to === 'hea_hospital');
-  assert.ok(rung);
-  assert.equal(rung.groupSize, 8);
-  assert.equal(rung.groupSize * capacityOf(clinic), capacityOf(hospital), 'this rung happens to divide EXACTLY (40000/8=5000) — no loss, unlike 55% of the ladder');
-
-  // Does the successor actually FIT? hea_hospital is 2x2=4 tiles; the group
-  // of 8x 1x1 clinics occupies 8 tiles (CEIL-2 "no net sprawl" is satisfied:
-  // 4 <= 8). But note what is NOT checked anywhere in this read-only module:
-  // whether the 8 clinics are laid out such that a contiguous 2x2 footprint
-  // is actually available once they are demolished (no siting/placement
-  // check exists here at all - explicitly deferred to the mutation lane per
-  // ASM-1495). The opportunity is reported as actionable without ever
-  // testing placement feasibility - a recommendation Aaron cannot verify is
-  // executable from the tab alone.
-  assert.ok(tilesOf(hospital) <= 8 * tilesOf(clinic));
+  assert.equal(rung, undefined, 'a hospital consolidating away local clinic coverage must never be offered');
 
   const buildings = [];
   for (let i = 0; i < 8; i++) buildings.push({ id: i + 1, spec: 'hea_clinic', x: i, y: 0, builtTick: 0 });
   const s = baseState({ buildings });
   const opp = findOpportunities(s, [sectionKeyOf(0, 0)]).find((o) => o.fromSpec === 'hea_clinic' && o.toSpec === 'hea_hospital');
-  assert.ok(opp);
-  const buildCost = placementCost(hospital);
-  const scrapRecovered = Math.round(placementCost(clinic) * CONSOLIDATOR_SCRAP_FRACTION) * 8;
-  assert.equal(opp.buildCost, buildCost);
-  assert.equal(opp.scrapRecovered, scrapRecovered);
-  assert.equal(opp.netCost, buildCost - scrapRecovered);
-  assert.equal(opp.capacityGain, 0, 'exact match: correctly zero, not a hidden loss (contrast with HAND RECOST 1/2)');
+  assert.equal(opp, undefined, 'no clinic-into-hospital opportunity may be surfaced to the tab');
 });
 
 // ===========================================================================

@@ -85,6 +85,23 @@ export interface Spec {
   served?: number;
   mw?: number;
   jobs?: number;
+  /**
+   * FEAT-2326609761 civic-tier round F1 (2026-09-05, GR#15 data-driven
+   * discriminator): distinguishes health specs that share `kind: 'health'`
+   * and capacity field `served` but must NEVER be treated as consolidation
+   * successors of each other. 'local' = geographically-distributed primary/
+   * emergency coverage (hea_clinic, hea_ambulance) — Aaron's own words:
+   * "clinics/ambulances are local coverage, never merge them into one
+   * hospital". 'regional' = hospital-tier escalation (hea_hospital,
+   * hea_teaching) — Aaron's own consolidation example ("one teaching
+   * hospital replaces many hospitals") stays valid because both sit in
+   * 'regional'. consolidator.ts's familyKeyOf folds this in as a fifth
+   * key segment so a 'local' spec can never share a family with a
+   * 'regional' one even though kind/capacityField/tag/stage all match.
+   * Present ONLY on health-kind specs today; undefined (and therefore a
+   * no-op '' segment) everywhere else.
+   */
+  careTier?: 'local' | 'regional';
   tourism?: number;
   dims?: Dims;
   /**
@@ -1347,6 +1364,7 @@ export const HEIGHT_CAP_STOREYS: Record<string, number> = {
   res_tower_nyc: 60,
   res_tower_sgp: 40,
   edu_nursery: 4,
+  edu_nursery_city: 4,
   edu_primary: 4,
   edu_city: 4,
   edu_tech: 6,
@@ -1837,11 +1855,33 @@ export const SPECS: Record<string, Spec> = {
 
   // FEAT-2326609740 §2 service-spec set: capacityTiers + monitor coverage
   // extended to health/police/school/office alongside residential above.
-  hea_clinic: P('hea_clinic', 'health', 'Clinic', 'GPs for 5,000', 1, 1, 3240000, 180, '#ff7b72', 'services', 2, { served: 5000, capacityTiers: tierLadder(5000) }),
-  hea_hospital: P('hea_hospital', 'health', 'General Hospital', 'Serves 40,000', 2, 2, 28800000, 1600, '#d95f57', 'services', 4, { served: 40000, capacityTiers: tierLadder(40000) }),
+  hea_clinic: P('hea_clinic', 'health', 'Clinic', 'GPs for 5,000', 1, 1, 3240000, 180, '#ff7b72', 'services', 2, { served: 5000, capacityTiers: tierLadder(5000), careTier: 'local' }),
+  hea_hospital: P('hea_hospital', 'health', 'General Hospital', 'Serves 40,000', 2, 2, 28800000, 1600, '#d95f57', 'services', 4, { served: 40000, capacityTiers: tierLadder(40000), careTier: 'regional' }),
   pol_station: P('pol_station', 'police', 'Police Station', 'Covers 10,000', 2, 1, 4680000, 260, '#6e7bd9', 'services', 3, { served: 10000, capacityTiers: tierLadder(10000) }),
 
   edu_nursery: P('edu_nursery', 'school', 'Kindergarten', '30 places · ages 0–4', 1, 1, 2160000, 120, '#ffd166', 'services', 2, { children: 30, stage: 'nursery', capacityTiers: tierLadder(30) }),
+  // FEAT-2326609761 (Aaron, 2026-09-05, dogfood gap): "ONE city kindergarten
+  // doing 1000 children, not 40 kindergartens" — his own consolidation
+  // example, and the catalogue had NO same-stage successor for edu_nursery
+  // at all (a nursery could only ever consolidate into more nurseries).
+  // Same `stage: 'nursery'` as edu_nursery so familyKeyOf() (kind|
+  // capacityField|tag|stage) matches — edu_primary/edu_city are a DIFFERENT
+  // stage ('primary'/'city') and must never be a nursery successor (AC-7).
+  // 1000/30 = 33.3x edu_nursery's capacity, comfortably clears AC-8 rule 3's
+  // CONSOLIDATOR_MIN_GROUP(4)x floor; footprint 3x3=9 tiles gives density
+  // 111.1 children/tile vs edu_nursery's 30/tile, clearing rule 4 (never
+  // lose density) by a wide margin so a future catalogue retune has room.
+  // ⚠ PLACEHOLDER-balance (directional only, Aaron balance-reviews):
+  // cost/upkeep interpolated on a per-child basis between edu_nursery
+  // (£72,000/child, £4/child upkeep) and edu_city (£28,800/child, £1.6/child
+  // upkeep) — City Kindergarten sits at £40,000/child (£40.0M) and
+  // £2.2/child upkeep (£2,200), i.e. cheaper per-place than a nursery but
+  // dearer than a full City School, consistent with the existing economies-
+  // of-scale shape (see tierLadder/reactorLadder's own doc comments for the
+  // precedent of a placeholder growth curve pending Aaron's numbers pass).
+  // Unlock level 4 matches edu_city — a late-game consolidation target, not
+  // an early-game build.
+  edu_nursery_city: P('edu_nursery_city', 'school', 'City Kindergarten', '1,000 places · ages 0–4', 3, 3, 40000000, 2200, '#ffb703', 'services', 4, { children: 1000, stage: 'nursery', capacityTiers: tierLadder(1000) }),
   edu_primary: P('edu_primary', 'school', 'Primary School', '300 places · ages 5–11', 2, 2, 9360000, 520, '#f2c14e', 'services', 3, { children: 300, stage: 'primary', capacityTiers: tierLadder(300) }),
   edu_city: P('edu_city', 'school', 'City School', '2,000 places · ages 5–15', 3, 2, 57600000, 3200, '#e3a92f', 'services', 4, { children: 2000, stage: 'city', capacityTiers: tierLadder(2000) }),
   col_sixth: P('col_sixth', 'school', 'College', '1,500 places · ages 16–19', 2, 2, 32400000, 1800, '#b58fd8', 'services', 4, { children: 1500, stage: 'tertiary' }),
@@ -2057,21 +2097,45 @@ export const SPECS: Record<string, Spec> = {
   edu_tech: P('edu_tech', 'school', 'Technical College', '2,200 places · trades + T-levels', 2, 2, 43200000, 2400, '#b58fd8', 'services', 6, { children: 2200, stage: 'tertiary', capacityTiers: tierLadder(2200) }),
 
   // ---- Health additions ----
-  hea_ambulance: P('hea_ambulance', 'health', 'Ambulance Station', 'Six-crew emergency cover', 1, 1, 6840000, 380, '#ff7b72', 'services', 5, { served: 15000, capacityTiers: tierLadder(15000) }),
+  hea_ambulance: P('hea_ambulance', 'health', 'Ambulance Station', 'Six-crew emergency cover', 1, 1, 6840000, 380, '#ff7b72', 'services', 5, { served: 15000, capacityTiers: tierLadder(15000), careTier: 'local' }),
   hea_eldercare: P('hea_eldercare', 'health', 'Elder-care Home', '90 assisted-living places', 2, 2, 15300000, 850, '#d95f57', 'services', 7, { served: 90, capacityTiers: tierLadder(90) }),
   // BUG-652: real large NHS teaching hospital trusts (e.g. Cambridge
   // University Hospitals/Addenbrooke's, ~12,000 staff for a ~1M-population
   // regional catchment — a ~1:83 staff-to-served ratio) employ far more per
   // capita than a district general hospital, reflecting teaching/research
-  // roles on top of clinical care. Applying ~1:83 to hea_teaching's own
-  // served=120,000 gives ~1,450 jobs. kind 'health' -> KIND_TO_WAGE_SECTOR
-  // already maps health -> public, no fiscal.ts change needed. FLAT, not
-  // scaled by the existing capacityTiers ladder — that ladder is sized for
-  // `served` (tierLadder(120000)), NOT jobs; see jobsAtTier()'s doc comment
+  // roles on top of clinical care. The original ~1:83 ratio was applied to
+  // hea_teaching's THEN served=120,000 to derive ~1,450 jobs; `jobs` is kept
+  // FLAT (grandfathered) rather than re-derived from `served` every time the
+  // latter is balance-tuned — see the FEAT-2326609761 note directly below
+  // for why `served` itself has since moved. kind 'health' ->
+  // KIND_TO_WAGE_SECTOR already maps health -> public, no fiscal.ts change
+  // needed. FLAT, not scaled by the existing capacityTiers ladder — that
+  // ladder is sized for `served`, NOT jobs; see jobsAtTier()'s doc comment
   // above totalJobs() for why a spec with jobs + an unrelated capacityTiers
-  // ladder must keep jobs flat (blindly scaling would have overstated this
-  // spec's job count ~80x, reading its served-tier value as its job count).
-  hea_teaching: P('hea_teaching', 'health', 'Teaching Hospital', 'Serves 120,000 + trains doctors', 3, 3, 153000000, 8500, '#c24f47', 'services', 10, { served: 120000, capacityTiers: tierLadder(120000), jobs: 1450 }),
+  // ladder must keep jobs flat (blindly scaling would overstate this spec's
+  // job count by reading its served-tier value as its job count).
+  //
+  // FEAT-2326609761 (Aaron, 2026-09-05, dogfood gap): "ONE teaching hospital
+  // replaces many [hospitals]" — his own consolidation example — was refused
+  // by AC-8 rule 3 on the ORIGINAL 120,000-served catalogue value: hea_
+  // hospital's `served: 40,000` only reaches hea_teaching's old 120,000 at a
+  // 3x ratio, short of CONSOLIDATOR_MIN_GROUP(4)x. `served` raised
+  // 120,000 -> 200,000 (5x hea_hospital, clearing the 4x floor with
+  // headroom) so the ladder rung Aaron actually asked for now exists in
+  // data, per the design's own preferred remedy (raise the successor's
+  // capacity rather than weaken CONSOLIDATOR_MIN_GROUP globally, which would
+  // have widened every OTHER family's group-size floor too — a much larger
+  // blast radius for a single hand-picked example). cost/upkeep scaled by
+  // the same 5/3 ratio to keep £-per-served roughly constant with the rest
+  // of the health family (153.0M -> 255.0M; 8,500 -> 14,200) — `jobs: 1450`
+  // is UNCHANGED (grandfathered per the paragraph above: it is staff
+  // headcount, not served-capacity, and BUG-652 already established it must
+  // never be re-derived from a `served`/capacityTiers change).
+  // ⚠ PLACEHOLDER-balance (directional only, Aaron balance-reviews) — both
+  // this bump and the ORIGINAL 120,000/153.0M/8,500 figures it replaces were
+  // always placeholder catalogue numbers, never a researched real-hospital
+  // figure.
+  hea_teaching: P('hea_teaching', 'health', 'Teaching Hospital', 'Serves 200,000 + trains doctors', 3, 3, 255000000, 14200, '#c24f47', 'services', 10, { served: 200000, capacityTiers: tierLadder(200000), jobs: 1450, careTier: 'regional' }),
 
   // ---- Police & justice ----
   pol_hq: P('pol_hq', 'police', 'Divisional HQ', 'Commands 60,000 coverage', 2, 2, 27000000, 1500, '#6e7bd9', 'services', 9, { served: 60000, capacityTiers: tierLadder(60000) }),
@@ -2490,7 +2554,7 @@ export const PALETTE: { title: string; items: string[] }[] = [
   { title: 'Health', items: ['hea_clinic', 'hea_hospital', 'hea_ambulance', 'hea_eldercare', 'hea_teaching', 'death_cemetery', 'death_crematorium', 'air_heliport'] },
   { title: 'Police & Justice', items: ['pol_station', 'civ_courthouse', 'pol_hq', 'civ_prison', 'civ_adx', 'air_police_helibase'] },
   { title: 'Fire & Rescue', items: ['fire_post', 'fire_station', 'fire_hq', 'air_fire_helibase'] },
-  { title: 'Education', items: ['edu_nursery', 'edu_primary', 'edu_city', 'col_sixth', 'uni', 'edu_tech'] },
+  { title: 'Education', items: ['edu_nursery', 'edu_nursery_city', 'edu_primary', 'edu_city', 'col_sixth', 'uni', 'edu_tech'] },
   { title: 'Civic', items: ['civ_library', 'civ_townhall', 'civ_cityhall'] },
   { title: 'Landmarks', items: ['land_stadium', 'land_airport', 'land_harbour', 'land_cathedral', 'land_eye', 'land_tunnel', 'land_space', 'land_ferryterminal', 'land_containerport', 'land_gigafactory', 'land_semifab', 'land_cern'] },
   { title: 'Tourism', items: ['tour_greatwall', 'tour_colosseum', 'tour_tajmahal', 'tour_machupicchu', 'tour_petra', 'tour_giza', 'tour_eiffel', 'tour_liberty', 'tour_grandcanyon', 'tour_niagara', 'tour_angkor', 'tour_stonehenge', 'tour_acropolis', 'tour_redeemer', 'tour_sagrada', 'tour_forbidden', 'tour_stpeters', 'tour_alhambra', 'tour_chichenitza', 'tour_fuji', 'tour_opera', 'tour_goldengate', 'tour_louvre', 'tour_santorini', 'tour_venice', 'tour_neuschwanstein', 'tour_burj', 'tour_iguazu', 'tour_banff', 'tour_aurora', 'tour_reef', 'tour_yellowstone', 'tour_serengeti', 'tour_fushimi', 'tour_prague', 'tour_dubrovnik', 'tour_cappadocia', 'tour_moai', 'tour_uluru', 'tour_tablemountain', 'tour_hallstatt', 'tour_antelope', 'tour_halong', 'tour_zhangjiajie', 'tour_matterhorn', 'tour_towerlondon', 'tour_versailles', 'tour_montstmichel', 'tour_giantscauseway', 'tour_edinburgh'] },
@@ -3515,10 +3579,11 @@ export function isBrownoutActive(s: SimState): boolean {
  * residents > children > served > jobs, picks the ONE metric a spec's single
  * capacityTiers ladder belongs to). BUG-652 gives jobs to hea_teaching
  * (which already carries a capacityTiers ladder sized for its `served`
- * figure, 120,000) and uni/station_ashford (which carry children/served with
- * no ladder at all) — blindly reading capacityAtTier(sp, tier) for jobs on
- * hea_teaching would silently return its SERVED tier value (120,000+) as
- * the job count, an 80x overstatement, and on uni/station_ashford would
+ * figure — 200,000 as of FEAT-2326609761's balance bump, was 120,000) and
+ * uni/station_ashford (which carry children/served with no ladder at all) —
+ * blindly reading capacityAtTier(sp, tier) for jobs on hea_teaching would
+ * silently return its SERVED tier value (200,000+) as the job count, an
+ * overstatement of two further orders, and on uni/station_ashford would
  * depend on capacityAtTier's bare fallback ordering (residents ?? jobs ??
  * 0), which happens to work only by accident (see grand_terminus, the one
  * pre-existing served+jobs+no-capacityTiers spec).
@@ -5435,9 +5500,10 @@ export interface PlacementAffordability {
  * read via jobsAtTier(sp, 0) — the estate's OWN collision-safe SSOT (this
  * file's totalJobs()/totalJobsBySector() use it too) — never
  * capacityAtTier(sp, 0) directly. hea_teaching carries `jobs: 1450`
- * ALONGSIDE a capacityTiers ladder sized for its `served` figure (120,000);
- * capacityAtTier(sp,0) blindly returns that ladder's tier-0 value (120,000)
- * regardless of which field it was built for, an 82.8x overstatement.
+ * ALONGSIDE a capacityTiers ladder sized for its `served` figure (200,000 as
+ * of FEAT-2326609761's balance bump, was 120,000);
+ * capacityAtTier(sp,0) blindly returns that ladder's tier-0 value (200,000)
+ * regardless of which field it was built for, a huge overstatement.
  *
  * IMPORTANT: this function is PURE and UI-facing ONLY (called from a SHARED
  * UI dispatch seam — see src/components/placementGate.ts — BEFORE any
