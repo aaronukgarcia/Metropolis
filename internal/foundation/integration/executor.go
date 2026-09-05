@@ -296,6 +296,25 @@ func executeSingleShard[T any, M any](correlationID string, in Integration[T, M]
 		}
 	}
 
+	// Validate every message's Shard index BEFORE applying anything —
+	// BUG-760: ApplyBarrier (det/barrier.go) range-checks Shard against
+	// det.NumShards on every message before applying any of them, but
+	// this fast path previously had no equivalent check at all, so a
+	// message with an out-of-range Shard (e.g. NumShards+3, or negative)
+	// was silently APPLIED here while the pooled path correctly rejected
+	// it via det.ValidateShardIndex — the same class of fast-vs-pooled
+	// divergence BUG-370 closed for the duplicate-key check below,
+	// closed the same way: route through the one shared helper so both
+	// paths error identically, with nothing applied, on the same input.
+	// Checked unconditionally (not gated behind len(msgs0) > 1 like the
+	// duplicate-key check, which needs at least two entries to tie) since
+	// even a single out-of-range message must be rejected.
+	for _, m := range msgs0 {
+		if err := det.ValidateShardIndex(correlationID, m.Shard); err != nil {
+			return in.Zero(), err
+		}
+	}
+
 	if len(msgs0) > 1 {
 		sorted := make([]det.Message[M], len(msgs0))
 		copy(sorted, msgs0)

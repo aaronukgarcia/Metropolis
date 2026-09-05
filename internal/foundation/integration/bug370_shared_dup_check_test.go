@@ -58,6 +58,79 @@ type forceFullPathMultiMsgIntegration struct {
 
 func (forceFullPathMultiMsgIntegration) SingleShard() bool { return false }
 
+// TestBUG760_FastAndPooledPathsAgreeOnShardRange is BUG-760's table-driven
+// equivalence proof, built the same way as TestBUG370_FastAndPooledPathsAgree
+// below (same wiring: multiMsgIntegration + forceFullPathMultiMsgIntegration,
+// same fast-vs-pooled comparison), but for the range check instead of the
+// duplicate-key check.
+//
+// Before this fix, ApplyBarrier (det/barrier.go) range-checked every
+// message's Shard against det.NumShards before applying any of them, but
+// executeSingleShard had no equivalent check: a message whose Shard fell
+// outside [0, NumShards) — including NumShards+3, exactly as BUG-760's
+// report describes — was silently APPLIED on the fast path while the
+// pooled path (which routes every message through ApplyBarrier) correctly
+// rejected it via ErrShardOutOfRange (MET-F200). Both paths now route
+// through the one shared helper (det.ValidateShardIndex), so this table
+// proves they agree — including that NOTHING is applied on the rejected
+// input, on both paths.
+func TestBUG760_FastAndPooledPathsAgreeOnShardRange(t *testing.T) {
+	cases := []struct {
+		name       string
+		shard0Msgs []det.Message[string]
+	}{
+		{
+			name: "shard index NumShards+3 is out of range on both paths",
+			shard0Msgs: []det.Message[string]{
+				{Shard: det.NumShards + 3, Sequence: 0, Payload: "out-of-range-high"},
+			},
+		},
+		{
+			name: "negative shard index is out of range on both paths",
+			shard0Msgs: []det.Message[string]{
+				{Shard: -1, Sequence: 0, Payload: "out-of-range-negative"},
+			},
+		},
+		{
+			name: "one valid message plus one out-of-range message rejects both, applies neither",
+			shard0Msgs: []det.Message[string]{
+				{Shard: 0, Sequence: 0, Payload: "valid"},
+				{Shard: det.NumShards, Sequence: 1, Payload: "out-of-range-at-boundary"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fast := &multiMsgIntegration{single: true, shard0Msgs: tc.shard0Msgs}
+			_, fastErr := Execute[uint64, string]("corr-bug760-fast", NewLocalPool(4), fast)
+
+			slowUnderlying := &multiMsgIntegration{single: true, shard0Msgs: tc.shard0Msgs}
+			slow := forceFullPathMultiMsgIntegration{slowUnderlying}
+			_, slowErr := Execute[uint64, string]("corr-bug760-pooled", NewLocalPool(4), slow)
+
+			if fastErr == nil {
+				t.Fatal("fast path: want error, got nil — out-of-range Shard was silently applied")
+			}
+			if slowErr == nil {
+				t.Fatal("pooled path: want error, got nil")
+			}
+			if !errors.Is(fastErr, &errs.E{Code: det.ErrShardOutOfRange}) {
+				t.Fatalf("fast path error = %v, want ErrShardOutOfRange (%s)", fastErr, det.ErrShardOutOfRange)
+			}
+			if !errors.Is(slowErr, &errs.E{Code: det.ErrShardOutOfRange}) {
+				t.Fatalf("pooled path error = %v, want ErrShardOutOfRange (%s)", slowErr, det.ErrShardOutOfRange)
+			}
+			if applied := fast.Applied(); len(applied) != 0 {
+				t.Fatalf("fast path applied = %v, want nothing applied on an out-of-range shard", applied)
+			}
+			if applied := slowUnderlying.Applied(); len(applied) != 0 {
+				t.Fatalf("pooled path applied = %v, want nothing applied on an out-of-range shard", applied)
+			}
+		})
+	}
+}
+
 // TestBUG370_FastAndPooledPathsAgree is BUG-370's table-driven equivalence
 // proof for foundation/integration: executeSingleShard (the fast path,
 // SingleShard()==true) and Execute's full 256-shard path (the same

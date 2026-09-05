@@ -69,8 +69,8 @@ func ApplyBarrier[T any](correlationID string, messages []Message[T], apply func
 	})
 
 	for i, m := range sorted {
-		if m.Shard < 0 || m.Shard >= NumShards {
-			return errs.New(ErrShardOutOfRange, correlationID, map[string]any{"shard": m.Shard})
+		if err := ValidateShardIndex(correlationID, m.Shard); err != nil {
+			return err
 		}
 		if i > 0 {
 			if err := RejectAdjacentDuplicateKey(correlationID, m.Shard, m.Sequence, sorted[i-1].Shard, sorted[i-1].Sequence); err != nil {
@@ -81,6 +81,35 @@ func ApplyBarrier[T any](correlationID string, messages []Message[T], apply func
 
 	for _, m := range sorted {
 		apply(m.Payload)
+	}
+	return nil
+}
+
+// ValidateShardIndex is the ONE range check every single-message-at-a-time
+// apply path in this package (and its callers outside it) uses to confirm
+// shard falls within [0, NumShards) before applying anything — returning
+// a registry-sourced ErrShardOutOfRange (MET-F200) otherwise.
+//
+// BUG-760 (2026-09-05, the last fast-vs-pooled divergence GR#21 flagged
+// after BUG-370 closed the duplicate-key gap the same way): ApplyBarrier
+// range-checked every message's Shard before applying, but foundation/
+// integration's executeSingleShard fast path did not — a message whose
+// Shard sat outside [0, NumShards) was silently APPLIED on the fast path
+// while the pooled path (which routes every message through
+// ApplyBarrier) correctly rejected it with ErrShardOutOfRange. Sharing
+// this one check between both call sites, exactly as
+// RejectAdjacentDuplicateKey already did for the duplicate-key check,
+// makes that class of drift impossible: fixing the range here fixes it
+// everywhere that calls it.
+//
+// Call sites:
+//
+//   - ApplyBarrier, the general multi-shard barrier (this file).
+//   - foundation/integration's executeSingleShard (executor.go), the
+//     SingleShard() Integration fast path — BUG-760's finding.
+func ValidateShardIndex(correlationID string, shard int) error {
+	if shard < 0 || shard >= NumShards {
+		return errs.New(ErrShardOutOfRange, correlationID, map[string]any{"shard": shard})
 	}
 	return nil
 }

@@ -249,7 +249,7 @@
       "severity": "error",
       "module": "foundation.det",
       "message": "shard index {shard} is out of range",
-      "remedy": "Every ShardResult/Message must carry a Shard index in [0, NumShards). Check the sharding function that produced this result for an off-by-one or a stale NumShards value."
+      "remedy": "Every ShardResult/Message must carry a Shard index in [0, NumShards). Raised by the one shared check det.ValidateShardIndex (BUG-760, widening BUG-287/BUG-370's shared-helper precedent), called from ApplyBarrier and foundation/integration's executeSingleShard fast path alike so both agree on the same input. Check the sharding function that produced this result for an off-by-one or a stale NumShards value."
     },
     "MET-F201": {
       "severity": "error",
