@@ -1425,7 +1425,8 @@
         "engine.finance",
         "foundation.errors",
         "foundation.num",
-        "int.serializer"
+        "int.serializer",
+        "engine.refuse"
       ],
       "sprint": 4,
       "collaborations": {
@@ -1573,7 +1574,8 @@
         "engine.world",
         "foundation.data",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "int.serializer"
       ],
       "sprint": 6
     },
@@ -1670,7 +1672,8 @@
         "engine.citizens",
         "foundation.data",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "engine.finance"
       ],
       "sprint": 6
     },
@@ -1789,7 +1792,8 @@
         "feat.saveux",
         "engine.unlocks",
         "int.serializer",
-        "engine.deathservices"
+        "engine.deathservices",
+        "engine.wellbeing"
       ],
       "sprint": 6
     },
@@ -1937,7 +1941,8 @@
         "foundation.data",
         "foundation.errors",
         "foundation.num",
-        "int.serializer"
+        "int.serializer",
+        "engine.wellbeing"
       ],
       "sprint": 4
     },
@@ -3163,7 +3168,8 @@
         "engine.market",
         "engine.wellbeing",
         "engine.citizens",
-        "foundation.errors"
+        "foundation.errors",
+        "engine.logistics"
       ],
       "sprint": 10
     },

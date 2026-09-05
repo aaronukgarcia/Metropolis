@@ -258,6 +258,12 @@ func (d *DeathServicesAPI) snapshotForSave(correlationID string) (deathServicesS
 // live inside this package alone, since this package cannot see whether
 // its own shard will be present in a bundle it has not read yet.
 func (d *DeathServicesAPI) ResetForLoad(correlationID string) error {
+	// SEC-020 copy guard on the exported surface itself (astgate checks
+	// each receiver method syntactically; delegating to the guarded
+	// resetForLoad alone reads as unguarded — the CI red of 2026-09-05).
+	if err := d.checkNotCopied(correlationID, "ResetForLoad"); err != nil {
+		return err
+	}
 	return d.resetForLoad(correlationID)
 }
 
