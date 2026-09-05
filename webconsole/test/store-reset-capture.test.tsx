@@ -80,6 +80,20 @@ test('BUG-437 BAR-1(b): reset with a rigged pre-wipe archive write aborts the wi
     });
     assert.ok((Probe as any)._latest, 'Probe must have rendered');
 
+    // BUG-694 tick-gate: pause the store's own auto tick-driver (store.tsx's
+    // setInterval effect, keyed on state.speed, firing every SPEED_MS[speed]ms
+    // via engine.ts's `speed` action — SPEED_MS[1] default is 900ms) BEFORE
+    // driving any explicit ticks below. Under load this test's own act()
+    // round-trips can take long enough in wall-clock time for that background
+    // interval to also fire, injecting an extra real tick between the funds
+    // snapshot (dirtyFunds, below) and the post-abort assert — moving funds by
+    // exactly one tick's net flows (observed 964638 vs 964729, pass/fail/pass).
+    // This is the liveness-needs-both-bounds class (house memory: a progress
+    // floor without a rate ceiling let a clock runaway ship) — the fix is
+    // TICK-GATING the driver itself (speed: 0), not widening the funds
+    // tolerance, which would also hide a real GR#27 funds-leak-on-abort bug.
+    await act(async () => { latest().dispatch({ type: 'speed', speed: 0 }); });
+
     // Dirty the city (same proven sequence used in capture-before-wipe.test.mjs's
     // dirtyCity() fixture) so "unchanged after aborted wipe" is actually observable.
     await act(async () => { latest().dispatch({ type: 'debugFunds', amount: 50_000 }); });

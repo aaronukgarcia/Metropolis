@@ -226,6 +226,78 @@ function makeCoordAllocator() {
 }
 
 /**
+ * BUG-653 FIX: how many ROAD-ADJACENCY "hubs" to carve out of the fixture's
+ * own already-allocated road/motorway budget when `stampBuiltTick` is set.
+ * Each hub is one existing 'road'-kind entry repositioned to sit beside a
+ * 'motorway'-kind entry (repositioned to sit one tile further out) so the
+ * road tile is independently seeded as CONNECTED by computeRoadConnectivity's
+ * own "near a trunk tile" rule (data.ts) — no BFS chain between hubs is
+ * needed. Every non-network ("needs adjacency") building in the fixture is
+ * then repositioned to sit immediately beside hub[i % hubCount]'s road tile.
+ * Capped at 300: far more hubs than any selector needs to see realistic
+ * per-building road-gate cost (every non-network building still pays the
+ * isRoadAdjacent/isRoadConnected walk once — that IS the cost this bug exists
+ * to exercise — hubs only control how many DISTINCT connectivity anchors are
+ * reused, not how many buildings pay the gate).
+ */
+const MAX_ADJACENCY_HUBS = 300;
+
+/**
+ * BUG-653 FIX — mutates `allPlaced` (still plain {spec,x,y,...} objects,
+ * pre-id-assignment) IN PLACE: stamps every building's builtTick, then
+ * repositions every non-network ("needs road adjacency") building beside a
+ * small number of independently-connected road hubs carved out of the
+ * fixture's OWN pre-existing 'road'/'motorway' entries — never adds or
+ * removes a building, so `buildings.length` stays exactly what the caller
+ * asked for (`buildingCount`), unchanged from the non-opt-in path.
+ */
+function stampActivationGates(allPlaced) {
+  const roadEntries = allPlaced.filter((b) => SPECS[b.spec]?.kind === 'road');
+  const motorwayEntries = allPlaced.filter((b) => SPECS[b.spec]?.kind === 'motorway');
+  const needsAdjacency = allPlaced.filter((b) => {
+    const sp = SPECS[b.spec];
+    return sp && sp.category !== 'network';
+  });
+
+  const hubCount = Math.max(0, Math.min(MAX_ADJACENCY_HUBS, roadEntries.length, motorwayEntries.length));
+  const hubs = [];
+  for (let i = 0; i < hubCount; i++) {
+    // Reposition one existing 'road' entry to (hx, hy) and one existing
+    // 'motorway' entry to (hx, hy + 1) — the road tile is then seeded
+    // CONNECTED by computeRoadConnectivity's own "orthogonally near a trunk
+    // tile" rule (data.ts) directly, with no BFS chain to another road tile
+    // or the map edge required.
+    const hx = (i % 100) * 2 + 1;
+    const hy = Math.floor(i / 100) * 4 + 1;
+    roadEntries[i].x = hx;
+    roadEntries[i].y = hy;
+    motorwayEntries[i].x = hx;
+    motorwayEntries[i].y = hy + 1;
+    hubs.push({ x: hx, y: hy });
+  }
+
+  if (hubCount > 0) {
+    needsAdjacency.forEach((b, i) => {
+      const hub = hubs[i % hubCount];
+      // One tile north of the hub's road tile — every spec's footprint
+      // includes its own (x, y) corner, whose south neighbour is the road,
+      // regardless of that spec's own w/h (isRoadAdjacent ORs over every
+      // footprint tile's neighbours — see data.ts).
+      b.x = hub.x;
+      b.y = Math.max(0, hub.y - 1);
+    });
+  }
+
+  // builtTick comfortably clears constructionTicks() for even the costliest
+  // catalogue entry (data.ts's CONSTRUCTION_COST_DIVISOR comment) — same
+  // idiom activation-inc1.test.mjs already uses (`builtTick: -1000`) for
+  // exactly this purpose, widened for extra margin.
+  for (const b of allPlaced) {
+    if (b.builtTick === undefined) b.builtTick = -100000;
+  }
+}
+
+/**
  * Builds the deterministic scale fixture: buildingCount buildings (default
  * DEFAULT_BUILDING_COUNT), residential capacity reaching at least
  * targetPopulation (default DEFAULT_TARGET_POPULATION), settled through
@@ -235,11 +307,31 @@ function makeCoordAllocator() {
  * upkeep never trips insolvency/bailout/administration state machinery
  * mid-settle — this gate measures TICK COST at scale, not the (separately
  * tested) insolvency state machine.
+ *
+ * BUG-653 (2026-09-04): `stampBuiltTick` is OPT-IN, defaulting to `false` so
+ * every one of this fixture's other 15 existing callers (render tests,
+ * consolidator tests, several attack- and BUG-64x rounds) keeps its EXACT
+ * current behaviour — the pre-existing "no builtTick → isOnline() treats
+ * every building as always-online" shortcut (see ONLINE-GATING SHORTCUT
+ * above) is untouched for them. Only scale-gate.test.mjs (the one gate this
+ * bug is about) opts in. When true: every building gets `builtTick = -100000`
+ * (comfortably clears constructionTicks() for even the costliest catalogue
+ * entry — see data.ts's CONSTRUCTION_COST_DIVISOR comment — matching the
+ * `builtTick: -1000` idiom activation-inc1.test.mjs already uses for the same
+ * purpose), and every NON-network ("needs road adjacency", i.e.
+ * `SPECS[spec].category !== 'network'`) building — including residential —
+ * is repositioned to sit directly beside one of a small number of
+ * already-connected road "hubs" (see MAX_ADJACENCY_HUBS), so isOnline() now
+ * genuinely walks G1 (construction)/G2 (road-adjacent)/G3 (road-connected)
+ * for every one of them instead of short-circuiting on the null-builtTick
+ * check — the exact code path BUG-642's isOnline memo sits behind, and the
+ * exact half of the gate this bug's own report says was previously dead.
  */
 export function buildScaleFixture({
   buildingCount = DEFAULT_BUILDING_COUNT,
   targetPopulation = DEFAULT_TARGET_POPULATION,
   settleTicks = 3,
+  stampBuiltTick = false,
 } = {}) {
   const coord = makeCoordAllocator();
 
@@ -259,6 +351,10 @@ export function buildScaleFixture({
   nonResidential.push(...fillKind('road', roadCount, coord));
 
   const allPlaced = [...residential, ...nonResidential];
+
+  if (stampBuiltTick) {
+    stampActivationGates(allPlaced);
+  }
 
   let nextId = 1;
   const buildings = allPlaced.map((b) => ({ id: nextId++, ...b }));

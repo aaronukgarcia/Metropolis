@@ -309,17 +309,52 @@ test('ATTACK: computeMilestoneRewards mutates neither its state nor the claimed 
 
 // ---------------------------------------------------------------------------
 // ATTACK 12 — per-tick cost of the 6 predicates (m5 slices history(-60) twice).
+// BUG-710 rework (2026-09-05): the original version asserted a fixed
+// wall-clock bound (`full / N < 1ms`), which is exactly the CI-under-load
+// flake class GR-banned by house idiom (BUG-654/681/674) — a shared/
+// contended CI runner can legitimately push a 20,000-iteration average over
+// 1ms with zero change to the code under test. Replaced with fold-count
+// instrumentation (BUG-674 precedent): the actual concern this test guards
+// against is m5's `s.history.slice(-60)` silently becoming an O(history
+// length) scan (e.g. a future edit dropping the `-60` bound). That is
+// provable EXACTLY, with no clock, by counting slice calls/elements at two
+// wildly different history sizes and asserting the count is INVARIANT to
+// history length (scale-invariance ratio == 1, not a wall-clock budget).
 // ---------------------------------------------------------------------------
-test('ATTACK: the 6-predicate detection loop adds no meaningful per-tick cost (spot measure, no wall-clock assert)', () => {
-  const s = tickN({ ...blank(), buildings: [...blank().buildings, RES] }, 80);
-  const claimedAll = MILESTONES.map((m) => m.id);
-  const N = 20000;
-  let t0 = process.hrtime.bigint();
-  for (let i = 0; i < N; i++) computeMilestoneRewards(s, claimedAll); // all-claimed: short-circuits
-  const shortCircuit = Number(process.hrtime.bigint() - t0) / 1e6;
-  t0 = process.hrtime.bigint();
-  for (let i = 0; i < N; i++) computeMilestoneRewards(s, []); // full evaluation incl. m5's slices
-  const full = Number(process.hrtime.bigint() - t0) / 1e6;
-  console.log(`  detection cost over ${N} calls: all-claimed ${shortCircuit.toFixed(1)}ms, full ${full.toFixed(1)}ms (${(full * 1000 / N).toFixed(1)}us/tick)`);
-  assert.ok(full / N < 1, 'a single detection pass must be well under 1ms');
+test('ATTACK: the 6-predicate detection loop is O(1) in history length — m5\'s history(-60) slice never scans more than its fixed 60-tick window, at any state size (fold-count instrumentation, not wall-clock)', () => {
+  const base = tickN({ ...blank(), buildings: [...blank().buildings, RES] }, 80);
+  // Two states, identical in every way EXCEPT history length: a normal-size
+  // history (the real one from 80 ticks) vs an artificially blown-up one
+  // (250x longer) simulating a very long-running city. If the predicate loop
+  // were accidentally O(history length) (e.g. a full slice instead of -60),
+  // the element count below would grow with the array; a correctly bounded
+  // -60 window produces the IDENTICAL count regardless of array length.
+  const small = base;
+  const big = { ...base, history: Array.from({ length: base.history.length * 250 }, (_, i) => base.history[i % base.history.length]) };
+  assert.ok(big.history.length > small.history.length * 100, 'sanity: big history really is much larger than small');
+
+  const originalSlice = Array.prototype.slice;
+  let sliceCalls = 0;
+  let elementsReturned = 0;
+  Array.prototype.slice = function (...args) {
+    const result = originalSlice.apply(this, args);
+    if (Array.isArray(result)) { sliceCalls++; elementsReturned += result.length; }
+    return result;
+  };
+  let smallCalls = 0, smallElements = 0, bigCalls = 0, bigElements = 0;
+  try {
+    sliceCalls = 0; elementsReturned = 0;
+    computeMilestoneRewards(small, []); // full evaluation of all 6 predicates, incl. m5
+    smallCalls = sliceCalls; smallElements = elementsReturned;
+
+    sliceCalls = 0; elementsReturned = 0;
+    computeMilestoneRewards(big, []);
+    bigCalls = sliceCalls; bigElements = elementsReturned;
+  } finally {
+    Array.prototype.slice = originalSlice;
+  }
+  console.log(`  fold-count: small-history slice calls=${smallCalls} elements=${smallElements}; big-history (${big.history.length} entries) slice calls=${bigCalls} elements=${bigElements}`);
+  assert.equal(bigCalls, smallCalls, 'the number of slice() calls in one detection pass must be IDENTICAL regardless of history array length (fixed predicate count, not a scan of the whole array)');
+  assert.equal(bigElements, smallElements, 'the total elements returned by slice() must be IDENTICAL regardless of history array length — proves the -60 window bound holds at any scale, not just the small fixture');
+  assert.ok(bigElements <= 120, 'total sliced elements must stay bounded to (at most) 2 x the 60-tick window, never proportional to history length');
 });

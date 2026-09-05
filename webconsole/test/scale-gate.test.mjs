@@ -131,46 +131,88 @@ const TICK_SAMPLE_COUNT = 30;
 // that state, the same shape BUG-642's real trigger had (a never-before-
 // queried restored/loaded state).
 //
+// BUG-654 FIX (2026-09-04, SECOND PASS): the old table bounded each selector
+// by a FIXED absolute ms figure — "LOCAL MEDIAN x30" — which measurably let
+// a 5-20x regression pass silently (this item's own report on the BOW proved
+// it: only a ~25x+ regression ever crossed a bound that loose). A first
+// attempt at a fix replaced the absolute figure with a ratio against this
+// SAME RUN's reducer-tick median, reasoning that both pay the identical
+// CI/local hardware gap so the ratio would cancel it out — but every one of
+// these selectors (waterCaps, powerStats, crimeRateOf, serviceCoverageOf,
+// and transitively wellbeingOf/computeFlows/buildingDisplayStates which call
+// them) is ALSO invoked FROM INSIDE the reducer's own 'tick' handler
+// (computeFlows et al.), so inflating a selector inflates tick cost too —
+// the ratio is not independent of the thing being measured and a real
+// regression barely moves it. Confirmed empirically: a synthetic ~5x
+// per-plant regression injected into waterCaps left the tick-ratio bound
+// GREEN in every trial.
+//
+// REMEDY: true SAME-RUN SCALE-INVARIANCE, the actual technique BUG-660's
+// ratio/geometric-mean gates established for this codebase
+// (bug660-connectivity-batch.test.mjs) — compare the SAME selector against
+// ITSELF at two different building counts in the SAME run, not against an
+// unrelated (and entangled) reference. Every selector here costs
+// close-to-linearly in buildings.length (file header), so "cost per
+// building" should stay roughly CONSTANT as buildingCount grows; a
+// regression to O(buildings²) (BUG-642's actual shape: waterCaps() walking
+// all buildings per water PLANT) makes "cost per building" grow WITH
+// buildingCount instead. Comparing a LARGE (13,000) and SMALL (2,600, 1/5
+// scale — SIZE_RATIO below) same-composition fixture and taking
+// (largePerBuilding / smallPerBuilding) gives a ratio that stays near 1 for
+// genuinely O(n) code and rises toward SIZE_RATIO (or beyond, for something
+// worse than O(n²)) under a regression — and, being a ratio of two
+// same-machine, same-run measurements, is immune to the CI/local hardware
+// gap the old absolute bound needed 30x of slack to survive.
+//
 // BOUND DERIVATION (house rule: MEDIAN of >=5 runs, never max — see file
-// header). Measured locally (Windows, Node 25.3.0, SAMPLES=6 cold calls per
-// selector, straight after the BUG-644 composition fix, at the DEFAULT
-// 13,000-building / ~1.4M-population fixture with its now-representative
-// mix — 213 water-kind buildings, 2,037 motorway, 484 rail, etc., see
-// scale/fixture.mjs's COMPOSITION PROVENANCE note):
-//   buildingDisplayStates  7.7-12.4ms  median  9.5ms
-//   computeFlows           13.4-26.9ms median 14.4ms  (one 26.9ms outlier;
-//                                                        median stays robust)
-//   wellbeingOf            9.3-10.6ms  median  9.7ms
-//   crimeRateOf            9.2-9.6ms   median  9.4ms
-//   serviceCoverageOf      3.9-4.3ms   median  4.1ms
-//   waterCaps              1.2-2.8ms   median  1.3ms
-//   powerStats             2.6-2.9ms   median  2.8ms
-//   demandFixPlan          5.6-6.2ms   median  5.9ms
-//   wasteStatsOf           1.8-1.9ms   median  1.9ms
-// This file's OWN prior CI run (33736133023, 2026-09-03, cited above) already
-// proved CI hardware runs these selectors at ~7.3x the local wall-clock
-// (54.66ms CI vs ~7.5ms local for a differently-warmed wellbeingOf call), and
-// the house rule wants the SAME "smoke gate for an order-of-magnitude cliff,
-// not a micro-benchmark" margin TICK_MEDIAN_BOUND_MS/RENDER_PATH_BOUND_MS
-// already use (a ~15-25x local multiplier once real CI numbers were folded
-// in). Absent a fresh per-selector CI run to fold in here, every bound below
-// is LOCAL MEDIAN x30 (7.3x measured hardware gap x ~4x smoke-gate margin,
-// rounded generously) — expect, per this file's own established pattern, to
-// re-derive at least one of these tighter after the first real CI run redens
-// or comfortably passes it (do NOT tighten pre-emptively without that data).
-const SELECTOR_BUDGETS = [
-  ['buildingDisplayStates', buildingDisplayStates, 300],
-  ['computeFlows', computeFlows, 450],
-  ['wellbeingOf', wellbeingOf, 300],
-  ['crimeRateOf', crimeRateOf, 300],
-  ['serviceCoverageOf', serviceCoverageOf, 125],
-  ['waterCaps', waterCaps, 40],
-  ['powerStats', powerStats, 90],
-  ['demandFixPlan', demandFixPlan, 180],
-  ['wasteStatsOf', wasteStatsOf, 60],
+// header). Measured locally (Windows, Node 25.3.0, FIVE independent
+// 20-sample runs at each scale, straight after the BUG-653 activation-gate
+// fix): largePerBuilding/smallPerBuilding ratio per run (max column is the
+// highest of all five):
+//   buildingDisplayStates  1.008, 1.042, 0.805, 1.049, 1.190   max 1.190
+//   computeFlows           1.094, 1.020, 0.806, 0.863, 1.099   max 1.099
+//   wellbeingOf            1.032, 0.905, 0.642, 0.957, 1.026   max 1.032
+//   crimeRateOf            0.933, 0.957, 0.831, 1.049, 0.933   max 1.049
+//   serviceCoverageOf      1.021, 0.965, 0.983, 1.087, 1.166   max 1.166
+//   waterCaps              0.910, 1.107, 1.086, 0.992, 1.037   max 1.107
+//   powerStats             0.943, 0.968, 1.028, 1.051, 0.998   max 1.051
+//   demandFixPlan          0.955, 0.969, 0.898, 0.992, 1.010   max 1.010
+//   wasteStatsOf           1.185, 1.087, 0.889, 1.030, 0.759   max 1.185
+// Every genuinely-O(n) selector clusters tightly around 1.0 (max observed
+// 1.19) across all nine selectors and five runs — a dramatically more stable
+// signal than the tick-ratio attempt above. SIZE_INVARIANCE_BOUND is set to
+// the geometric mean of "perfectly linear" (ratio 1) and "one whole
+// size-ratio worse" (ratio SIZE_RATIO=5), i.e. sqrt(5) ≈ 2.24, rounded up —
+// comfortably above every observed max (1.19) yet decisively below what a
+// real O(n²)-class regression produces (BUG-642's real-world shape blew this
+// same style of measurement by 100x-3750x — see file header).
+const SIZE_RATIO = 5;
+const SIZE_INVARIANCE_BOUND = 2.5;
+
+const SELECTORS = [
+  ['buildingDisplayStates', buildingDisplayStates],
+  ['computeFlows', computeFlows],
+  ['wellbeingOf', wellbeingOf],
+  ['crimeRateOf', crimeRateOf],
+  ['serviceCoverageOf', serviceCoverageOf],
+  ['waterCaps', waterCaps],
+  ['powerStats', powerStats],
+  ['demandFixPlan', demandFixPlan],
+  ['wasteStatsOf', wasteStatsOf],
 ];
 
-const SELECTOR_SAMPLE_COUNT = 6;
+// BUG-654: 20 samples/selector at EACH scale (was 6, absolute-bound era) —
+// more samples damps the per-run jitter documented above (which tick phase,
+// relative to the periodic sweep, a disjoint sample window happens to land
+// on) at both the large and small scale.
+const SELECTOR_SAMPLE_COUNT = 20;
+
+/** The SMALL side of the BUG-654 scale-invariance comparison — SIZE_RATIO
+ * (5x) smaller than DEFAULT_BUILDING_COUNT, same composition/target-population
+ * ratio, same stampBuiltTick:true activation-gate treatment as the large
+ * fixture (BUG-653) so the two are comparable. */
+const SMALL_BUILDING_COUNT = DEFAULT_BUILDING_COUNT / SIZE_RATIO;
+const SMALL_TARGET_POPULATION = DEFAULT_TARGET_POPULATION / SIZE_RATIO;
 
 function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
@@ -186,7 +228,14 @@ let fixtureBuildMs;
 
 test('SCALE GATE half A: the 13k-building/1.4M-population fixture builds within budget and passes every consistency check', () => {
   const t0 = performance.now();
-  fixture = buildScaleFixture();
+  // BUG-653 FIX: stampBuiltTick opts THIS fixture into real activation gates
+  // (builtTick stamped, every non-network building repositioned beside a
+  // connected road hub — see fixture.mjs's stampActivationGates doc) so
+  // isOnline() genuinely walks G1/G2/G3 for every building instead of
+  // short-circuiting on the null-builtTick backward-tolerance rule. Every
+  // OTHER caller of buildScaleFixture() is unaffected (stampBuiltTick
+  // defaults to false).
+  fixture = buildScaleFixture({ stampBuiltTick: true });
   fixtureBuildMs = performance.now() - t0;
 
   assert.equal(
@@ -213,17 +262,17 @@ test('SCALE GATE half A: the 13k-building/1.4M-population fixture builds within 
     `scale fixture must pass every consistency check; failures: ${JSON.stringify(failures.slice(0, 5))}`
   );
 
-  // BUG-644: a fixture composition change is worthless (or worse, silently
-  // vacuous) if it produces a mostly-OFFLINE city — offline buildings are
-  // gated out of most of the selectors this file bounds, so an all-offline
-  // fixture would make every one of those bounds trivially, meaninglessly
-  // pass. This fixture is direct-constructed WITHOUT a builtTick field (see
-  // file header ONLINE-GATING SHORTCUT in scale/fixture.mjs), so isOnline()
-  // treats every building as online by its own documented backward-tolerance
-  // rule — this assertion is the load-bearing proof that stays true, not a
-  // tautology: if a future change to isOnline()/the fixture ever starts
-  // giving buildings a builtTick (or otherwise re-enables the road-gate),
-  // this is what would catch a city that came out mostly offline.
+  // BUG-644 / BUG-653: a fixture composition change is worthless (or worse,
+  // silently vacuous) if it produces a mostly-OFFLINE city — offline
+  // buildings are gated out of most of the selectors this file bounds, so an
+  // all-offline fixture would make every one of those bounds trivially,
+  // meaninglessly pass. Since BUG-653's fix, this fixture is built WITH
+  // `stampBuiltTick: true` (see fixture.mjs's stampActivationGates), so
+  // isOnline() genuinely walks the G1 (construction)/G2 (road-adjacent)/G3
+  // (road-connected) gates for every non-network building — this assertion
+  // now proves the REAL road-gate path (not the backward-tolerance
+  // shortcut) leaves the fixture almost entirely online, i.e. the
+  // connectivity hubs actually work, not just that the check is skipped.
   const onlineCount = fixture.buildings.reduce((n, b) => n + (isOnline(fixture, b) ? 1 : 0), 0);
   const onlineFraction = onlineCount / fixture.buildings.length;
   assert.ok(
@@ -289,54 +338,61 @@ test('SCALE GATE half A: render-path derivations (wellbeingOf + serviceCoverageO
   );
 });
 
-test('SCALE GATE: per-selector budget table catches a single regressed selector, not just the whole tick (BUG-644)', () => {
-  assert.ok(fixture, 'earlier tests must run first (node:test preserves file order)');
-
-  // See SELECTOR_BUDGETS' file-header comment for the full COLD-CALL
-  // METHODOLOGY rationale. Each selector gets its OWN disjoint slice of
-  // freshly-ticked states — reused by no other selector in this file — so
-  // every measurement is a guaranteed cold (first-ever, never memo-hit) call
-  // for that exact state object, the same shape a just-loaded/just-restored
-  // city has in production (precisely BUG-642's real trigger shape).
-  let s = fixture;
-  const tickTimes = [];
-  const selectorStates = SELECTOR_BUDGETS.map(() => []);
-  const totalTicksNeeded = SELECTOR_BUDGETS.length * SELECTOR_SAMPLE_COUNT;
+/** Runs each selector in SELECTORS on its OWN disjoint slice of
+ * freshly-ticked states drawn from `startState` — see the file header's
+ * COLD-CALL METHODOLOGY comment for why disjoint-per-selector state is
+ * required (a shared small set of states silently measures memo-cache HITS,
+ * not real cold-call cost). Returns { medians: {name: ms}, endState }. */
+function sampleSelectorMedians(startState) {
+  let s = startState;
+  const selectorStates = SELECTORS.map(() => []);
+  const totalTicksNeeded = SELECTORS.length * SELECTOR_SAMPLE_COUNT;
   for (let n = 0; n < totalTicksNeeded; n++) {
-    const t0 = performance.now();
     s = reducer(s, { type: 'tick' });
-    tickTimes.push(performance.now() - t0);
-    selectorStates[n % SELECTOR_BUDGETS.length].push(s);
+    selectorStates[n % SELECTORS.length].push(s);
   }
-  fixture = s; // carry the settled state forward (HALF B reuses `fixture`)
-
-  // The reducer tick itself is also in the "at least" list this table must
-  // cover — reuses the SAME already-established TICK_MEDIAN_BOUND_MS (not a
-  // new, weaker number) so this row cannot silently be more lenient than
-  // HALF A's own tick bound; it exists here so a regression's failure
-  // message names "reducer tick" explicitly alongside every other selector
-  // in the SAME table, instead of only reddening a separate HALF A test.
-  const tickMedian = median(tickTimes);
-  assert.ok(
-    tickMedian < TICK_MEDIAN_BOUND_MS,
-    `[reducer tick] median ${tickMedian.toFixed(2)}ms across ${tickTimes.length} ticks, ` +
-      `must be under ${TICK_MEDIAN_BOUND_MS}ms`
-  );
-
-  const regressed = [];
-  for (let i = 0; i < SELECTOR_BUDGETS.length; i++) {
-    const [name, fn, boundMs] = SELECTOR_BUDGETS[i];
-    const states = selectorStates[i];
-    const times = states.map((st) => {
+  const medians = {};
+  for (let i = 0; i < SELECTORS.length; i++) {
+    const [name, fn] = SELECTORS[i];
+    const times = selectorStates[i].map((st) => {
       const t0 = performance.now();
       fn(st);
       return performance.now() - t0;
     });
-    const med = median(times);
-    if (!(med < boundMs)) {
+    medians[name] = median(times);
+  }
+  return { medians, endState: s };
+}
+
+test('SCALE GATE: per-selector scale-invariance table catches a single regressed selector, not just the whole tick (BUG-644 / BUG-654)', () => {
+  assert.ok(fixture, 'earlier tests must run first (node:test preserves file order)');
+
+  // LARGE side: continue ticking the already-settled 13k-building `fixture`.
+  const { medians: largeMedians, endState } = sampleSelectorMedians(fixture);
+  fixture = endState; // carry the settled state forward (HALF B reuses `fixture`)
+
+  // SMALL side: an independent SIZE_RATIO-times-smaller fixture, same
+  // stampBuiltTick:true treatment (BUG-653) so the two are comparable — see
+  // SIZE_INVARIANCE_BOUND's derivation comment above for why this, not a
+  // same-run tick-cost ratio, is the fix BUG-654 needs.
+  const smallFixture = buildScaleFixture({
+    buildingCount: SMALL_BUILDING_COUNT,
+    targetPopulation: SMALL_TARGET_POPULATION,
+    stampBuiltTick: true,
+  });
+  const { medians: smallMedians } = sampleSelectorMedians(smallFixture);
+
+  const regressed = [];
+  for (const [name] of SELECTORS) {
+    const perBuildingLarge = largeMedians[name] / DEFAULT_BUILDING_COUNT;
+    const perBuildingSmall = smallMedians[name] / SMALL_BUILDING_COUNT;
+    const ratio = perBuildingLarge / perBuildingSmall;
+    if (!(ratio < SIZE_INVARIANCE_BOUND)) {
       regressed.push(
-        `${name}: median ${med.toFixed(2)}ms (samples: ${times.map((t) => t.toFixed(1)).join(', ')}) ` +
-          `exceeds its ${boundMs}ms budget`
+        `${name}: large ${largeMedians[name].toFixed(2)}ms/${DEFAULT_BUILDING_COUNT} vs ` +
+          `small ${smallMedians[name].toFixed(2)}ms/${SMALL_BUILDING_COUNT} buildings — ` +
+          `per-building cost ratio ${ratio.toFixed(2)}x exceeds the ${SIZE_INVARIANCE_BOUND}x ` +
+          `scale-invariance bound (i.e. this selector's cost is NOT staying linear in buildings.length)`
       );
     }
   }
@@ -347,7 +403,7 @@ test('SCALE GATE: per-selector budget table catches a single regressed selector,
   assert.equal(
     regressed.length,
     0,
-    `${regressed.length} selector(s) exceeded their per-derivation budget:\n  ` + regressed.join('\n  ')
+    `${regressed.length} selector(s) exceeded their scale-invariance bound:\n  ` + regressed.join('\n  ')
   );
 
   // Sanity check that the extra ticks didn't silently break the city.

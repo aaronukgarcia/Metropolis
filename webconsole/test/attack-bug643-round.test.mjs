@@ -228,19 +228,30 @@ test('ATTACK (e2): none of the 4 engine.ts call sites (or lineUsageOf in data.ts
   }
 });
 
-test('ATTACK (e2): a HOSTILE caller that spreads `s` before every stationLinks call gets correct answers but demonstrably ZERO cache benefit (measures, does not assert a bound — documents the failure mode the previous test guards against)', () => {
+// BUG-710 rework (2026-09-05): the original version measured wall-clock time
+// (`sameRefTime <= freshRefTime + 5`ms) — a fixed additive slack on top of a
+// timing comparison, exactly the CI-under-load flake class house idiom bans
+// (BUG-654/681/674): a contended runner can make two back-to-back timed loops
+// disagree by more than 5ms with zero change to the code under test. The real
+// invariant this test proves needs no clock at all: memoOnState (src/sim/
+// data.ts) stores each computed value in a WeakMap<SimState, T> keyed on
+// object identity and returns the SAME stored reference on a cache hit,
+// while a genuine cache MISS always computes a fresh `{ total, connectedIds }`
+// object literal (see stationLinks' compute body). So cache-hit vs cache-miss
+// is directly observable via Object.is/reference-identity of the results —
+// deterministic, exact, and immune to hardware/load, unlike a timing ratio.
+test('ATTACK (e2): a HOSTILE caller that spreads `s` before every stationLinks call gets correct answers but demonstrably ZERO cache benefit (proven by result object-identity fold-count, not wall-clock)', () => {
   const s = buildScaleFixture({ buildingCount: 2000, targetPopulation: 150_000, settleTicks: 1 });
   const N = 20;
-  const t0 = performance.now();
-  for (let i = 0; i < N; i++) stationLinks(s); // real call sites: same ref
-  const sameRefTime = performance.now() - t0;
-  const t1 = performance.now();
-  for (let i = 0; i < N; i++) stationLinks({ ...s }); // hostile: fresh ref every call
-  const freshRefTime = performance.now() - t1;
-  console.log(`[e2] same-ref ${N} calls=${sameRefTime.toFixed(2)}ms vs fresh-ref ${N} calls=${freshRefTime.toFixed(2)}ms`);
-  // Not a strict assertion (timing-sensitive across CI hardware) — just proves
-  // the two are not wildly backwards, i.e. sameRefTime is not somehow slower.
-  assert.ok(sameRefTime <= freshRefTime + 5, 'sanity: reusing the same state reference should never be measurably slower than spreading it every call');
+  const sameRefResults = [];
+  for (let i = 0; i < N; i++) sameRefResults.push(stationLinks(s)); // real call sites: same ref
+  const freshRefResults = [];
+  for (let i = 0; i < N; i++) freshRefResults.push(stationLinks({ ...s })); // hostile: fresh ref every call
+  const sameRefDistinct = new Set(sameRefResults).size;
+  const freshRefDistinct = new Set(freshRefResults).size;
+  console.log(`[e2] fold-count: same-ref ${N} calls -> ${sameRefDistinct} distinct result object(s); fresh-ref ${N} calls -> ${freshRefDistinct} distinct result object(s)`);
+  assert.equal(sameRefDistinct, 1, 'reusing the same state reference must hit the memo on every call — a single distinct result object across all N calls');
+  assert.equal(freshRefDistinct, N, 'a hostile caller spreading `s` before every call must defeat the memo entirely — every call is a cache miss producing its OWN fresh, distinct result object (this IS the zero-cache-benefit failure mode the previous test guards against)');
 });
 
 // ────────────────────────────────────────────────────────────────────────
