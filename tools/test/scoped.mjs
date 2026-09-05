@@ -89,8 +89,39 @@
 //                                                 bounded + concise (the lead's
 //                                                 /ci-green path — one shot, no
 //                                                 flood, no retry loop)
+//   node tools/test/scoped.mjs --webconsole-tsx-all
+//                                                 BUG-749: run EVERY
+//                                                 webconsole/test/*.test.tsx
+//                                                 file (the full glob, not the
+//                                                 curated 18-file subset that
+//                                                 --webconsole-ci/npm test
+//                                                 cover) under this runner —
+//                                                 i.e. through tsx --test with
+//                                                 BUG-599's --test-force-exit
+//                                                 wedge protection, the hard
+//                                                 timeout, and the dot
+//                                                 reporter. This is the mode
+//                                                 the new CI job
+//                                                 "webconsole-tsx" invokes:
+//                                                 bare `node --test` at the
+//                                                 repo root (the existing
+//                                                 node-test job) can never run
+//                                                 .tsx files at all (no JSX
+//                                                 stripping), so EVERY
+//                                                 webconsole/test/*.test.tsx
+//                                                 file — 69 as of this fix —
+//                                                 was invisible to CI until
+//                                                 this flag existed. Because
+//                                                 it expands the real glob
+//                                                 (not a hand-maintained
+//                                                 list), a new .test.tsx file
+//                                                 is covered automatically —
+//                                                 no companion list to keep in
+//                                                 sync, unlike
+//                                                 WEBCONSOLE_TSX_FILES above.
 //   flags: --timeout=<sec> (default 240, or SCOPED_TIMEOUT_MS env in ms)
-//          --cwd=<dir> (default webconsole for --webconsole-ci, else CWD)
+//          --cwd=<dir> (default webconsole for --webconsole-ci and
+//                       --webconsole-tsx-all, else CWD)
 //          --reporter=<dot|tap|spec> (default dot)
 //
 // It dispatches `.mjs`/`.js` to `node --test` and `.tsx`/`.ts` to `tsx --test`,
@@ -422,6 +453,11 @@ function expandAndValidate(targets, cwd, label) {
 // diverge; an earlier version of this comment pointed at a scoped.test.mjs
 // that was never actually written, which is why the drift went unchecked).
 const WEBCONSOLE_NODE_GLOB = ['test/*.test.mjs'];
+// BUG-749: the FULL tsx glob, deliberately a glob (not an enumerated list
+// like WEBCONSOLE_TSX_FILES above) so a newly added *.test.tsx file is
+// covered the moment it lands — nothing to keep in lockstep, and nothing for
+// a drift check to police (unlike WEBCONSOLE_TSX_FILES's own drift guard).
+const WEBCONSOLE_TSX_GLOB = ['test/*.test.tsx'];
 const WEBCONSOLE_TSX_FILES = [
   'test/mount.test.tsx',
   'test/rebuild-prompt.test.tsx',
@@ -444,9 +480,10 @@ const WEBCONSOLE_TSX_FILES = [
 ];
 
 function parseArgs(argv) {
-  const opts = { files: [], timeoutSec: DEFAULT_TIMEOUT_SEC, cwd: null, reporter: 'dot', webconsoleCi: false };
+  const opts = { files: [], timeoutSec: DEFAULT_TIMEOUT_SEC, cwd: null, reporter: 'dot', webconsoleCi: false, webconsoleTsxAll: false };
   for (const a of argv) {
     if (a === '--webconsole-ci') opts.webconsoleCi = true;
+    else if (a === '--webconsole-tsx-all') opts.webconsoleTsxAll = true;
     else if (a.startsWith('--timeout=')) opts.timeoutSec = Math.max(1, Number(a.slice('--timeout='.length)) || DEFAULT_TIMEOUT_SEC);
     else if (a.startsWith('--cwd=')) opts.cwd = a.slice('--cwd='.length);
     else if (a.startsWith('--reporter=')) opts.reporter = a.slice('--reporter='.length) || 'dot';
@@ -639,6 +676,11 @@ async function main() {
     if (!opts.cwd) cwd = resolve('webconsole');
     nodeTargets = [...WEBCONSOLE_NODE_GLOB];
     tsxTargets = [...WEBCONSOLE_TSX_FILES];
+  } else if (opts.webconsoleTsxAll) {
+    // BUG-749: full glob, not the curated WEBCONSOLE_TSX_FILES subset — see
+    // the header comment and WEBCONSOLE_TSX_GLOB's own comment above.
+    if (!opts.cwd) cwd = resolve('webconsole');
+    tsxTargets = [...WEBCONSOLE_TSX_GLOB];
   } else {
     if (opts.files.length === 0) {
       process.stderr.write(
@@ -721,7 +763,7 @@ async function main() {
     // already webconsole-relative; only rewrite/partition for the
     // named-files path. F5: partition mixed roots into their own groups
     // instead of falling back to one repo-root-cwd group for everything.
-    const tsxGroups = opts.webconsoleCi
+    const tsxGroups = (opts.webconsoleCi || opts.webconsoleTsxAll)
       ? [{ cwd, targets: tsxTargets, displayTargets: tsxTargets }]
       : bucketizeTsxTargets(tsxTargets, cwd, opts.cwd);
     for (const g of tsxGroups) {

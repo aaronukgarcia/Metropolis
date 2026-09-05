@@ -316,6 +316,117 @@ jobs:
       - name: node --test
         run: node --test --test-shard=${{ matrix.shard }}/3
 
+  # --- webconsole tsx test suite (BUG-749, P1, CI blind spot) -------------
+  # The node-test job directly above runs bare `node --test` at the repo
+  # root, which can NEVER execute a webconsole/test/*.test.tsx file — bare
+  # node has no JSX transform, so every .tsx test file (69 of them as of
+  # this fix) was invisible to CI. Those files only ever ran through a build
+  # agent's own discipline (tools/test/scoped.mjs, which dispatches .tsx to
+  # `tsx --test`) or the curated 18-file subset in webconsole/package.json's
+  # "test" script (WEBCONSOLE_TSX_FILES in scoped.mjs) — neither of which is
+  # a CI gate. Consequence discovered live: webconsole/test/
+  # attack-p0-lineage-round.test.tsx's KILL-SHOT (reverse) test is
+  # deterministically RED against the in-flight P0 lineage fix while CI
+  # stayed green, because nothing in CI ever ran that file.
+  #
+  # This job closes the gap the smallest way that reuses BUG-599's existing
+  # wedge protection: `node tools/test/scoped.mjs --webconsole-tsx-all`, a
+  # new runner mode (added in the SAME commit as this job) that expands the
+  # FULL `test/*.test.tsx` glob under webconsole — not the curated
+  # WEBCONSOLE_TSX_FILES subset — through the same `tsx --test
+  # --test-force-exit` path, hard timeout, and dot reporter every other
+  # scoped.mjs invocation gets. Being a real glob (not a hand-maintained
+  # list), a newly added *.test.tsx file is covered automatically; a
+  # tools/test/tsx-ci-coverage.test.mjs guard (run by the node-test job
+  # above, since it lives under tools/test/) fails loudly if a future tsx
+  # test file ever lands somewhere that flat glob would not reach.
+  #
+  # Same runner OS + Node version as node-test above (ubuntu-latest, Node
+  # 22) — no reason for this suite to behave differently by platform, and
+  # keeping it identical avoids a second axis of "passes on X, fails on Y"
+  # to debug. No MariaDB service: unlike node-test's claude-bow.js/
+  # claude-sync.js suites, no webconsole *.test.tsx file talks to the metro
+  # DB (verified by grep for METRO_DB/mysql2/claude-bow/claude-sync across
+  # webconsole/test/*.test.tsx before writing this job).
+  #
+  # Measured wall time locally (2026-09-05, all 69 files in one `tsx --test`
+  # invocation): ~163s — nowhere near the ~15-minute mark that would justify
+  # sharding like node-test does, so this stays a single job for now. If the
+  # suite grows past that, shard the same way node-test does
+  # (--test-shard=N/M) rather than reintroducing a curated file list.
+  #
+  # NOT in branch protection's required-status-check set (build-test-vet /
+  # determinism-gate / lint / perf-1m-probe only, verified via the branch
+  # protection API) — same non-required status as node-test above, and for
+  # the same practical reason right now: this job is EXPECTED RED at the
+  # time it lands. Do NOT treat that as this job being broken:
+  #   * webconsole/test/attack-p0-lineage-round.test.tsx's KILL-SHOT
+  #     (reverse) test — the motivating BUG-749 case above — is owned by a
+  #     SEPARATE lane fixing the underlying P0 lineage defect; this commit
+  #     deliberately does not touch that test or its production code.
+  #     Measured directly (2026-09-05, this checkout): NOT deterministic
+  #     either way. Standalone through scoped.mjs it failed 4 of 5 runs and
+  #     passed 1; inside the full 69-file --webconsole-tsx-all batch it did
+  #     not show as failed in any of 3 runs. Read that as "genuinely flaky",
+  #     not "standalone-red, batch-flaky" — NEITHER a green standalone run
+  #     NOR a green full-batch run is proof this test is fixed; only the
+  #     owning lane's own root-cause fix is. A red in either shape is the
+  #     only trustworthy signal.
+  #   * A further set of pre-existing failures was surfaced by widening
+  #     coverage past the curated 18-file subset for the first time (none
+  #     introduced by this job or by scoped.mjs's new flag). Each of the
+  #     following fails DETERMINISTICALLY when run standalone (confirmed
+  #     directly, repeatedly): attack-bug606-cap.test.tsx,
+  #     attack-bug606-money-notice.test.tsx,
+  #     bug615-queue-depth-hud-flag-flip.test.tsx, config-confirm.test.tsx
+  #     (three subtests), and feat-2326609771-webworker-default-on.test.tsx.
+  #     They are NOT perfectly stable as a SET inside the full batch, though
+  #     — one full-batch run showed attack-bug669-round2.test.tsx (which
+  #     passes standalone, every time measured) failing in place of
+  #     attack-bug606-money-notice.test.tsx (masked that run despite failing
+  #     standalone every time measured) — i.e. the full 69-file batch has
+  #     real cross-file contention/interference beyond just the lineage test.
+  #     Treat "which tests this job's failure list names on a given run" as
+  #     noisy; treat "this job is red at all" as the reliable signal, and use
+  #     `node tools/test/scoped.mjs <file>` standalone to attribute a
+  #     specific red before touching production code.
+  # Promote this job to required once those clear — tracked on BUG-749.
+  webconsole-tsx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: npm ci (webconsole)
+        working-directory: webconsole
+        run: npm ci
+
+      # See node-test's "Generate webconsole version stamp" step above for
+      # why this is needed (src/generated/version.ts is gitignored and only
+      # ever produced by this script).
+      - name: Generate webconsole version stamp
+        working-directory: webconsole
+        run: node scripts/gen-version.mjs
+
+      # SCOPED_TIMEOUT_MS override (sonnet-verify-bug749 round finding): scoped.mjs's
+      # internal per-group hard-kill defaults to 240s (DEFAULT_TIMEOUT_SEC), which is
+      # too thin here — the full 69-file tsx group measured 135-163s on a local dev
+      # box, and a shared 2-core ubuntu-latest runner has materially less headroom.
+      # scoped.mjs already reads this env var (see its own header comment) and clamps
+      # it to Aaron's 30-minute watchdog ceiling regardless, so 600000 (10 minutes)
+      # gives ~4-6x local headroom while staying well inside this job's own
+      # timeout-minutes: 20 ceiling below.
+      - name: webconsole tsx tests (scoped.mjs --webconsole-tsx-all)
+        env:
+          SCOPED_TIMEOUT_MS: "600000"
+        run: node tools/test/scoped.mjs --webconsole-tsx-all
+
   # --- Perf smoke (H-SYNTH / MOD-016, M0-ENG §6 point 5) -----------------
   # cmd/perfci (internal/harness/synth/cmd/perfci) is the CI-runnable perf
   # gate AC-6 asks for: generate a synthetic city, run it N months through
