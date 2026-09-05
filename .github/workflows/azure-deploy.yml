@@ -287,7 +287,7 @@ jobs:
               --name "${{ env.CONTAINER_APP_NAME }}" \
               --resource-group "${{ env.RESOURCE_GROUP }}" \
               --image "$IMAGE" \
-              --args "-addr" "0.0.0.0:8080" "-persist-dir" "/data" "-city" "${{ github.event.inputs.city }}" "-tick-interval" "1s" "-snapshot-every" "360" \
+              --args="-addr 0.0.0.0:8080 -persist-dir /data -city ${{ github.event.inputs.city }} -tick-interval 1s -snapshot-every 360" \
               --set-env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret"
           else
             echo "Container App does not exist — creating it (first inc1 deploy)."
@@ -305,7 +305,7 @@ jobs:
               --cpu 0.5 --memory 1.0Gi \
               --min-replicas 0 --max-replicas 1 \
               --ingress external --target-port 8080 --transport auto \
-              --args "-addr" "0.0.0.0:8080" "-persist-dir" "/data" "-city" "${{ github.event.inputs.city }}" "-tick-interval" "1s" "-snapshot-every" "360" \
+              --args="-addr 0.0.0.0:8080 -persist-dir /data -city ${{ github.event.inputs.city }} -tick-interval 1s -snapshot-every 360" \
               --secrets "metroserve-shared-secret=REPLACE-BEFORE-FIRST-RUN" \
               --env-vars "METROSERVE_SHARED_SECRET=secretref:metroserve-shared-secret" \
               --azure-file-volume-name "metroserve-data-volume" \
