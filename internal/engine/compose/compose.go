@@ -806,6 +806,13 @@ type DeathServicesRunStatus struct {
 	DispensationActive   bool
 	CemeteriesRegistered int
 	CrematoriaRegistered int
+	// CremationShortfallOwed (BUG-733, GR#17): the total currently-
+	// outstanding, unpaid cremation cost — non-zero means a broke city
+	// cremated bodies the treasury could not afford, and the debt is
+	// still owed (see FinanceAPI.CremationShortfallOwed's doc comment).
+	// Zero (and st.finance == nil, mirroring this accessor's other
+	// nil-wiring defaults) when finance is not wired.
+	CremationShortfallOwed finance.Money
 }
 
 // DeathServicesRunStatus returns the current disposal-pipeline status
@@ -819,6 +826,10 @@ func (c *Composition) DeathServicesRunStatus() DeathServicesRunStatus {
 	}
 	backlog, _ := st.deathServices.AwaitingBacklog(st.cid)
 	active, _ := st.deathServices.DispensationActive(st.cid)
+	var owed finance.Money
+	if st.finance != nil {
+		owed = st.finance.CremationShortfallOwed()
+	}
 	return DeathServicesRunStatus{
 		AwaitingBacklog:    backlog,
 		DispensationActive: active,
@@ -826,8 +837,9 @@ func (c *Composition) DeathServicesRunStatus() DeathServicesRunStatus {
 		// plus the live build->deathservices bridge — summed here so this
 		// status figure reflects every actually-registered id, not just
 		// the stopgap half.
-		CemeteriesRegistered: len(st.deathServiceCemeteryIDs) + len(st.deathServiceBridgeCemeteryIDs),
-		CrematoriaRegistered: len(st.deathServiceCrematoriumIDs) + len(st.deathServiceBridgeCrematoriumIDs),
+		CemeteriesRegistered:   len(st.deathServiceCemeteryIDs) + len(st.deathServiceBridgeCemeteryIDs),
+		CrematoriaRegistered:   len(st.deathServiceCrematoriumIDs) + len(st.deathServiceBridgeCrematoriumIDs),
+		CremationShortfallOwed: owed,
 	}
 }
 
@@ -3318,11 +3330,46 @@ func (st *simState) runDeathServices(day, month int64) error {
 		if err != nil {
 			return err
 		}
-		if cost > 0 && st.finance != nil {
-			if _, err := st.finance.SettleOpex(finance.Money(cost)); err != nil {
-				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "SettleOpex", "cause": err.Error()})
-			} else {
-				st.syncMoneyFromLedger()
+		if st.finance != nil {
+			// BUG-733 (GR#17): unfunded cremation is NOT free and NOT
+			// deferred (Aaron's ruling) -- the bodies above are already
+			// cremated regardless of what the treasury can afford, so a
+			// SettleOpex rejection must accrue as real debt
+			// (FinanceAPI.CremationShortfallOwed), never just a logged,
+			// silently-absorbed failure.
+			//
+			// Documented order: repay any PRE-EXISTING shortfall FIRST,
+			// before posting today's new cost, so a funded day pays down
+			// yesterday's debt ahead of piling on more of today's. The
+			// repayment posting is a real SettleOpex call (never a
+			// phantom balance edit with no matching ledger movement) and
+			// is only reflected on the debt tracker (RepayCremationShortfall)
+			// once that posting actually succeeds; SettleOpex's own
+			// all-or-nothing Post semantics (AC-12/AC-13) mean a
+			// too-large repayment simply fails and leaves the debt
+			// untouched rather than partially applying.
+			if owed := st.finance.CremationShortfallOwed(); owed > 0 {
+				if _, err := st.finance.SettleOpex(owed); err == nil {
+					st.finance.RepayCremationShortfall(owed)
+					st.syncMoneyFromLedger()
+				}
+				// A failed repayment leaves the debt exactly as it was --
+				// no error surfaced here (nothing NEW went wrong; it is
+				// the same still-outstanding debt MET-G219 already
+				// reported when it first accrued), and the loop falls
+				// through to attempt today's own cost below regardless.
+			}
+			if cost > 0 {
+				if _, err := st.finance.SettleOpex(finance.Money(cost)); err != nil {
+					_ = errs.New(finance.ErrCremationOpexShortfall, st.cid, map[string]any{
+						"crematoriumID":     crematoriumID,
+						"amountMicropounds": cost,
+						"correlationID":     st.cid,
+					})
+					st.finance.RecordCremationShortfall(month, finance.Money(cost))
+				} else {
+					st.syncMoneyFromLedger()
+				}
 			}
 		}
 	}

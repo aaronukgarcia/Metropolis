@@ -88,7 +88,8 @@ func TestFinanceAPIFieldsAllClassified(t *testing.T) {
 		"nextLoanID": true, "totalDebt": true, "missedPayments": true,
 		"insolvencyMonths": true, "gameOver": true, "firms": true, "nextFirmID": true,
 		"investments": true, "nextInvestID": true,
-		"backlog": true,
+		"backlog":            true,
+		"cremationShortfall": true, "lastCremationShortfallMonth": true,
 	}
 	ft := reflect.TypeOf((*FinanceAPI)(nil)).Elem()
 	for i := 0; i < ft.NumField(); i++ {
@@ -157,7 +158,15 @@ func driveFinance(t *testing.T, f *FinanceAPI) {
 		// Alternate the solvency outcome so both RecordMonthResult branches
 		// (increment vs reset) and the resulting counter are exercised.
 		f.RecordMonthResult(m == 2, false)
+		// BUG-733: exercise the accruing cremation-shortfall balance so the
+		// round-trip test proves it survives save/load like every other
+		// running total here (never the PayrollShortfall-style transient
+		// exclusion — see cremationShortfall's field doc).
+		f.RecordCremationShortfall(m, gbp(1))
 	}
+	// One partial repayment mid-drive, so the persisted balance is not a
+	// simple running sum of RecordCremationShortfall calls alone.
+	f.RepayCremationShortfall(gbp(1))
 }
 
 // allAccountIDs is the fixed, sorted set of accounts driveFinance touches.
@@ -232,6 +241,16 @@ func compareFinance(t *testing.T, a, b *FinanceAPI, label string) {
 	}
 	if a.BudgetBalance() != b.BudgetBalance() {
 		t.Fatalf("%s: BudgetBalance %d != %d", label, a.BudgetBalance(), b.BudgetBalance())
+	}
+	if a.CremationShortfallOwed() != b.CremationShortfallOwed() {
+		t.Fatalf("%s: CremationShortfallOwed %d != %d", label, a.CremationShortfallOwed(), b.CremationShortfallOwed())
+	}
+	{
+		am, ao := a.CremationShortfall()
+		bm, bo := b.CremationShortfall()
+		if am != bm || ao != bo {
+			t.Fatalf("%s: CremationShortfall (month=%d,owed=%d) != (month=%d,owed=%d)", label, am, ao, bm, bo)
+		}
 	}
 	for _, id := range allAccountIDs() {
 		ba, oka := a.AccountBalance(id)
@@ -323,6 +342,7 @@ func continueFinance(t *testing.T, f *FinanceAPI) {
 	ck(t, err)
 	ck(t, f.ServiceDebt(gbp(2), gbp(8)))
 	f.RecordMonthResult(true, false)
+	f.RecordCremationShortfall(4, gbp(1))
 }
 
 // ---------------------------------------------------------------------------

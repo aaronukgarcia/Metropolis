@@ -116,4 +116,17 @@ const (
 	// composition-root wiring mistake leaves a trace instead of quietly
 	// running every session as Unlimited.
 	ErrModeGateFailed = "MET-G218"
+
+	// ErrCremationOpexShortfall (BUG-733, GR#17): SettleOpex rejected a
+	// day's cremation cost because the treasury (plus credit line) could
+	// not cover it. Aaron's ruling on BUG-733's brief: an unfunded
+	// cremation is NOT free and NOT deferred — the crematoria already
+	// delivered the service, so the shortfall accrues as a real,
+	// conservation-relevant debt (FinanceAPI.CremationShortfallOwed,
+	// mirroring BUG-548's PayrollShortfall surface but PERSISTED across
+	// save/load — see RecordCremationShortfall's doc comment for why this
+	// one is not a transient this-month-only value), repaid from the
+	// treasury on the next funded day BEFORE that day's new cremation
+	// opex is posted (compose.go's runDeathServices).
+	ErrCremationOpexShortfall = "MET-G219"
 )

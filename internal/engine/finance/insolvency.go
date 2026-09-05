@@ -118,3 +118,87 @@ func (f *FinanceAPI) PayrollShortfall() (month int64, shortfall Money) {
 	defer f.mu.RUnlock()
 	return f.lastPayrollShortfallMonth, f.lastPayrollShortfall
 }
+
+// RecordCremationShortfall (BUG-733, GR#17) ACCRUES amount onto the
+// running, unpaid cremation-cost debt for month: the composition root
+// calls this when SettleOpex rejected a day's cremation cost because the
+// treasury (plus credit line) could not cover it. Unlike
+// RecordPayrollShortfall, which OVERWRITES a transient "this month's
+// shortfall" value, this ADDS — a broke city's cremation debt keeps
+// growing day over day until a funded day repays it (RepayCremationShortfall),
+// exactly the "unfunded cremation is not free, not deferred" ruling this
+// bug's brief records. amount must be non-negative (the composition root
+// only ever calls this with a real posting shortfall); a negative amount
+// is ignored (GR#15: never silently substitute/clamp a caller error,
+// but also never let a bad caller drive the debt negative — the "ignore"
+// is because this method returns no error, mirroring RecordPayrollShortfall's
+// shape, so validation happens once, at the SettleOpex call site that
+// derives amount from a real ledger rejection).
+func (f *FinanceAPI) RecordCremationShortfall(month int64, amount Money) {
+	if err := f.checkNotCopied("RecordCremationShortfall"); err != nil {
+		return
+	}
+	if amount < 0 {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cremationShortfall, _ = satAddMoney(f.cremationShortfall, amount)
+	f.lastCremationShortfallMonth = month
+}
+
+// CremationShortfallOwed returns the total currently-outstanding, unpaid
+// cremation cost (BUG-733, GR#17) — the accruing debt surface a news
+// feed/status line (or a future insolvency/debt-rating trigger, wired the
+// same way PayrollShortfall would be) polls. Zero means every cremation
+// ever billed has since been paid in full.
+func (f *FinanceAPI) CremationShortfallOwed() Money {
+	if err := f.checkNotCopied("CremationShortfallOwed"); err != nil {
+		return 0
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.cremationShortfall
+}
+
+// CremationShortfall returns the month a cremation shortfall was most
+// recently ACCRUED and the current total outstanding debt (BUG-733,
+// GR#17) — mirrors PayrollShortfall's (month, amount) reporting shape,
+// except the amount here is the running balance, not a single month's
+// delta (see cremationShortfall's field doc for why this one persists
+// and accrues rather than resetting each month).
+func (f *FinanceAPI) CremationShortfall() (month int64, owed Money) {
+	if err := f.checkNotCopied("CremationShortfall"); err != nil {
+		return 0, 0
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.lastCremationShortfallMonth, f.cremationShortfall
+}
+
+// RepayCremationShortfall (BUG-733) reduces the outstanding cremation debt
+// by amount, floored at zero. It does NOT post to the ledger itself — the
+// caller (compose.go's runDeathServices) posts the actual SettleOpex
+// repayment transaction first and calls this only once that posting
+// succeeds, mirroring PostMaintenance's backlog-adjustment-after-the-fact
+// pattern (opex.go): the debt-tracking balance is kept in lock-step with
+// a real, separately-posted ledger transaction, never a phantom deduction
+// with no matching money movement.
+func (f *FinanceAPI) RepayCremationShortfall(amount Money) {
+	if err := f.checkNotCopied("RepayCremationShortfall"); err != nil {
+		return
+	}
+	if amount <= 0 {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Floored at zero (mirrors PostMaintenance's backlog-recovery clamp,
+	// opex.go): a caller repaying more than is actually owed must never
+	// drive this into negative territory, which would nonsensically read
+	// as the treasury being OWED money rather than owing it.
+	if amount > f.cremationShortfall {
+		amount = f.cremationShortfall
+	}
+	f.cremationShortfall = satSubMoney(f.cremationShortfall, amount)
+}

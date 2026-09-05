@@ -169,6 +169,16 @@ type financeMetaWire struct {
 	// per-tick transactions don't carry enough history to reconstruct a
 	// balance that has been decaying/growing over many prior months).
 	Backlog Money `json:"backlog"`
+	// CremationShortfall/LastCremationShortfallMonth (BUG-733, GR#17):
+	// the running, ACCRUING unpaid-cremation-cost debt and the month it
+	// was last added to. Real conservation-relevant state (money the
+	// treasury still owes the outside world for a service already
+	// delivered), so it persists across a save/load round trip exactly
+	// like Backlog — never re-derived on load, and NOT part of the
+	// PayrollShortfall-style excluded/transient set (see
+	// participant_test.go's TestFinanceAPIFieldsAllClassified).
+	CremationShortfall          Money `json:"cremationShortfall"`
+	LastCremationShortfallMonth int64 `json:"lastCremationShortfallMonth"`
 }
 
 // financeSnapshot is a point-in-time, deterministically-ordered copy of
@@ -277,20 +287,22 @@ func (f *FinanceAPI) snapshotForSave() (financeSnapshot, error) {
 
 	snap := financeSnapshot{
 		meta: financeMetaWire{
-			NextTxID:         f.nextTxID,
-			NextLoanID:       f.nextLoanID,
-			NextFirmID:       f.nextFirmID,
-			NextInvestID:     f.nextInvestID,
-			MoneyStock:       f.moneyStock,
-			OpeningStock:     f.openingStock,
-			TrackedDelta:     f.trackedDelta,
-			Month:            f.month,
-			TotalCreditLine:  f.totalCreditLine,
-			TotalDebt:        f.totalDebt,
-			MissedPayments:   f.missedPayments,
-			InsolvencyMonths: f.insolvencyMonths,
-			GameOver:         f.gameOver,
-			Backlog:          f.backlog,
+			NextTxID:                    f.nextTxID,
+			NextLoanID:                  f.nextLoanID,
+			NextFirmID:                  f.nextFirmID,
+			NextInvestID:                f.nextInvestID,
+			MoneyStock:                  f.moneyStock,
+			OpeningStock:                f.openingStock,
+			TrackedDelta:                f.trackedDelta,
+			Month:                       f.month,
+			TotalCreditLine:             f.totalCreditLine,
+			TotalDebt:                   f.totalDebt,
+			MissedPayments:              f.missedPayments,
+			InsolvencyMonths:            f.insolvencyMonths,
+			GameOver:                    f.gameOver,
+			Backlog:                     f.backlog,
+			CremationShortfall:          f.cremationShortfall,
+			LastCremationShortfallMonth: f.lastCremationShortfallMonth,
 		},
 	}
 
@@ -419,6 +431,8 @@ func (f *FinanceAPI) resetForLoad() error {
 	f.insolvencyMonths = 0
 	f.gameOver = false
 	f.backlog = 0
+	f.cremationShortfall = 0
+	f.lastCremationShortfallMonth = 0
 	return nil
 }
 
@@ -457,6 +471,8 @@ func (f *FinanceAPI) applyLoadRecord(rec serialize.Record) error {
 		f.insolvencyMonths = m.InsolvencyMonths
 		f.gameOver = m.GameOver
 		f.backlog = m.Backlog
+		f.cremationShortfall = m.CremationShortfall
+		f.lastCremationShortfallMonth = m.LastCremationShortfallMonth
 
 	case recAccount:
 		var a accountRecordWire

@@ -91,6 +91,22 @@ type FinanceAPI struct {
 	lastPayrollShortfall      Money
 	lastPayrollShortfallMonth int64
 
+	// cremationShortfall (BUG-733, GR#17): the running, ACCRUING balance
+	// of unpaid cremation cost — unlike lastPayrollShortfall (a transient
+	// "this month's failure" observability value that is fine to lose on
+	// reload, per participant_test.go's exclusion reason), this is real
+	// unpaid debt: the crematoria already delivered the service the day
+	// SettleOpex rejected its cost (Aaron's ruling: unfunded cremation is
+	// NOT free and NOT deferred), so the money still owes the outside
+	// world and must survive a save/load round trip exactly like
+	// MaintenanceBacklog's f.backlog (opex.go) — see RecordCremationShortfall/
+	// CremationShortfallOwed/RepayCremationShortfall. lastCremationShortfallMonth
+	// is the last month a NEW shortfall was recorded (mirrors
+	// lastPayrollShortfallMonth's reporting shape for a monitor), separate
+	// from the accrued total itself.
+	cremationShortfall          Money
+	lastCremationShortfallMonth int64
+
 	// lastModeGateErr (FEAT-143 round finding P2-B, GR#17): the
 	// USER-VISIBLE surface for the most recent modeGate.Unlimited failure
 	// -- set by unlimitedLocked (mode.go) every time the injected gate

@@ -272,7 +272,7 @@
       "severity": "error",
       "module": "foundation.det",
       "message": "duplicate (shard {shard}, sequence {sequence}) pair",
-      "remedy": "ApplyBarrier / the single-shard fast path requires exactly one message per (Shard, Sequence) pair. Check the emitting hook/shard for a Sequence counter that was reused or reset, rather than applying two messages for the same canonical slot, which would make the applied order depend on submission order and break determinism."
+      "remedy": "ApplyBarrier and both single-shard fast paths (engine/core's runPhaseForHookFast, foundation/integration's executeSingleShard) require exactly one message per (Shard, Sequence) pair, enforced by the one shared check det.RejectAdjacentDuplicateKey (BUG-287, widened BUG-370). Check the emitting hook/shard for a Sequence counter that was reused or reset, rather than applying two messages for the same canonical slot, which would make the applied order depend on submission order and break determinism."
     },
     "MET-F300": {
       "severity": "error",
@@ -2121,6 +2121,12 @@
       "module": "engine.finance",
       "message": "the injected mode gate failed while checking Unlimited Money mode: {cause}",
       "remedy": "the session's *gameinit.GameInit was likely called on a struct-copied value (SEC-020); check the composition root's SetModeGate wiring"
+    },
+    "MET-G219": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "cremation cost shortfall: crematorium {crematoriumID} cremated bodies this day but the treasury could not cover {amountMicropounds} of the cost, correlation {correlationID}",
+      "remedy": "SettleOpex rejected the day's cremation cost (treasury + credit line insufficient); the shortfall now accrues on FinanceAPI.CremationShortfallOwed() as a real, repaid-first debt (BUG-733, GR#17) rather than a free/deferred cremation -- check the treasury balance or credit line, or wait for a funded day to auto-repay"
     },
     "MET-G300": {
       "severity": "error",
