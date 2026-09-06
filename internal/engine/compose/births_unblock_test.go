@@ -58,7 +58,18 @@ import (
 // finding).
 func TestBirthsUnblock_RealFertilityProducesLiveBirths(t *testing.T) {
 	const seed = uint64(4242) // same seed BUG-517/BUG-529 use — known to admit real migrants and pair them within a handful of months
-	const totalMonths = 60
+	// BUG-380 (2026-09-05): 60 -> 90 months. Aaron's tenure-grace fix
+	// (migrantTenureGraceMonths, attract package) makes admitted-migrant
+	// pairs emigration-eligible again after 12 months, where they
+	// previously (residentIDs() narrow, no widening at all) stayed forever
+	// — so the FIRST migrant pair that happens to survive long enough to
+	// clear the fertility hazard is no longer guaranteed to be an early
+	// one; this exact seed's first surviving couple now conceives at month
+	// 72 rather than well inside the old 60-month window (measured by
+	// hand: VitalBirths()==0 through month 60, ==1 at month 72). 90 gives
+	// a comfortable margin past that observed point without loosening any
+	// assertion below.
+	const totalMonths = 90
 
 	var violations atomic.Int64
 	e, comp := newTestEngine(t, seed, invariant.WithLogSink(func(*errs.E) { violations.Add(1) }))
@@ -106,10 +117,12 @@ func TestBirthsUnblock_RealFertilityProducesLiveBirths(t *testing.T) {
 // people-conservation check on top of the invariant hook above: peopleIn ==
 // peopleOut + population, read directly off Composition's own conservation
 // surface, over a run long enough for the payoff test above to have
-// produced real births (60 months, same seed).
+// produced real births (90 months per BUG-380's tenure-grace timing shift
+// — see TestBirthsUnblock_RealFertilityProducesLiveBirths's own comment —
+// same seed).
 func TestBirthsUnblock_PeopleConservationAcrossBirths(t *testing.T) {
 	const seed = uint64(4242)
-	const totalMonths = 60
+	const totalMonths = 90
 
 	var violations atomic.Int64
 	e, comp := newTestEngine(t, seed, invariant.WithLogSink(func(*errs.E) { violations.Add(1) }))
@@ -129,7 +142,9 @@ func TestBirthsUnblock_PeopleConservationAcrossBirths(t *testing.T) {
 // hazard draw and the widened cold-store round-trip) must hash identically.
 func TestBirthsUnblock_GenesisReplayByteIdentical(t *testing.T) {
 	const seed = uint64(4242)
-	const totalMonths = 48
+	// BUG-380: 48 -> 90 months, same timing-shift reason as
+	// TestBirthsUnblock_RealFertilityProducesLiveBirths's own comment.
+	const totalMonths = 90
 	run := func() ([32]byte, int64) {
 		e, comp := newTestEngine(t, seed)
 		advanceInChunks(t, e, totalMonths*int64(core.DailyTicksPerMonth))

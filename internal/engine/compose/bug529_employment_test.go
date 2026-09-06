@@ -195,14 +195,69 @@ func TestBUG529_EmployedFractionStaysProportionalUnderOrganicMigration(t *testin
 		}
 	}
 
-	// 2) The concrete symptom: the wage bill must NOT pin at
+	// 2) BUG-380 round finding P2 (opus-round-bug380): this sawtooth check
+	// MUST run before the wage-bill-floor check (was #3, after it,
+	// pre-round — a grace=0 run's wage-bill Fatalf fired FIRST and the
+	// sawtooth assertions below were never even reached, so a grace=0
+	// regression could only ever be attributed to the wage-bill symptom,
+	// never proved independently against ITS OWN assertion). Moved above
+	// so `go test -run .../grace=0` fails HERE, on its own terms.
+	//
+	// The population growth curve must stay "monotone-ish", never the
+	// sawtooth boom/bust collapse two earlier, reverted widenings of
+	// residentIDs() reproduced (population repeatedly crashing to <40% of
+	// its running peak, e.g. peak 128 -> trough 30 in the ungated widening
+	// this ticket's own BOW comment records). The migrantTenureGraceMonths
+	// gate (attract package) is what is supposed to prevent that here —
+	// see attract.TestMigrantTenureGrace_ZeroGraceReproducesSawtoothMechanism
+	// (internal/engine/attract/bug380_tenure_grace_test.go), which flips
+	// the same knob this test relies on (at the unit level, since the var
+	// is unexported to this package) and proves a freshly-admitted migrant
+	// departs almost immediately without it — the exact mechanism this
+	// compose-level suite's own hand-verified grace=0 re-run reproduces as
+	// the full sawtooth (population crashing back to ~54 by month 48,
+	// wage bill re-pinned at floor; see this ticket's BOW comment for the
+	// full before/after trace). Two derived-from-data checks, both
+	// measured against this test's OWN observed run (seed 4242) with a
+	// comfortable margin (never tuned to just barely pass):
+	//
+	//  a) no month's population may fall below runningPeakFraction (40%) of
+	//     the highest population reached so far in the run. The
+	//     grace-protected run's worst observed dip is ~60% of its running
+	//     peak (month 17, peak 128 -> 77); the grace=0 sawtooth's worst dip
+	//     is ~24% (peak 128 -> trough 30) and it recurs repeatedly, not
+	//     once — 40% sits well clear of the healthy run's floor and well
+	//     inside the sawtooth's, so it cannot pass by accident.
+	//  b) the final month's population must be at least
+	//     finalOverFirstMultiple (2x) the first month's — the sawtooth
+	//     class of failure oscillates around a roughly FLAT level (the
+	//     grace=0 run ends at 54, essentially where it started at 53) while
+	//     healthy organic growth (this run ends at 236 from 53, ~4.5x; the
+	//     pre-BUG-380 no-migrant-emigration baseline ended at 526, ~10x)
+	//     clears 2x by a wide margin either way.
+	const runningPeakFraction = 0.40
+	const finalOverFirstMultiple = 2.0
+	runningPeak := 0
+	for _, s := range snaps {
+		if s.population > runningPeak {
+			runningPeak = s.population
+		}
+		if runningPeak > 0 && float64(s.population) < runningPeakFraction*float64(runningPeak) {
+			t.Fatalf("month %d: population %d fell below %.0f%% of the running peak %d (ratio %.3f) — this is the sawtooth boom/bust collapse BUG-380's migrantTenureGraceMonths gate exists to prevent, not smooth organic growth", s.month, s.population, runningPeakFraction*100, runningPeak, float64(s.population)/float64(runningPeak))
+		}
+	}
+	if float64(last.population) < finalOverFirstMultiple*float64(first.population) {
+		t.Fatalf("month %d: population %d is less than %.0fx month 1's %d — organic growth stalled/flatlined instead of compounding (the sawtooth's flat-oscillation signature)", totalMonths, last.population, finalOverFirstMultiple, first.population)
+	}
+
+	// 3) The concrete symptom: the wage bill must NOT pin at
 	// monthlyWagesFloor once the run has meaningfully grown past the seed
 	// population.
 	if last.wageBill <= monthlyWagesFloor {
 		t.Fatalf("month %d: wage bill = %d, did not exceed monthlyWagesFloor (%d) despite population growing from %d to %d — the wage bill is pinned at the floor (BUG-529 symptom)", last.month, last.wageBill, int64(monthlyWagesFloor), first.population, last.population)
 	}
 
-	// 3) BUG-535/births-unblock lane history (logged, NOT asserted — see
+	// 4) BUG-535/births-unblock lane history (logged, NOT asserted — see
 	// below): formResidentHouseholds pairs migrants/children
 	// (liveResidentIDs()), which was expected to unblock cross-cohort
 	// fertility but did NOT at the time BUG-535 landed — VitalBirths()
@@ -224,7 +279,7 @@ func TestBUG529_EmployedFractionStaysProportionalUnderOrganicMigration(t *testin
 	// below, not a regression.
 	t.Logf("VitalBirths() = %d after %d months (births-unblock lane fix live — >0 is now expected once a cross-cohort couple clears the fertility hazard; see the safeUint32 partner/household widening above)", comp.VitalBirths(), totalMonths)
 
-	// 4) Conservation must still hold every tick: widening residentIDs()
+	// 5) Conservation must still hold every tick: widening residentIDs()
 	// touches the wage/employment/household-formation surface every month,
 	// so this proves the wider enumeration introduces no double-counting
 	// (a citizen appearing in more than one range) or double-crediting.

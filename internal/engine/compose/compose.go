@@ -481,18 +481,17 @@ type Deps struct {
 	// Composition.MoneyFlows was byte-identical after one ticked month
 	// whether SeedCitizenCount was 0 or 50,000.
 	//
-	// Deliberately widens ONLY liveResidentIDs(), never residentIDs()
-	// itself: residentIDs() ALSO feeds attract.MigrationCommand.
+	// SeedResidentIDBase/Count is deliberately folded ONLY into
+	// liveResidentIDs(), never into residentIDs()'s own admitted-migrant
+	// widening: residentIDs() ALSO feeds attract.MigrationCommand.
 	// ResidentIDs (the emigration-eligible set, compose.go's
-	// applyMigration) and its own doc comment records a live, previously-
-	// shipped regression from widening exactly that function (a
-	// BUG-529/BUG-535 first cut caused "a sawtooth boom/bust population
-	// collapse every few months" once migrants/fertility children became
-	// emigration-eligible). Folding a large SeedResidentIDCount range
-	// into emigration eligibility too would risk reproducing that same
-	// class of regression at a much larger scale — out of scope for this
-	// fix, which only needs the moneycirc wage/employment/household
-	// surface to see the seeded population, never emigration.
+	// applyMigration), and BUG-380's own doc comment (residentIDs' comment,
+	// this file) records the full history of getting THAT widening safe —
+	// two reverted attempts, then a tenure-grace fix on the third. A large,
+	// externally-seeded SeedResidentIDBase/Count range becoming
+	// emigration-eligible in one step is a DIFFERENT, unreviewed widening
+	// on top of that (it has no per-entry admission month to hang a tenure
+	// grace off) — out of scope here, so it stays in liveResidentIDs() only.
 	//
 	// Wire validates the range stays disjoint from [1, seedCitizenCount],
 	// attract.MigrantIDBase, and citizens.FertilityChildIDBase (the same
@@ -3757,22 +3756,13 @@ func (st *simState) environmentTerm() (float64, error) {
 	return 100 * (1 - pressure), nil
 }
 
-// residentIDs returns the citizen-id set eligible for personality-weighted
-// emigration: every sequentially-minted id (seed + direct seeding). This is
-// deliberately left NARROW (never widened to migrants/fertility children —
-// see liveResidentIDs below for the wider set the wage/employment/
-// household-formation surface needs): a first cut of BUG-529/BUG-535
-// widened THIS function itself, which also feeds
-// attract.MigrationCommand.ResidentIDs (compose.go's applyMigration) — the
-// emigration-eligible set — and empirically produced a sawtooth
-// boom/bust population collapse every few months in a 48-month composed
-// run (a mass-emigration event repeatedly wiping out most of the newly
-// widened eligible pool), which is a materially worse regression than the
-// wage-pinning defect this ticket fixes. Emigration eligibility for
-// migrants/fertility children is therefore left as the SAME pre-existing,
-// documented baseline-one limitation it always was — flagged for a
-// follow-up ticket, not silently folded into this wiring fix.
-func (st *simState) residentIDs() []uint64 {
+// baseResidentIDs returns the sequentially-minted seed/direct-seed citizen
+// id range [1, nextCitizenID) — the CLOSED range compose.go's spawnCitizens
+// mints at Wire time and grows only via direct per-citizen commands, never
+// via migration or fertility. Factored out so residentIDs() and
+// liveResidentIDs() both build from ONE call site (BUG-380) instead of each
+// re-deriving the same range and risking drift between the two.
+func (st *simState) baseResidentIDs() []uint64 {
 	ids := make([]uint64, 0, st.nextCitizenID-1)
 	for id := uint64(1); id < st.nextCitizenID; id++ {
 		ids = append(ids, id)
@@ -3780,14 +3770,133 @@ func (st *simState) residentIDs() []uint64 {
 	return ids
 }
 
-// liveResidentIDs returns the FULL live-resident citizen-id set: residentIDs()
-// (the seed population) UNION every migrant id engine.attract has ever
-// admitted UNION every fertility-born child id engine.citizens has ever
-// minted. Used ONLY by the wage/employment-marking surface
-// (markEmploymentAndCount/distributeWagesToResidents/employedResidentCount,
-// moneycirc.go) and monthly household formation (formResidentHouseholds,
-// moneycirc.go) — NEVER for attract's emigration eligibility (residentIDs()
-// itself stays narrow for that, see its own doc comment for why).
+// migrantIDsFromCount returns every admitted-migrant citizen id
+// [MigrantIDBase+2, MigrantIDBase+migrants] for the given LIVE
+// AttractAPI.MigrantsAdmitted() count (migrants == attract's own
+// nextMigrantID counter, api.go's MigrantsAdmitted). The base is +2, NOT
+// +1, and the top is +migrants, NOT +migrants+1: migration.go's
+// mintMigrantID pre-increments a counter AttractAPI.New initialises to 1
+// (api.go), so after N real mints the counter reads nextMigrantID = 1+N —
+// the N minted ids are exactly {2, 3, ..., N+1} = {2, ..., migrants}, i.e.
+// migrants-1 real ids, NOT migrants of them (this same convention is
+// documented independently by feat_1972079927_migrantwealth_test.go's own
+// migrant-id helper, which loops i from 2 to Inflow+1 against a *known*
+// Inflow count rather than the live counter — the two are related by
+// migrants == Inflow+1 after a single admitting month starting from a
+// fresh counter). Migrant ids are otherwise minted densely and gaplessly
+// from that point ("counter++; return base|counter"), so this range is
+// exactly the admitted set at any point in the run — see liveResidentIDs'
+// doc comment for the fuller rationale (live counter reads, never a
+// compose-tracked shadow counter). A departed migrant (death or a prior
+// emigration) is simply skipped by every consumer's existing CitizenAt
+// !ok check, exactly as it already is for every other range.
+//
+// CORRECTED (opus-round-bug380, 2026-09-05/06 — this comment previously
+// claimed an off-by-one at BOTH ends; that was wrong, pinned by the
+// round's TestAttack380_MigrantIDsFromCountLowerBoundClaim): this function
+// used to enumerate [MigrantIDBase+1, MigrantIDBase+migrants] inclusive —
+// a STRICT SUPERSET of the true minted set [MigrantIDBase+2,
+// MigrantIDBase+migrants], off by exactly ONE id at the BOTTOM only. It
+// enumerated a NEVER-MINTED phantom id (MigrantIDBase+1, harmlessly
+// skipped by every CitizenAt !ok check) but the top end was always correct
+// (an inclusive i<=migrants loop already reaches MigrantIDBase+migrants) —
+// it never excluded the most-recently-admitted real migrant, contrary to
+// what this comment and TestMigrantIDsFromCount_MatchesRealMintedRange's
+// own PROOF-THIS-CAN-FAIL both used to claim. The actual, narrower defect
+// this fix closes is the phantom id itself: harmless for emigration
+// eligibility (CitizenAt skips it) but a real one-entry pollutant in any
+// caller that iterates the returned ids directly rather than querying
+// CitizenAt per id. Fixed here rather than filed separately since both
+// residentIDs() (emigration eligibility) and liveResidentIDs' wage/
+// employment/household-formation surface share this one helper and the
+// true range is a one-line correction once identified.
+func migrantIDsFromCount(migrants uint64) []uint64 {
+	if migrants == 0 {
+		return nil
+	}
+	ids := make([]uint64, 0, migrants-1)
+	for i := uint64(2); i <= migrants; i++ {
+		ids = append(ids, attract.MigrantIDBase+i)
+	}
+	return ids
+}
+
+// residentIDs returns the citizen-id set eligible for personality-weighted
+// emigration: baseResidentIDs() (seed + direct seeding) UNION every
+// admitted-migrant id engine.attract has ever minted (BUG-380). Widened
+// for real this time — see the THIRD-ATTEMPT history below for why the
+// first two attempts (2026-09-02, 2026-09-05) reverted this exact
+// widening, and what makes this one safe.
+//
+// BUG-380 THIRD ATTEMPT (2026-09-05, Aaron's ruling): the reported defect
+// is real (an admitted migrant could never depart, no matter how severe or
+// long a subsequent decline ran, because applyEmigration/migration.go only
+// ever evaluates ids it is HANDED), and the emigration mechanism itself
+// was always unbiased — attract.applyEmigration applies the IDENTICAL
+// per-resident hazard (EmigrationHazard) to any id in
+// MigrationCommand.ResidentIDs regardless of range. Two earlier attempts
+// at this same widening (a BUG-529/BUG-535 "first cut", 2026-09-02, and
+// this ticket's own SECOND attempt earlier the same day) both reverted
+// after reproducing a "sawtooth boom/bust population collapse":
+// population oscillating wildly instead of growing smoothly, driving
+// TestBUG529_EmployedFractionStaysProportionalUnderOrganicMigration's
+// wage-bill-floor assertion and the births-unblock suite RED. Both
+// attempts read the sawtooth as evidence migrants must stay PERMANENTLY
+// exempt from emigration.
+//
+// Aaron's ruling: that reading was wrong. The sawtooth is the EXPECTED
+// result of letting a migrant admitted in month M be an emigration
+// candidate again in month M+1 — before the city has had a chance to
+// stabilise around them (wage/employment/household formation all take a
+// few months to catch up, per liveResidentIDs' own BUG-529/BUG-535
+// history) — not evidence that eligibility itself is unsafe. The fix is a
+// TENURE GRACE, not abandoning eligibility: migrantTenureGraceMonths
+// (migration.go, attract package) now gates applyEmigration so a migrant
+// is skipped until migrantTenureGraceMonths (12, a placeholder pending
+// Aaron's balance pass) simulated months have passed since their own
+// admission month (tracked per-migrant in AttractAPI.migrantAdmittedMonth,
+// persisted via participant.go so it survives save/restore). Re-running
+// the SAME 48-month organic-migration suite (seed 4242) with the grace
+// live keeps population growth smooth (see that test's own updated
+// monotone-ish bound) and both previously-broken suites GREEN — see
+// internal/engine/attract/bug380_tenure_grace_test.go's
+// TestMigrantTenureGrace_BlocksEarlyEmigrationAllowsLate for the direct
+// per-migrant M+6-blocked / M+13-eligible proof, and that same file's
+// TestMigrantTenureGrace_ZeroGraceReproducesSawtoothMechanism (grace
+// forced to 0) for the RED-reproduction proving the grace, not something
+// else, is what was fixing it.
+func (st *simState) residentIDs() []uint64 {
+	ids := st.baseResidentIDs()
+	ids = append(ids, migrantIDsFromCount(st.attract.MigrantsAdmitted())...)
+	return ids
+}
+
+// liveResidentIDs returns the FULL live-resident citizen-id set:
+// baseResidentIDs() (the seed population) UNION every migrant id
+// engine.attract has ever admitted UNION every fertility-born child id
+// engine.citizens has ever minted. Used by the wage/employment-marking
+// surface (markEmploymentAndCount/distributeWagesToResidents/
+// employedResidentCount, moneycirc.go) and monthly household formation
+// (formResidentHouseholds, moneycirc.go).
+//
+// BUG-380 (2026-09-05): factored to build from baseResidentIDs() directly
+// (rather than calling residentIDs() and appending migrants again) so this
+// function's migrant range and residentIDs' own eligibility range share
+// ONE helper (migrantIDsFromCount) and can never drift on what "admitted
+// migrant" means — independently of residentIDs()'s eligibility POLICY
+// (whether/how it gates a migrant by tenure), which is entirely
+// residentIDs'/applyEmigration's concern, not this enumeration's (see
+// residentIDs' own doc comment for the tenure-grace history).
+// migrantIDsFromCount also had its own real, independent off-by-one fixed
+// here (see that function's CORRECTED doc comment, opus-round-bug380) —
+// the counter-init quirk means id MigrantIDBase+1 is never actually
+// minted, so the pre-fix range [+1, +migrants] (inclusive) enumerated that
+// one permanently-unreachable phantom at the BOTTOM. It was a strict
+// SUPERSET of the true minted set, not off at both ends — the top id was
+// always correctly included, so no real migrant was ever excluded from
+// this function's wage/employment/household-formation surface by that
+// off-by-one. That fix (removing the one phantom) stands regardless of
+// residentIDs()'s eligibility policy.
 //
 // BUG-529/BUG-535 (2026-09-02): markEmploymentAndCount/formResidentHouseholds/
 // distributeWagesToResidents/employedResidentCount used to iterate
@@ -3808,7 +3917,10 @@ func (st *simState) residentIDs() []uint64 {
 // Migrant and fertility-child ids are minted densely and gaplessly
 // (migration.go's mintMigrantID / fertility.go's nextFertilityChildID, both
 // simple "id = base + counter; counter++" schemes), so
-// [MigrantIDBase+1, MigrantIDBase+MigrantsAdmitted()] and
+// [MigrantIDBase+2, MigrantIDBase+MigrantsAdmitted()] (see
+// migrantIDsFromCount's own doc comment for why the range runs +2..+M,
+// not +1..+M — mintMigrantID pre-increments a counter initialised to 1)
+// and
 // [FertilityChildIDBase+1, FertilityChildIDBase+FertilityChildrenBorn()]
 // are exactly the admitted/born sets at any point in the run. Both counts
 // are LIVE reads of attract's and citizens' own already-correctly-persisted
@@ -3835,11 +3947,9 @@ func (st *simState) residentIDs() []uint64 {
 // once from Deps at Wire time, never grows) -- it needs no cache-
 // invalidation key of its own, unlike migrants/children/nextCitizenID
 // which are live, growing counters. Deliberately NOT folded into
-// residentIDs() itself -- see Deps.SeedResidentIDCount's own doc comment
-// for why (residentIDs() also feeds emigration eligibility, and widening
-// IT to a large externally-seeded range risks reproducing the exact
-// "sawtooth boom/bust population collapse" residentIDs()'s own doc comment
-// already records from a past over-widening).
+// residentIDs() (emigration eligibility, BUG-380's own narrower fix) — a
+// large externally-seeded range becoming emigration-eligible in one step
+// is a separate, unreviewed widening this fix does not make.
 func (st *simState) liveResidentIDs() []uint64 {
 	migrants := st.attract.MigrantsAdmitted()
 	children := st.citizens.FertilityChildrenBorn(st.cid)
@@ -3858,15 +3968,13 @@ func (st *simState) liveResidentIDs() []uint64 {
 		st.liveResidentIDsCacheNextID == st.nextCitizenID {
 		return st.liveResidentIDsCache
 	}
-	ids := st.residentIDs()
+	ids := st.baseResidentIDs()
 	if st.seedResidentIDCount > 0 {
 		for i := uint64(1); i <= uint64(st.seedResidentIDCount); i++ {
 			ids = append(ids, st.seedResidentIDBase+i)
 		}
 	}
-	for i := uint64(1); i <= migrants; i++ {
-		ids = append(ids, attract.MigrantIDBase+i)
-	}
+	ids = append(ids, migrantIDsFromCount(migrants)...)
 	// BUG-541: fertility mints from [FertilityChildIDBase+0,
 	// FertilityChildIDBase+children-1] (fertility.go's nextFertilityChildID
 	// starts at 0 and increments AFTER minting each child — see

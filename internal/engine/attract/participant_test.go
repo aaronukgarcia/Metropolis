@@ -7,7 +7,9 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/save"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
 
 // ---------------------------------------------------------------------------
@@ -79,10 +81,11 @@ func TestAttractAPIFieldsAllClassified(t *testing.T) {
 		"wellbeingModifiers": "wired dependency getter (MOD-034's SetWellbeingModifiers), re-supplied by the composition root before Load runs -- a plain func()(float64,float64) closure over the composition root's own state (compose_wellbeing.go) can never be serialized (funcs are not JSON-marshallable) and would be meaningless after a restore anyway, mirroring termInputs'/citizens'/finance's/households' identical wired-dependency exclusion reasoning: compose re-wires this seam every load, BEFORE the first ApplyMigration call, so a stale/missing post-load value is always overwritten before it can influence a migration decision.",
 	}
 	covered := map[string]bool{
-		"reputation":        true,
-		"lastAdvancedMonth": true,
-		"hasAdvanced":       true,
-		"nextMigrantID":     true,
+		"reputation":           true,
+		"lastAdvancedMonth":    true,
+		"hasAdvanced":          true,
+		"nextMigrantID":        true,
+		"migrantAdmittedMonth": true, // BUG-380 tenure-grace map, attractMetaWire.MigrantAdmittedMonths
 	}
 	at := reflect.TypeOf((*AttractAPI)(nil)).Elem()
 	for i := 0; i < at.NumField(); i++ {
@@ -152,9 +155,17 @@ func compareAttractInternal(t *testing.T, a, b *AttractAPI, label string) {
 	t.Helper()
 	a.mu.RLock()
 	aRep, aLast, aHasAdv, aNextID := a.reputation, a.lastAdvancedMonth, a.hasAdvanced, a.nextMigrantID
+	aTenure := make(map[uint64]int64, len(a.migrantAdmittedMonth))
+	for k, v := range a.migrantAdmittedMonth {
+		aTenure[k] = v
+	}
 	a.mu.RUnlock()
 	b.mu.RLock()
 	bRep, bLast, bHasAdv, bNextID := b.reputation, b.lastAdvancedMonth, b.hasAdvanced, b.nextMigrantID
+	bTenure := make(map[uint64]int64, len(b.migrantAdmittedMonth))
+	for k, v := range b.migrantAdmittedMonth {
+		bTenure[k] = v
+	}
 	b.mu.RUnlock()
 
 	if aRep != bRep {
@@ -168,6 +179,9 @@ func compareAttractInternal(t *testing.T, a, b *AttractAPI, label string) {
 	}
 	if aNextID != bNextID {
 		t.Fatalf("%s: nextMigrantID %d != %d", label, aNextID, bNextID)
+	}
+	if !reflect.DeepEqual(aTenure, bTenure) {
+		t.Fatalf("%s: migrantAdmittedMonth %+v != %+v", label, aTenure, bTenure)
 	}
 	if a.Reputation() != b.Reputation() {
 		t.Fatalf("%s: Reputation() %v != %v", label, a.Reputation(), b.Reputation())
@@ -258,7 +272,44 @@ func TestAttractParticipant_RoundTrip(t *testing.T) {
 
 	// Load into a FRESH AttractAPI (mirrors a composition root reconstructing
 	// the module before Load, per NewSaveParticipant's doc comment).
-	reloaded, _, _, _ := newAPI(t, validConfig())
+	reloaded, reloadedCA, _, _ := newAPI(t, validConfig())
+
+	// BUG-380 re-round (opus-reround-bug380): seed reloadedCA with a
+	// matching cold record for every id orig's tenure map already holds,
+	// BEFORE Load runs. sweepDepartedMigrantTenure (migration.go) — called
+	// at the top of every ApplyMigration, including continueAttract's call
+	// below — checks CitizenAt against whichever CitizensAPI is wired, and
+	// prunes any tenure entry that does not resolve. In the REAL system, a
+	// composition root's LoadAt restores attract's participant AND
+	// citizens' own participant from the SAME save bundle, so the two
+	// always agree on who is still alive; this test's default (newAPI
+	// gives orig and reloaded independent, disconnected CitizensAPI
+	// instances, since it only exercises attract's OWN participant) would
+	// otherwise make the sweep see EVERY migrant orig ever admitted as
+	// "not found" in reloaded's empty store and prune the whole tenure map
+	// on reloaded's very first post-load ApplyMigration call — a
+	// test-environment artifact, not a real defect (proved separately at
+	// the composition level, with a genuinely SHARED citizens store, by
+	// compose's TestAttack380_SaveRestoreMidTenureDifferential and
+	// TestReround380_SaveRestoreAfterPruningDifferential). Seeding into a
+	// SEPARATE store (rather than sharing origCA directly) also avoids a
+	// real id collision: reloaded's own nextMigrantID counter restores to
+	// the SAME post-driveAttract value orig's had, so continueAttract's
+	// later independent mint on each would collide if they wrote into one
+	// shared store.
+	orig.mu.RLock()
+	seedRecords := make([]citizens.ColdRecord, 0, len(orig.migrantAdmittedMonth))
+	for id := range orig.migrantAdmittedMonth {
+		seedRecords = append(seedRecords, mkResident(id, 50))
+	}
+	orig.mu.RUnlock()
+	if len(seedRecords) == 0 {
+		t.Fatalf("test setup: orig has no tenure entries to mirror into reloadedCA")
+	}
+	if err := reloadedCA.SeedColdRecords(seedRecords, "corr-attract"); err != nil {
+		t.Fatalf("SeedColdRecords(reloadedCA): %v", err)
+	}
+
 	mgr := save.NewManager(root, []save.Participant{NewSaveParticipant(reloaded)}, "reloaded")
 	_, _, err := mgr.Load(manualBundleDir(t, root))
 	ckA(t, err)
@@ -407,5 +458,60 @@ func TestAttractParticipant_NextMigrantIDContinuesWithoutCollision(t *testing.T)
 	firstEverID := fresh.mintMigrantID()
 	if !preSaveIDs[firstEverID] {
 		t.Fatalf("test setup: a freshly-constructed AttractAPI's first minted id (%d) is not in the pre-save set (%v) -- the collision scenario this test guards against is not actually reachable by a reset-to-1 bug", firstEverID, preSaveIDs)
+	}
+}
+
+// TestAttractParticipant_OldSaveBackfillsMigrantTenure is BUG-380's
+// backward-compatibility proof: a save record taken BEFORE the tenure-grace
+// field existed (no "migrantAdmittedMonths" key at all -- hand-built here,
+// mirroring exactly what an old attractMetaWire JSON blob looks like) must
+// decode WITHOUT error, and applyLoadRecord's backfill (participant.go)
+// must install every REAL migrant id implied by the restored nextMigrantID
+// counter at the record's own LastAdvancedMonth -- never left ungated
+// (which would make an old save's migrants instantly emigration-eligible
+// with no grace at all) and never a decode failure.
+func TestAttractParticipant_OldSaveBackfillsMigrantTenure(t *testing.T) {
+	a, _, _, _ := newAPI(t, validConfig())
+
+	// A hand-built OLD-SHAPE record: NextMigrantID=4 (i.e. two real migrant
+	// pairs minted, ids base+2..base+4) but no migrantAdmittedMonths key at
+	// all -- exactly what json.Marshal of a pre-BUG-380 attractMetaWire
+	// produced.
+	oldRec := serialize.Record{Kind: recAttractMeta, Data: []byte(`{"reputation":{"hasBaseline":true,"baseline":5,"value":6},"lastAdvancedMonth":9,"hasAdvanced":true,"nextMigrantID":4}`)}
+	if err := NewSaveParticipant(a).Handler()(oldRec); err != nil {
+		t.Fatalf("Handler rejected an old-shape (pre-BUG-380) record: %v", err)
+	}
+
+	a.mu.RLock()
+	tenure := make(map[uint64]int64, len(a.migrantAdmittedMonth))
+	for k, v := range a.migrantAdmittedMonth {
+		tenure[k] = v
+	}
+	a.mu.RUnlock()
+
+	wantIDs := []uint64{migrantIDHighBit | 2, migrantIDHighBit | 3, migrantIDHighBit | 4}
+	if len(tenure) != len(wantIDs) {
+		t.Fatalf("backfilled migrantAdmittedMonth has %d entries, want %d (%v): got %v", len(tenure), len(wantIDs), wantIDs, tenure)
+	}
+	for _, id := range wantIDs {
+		month, ok := tenure[id]
+		if !ok {
+			t.Fatalf("backfill missing real migrant id %d (nextMigrantID=4 implies ids base+2..base+4 exist): %v", id, tenure)
+		}
+		if month != 9 {
+			t.Fatalf("id %d backfilled at month %d, want the record's own lastAdvancedMonth (9)", id, month)
+		}
+	}
+
+	// The backfilled tenure must actually GATE emigration: at the backfill
+	// month itself (9), the migrant is still within a fresh 12-month grace
+	// counted from 9 -- migrantBelowTenureGrace(id, 9) must be true (tenure
+	// 0 < 12), never instantly eligible just because it was backfilled
+	// rather than recorded at real admission time.
+	if !a.migrantBelowTenureGrace(wantIDs[0], 9) {
+		t.Fatalf("a backfilled migrant is NOT gated at its own backfill month (tenure 0) -- an old save's migrants would be instantly emigration-eligible with no grace at all")
+	}
+	if a.migrantBelowTenureGrace(wantIDs[0], 9+migrantTenureGraceMonths) {
+		t.Fatalf("a backfilled migrant is STILL gated once tenure clears migrantTenureGraceMonths (%d) from its backfilled month -- the backfill must behave exactly like a real admission from that point on", migrantTenureGraceMonths)
 	}
 }

@@ -66,6 +66,65 @@ type AttractAPI struct {
 	// prefix, so admitted migrants never collide with small seeded ids).
 	nextMigrantID uint64
 
+	// migrantAdmittedMonth maps an admitted migrant's citizen id to the
+	// simulation month applyImmigration (migration.go) admitted them —
+	// BUG-380's tenure-grace state: applyEmigration skips a migrant whose
+	// tenure (currentMonth - admittedMonth) is below
+	// migrantTenureGraceMonths, so a just-arrived migrant cannot be
+	// immediately re-selected by the very next decline month (the
+	// mechanism that produced the "sawtooth boom/bust population
+	// collapse" documented on compose.go's residentIDs()/migrantIDsFromCount).
+	// Populated once, at mint time (recordMigrantAdmission, called from
+	// applyImmigration right after each birthMigrant succeeds) — a
+	// migrant's arrival month is a fact, never revised.
+	//
+	// BUG-380 round finding P2 (opus-round-bug380, 2026-09-05/06): this
+	// field was originally documented as "never pruned... bounded by
+	// MigrantsAdmitted()" — measured false. The attacker's
+	// TestAttack380_TenureMapGrowsWithCumulativeAdmissionsNeverPruned
+	// (compose package) found 39.4% of entries already belonged to
+	// departed/dead citizens after just 48 months, an unbounded-with-time
+	// growth law, not the small/bounded table this comment claimed.
+	// pruneMigrantTenure (migration.go) deletes an entry the INSTANT
+	// applyEmigration itself removes that citizen (the one departure
+	// channel this package issues itself).
+	//
+	// BUG-380 re-round finding P1 (opus-reround-bug380): pruning on
+	// emigration ALONE still left an unbounded "orphan" residual for
+	// migrants who died of NATURAL causes (citizens' own coldpass has no
+	// callback into this package) — measured at 45 orphans by month 200 on
+	// a roughly linear ~0.25/month growth, not the small constant a fixed
+	// orphanSlack could safely bound. Closed by sweepDepartedMigrantTenure
+	// (migration.go), called once at the top of every ApplyMigration:
+	// rather than adding a NEW engine.citizens -> engine.attract "citizen
+	// removed" notification edge (GR#25: none is registered, and none is
+	// added here), it reuses the ALREADY-REGISTERED engine.attract ->
+	// engine.citizens edge (CitizenAt) to directly check every tenured
+	// migrant's liveness and delete the dead ones. Between the two
+	// mechanisms, this map's steady-state size now tracks live migrants
+	// EXACTLY (proved over a 200-month run, slack 0 — see
+	// TestAttack380_TenureMapStaysBoundedToLiveMigrantsPlusOrphanSlack's
+	// re-round revision) rather than the open-ended residual the first
+	// round's fix left. Never iterated in a hot path outside this sweep
+	// (every OTHER consumer looks up by a SPECIFIC id — GR#21's "no
+	// map-range-with-break" is not implicated by the sweep either: a plain
+	// map range with an in-loop delete and no early break, whose RESULT
+	// does not depend on visitation order).
+	//
+	// Persisted via participant.go
+	// (attractMetaWire.MigrantAdmittedMonths, sorted by id for GR#21) so
+	// tenure survives save/restore. BUG-380 re-round finding P0
+	// (opus-reround-bug380, BLOCKING): the wire field is a POINTER
+	// precisely so a MODERN save's (possibly already-pruned) slice is
+	// trusted verbatim with NO backfill, distinguishing it from an OLD
+	// save (taken before this field existed at all, decodes nil) which
+	// backfills every real migrant id at the save's own last-advanced
+	// month — see attractMetaWire's own doc comment for why a plain slice
+	// could not make this distinction, and the round-1 regression it
+	// caused (a save/load round trip undid every prune: 102 entries at a
+	// month-30 save became 208 after LoadAt).
+	migrantAdmittedMonth map[uint64]int64
+
 	// wellbeingModifiers is MOD-034's OPTIONAL injected seam (the registered
 	// engine.attract -> engine.wellbeing edge, code.json): a plain getter
 	// returning the two §18 downstream-effect modifiers this package's
@@ -109,13 +168,14 @@ func New(cfg Config, seed uint64, correlationID string) (*AttractAPI, error) {
 		return nil, err
 	}
 	a := &AttractAPI{
-		correlationID: correlationID,
-		weights:       cfg.Weights,
-		world:         cfg.World,
-		migrationRate: cfg.MigrationRate,
-		repCfg:        cfg.Reputation,
-		seed:          seed,
-		nextMigrantID: 1,
+		correlationID:        correlationID,
+		weights:              cfg.Weights,
+		world:                cfg.World,
+		migrationRate:        cfg.MigrationRate,
+		repCfg:               cfg.Reputation,
+		seed:                 seed,
+		nextMigrantID:        1,
+		migrantAdmittedMonth: make(map[uint64]int64),
 	}
 	// Armed exactly once, before a is returned to any caller (SEC-020).
 	a.self.Store(a)

@@ -2436,6 +2436,12 @@
       "message": "invalid migration month {month} (must be non-negative)",
       "remedy": "Pass a non-negative simulation month to ApplyMigration. The month keys the per-resident emigration hash stream and the once-per-month reputation advance; a negative value is rejected rather than wrapped into a migrant birth-month or stream key (FEAT-086)."
     },
+    "MET-G708": {
+      "severity": "error",
+      "module": "engine.attract",
+      "message": "restored migrant counter {nextMigrantID} exceeds the plausible ceiling {ceiling}",
+      "remedy": "A save's attract.meta nextMigrantID must be a real cumulative migrant-admission count, never larger than the project's documented population ceiling (100,000,000, Option B's max simulated population). A value beyond that is corrupt or hostile input, not a legitimate large city -- decode is refused rather than driving an O(nextMigrantID) backfill loop / map allocation (BUG-380 round finding, attack_bug380_round_test.go's TestAttack380_CorruptNextMigrantIDDrivesDecodeAllocation)."
+    },
     "MET-G800": {
       "severity": "error",
       "module": "feat.compositionroot",

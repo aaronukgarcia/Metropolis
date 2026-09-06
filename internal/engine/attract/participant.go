@@ -3,7 +3,9 @@ package attract
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
 
@@ -49,6 +51,23 @@ const (
 	KindAttract = "attract"
 
 	recAttractMeta = "attract.meta"
+
+	// migrantCounterCeiling is the plausibility ceiling applyLoadRecord
+	// enforces on a decoded attract.meta record's NextMigrantID BEFORE
+	// touching any state or running the tenure-map backfill loop (BUG-380
+	// round finding P1, opus-round-bug380). Derived from the project's own
+	// documented population ceiling (docs/METROPOLIS-MASTER-v2.1.md /
+	// CLAUDE.md: "persistent individual citizens... up to 100M at adaptive
+	// fidelity", Option B) — a migrant count can never exceed total
+	// population, so any NextMigrantID beyond this is provably corrupt or
+	// hostile input, never a legitimate large city. Without this check, a
+	// hand-edited or corrupted save with NextMigrantID=1<<40 drove an
+	// O(NextMigrantID) map-insert loop before any other validation ran —
+	// attack_bug380_round_test.go's
+	// TestAttack380_CorruptNextMigrantIDDrivesDecodeAllocation measured
+	// ~45MB/160ms at a mere 1e6; 1<<40 would attempt roughly a
+	// trillion-entry map and hang/OOM the process.
+	migrantCounterCeiling = 100_000_000
 )
 
 // reputationStateWire is reputationState's wire projection (AC-2). The
@@ -61,22 +80,53 @@ type reputationStateWire struct {
 	Value       float64 `json:"value"`
 }
 
+// migrantTenureEntryWire is one migrantAdmittedMonth entry's wire
+// projection (BUG-380 tenure grace).
+type migrantTenureEntryWire struct {
+	ID            uint64 `json:"id"`
+	AdmittedMonth int64  `json:"admittedMonth"`
+}
+
 // attractMetaWire carries every mutable field of AttractAPI this
 // participant persists: the reputation-momentum state (projected via
 // reputationStateWire), the monthly-advance idempotency tracker
 // (lastAdvancedMonth/hasAdvanced — migration.go's ApplyMigration reads
 // these to decide whether this month's fundamentals have already been
-// folded into reputation), and the deterministic migrant-id counter
-// (nextMigrantID — migration.go's mintMigrantID). A citizen-ID collision
-// after restore is the FEAT-169 class of bug: nextMigrantID MUST round-
-// trip exactly so post-restore migrants never re-mint an id a pre-save
-// migrant already holds (see participant_test.go's explicit collision
-// test).
+// folded into reputation), the deterministic migrant-id counter
+// (nextMigrantID — migration.go's mintMigrantID; a citizen-ID collision
+// after restore is the FEAT-169 class of bug, so nextMigrantID MUST
+// round-trip exactly, see participant_test.go's explicit collision test),
+// and — BUG-380 (2026-09-05) — the migrant tenure-grace map
+// (migrantAdmittedMonth), sorted by id (GR#21) so the JSON encoding is
+// deterministic regardless of Go's map iteration order.
+//
+// MigrantAdmittedMonths is a POINTER (BUG-380 re-round finding P0,
+// opus-reround-bug380), not a plain slice, so applyLoadRecord can tell
+// "an OLD save that predates this field entirely" (decodes nil — the key
+// is simply absent from the JSON) apart from "a MODERN save whose slice is
+// authoritative, even when it legitimately holds fewer than
+// NextMigrantID-1 entries because pruneMigrantTenure has already removed
+// some" (decodes as a non-nil pointer to a slice — snapshotForSave always
+// sets one, even to an empty slice, never leaves it nil). A plain
+// (non-pointer) slice field cannot make this distinction: json.Unmarshal
+// leaves BOTH "key absent" and "key present as []" as a nil Go slice,
+// which is exactly the bug the re-round found — applyLoadRecord's old
+// backfill loop treated a modern, ALREADY-PRUNED slice as if it were an
+// old-shape record missing the field entirely, and re-inserted an entry
+// for every migrant pruneMigrantTenure had legitimately removed, undoing
+// the P2 prune on every save/load round trip (measured: 102 entries at a
+// month-30 save became 208 after LoadAt).
+//
+// An OLD save (taken before BUG-380 landed at all) decodes this as nil —
+// see applyLoadRecord's own comment for the backfill that ONLY runs in
+// that case (a migrant's grace period re-starts from the load month, a
+// conservative approximation, never a decode error).
 type attractMetaWire struct {
-	Reputation        reputationStateWire `json:"reputation"`
-	LastAdvancedMonth int64               `json:"lastAdvancedMonth"`
-	HasAdvanced       bool                `json:"hasAdvanced"`
-	NextMigrantID     uint64              `json:"nextMigrantID"`
+	Reputation            reputationStateWire       `json:"reputation"`
+	LastAdvancedMonth     int64                     `json:"lastAdvancedMonth"`
+	HasAdvanced           bool                      `json:"hasAdvanced"`
+	NextMigrantID         uint64                    `json:"nextMigrantID"`
+	MigrantAdmittedMonths *[]migrantTenureEntryWire `json:"migrantAdmittedMonths,omitempty"`
 }
 
 // attractSnapshot is a point-in-time copy of AttractAPI's mutable runtime
@@ -132,6 +182,19 @@ func (a *AttractAPI) snapshotForSave() (attractSnapshot, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
+	// Migrant tenure map -- sorted by id, numerically (GR#21), mirroring
+	// engine.citizens' identical households/hot-fidelity sort pattern
+	// (participant.go there).
+	tenureIDs := make([]uint64, 0, len(a.migrantAdmittedMonth))
+	for id := range a.migrantAdmittedMonth {
+		tenureIDs = append(tenureIDs, id)
+	}
+	sort.Slice(tenureIDs, func(i, j int) bool { return tenureIDs[i] < tenureIDs[j] })
+	tenureWire := make([]migrantTenureEntryWire, 0, len(tenureIDs))
+	for _, id := range tenureIDs {
+		tenureWire = append(tenureWire, migrantTenureEntryWire{ID: id, AdmittedMonth: a.migrantAdmittedMonth[id]})
+	}
+
 	return attractSnapshot{
 		meta: attractMetaWire{
 			Reputation: reputationStateWire{
@@ -142,6 +205,12 @@ func (a *AttractAPI) snapshotForSave() (attractSnapshot, error) {
 			LastAdvancedMonth: a.lastAdvancedMonth,
 			HasAdvanced:       a.hasAdvanced,
 			NextMigrantID:     a.nextMigrantID,
+			// Always a non-nil pointer, even when tenureWire is empty
+			// (zero migrants ever admitted) — see the field's own doc
+			// comment for why this MUST never be left nil for a save this
+			// code writes: a nil decode is what marks a record as
+			// pre-BUG-380 legacy and triggers the backfill loop.
+			MigrantAdmittedMonths: &tenureWire,
 		},
 	}, nil
 }
@@ -164,6 +233,12 @@ func (a *AttractAPI) resetForLoad() error {
 	a.lastAdvancedMonth = 0
 	a.hasAdvanced = false
 	a.nextMigrantID = 0
+	// BUG-380: cleared to an EMPTY (never nil) map, not left at whatever a
+	// pre-load AttractAPI happened to hold — applyLoadRecord always
+	// installs the meta record's MigrantAdmittedMonths next (possibly
+	// itself empty, for an old pre-BUG-380 save), mirroring nextMigrantID's
+	// own "always installs a value" discipline above.
+	a.migrantAdmittedMonth = make(map[uint64]int64)
 	return nil
 }
 
@@ -184,6 +259,30 @@ func (a *AttractAPI) applyLoadRecord(rec serialize.Record) error {
 		if err := json.Unmarshal(rec.Data, &m); err != nil {
 			return fmt.Errorf("attract: decoding %s record: %w", rec.Kind, err)
 		}
+		// BUG-380 round finding P1 (opus-round-bug380), re-round finding P2
+		// (opus-reround-bug380): validate NextMigrantID against
+		// migrantCounterCeiling BEFORE touching ANY state or running the
+		// legacy tenure-map backfill loop below. Pre-fix, a corrupt/hostile
+		// NextMigrantID (e.g. 1<<40 from a hand-edited or truncated save)
+		// drove an O(NextMigrantID) map-insert loop with zero validation —
+		// attack_bug380_round_test.go's
+		// TestAttack380_CorruptNextMigrantIDDrivesDecodeAllocation measured
+		// ~45MB/160ms at a mere 1e6 real entries. The check is `>=`, NOT
+		// `>` (the re-round's own finding: a `>` check ACCEPTS the ceiling
+		// value itself and still drives a ~1e8-iteration backfill —
+		// TestReround380_CounterCeilingBoundary extrapolates that to
+		// several GB of heap and tens of seconds, still a decode-time
+		// hang/OOM at a merely higher trigger value). Refused HERE, before
+		// the reputation/lastAdvancedMonth/hasAdvanced/nextMigrantID
+		// assignments too, so a refused record leaves the target's state
+		// exactly as it was after resetForLoad (zeroed) rather than a
+		// partially-applied blend.
+		if m.NextMigrantID >= migrantCounterCeiling {
+			return errs.New(ErrMigrantCounterImplausible, a.correlationID, map[string]any{
+				"nextMigrantID": m.NextMigrantID,
+				"ceiling":       uint64(migrantCounterCeiling),
+			})
+		}
 		a.reputation = reputationState{
 			hasBaseline: m.Reputation.HasBaseline,
 			baseline:    m.Reputation.Baseline,
@@ -192,6 +291,55 @@ func (a *AttractAPI) applyLoadRecord(rec serialize.Record) error {
 		a.lastAdvancedMonth = m.LastAdvancedMonth
 		a.hasAdvanced = m.HasAdvanced
 		a.nextMigrantID = m.NextMigrantID
+
+		// BUG-380 re-round finding P0 (opus-reround-bug380, BLOCKING): a
+		// MODERN record's MigrantAdmittedMonths slice is AUTHORITATIVE —
+		// pruneMigrantTenure (migration.go) may have already legitimately
+		// removed entries for migrants this package itself emigrated, and
+		// that pruned slice is exactly what got saved. The OLD code ran
+		// the backfill loop unconditionally after installing the saved
+		// entries, which re-inserted one at m.LastAdvancedMonth for EVERY
+		// id the slice was missing — indistinguishable, to that loop, from
+		// "a migrant pruneMigrantTenure legitimately removed" and "an id
+		// an old pre-BUG-380 save never recorded at all". Every save/load
+		// round trip therefore UNDID the P2 prune and put the map back on
+		// its unbounded growth path (measured: 102 entries at a month-30
+		// save became 208 after LoadAt — TestReround380_
+		// PruningIsUndoneByTheOldSaveBackfill). Fixed by making
+		// MigrantAdmittedMonths a POINTER (attractMetaWire's own doc
+		// comment has the full nil-vs-non-nil rationale): a non-nil
+		// pointer (every save this code writes, even with zero entries)
+		// means "trust this slice completely, no backfill, ever" — the
+		// backfill loop below runs ONLY when the pointer decodes nil, the
+		// signature of a record from BEFORE this field existed at all.
+		if m.MigrantAdmittedMonths != nil {
+			for _, e := range *m.MigrantAdmittedMonths {
+				a.migrantAdmittedMonth[e.ID] = e.AdmittedMonth
+			}
+		} else {
+			// Legacy path: a pre-BUG-380 record never recorded ANY
+			// migrant's admission month, so every real migrant id
+			// (derivable purely from the just-restored nextMigrantID
+			// counter, migrantIDHighBit's own three-package id map) is
+			// backfilled at m.LastAdvancedMonth (the save's own
+			// last-advanced month, the closest available proxy for "when
+			// this state was captured") rather than 0 or the id's mint
+			// context (unavailable at decode time): a migrant so
+			// backfilled starts its tenure grace fresh from the save
+			// point, which is the CONSERVATIVE direction (never wrongly
+			// makes an already-eligible migrant instantly
+			// emigration-eligible on load; at worst delays eligibility by
+			// up to migrantTenureGraceMonths for a migrant that was
+			// already past grace pre-save) — never a decode error or a
+			// crash. a.migrantAdmittedMonth is guaranteed empty here
+			// (resetForLoad, and this is a legacy record with nothing to
+			// have installed above), so a plain assignment is correct —
+			// no pruned-vs-legacy ambiguity can exist for a record that
+			// predates pruning entirely.
+			for i := uint64(2); i <= m.NextMigrantID; i++ {
+				a.migrantAdmittedMonth[migrantIDHighBit|i] = m.LastAdvancedMonth
+			}
+		}
 
 	default:
 		return fmt.Errorf("attract: unknown attract save record kind %q", rec.Kind)

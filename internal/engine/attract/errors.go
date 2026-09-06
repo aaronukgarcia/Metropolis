@@ -62,4 +62,16 @@ const (
 	// month. Rejected rather than wrapped into a migrant birth-month or a
 	// hash-stream key (FEAT-086).
 	ErrInvalidMonth = "MET-G707"
+
+	// ErrMigrantCounterImplausible: a decoded attract.meta record's
+	// nextMigrantID exceeds migrantCounterCeiling (participant.go) — BUG-380
+	// round finding P1 (opus-round-bug380): applyLoadRecord's tenure-map
+	// backfill loop used to run i=2..nextMigrantID straight off the save
+	// with no validation, so a corrupt/hostile nextMigrantID (e.g. 1<<40)
+	// drove an unbounded map allocation/hang before any other check ran.
+	// Refused BEFORE the backfill loop ever executes — see
+	// attack_bug380_round_test.go's
+	// TestAttack380_CorruptNextMigrantIDDrivesDecodeAllocation for the
+	// attack this closes.
+	ErrMigrantCounterImplausible = "MET-G708"
 )
