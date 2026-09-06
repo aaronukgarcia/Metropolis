@@ -88,6 +88,17 @@ import {
   occupiedColumnsOf,
 } from './data.ts';
 import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
+// R3-D FIX (round-3 finding, LOW — "make the nextId self-heal loud"): a
+// DELIBERATE, NARROW exception to this file's own convention of zero
+// side-effects in the reducer (no console.* calls anywhere else in
+// engine.ts — recordError is backend.ts's error-LOG side channel, not
+// simulation state, so it never touches what a replay reproduces). Used at
+// exactly ONE call site below (applyConsolidatorPass's nextId floor check)
+// — an anomaly that should never occur from real play (only a hand-built
+// fixture/corrupt save skipping nextSafeBuildingId can trigger it), where
+// staying silent would hide a real construction defect from GR#7's error
+// registry entirely.
+import { recordError } from './backend.ts';
 import { planConnector } from './roadConnect.ts';
 import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
 import type {
@@ -128,6 +139,40 @@ import {
 // this import creates no cycle even though consolidator.ts already imports
 // FROM this file.
 import { glideWindowForDay } from './consolidatorGlide.ts';
+// FEAT-2326609779 (consolidator inc3): the LAYOUT HIERARCHY's pure planner +
+// geometry leaf (zero imports of its own — see its file header), imported
+// here (the mutation lane) for the same reason consolidator.ts's read-only
+// helpers are: this file owns every primitive needed to actually MUTATE
+// state (buildings/funds/nextId).
+import {
+  TIER_ORDER,
+  TIER_SPEC_ID,
+  MIN_TIER_RUN_TILES,
+  layoutSeedOf,
+  candidateTierPath,
+  resolveTierConflicts,
+  isValidBendPath,
+  wouldSever,
+  classifyFreeSpace,
+  evaluateJunctionRules,
+  PARK_TILE_PROXIMITY,
+  MAX_PARKS_PLACED_PER_SECTION_PASS,
+  LAYOUT_THROTTLE_TICKS,
+  longestContiguousFragment,
+  layoutUpkeepEffectiveFloorOf,
+  LAYOUT_CAPEX_RESERVE_MONTHS_UPKEEP,
+  LAYOUT_CAPEX_RESERVE_FRACTION_OF_FUNDS,
+  LAYOUT_CAPEX_MAX_PER_TICK,
+  LAYOUT_CAPEX_MAX_FRACTION_PER_TICK,
+  TIER_UPKEEP_SHARE,
+  extendExistingRun,
+  LAYOUT_UPKEEP_MAX_WORSENING_PER_TICK,
+  LAYOUT_UPKEEP_SHARE_OF_INCOME,
+  LAYOUT_LIFETIME_UPKEEP_SHARE_OF_INCOME,
+  LAYOUT_WILDERNESS_MARGIN_TILES,
+  LAYOUT_EXTENSION_SEARCH_MARGIN_TILES,
+} from './consolidatorLayout.ts';
+import type { TierKind, TileXY, TierPlan, TierImplementation, ResolvedTierPaths } from './consolidatorLayout.ts';
 import type { ConsolidationPass, ConsolidationTransaction, ConsolidationRecord, SectionAudit } from './consolidator.ts';
 import type {
   FlowItem,
@@ -414,6 +459,19 @@ export function nextSafeBuildingId(buildings: SimState['buildings']): number {
   return maxId + 1;
 }
 
+// R3-C FIX (consolidator inc3 perf): buildings-identity-memoised wrapper
+// around nextSafeBuildingId, for the ONE call site (applyConsolidatorPass's
+// layout-stage self-heal check) that would otherwise re-pay this O(buildings)
+// fold every single glide day. Mirrors occupiedSet's own WeakMap-cache idiom.
+const safeNextIdCache = new WeakMap<SimState['buildings'], number>();
+function safeNextIdOf(buildings: SimState['buildings']): number {
+  const cached = safeNextIdCache.get(buildings);
+  if (cached !== undefined) return cached;
+  const result = nextSafeBuildingId(buildings);
+  safeNextIdCache.set(buildings, result);
+  return result;
+}
+
 function rawState(): SimState {
   const buildings = starterCity();
   return {
@@ -528,6 +586,12 @@ function rawState(): SimState {
     // explicit-undefined key and an absent key are NOT the same object to
     // Node's assert.deepStrictEqual). A concrete boolean default closes it.
     consolidatorUndoConsumed: false,
+    // BUG-684 FIX (round-6 F1b): not yet anchored — the layout stage anchors
+    // this lazily the first time it actually runs a pass (see
+    // applyConsolidatorPass), exactly the same "starts null, set on first
+    // use" contract as consolidatorReservedTiles starting `{}`.
+    consolidatorLayoutBaselineNetIncome: null,
+    consolidatorLayoutCumulativeUpkeepDelta: 0,
   };
 }
 
@@ -1883,6 +1947,773 @@ function findSuccessorSite(
 }
 
 /**
+ * FEAT-2326609779 (consolidator inc3) — THE LAYOUT HIERARCHY. For section
+ * `key`, lays rail -> motorway -> dual -> A-road -> minor infrastructure
+ * tiers, in that strict order, on the section's genuinely FREE tiles only
+ * (AC-1: this increment's generator never demolishes an existing building or
+ * road — see the module-level scope note below), each tier atomic (all its
+ * planned tiles land, or the whole tier is skipped and recorded — AC-1),
+ * funds-gated and severance-gated (AC-4/AC-9), then classifies whatever free
+ * space remains as parks or growth reserve (AC-7/AC-8). Booked through the
+ * SAME 'Consolidation' flow line as every other consolidator transaction
+ * (advance() sums `txn.buildCost`/`txn.scrapRecovered` across ALL
+ * transaction kinds, `'layout'` included — see applyConsolidatorPass's own
+ * per-transaction summation loop, unchanged by this addition).
+ *
+ * SCOPE NOTE (disclosed, FEAT-2326609779 §"non-goals" / this build's report):
+ * this generator only ever claims tiles that are currently free (no
+ * building, no road, no rail) — it never overwrites a pre-existing tier's
+ * tiles. That makes AC-4's literal "later tier demolishes an earlier one's
+ * connector" trigger UNREACHABLE from live play in this increment (adding
+ * tiles to a graph can only merge components, never split one — see
+ * `wouldSever`'s own doc). AC-4's CHECKER (`wouldSever`, a real 4-neighbour
+ * flood-fill component comparison) is fully implemented and wired here for
+ * defense-in-depth against a future demolition-capable increment, and is
+ * independently unit-tested with a constructed before/after tile set that
+ * DOES sever — proving the mechanism works even though this build's
+ * generator cannot trigger it live. A future increment that lets a tier
+ * demolish a lower pre-existing tier (AC-9's "rare" case) plugs straight
+ * into the `removedTiles` parameter `wouldSever` already accepts.
+ *
+ * ROUND-11 RESTRUCTURE (Aaron's ruling via the round-10 coordinator, "F2 is
+ * not deferrable — it IS the acceptance criterion"): this used to be ONE
+ * function that, for a single section, walked all five tiers in TIER_ORDER
+ * and committed each against a shared pass-wide capex/upkeep budget, called
+ * once per section in SECTION order. That let a low-priority tier in an
+ * EARLY section spend pass-wide budget before a high-priority tier in a
+ * LATER section ever got a look — the measured round-10 defect (motorway
+ * placed once at the 3-tile minimum and never grew across 300 ticks while
+ * dual/aroad/minor kept accumulating). Split into three phases, TIER_ORDER
+ * now the OUTER loop across every section in the pass, never the inner one:
+ *   Phase A (`buildLayoutSectionCtx`) — per section, PURE: compute free
+ *     space, each tier's raw candidate (preferring to EXTEND an existing
+ *     same-tier run over the section's box — `extendExistingRun`,
+ *     consolidatorLayout.ts — before falling back to a fresh
+ *     `candidateTierPath`), and resolve AC-6 tile-spread conflicts. None of
+ *     this depends on COMMIT order, only on TIER_ORDER precedence (already
+ *     baked into `resolveTierConflicts`), so precomputing it once per
+ *     section up front is exactly equivalent to the old per-section
+ *     computation.
+ *   Phase B (`attemptOneTierInSection`, called from applyConsolidatorPass's
+ *     tier-major loop) — for EACH tier in TIER_ORDER, walk EVERY section in
+ *     the pass attempting only that tier, against the pass-wide capex
+ *     ceiling and this tier's own TIER_UPKEEP_SHARE slice of the lifetime
+ *     upkeep allowance (consolidatorLayout.ts) — so rail/motorway get first
+ *     claim on both scarce resources across the WHOLE pass before dual/
+ *     aroad/minor are even attempted anywhere.
+ *   Phase C — once every tier's wave has run, finalise each section exactly
+ *     as before (park placement, free-space/reserve classification, one
+ *     `ConsolidationTransaction` per section) using the section's
+ *     accumulated tier-audit/added-tiles state.
+ *
+ * `buildLayoutSectionCtx` returns null when the section has no free space
+ * worth laying anything on (fewer than MIN_TIER_RUN_TILES free tiles) — an
+ * honest "nothing to do", never pushed as a transaction, exactly like a
+ * section with zero consolidation opportunities today.
+ */
+interface LayoutSectionCtx {
+  key: number;
+  box: { x0: number; y0: number; w: number; h: number };
+  resolved: ResolvedTierPaths;
+  /**
+   * ROUND-15 FIX (this build, the disclosed "convergent corridor" root
+   * cause — "resolveTierConflicts awards contested tiles to the
+   * higher-priority tier even when that tier then FAILS ON MONEY in Phase
+   * B, so the tiles are wasted instead of falling through"): the PRE-
+   * resolution raw candidate per tier, kept so a Phase-B money failure can
+   * re-run `resolveTierConflicts` with the failing tier's claim withdrawn —
+   * see `reofferSectionTilesOnMoneyFailure` below. Never mutated by
+   * anything except that one function, and only ever by zeroing an entry
+   * for a tier that has just failed on money (never re-adding a tier that
+   * succeeded or failed on geometry/no-space, which had every right to its
+   * claim).
+   */
+  rawPaths: Record<TierKind, TileXY[]>;
+  /** AC-4's severance graph — grows as ANY tier commits, across every wave. */
+  existingNetworkTiles: Set<string>;
+  /** AC-3 junction check input — tiles THIS PASS has committed, per tier. */
+  placedTierTiles: Map<TierKind, Set<string>>;
+  tierAudit: TierImplementation[];
+  addedAll: ConsolidationRecord[];
+  claimedTiles: Set<string>;
+  totalBuildCost: number;
+  priorReservedThisSection: Set<string>;
+  freeSet: Set<string>;
+  /**
+   * ROUND-13 FIX ("a rising component count under a working defrag means
+   * stubs are being laid disconnected — extendExistingRun should
+   * dominate"): true for a tier whose candidate in THIS section came from
+   * `extendExistingRun` (continuing an already-standing run) rather than a
+   * fresh `candidateTierPath` call (starting a brand-new, disconnected
+   * stub elsewhere). Phase B visits extension sections FIRST within each
+   * tier's wave — see the sort there — so the scarce per-tier tile quota
+   * finishes existing lines before ever funding a new scattered stub,
+   * which is what actually makes networkComponents fall rather than rise.
+   */
+  isExtension: Record<TierKind, boolean>;
+  /**
+   * BUG-754 FIX (task requirement 4, "isolated stubs are never laid — skip
+   * with reason 'tier failed: no connection point' [disclosed once per
+   * tier per pass]"): every tier whose FRESH (non-extension)
+   * fresh stub could find free space in THIS section but none of it was
+   * reachable from the existing network (see the network-anchored
+   * `extendExistingRun` call below).
+   * The caller (applyConsolidatorPass's Phase A loop) reads this to log the
+   * reason ONCE per tier across the WHOLE pass — never once per section,
+   * which on a large city could be hundreds of near-duplicate lines for the
+   * same underlying "this tier has nowhere left to grow from yet" fact.
+   */
+  noConnectionTiers: TierKind[];
+}
+
+/** Phase A — see the file-header note above `LayoutSectionCtx`. */
+function buildLayoutSectionCtx(
+  cur: SimState,
+  key: number,
+  tick: number,
+  runningOccupied: Set<string>,
+  wildernessClip?: { lo: { x: number; y: number }; hi: { x: number; y: number } } | null,
+  cityHasTier?: Record<TierKind, boolean>,
+): LayoutSectionCtx | null {
+  // R3-C FIX (round-3 finding, HIGH — 2.58x tick regression on the real
+  // 49k-building save): ONE mutable free-tile board per section, threaded
+  // through every tier wave via `runningOccupied` (never rebuilt from
+  // `occupiedSet(cur)` per tier/section — see this file's own BUG-642/F5
+  // precedents on why that would be an O(city buildings) anti-pattern).
+  const box = sectionOriginOf(key);
+  // ROUND-13 REJECT FIX (P1, "paid infrastructure laid OUTSIDE THE MAP" —
+  // really outside the CITY's own footprint, see LAYOUT_WILDERNESS_MARGIN_
+  // TILES's doc in consolidatorLayout.ts): section-level eligibility alone
+  // (the caller's `sectionNearCity` filter) is NOT enough — a single
+  // eligible section (because ITS box touches the wilderness rectangle) can
+  // still be wider/taller than the margin itself, so `candidateTierPath`/
+  // `extendExistingRun` could walk a run out the FAR side of that section,
+  // well past the margin (measured: an m20 run reaching x=196 from a
+  // section whose eligible edge was only at x=160). Every free tile offered
+  // to the tier search is therefore ALSO clipped to `wildernessClip` here,
+  // at the single point (`freeSet`) every candidate/extension search reads
+  // from — `undefined`/`null` (an unknown, empty-city bounding box) means no
+  // clip is applied, matching the caller's own "nothing to anchor to yet"
+  // convention.
+  const freeSet = new Set<string>();
+  for (let dx = 0; dx < box.w; dx++) {
+    for (let dy = 0; dy < box.h; dy++) {
+      const x = box.x0 + dx;
+      const y = box.y0 + dy;
+      if (
+        wildernessClip &&
+        (x < wildernessClip.lo.x || x > wildernessClip.hi.x || y < wildernessClip.lo.y || y > wildernessClip.hi.y)
+      ) {
+        continue;
+      }
+      const k = `${x},${y}`;
+      if (!runningOccupied.has(k)) freeSet.add(k);
+    }
+  }
+  if (freeSet.size < MIN_TIER_RUN_TILES) return null;
+
+  // AC-10: the layout seed derived ONLY from sectionKey+tick (never a clock
+  // or Math.random) — offset by tier index (a pure arithmetic bump, not a
+  // second random source) purely so all five tiers don't all scan starting
+  // at the same row/column.
+  const seed = layoutSeedOf(key, tick);
+  // BUG-754 FIX (task requirement 2, moved up from below — needed for the
+  // ORIGIN scan next, not just the free-tile walk): `extendExistingRun`'s
+  // search box, widened by LAYOUT_EXTENSION_SEARCH_MARGIN_TILES tiles on
+  // every side (clipped to the same wildernessClip a fresh stub already
+  // respects) — one section width's worth of reach into neighbouring
+  // sections, so a run that reached this section's own edge is not
+  // structurally stranded there forever.
+  const extBox = {
+    x0: box.x0 - LAYOUT_EXTENSION_SEARCH_MARGIN_TILES,
+    y0: box.y0 - LAYOUT_EXTENSION_SEARCH_MARGIN_TILES,
+    w: box.w + 2 * LAYOUT_EXTENSION_SEARCH_MARGIN_TILES,
+    h: box.h + 2 * LAYOUT_EXTENSION_SEARCH_MARGIN_TILES,
+  };
+  // ROUND-11 RUN-EXTENSION FIX (R10-F2, "runs do not grow across passes") +
+  // BUG-754 FIX (task requirement 2, "cross section boundaries"): each
+  // tier's own EXISTING tiles WITHIN THE WIDER extBox (pre-this-pass;
+  // genesis tiles excluded — builtTick < 0 is never something this stage
+  // itself could have grown, matching the genesis-exemption convention used
+  // elsewhere in this stage) are collected first, so `extendExistingRun`
+  // (consolidatorLayout.ts) can prefer CONTINUING a same-tier stub over
+  // starting a brand-new, disconnected run every pass. Scanning `extBox`
+  // rather than just this section's OWN `box` is the actual cross-boundary
+  // fix: a section with NO rail tile of its own but sitting within reach of
+  // a NEIGHBOURING section's rail run can now discover that run as a valid
+  // extension ORIGIN, not just walk further once already standing inside
+  // its own box (round-13's own investigation named this exact gap — "needs
+  // border-aware placement... a materially larger geometry change").
+  const existingByTier: Record<TierKind, Set<string>> = {
+    rail: new Set(),
+    motorway: new Set(),
+    dual: new Set(),
+    aroad: new Set(),
+    minor: new Set(),
+  };
+  for (const b of cur.buildings) {
+    if ((b.builtTick ?? 0) < 0) continue;
+    if (b.x < extBox.x0 || b.x >= extBox.x0 + extBox.w || b.y < extBox.y0 || b.y >= extBox.y0 + extBox.h) continue;
+    for (const t of TIER_ORDER) {
+      if (b.spec === TIER_SPEC_ID[t]) existingByTier[t].add(`${b.x},${b.y}`);
+    }
+  }
+
+  // BUG-754 FIX (task requirement 1, "connect-or-don't-lay" — computed
+  // BEFORE candidate generation now, not after, so the connectivity gate
+  // below has something to check against): every rail/motorway/road tile —
+  // ANY tier, INCLUDING genesis (builtTick<0) roads, per requirement 1's own
+  // wording — within the section's box PLUS a one-tile halo, so a candidate
+  // sitting right at a section's edge can see a neighbouring section's
+  // already-standing network (grown from an EARLIER pass, hence already a
+  // committed fact in `cur.buildings` — never another section's in-flight
+  // Phase A candidate from THIS pass, which is reserved separately below).
+  const existingNetworkTiles = new Set<string>();
+  for (const b of cur.buildings) {
+    if (b.x < box.x0 - 1 || b.x > box.x0 + box.w || b.y < box.y0 - 1 || b.y > box.y0 + box.h) continue;
+    const sp = SPECS[b.spec];
+    if (sp && (sp.kind === 'rail' || sp.kind === 'motorway' || sp.kind === 'road')) {
+      existingNetworkTiles.add(`${b.x},${b.y}`);
+    }
+  }
+
+  // BUG-754 FIX (task requirement 3, "higher tiers prefer joining to their
+  // own network... so the hierarchy reads as a tree, not stripes" — and the
+  // acceptance's own OWN-TIER component-count assert, which a general
+  // "touches ANY network tile" gate cannot satisfy: a rail stub that only
+  // ever touches a GENESIS ROAD tile still starts a brand-new, separate
+  // RAIL-only component even though it legitimately connects to the wider
+  // road network). `existingByTier` above is ALREADY the tier's own tiles
+  // scanned over the wide `extBox` (needed for the extension attempt) — the
+  // same set doubles as the SAME-TIER connectivity anchor below, so there is
+  // only ONE per-tier existing-tile scan, not two (GR#3).
+  //
+  // For aroad/minor (not measured by the acceptance's per-tier component
+  // assert, and structurally the densest, most-interconnected tiers
+  // already) and for a tier's bootstrap case (nothing of its OWN tier
+  // exists ANYWHERE yet), the anchor is the general network instead — ALSO
+  // scanned over the wide `extBox` for the same reason.
+  const existingNetworkTilesWide = new Set<string>();
+  for (const b of cur.buildings) {
+    if (b.x < extBox.x0 || b.x >= extBox.x0 + extBox.w || b.y < extBox.y0 || b.y >= extBox.y0 + extBox.h) continue;
+    const sp = SPECS[b.spec];
+    if (sp && (sp.kind === 'rail' || sp.kind === 'motorway' || sp.kind === 'road')) {
+      existingNetworkTilesWide.add(`${b.x},${b.y}`);
+    }
+  }
+
+  // BUG-754 FIX (task requirement 2, "extension-first for real... allow the
+  // extension to cross section boundaries within the wilderness margin"):
+  // the FREE-TILE view for the extension walk (never for a fresh
+  // `candidateTierPath` stub, which stays section-scoped exactly as before —
+  // controlling blast radius), over the SAME `extBox` computed above.
+  // `extAvailable` reads straight off `runningOccupied` (the pass-wide,
+  // ALREADY-committed-or-reserved occupancy board — see the reservation
+  // loop below) rather than the section-scoped `freeSet`, since the whole
+  // point is to see past this section's own box.
+  // BUG-754 FIX (map-bounds safety): `extBox` is deliberately allowed to
+  // extend PAST a section's own box (that is the whole point), including
+  // below 0 or past MAP_W/MAP_H for an edge section — every tile offered to
+  // the walk MUST still be clamped to the real map, independent of whether a
+  // wildernessClip happens to be known yet (a small/fixture city with no
+  // computable bounding box passes `wildernessClip: null`, which must never
+  // be read as "no bounds at all" — that is exactly how the FIRST version of
+  // this fix let an extension walk mint buildings at negative/out-of-map
+  // coordinates, caught by the estate's own conservation "bad pos" check).
+  const extAvailable = new Set<string>();
+  for (let dx = 0; dx < extBox.w; dx++) {
+    for (let dy = 0; dy < extBox.h; dy++) {
+      const x = extBox.x0 + dx;
+      const y = extBox.y0 + dy;
+      if (x < 0 || x >= MAP_W || y < 0 || y >= MAP_H) continue;
+      if (
+        wildernessClip &&
+        (x < wildernessClip.lo.x || x > wildernessClip.hi.x || y < wildernessClip.lo.y || y > wildernessClip.hi.y)
+      ) {
+        continue;
+      }
+      const k = `${x},${y}`;
+      if (!runningOccupied.has(k)) extAvailable.add(k);
+    }
+  }
+
+  const rawPaths = {} as Record<TierKind, TileXY[]>;
+  const isExtension = {} as Record<TierKind, boolean>;
+  const noConnectionTiers: TierKind[] = [];
+  TIER_ORDER.forEach((t, i) => {
+    const extension = extendExistingRun(existingByTier[t], extAvailable, extBox, seed + i);
+    isExtension[t] = extension.length > 0;
+    if (extension.length > 0) {
+      rawPaths[t] = extension;
+      return;
+    }
+    // BUG-754 FIX (task requirements 1/3/4): a FRESH stub (no existing
+    // same-tier run to extend) is only ever laid when at least one end
+    // already touches the network. For rail/motorway/dual — the three tiers
+    // the acceptance measures OWN-TIER component counts against — that
+    // network is the tier's OWN existing tiles specifically, once the city
+    // has ANY of them anywhere (requirement 3: "rail extends rail, motorway
+    // extends motorway"); a general "any tier" gate would let a brand-new
+    // rail stub touch nothing but a genesis road and still start a fresh,
+    // separate RAIL component, which is exactly the defect this fix exists
+    // to close. Before the city has ANY tile of that tier yet, there is
+    // nothing of its own to join — the FIRST-EVER stub of a tier may
+    // bootstrap off the general network (any tier, incl. genesis roads),
+    // matching requirement 1's literal wording, after which every
+    // subsequent fresh stub must find its own tier. aroad/minor (not
+    // measured by the component assert, and structurally the densest,
+    // most-interconnected tiers already) keep the general "any tier" gate.
+    //
+    // MEASURED FIX (same session — a first version generated a BLIND
+    // longest-free-run candidate via `candidateTierPath` and then REJECTED
+    // it if it didn't happen to land next to the network; on a real section
+    // where the network sits along one edge, a blind longest-run search
+    // routinely picks a row/column nowhere near it, so almost every
+    // fresh-stub attempt failed even in fixtures with a perfectly good
+    // connected placement available — measured regressing five pre-existing
+    // green tests, incl. two brand-new-treasury starvation-sweep pins). The
+    // fix ANCHORS the search to the network from the start, by reusing
+    // `extendExistingRun` itself with the network's own tiles standing in
+    // for "existing same-tier tiles" — this walks OUT from the network into
+    // free space (+ one turn), so any non-empty result is connected BY
+    // CONSTRUCTION (GR#3: one directional-walk implementation, not two).
+    // Once rail/motorway/dual has ANY tile of its own anywhere, its ONLY
+    // anchor is its OWN network — the extension attempt above (which reads
+    // `existingByTier[t]`, the exact same set) already tried and failed
+    // this pass, so there is nothing further to search: rail may only ever
+    // extend rail, never bootstrap a second, disconnected rail component
+    // off a road it happens to be near. aroad/minor, and every tier before
+    // its own bootstrap, may anchor to the general network instead.
+    const ownTierBootstrapped = (t === 'rail' || t === 'motorway' || t === 'dual') && (cityHasTier?.[t] ?? true);
+    const connectedFresh = ownTierBootstrapped
+      ? []
+      : extendExistingRun(existingNetworkTilesWide, extAvailable, extBox, seed + i);
+    if (connectedFresh.length === 0) {
+      if (candidateTierPath(freeSet, box, seed + i).length > 0) noConnectionTiers.push(t);
+      rawPaths[t] = [];
+      return;
+    }
+    rawPaths[t] = connectedFresh;
+  });
+  const resolved = resolveTierConflicts(rawPaths);
+
+  // BUG-754 FIX: reserve the SPILLOVER portion of this section's resolved
+  // candidates (tiles landing OUTSIDE this section's own `box`, i.e. tiles
+  // an extension walked into a neighbouring section's territory) into the
+  // PASS-WIDE `runningOccupied` board immediately — Phase A visits sections
+  // in a fixed order in the SAME loop that calls this function, so without
+  // this a LATER section's own extension search (which can now legitimately
+  // reach into an EARLIER section's territory, per the cross-boundary fix
+  // above) could plan the exact same physical spillover tiles this section
+  // just claimed, a double-booking `resolveTierConflicts` cannot catch (it
+  // only resolves conflicts WITHIN one section). Tiles INSIDE this section's
+  // own `box` are deliberately NEVER reserved here — every section's own box
+  // is disjoint from every other section's, so an in-box tile can never
+  // collide with another section's Phase A candidate regardless; reserving
+  // it anyway would (and, measured, DID) block a LATER pass's own extension
+  // from ever reaching a tile this pass merely CONSIDERED but a downstream
+  // funds gate ultimately trimmed away unbuilt (e.g. a 10-tile candidate
+  // capex-trimmed to 8 built tiles — the 2 unbuilt tail tiles must stay
+  // genuinely free for the next pass's extension to reach, not be
+  // phantom-reserved forever by a candidate that was never actually laid).
+  for (const t of TIER_ORDER) {
+    for (const p of resolved.paths[t] ?? []) {
+      if (p.x >= box.x0 && p.x < box.x0 + box.w && p.y >= box.y0 && p.y < box.y0 + box.h) continue;
+      runningOccupied.add(`${p.x},${p.y}`);
+    }
+  }
+
+  // F5 FIX (independent round finding, MEDIUM — AC-8 reader): this
+  // section's OWN currently-reserved tiles (bounded, per-section storage —
+  // see types.ts's doc on `consolidatorReservedTiles`), read BEFORE this
+  // pass mutates anything so `reservedTilesReused` on the audit reflects an
+  // honest "was this tile reserved coming INTO this pass".
+  const priorReservedThisSection = new Set(cur.consolidatorReservedTiles?.[String(key)] ?? []);
+
+  return {
+    key,
+    box,
+    resolved,
+    rawPaths,
+    existingNetworkTiles,
+    // F2 FIX (independent round finding, HIGH): the tile sets ACTUALLY
+    // placed by earlier tiers THIS pass, per tier — fed to
+    // `evaluateJunctionRules` (AC-3) so the junction angle check is a REAL
+    // evaluation against whatever this pass has really built so far, not a
+    // hardcoded `true`.
+    placedTierTiles: new Map(),
+    tierAudit: [],
+    addedAll: [],
+    claimedTiles: new Set(),
+    totalBuildCost: 0,
+    priorReservedThisSection,
+    freeSet,
+    isExtension,
+    noConnectionTiers,
+  };
+}
+
+/**
+ * ROUND-15 FIX (follow-on build, FEAT-2326609779/BUG-754 disclosed root
+ * cause): "the money gate before conflict resolution" (option a) is not
+ * available here — affordability is a PASS-WIDE, running quantity (the
+ * capex ceiling/reserve and the per-tier upkeep share both decrement as
+ * OTHER sections commit earlier in the very same tier's wave), so there is
+ * no single point before Phase A's conflict resolution where "will this
+ * candidate actually be affordable" is even knowable — the number changes
+ * section-by-section as this tier's own wave runs. Option (b) instead:
+ * whenever a tier's SURVIVOR path (the AC-6-resolved candidate it won in
+ * Phase A) ends up only PARTLY built — either because the whole tier failed
+ * on money (`fail('tier failed: capex budget' | 'capex reserve' | 'upkeep
+ * share exhausted' | 'unaffordable upkeep', true)`, nothing built) or
+ * because it succeeded but was TRIMMED to a shorter prefix by the capex
+ * ceiling/reserve/upkeep-share gates (some built, some not) — withdraw the
+ * unbuilt remainder from this SECTION's raw candidates and re-run
+ * `resolveTierConflicts` for this section alone. Any lower-priority tier
+ * whose own raw candidate touched the same tiles (the "convergent
+ * corridor" scenario) now wins the freed portion instead, in the SAME
+ * pass, for its OWN wave (which — TIER_ORDER being the outer loop — always
+ * runs later than the tier that just failed/trimmed, so there is no need
+ * to re-visit a tier that already had its turn). MEASURED as necessary,
+ * not just failure: a rail run trimmed by the capex ceiling from 34 planned
+ * tiles to 8 built ones left the other 26 permanently unavailable to
+ * motorway's own wave even though rail never touched them — the SAME
+ * waste this fix closes for an outright failure, just expressed as a
+ * partial build instead of a zero one.
+ *
+ * Bounded: at most `TIER_ORDER.length - 1` re-offers can ever happen for
+ * one section (each tier is visited at most once, only ever shrinking its
+ * own claim down to what it truly built), and each re-offer is a single
+ * pure fold over the remaining raw paths — order-independent, GR#21, no
+ * map-range-with-break. Scope discipline: this only ever fires for a MONEY
+ * shortfall (the caller passes `moneyReason` through), never for a
+ * geometry/no-space failure — a tier that failed bend/junction/severance
+ * validation had a real, contiguous candidate that was simply invalid, not
+ * a corridor another tier could have used instead of it.
+ *
+ * The spillover reservation `buildLayoutSectionCtx` makes into the
+ * pass-wide `runningOccupied` board (tiles a resolved path claims OUTSIDE
+ * this section's own box) is stale the instant a tier's claim shrinks —
+ * reconciled here by diffing the old vs. new resolved paths' out-of-box
+ * tiles and only ever touching the tiles that actually changed hands,
+ * never another section's unrelated reservations.
+ */
+function reconcileSectionTierClaimOnMoneyShortfall(
+  ctx: LayoutSectionCtx,
+  tier: TierKind,
+  actuallyBuiltTiles: readonly TileXY[],
+  runningOccupied: Set<string>,
+): void {
+  const survivor = ctx.resolved.paths[tier] ?? [];
+  if (actuallyBuiltTiles.length >= survivor.length) return; // built everything it won — nothing to release.
+  const oldResolved = ctx.resolved;
+  ctx.rawPaths = { ...ctx.rawPaths, [tier]: actuallyBuiltTiles.slice() };
+  const newResolved = resolveTierConflicts(ctx.rawPaths);
+
+  const outOfBox = (p: TileXY): boolean =>
+    p.x < ctx.box.x0 || p.x >= ctx.box.x0 + ctx.box.w || p.y < ctx.box.y0 || p.y >= ctx.box.y0 + ctx.box.h;
+  const spilloverOf = (resolved: ResolvedTierPaths): Set<string> => {
+    const out = new Set<string>();
+    for (const t of TIER_ORDER) {
+      for (const p of resolved.paths[t] ?? []) {
+        if (outOfBox(p)) out.add(`${p.x},${p.y}`);
+      }
+    }
+    return out;
+  };
+  const oldSpillover = spilloverOf(oldResolved);
+  const newSpillover = spilloverOf(newResolved);
+  for (const k of oldSpillover) {
+    if (!newSpillover.has(k)) runningOccupied.delete(k);
+  }
+  for (const k of newSpillover) {
+    if (!oldSpillover.has(k)) runningOccupied.add(k);
+  }
+
+  ctx.resolved = newResolved;
+}
+
+/**
+ * Phase B — attempt ONE tier's placement in ONE section, against the
+ * pass-wide capex ceiling headroom and this tier's own upkeep-share
+ * headroom (both passed in by the caller's tier-major loop, decremented as
+ * every section commits). Mutates `ctx` in place (audit/added/claimed
+ * tiles/network) and `runningOccupied`; returns the possibly-updated
+ * `SimState` plus enough for the caller to update its own running totals.
+ * Every gate below (contiguity re-check, bend/junction/severance,
+ * capex-ceiling trim, capex-reserve trim, upkeep-share trim, lifetime
+ * upkeep floor) is IDENTICAL in substance to the pre-round-11 single
+ * function's per-tier body — only the caller's LOOP SHAPE (tier-major vs
+ * section-major) and the added upkeep-share trim changed.
+ */
+function attemptOneTierInSection(
+  attempt: SimState,
+  ctx: LayoutSectionCtx,
+  tier: TierKind,
+  tick: number,
+  runningOccupied: Set<string>,
+  baselineNetIncomePerTick: number,
+  layoutUpkeepEffectiveFloor: number,
+  upkeepDeltaSoFarThisPass: number,
+  tierShareRemaining: number,
+  capexFundsFloor: number,
+  capexBudgetRemaining: number,
+): {
+  state: SimState;
+  placed: boolean;
+  buildCost: number;
+  upkeepDelta: number;
+  /** True when the failure reason was money-related (capex/reserve/upkeep), never geometry/no-space. */
+  moneyReason: boolean;
+} {
+  // ROUND-10 R10-F1 FIX (P1, "the road with a hole"): `resolved.paths[tier]`
+  // is the AC-6 tile-spread SURVIVOR list — a higher tier may have claimed
+  // individual tiles out of the MIDDLE of this tier's raw candidate, leaving
+  // a real gap. `longestContiguousFragment` extracts the longest genuinely-
+  // adjacent run BEFORE any geometry/funds gate runs.
+  const rawSurvivorPath = ctx.resolved.paths[tier] ?? [];
+  const fullPath = longestContiguousFragment(rawSurvivorPath);
+  const specId = TIER_SPEC_ID[tier];
+  const spec = SPECS[specId];
+  const fullEstimatedCost = spec ? placementCost(spec) * fullPath.length : 0;
+  const plan: TierPlan = {
+    tier,
+    plannedTiles: fullPath,
+    estimatedCost: fullEstimatedCost,
+    estimatedScrap: 0,
+    validationTests: {
+      bendGeometry: isValidBendPath(tier, fullPath),
+      severanceTest: !wouldSever(ctx.existingNetworkTiles, new Set(fullPath.map((p) => `${p.x},${p.y}`))),
+      junctionRules: evaluateJunctionRules(tier, fullPath, ctx.placedTierTiles),
+    },
+  };
+  // ROUND-10 R10-F3 FIX (P2, "conflictsResolved is recorded on the
+  // WINNER"): attribute every conflict to the tier that actually LOST the
+  // tile via the reason string's own tier prefix, never to path membership.
+  const lostConflicts = ctx.resolved.conflictsDetected.filter((c) => c.reason.startsWith(`${tier} vs `));
+  const fail = (reason: string, moneyReason: boolean) => {
+    ctx.tierAudit.push({ ...plan, actuallyPlaced: false, failureReason: reason, actualTiles: [], actualCost: 0, conflictsResolved: lostConflicts });
+    return { state: attempt, placed: false, buildCost: 0, upkeepDelta: 0, moneyReason };
+  };
+
+  if (fullPath.length < MIN_TIER_RUN_TILES) return fail('tier failed: no space', false);
+  if (!plan.validationTests.bendGeometry) return fail('tier failed: bend geometry', false);
+  if (!plan.validationTests.junctionRules) return fail('tier failed: junction rules', false);
+  if (!plan.validationTests.severanceTest) return fail('tier failed: severance', false);
+  if (!spec) return fail('tier failed: insufficient funds', false);
+
+  // ROUND-9 FIX: trim to the largest prefix the remaining PASS-WIDE capex
+  // budget (the per-tick ceiling) can afford, never below MIN_TIER_RUN_
+  // TILES. `plan.plannedTiles`/`plan.estimatedCost` stay the FULL,
+  // untrimmed candidate — "planned" is what the generator's own geometry
+  // search wanted, "actual" (independently re-derived below, per the F7
+  // fix) is what affordability really let through.
+  let path = fullPath;
+  let estimatedCost = fullEstimatedCost;
+  const perTileCost = placementCost(spec);
+  if (perTileCost > 0) {
+    const ceilingAffordableTiles = Math.max(0, Math.floor(capexBudgetRemaining / perTileCost));
+    if (ceilingAffordableTiles < fullPath.length) {
+      if (ceilingAffordableTiles < MIN_TIER_RUN_TILES) return fail('tier failed: capex budget', true);
+      path = fullPath.slice(0, ceilingAffordableTiles);
+      estimatedCost = path.length * perTileCost;
+    }
+  }
+  // BUG-684 FIX (F1) + ROUND-10 R10-F4 FIX (P2, "the trim consults only the
+  // ceiling"): a candidate that cleared the ceiling trim but still breaches
+  // the RESERVE is trimmed further to the largest prefix the reserve
+  // headroom affords, never below MIN_TIER_RUN_TILES.
+  if (attempt.funds - estimatedCost < capexFundsFloor) {
+    const reserveHeadroom = attempt.funds - capexFundsFloor;
+    const reserveAffordableTiles = perTileCost > 0 ? Math.max(0, Math.floor(reserveHeadroom / perTileCost)) : 0;
+    if (reserveAffordableTiles < MIN_TIER_RUN_TILES || reserveAffordableTiles >= path.length) {
+      return fail('tier failed: capex reserve', true);
+    }
+    path = path.slice(0, reserveAffordableTiles);
+    estimatedCost = path.length * perTileCost;
+  }
+
+  // R3-A FIX: the upkeep-affordability gate. Each candidate tile is a
+  // freshly-placed Building (builtTick=tick, never genesis), so
+  // upkeepChargeableOf charges its FULL real upkeep — no genesis-free
+  // exemption applies to anything this pass places.
+  const perTileUpkeep = spec ? upkeepChargeableOf({ id: 0, spec: specId, x: 0, y: 0, builtTick: tick }, spec) : 0;
+  // ROUND-11 LEAD RULING FIX (TIER_UPKEEP_SHARE): a tier may not spend more
+  // of the pass's remaining upkeep headroom than its OWN allocated share —
+  // see consolidatorLayout.ts's TIER_UPKEEP_SHARE doc for the full
+  // rationale. Only meaningful when this tier's upkeep is a genuine net
+  // WORSENING (perTileUpkeep > 0); a self-funding/profitable tile was never
+  // what the shared lifetime allowance protects against, so it is not
+  // bounded by the per-tier share either, exactly like the lifetime gate
+  // below.
+  if (perTileUpkeep > 0) {
+    const shareAffordableTiles = Math.max(0, Math.floor(tierShareRemaining / perTileUpkeep));
+    if (shareAffordableTiles < path.length) {
+      if (shareAffordableTiles < MIN_TIER_RUN_TILES) return fail('tier failed: upkeep share exhausted', true);
+      path = path.slice(0, shareAffordableTiles);
+      estimatedCost = path.length * perTileCost;
+    }
+  }
+  const tierUpkeepDelta = path.length * perTileUpkeep;
+  const projectedNetIncome = baselineNetIncomePerTick - upkeepDeltaSoFarThisPass - tierUpkeepDelta;
+  if (projectedNetIncome <= layoutUpkeepEffectiveFloor) return fail('tier failed: unaffordable upkeep', true);
+
+  // AC-1: commit the WHOLE tier atomically — every tile above already
+  // passed every gate as one unit, so there is nothing left to roll back
+  // partway through.
+  let next = attempt;
+  let nextId = next.nextId;
+  const beforeLen = next.buildings.length;
+  const newBuildings = next.buildings.slice();
+  const placedRecords: ConsolidationRecord[] = [];
+  for (const p of path) {
+    const rec: ConsolidationRecord = { id: nextId, spec: specId, x: p.x, y: p.y, builtTick: tick, placedBy: 'auto' };
+    newBuildings.push(recordToBuilding(rec));
+    placedRecords.push(rec);
+    ctx.existingNetworkTiles.add(`${p.x},${p.y}`);
+    ctx.claimedTiles.add(`${p.x},${p.y}`);
+    runningOccupied.add(`${p.x},${p.y}`); // R3-C: incremental, never a fresh occupiedSet(cur) rebuild.
+    nextId += 1;
+  }
+  next = { ...next, buildings: newBuildings, nextId, funds: next.funds - estimatedCost };
+  const tierTileSet = new Set(path.map((p) => `${p.x},${p.y}`));
+  ctx.placedTierTiles.set(tier, tierTileSet);
+  ctx.addedAll.push(...placedRecords);
+
+  // F7 FIX (independent round finding, MEDIUM — "actual is the plan
+  // verbatim"): re-derive `actualTiles`/`actualCost` from what is REALLY
+  // now sitting in `next.buildings` (the exact tail this commit just
+  // appended), not from the pre-mutation `path`/`estimatedCost` variables.
+  const verifiedTiles = next.buildings.slice(beforeLen).map((b) => ({ x: b.x, y: b.y }));
+  const verifiedCost = verifiedTiles.length * (spec ? placementCost(spec) : 0);
+  ctx.totalBuildCost += verifiedCost;
+  next = { ...next, cumulativeCapexSpent: (next.cumulativeCapexSpent ?? 0) + verifiedCost };
+  const reservedTilesReused = verifiedTiles.filter((p) => ctx.priorReservedThisSection.has(`${p.x},${p.y}`)).length;
+  ctx.tierAudit.push({
+    ...plan,
+    actuallyPlaced: true,
+    actualTiles: verifiedTiles,
+    actualCost: verifiedCost,
+    conflictsResolved: lostConflicts,
+    ...(reservedTilesReused > 0 ? { reservedTilesReused } : {}),
+  });
+  return { state: next, placed: true, buildCost: verifiedCost, upkeepDelta: verifiedTiles.length * perTileUpkeep, moneyReason: false };
+}
+
+/**
+ * Phase C — once every tier's TIER_ORDER wave has run across every section
+ * (applyConsolidatorPass's Phase B), finalise ONE section: classify
+ * whatever free space the five tiers did not claim as a park candidate or
+ * growth reserve (AC-7/AC-8), place parks up to the affordable count, and
+ * build the section's single `ConsolidationTransaction` from its
+ * accumulated `LayoutSectionCtx`. Identical in substance to the tail of the
+ * pre-round-11 single function — only now called once per section AFTER
+ * every tier wave, using the PASS-WIDE final `layoutRunningUpkeepDelta` for
+ * the park-affordability headroom (parks are lower priority than every
+ * infrastructure tier, so they always see the fully-depleted-by-this-pass
+ * number, never an intermediate per-section snapshot).
+ */
+function finalizeLayoutSection(
+  cur: SimState,
+  ctx: LayoutSectionCtx,
+  tick: number,
+  runningOccupied: Set<string>,
+  baselineNetIncomePerTick: number,
+  layoutUpkeepEffectiveFloor: number,
+  upkeepDeltaAtPassEnd: number,
+): { state: SimState; txn: ConsolidationTransaction; upkeepDeltaAfterParks: number } {
+  const box = ctx.box;
+  let attempt = cur;
+  let cumulativeUpkeepDeltaThisSection = upkeepDeltaAtPassEnd;
+
+  // AC-7/AC-8: whatever free space the five tiers did not claim is
+  // classified as a park candidate or growth reserve. F4 FIX (independent
+  // round finding, MEDIUM — "section-wide constant, ignores the tile it is
+  // handed"): `nearAmenity` is a REAL per-tile spatial predicate.
+  const remainingFree: TileXY[] = [];
+  for (const k of ctx.freeSet) {
+    if (ctx.claimedTiles.has(k)) continue;
+    const [xs, ys] = k.split(',');
+    remainingFree.push({ x: Number(xs), y: Number(ys) });
+  }
+  const residentialTiles: TileXY[] = [];
+  for (const b of attempt.buildings) {
+    if (b.x < box.x0 || b.x >= box.x0 + box.w || b.y < box.y0 || b.y >= box.y0 + box.h) continue;
+    if (SPECS[b.spec]?.kind === 'residential') residentialTiles.push({ x: b.x, y: b.y });
+  }
+  const nearAmenity = (p: TileXY) =>
+    residentialTiles.some((r) => Math.max(Math.abs(p.x - r.x), Math.abs(p.y - r.y)) <= PARK_TILE_PROXIMITY);
+  const freeSpaceAllocation = classifyFreeSpace(remainingFree, nearAmenity);
+
+  // F4 FIX: parks are actually PLACED (AC-7), capped at
+  // MAX_PARKS_PLACED_PER_SECTION_PASS per section-pass.
+  const parkSpec = SPECS['park'];
+  const parkUpkeepEach = canEnterSim(parkSpec)
+    ? upkeepChargeableOf({ id: 0, spec: 'park', x: 0, y: 0, builtTick: tick }, parkSpec)
+    : 0;
+  const parkHeadroom = baselineNetIncomePerTick - cumulativeUpkeepDeltaThisSection - layoutUpkeepEffectiveFloor;
+  const affordableParkCount =
+    parkUpkeepEach > 0 ? Math.max(0, Math.floor((parkHeadroom - 1) / parkUpkeepEach)) : Number.MAX_SAFE_INTEGER;
+  // ROUND-14 LEAD RULING (opus-round11-inc3 REJECT F4, P1, "parks... must
+  // never precede roads"): measured at 5M, a section with NO road/rail tile
+  // at all (capex too low for any tier to ever place) still got parks —
+  // "leftover space" classification with nothing to be leftover FROM. A
+  // section only earns parks once it has SOME real network tile present
+  // (from this pass or any earlier one) — `ctx.existingNetworkTiles` is
+  // exactly that set (grown incrementally as tiers commit, seeded from
+  // pre-existing road/rail/motorway tiles).
+  const parksToPlace = canEnterSim(parkSpec) && ctx.existingNetworkTiles.size > 0
+    ? freeSpaceAllocation.tilesByKind.parks.slice(0, Math.min(MAX_PARKS_PLACED_PER_SECTION_PASS, affordableParkCount))
+    : [];
+  if (parksToPlace.length > 0) {
+    let nextId = attempt.nextId;
+    const newBuildings = attempt.buildings.slice();
+    const parkRecords: ConsolidationRecord[] = [];
+    for (const p of parksToPlace) {
+      const rec: ConsolidationRecord = { id: nextId, spec: 'park', x: p.x, y: p.y, builtTick: tick, placedBy: 'auto' };
+      newBuildings.push(recordToBuilding(rec));
+      parkRecords.push(rec);
+      ctx.claimedTiles.add(`${p.x},${p.y}`);
+      runningOccupied.add(`${p.x},${p.y}`);
+      nextId += 1;
+    }
+    attempt = { ...attempt, buildings: newBuildings, nextId };
+    ctx.addedAll.push(...parkRecords);
+    cumulativeUpkeepDeltaThisSection += parksToPlace.length * parkUpkeepEach;
+  }
+
+  // F5 FIX: bounded, per-section reserve storage — REPLACED wholesale from
+  // this pass's own fresh classification, removed entirely once empty.
+  const priorReservedAll = attempt.consolidatorReservedTiles ?? {};
+  const nextReservedAll: Record<string, string[]> = { ...priorReservedAll };
+  const reserveKeysThisSection = freeSpaceAllocation.tilesByKind.reserve.map((p) => `${p.x},${p.y}`);
+  if (reserveKeysThisSection.length > 0) {
+    nextReservedAll[String(ctx.key)] = reserveKeysThisSection;
+  } else {
+    delete nextReservedAll[String(ctx.key)];
+  }
+  attempt = { ...attempt, consolidatorReservedTiles: nextReservedAll };
+
+  const txn: ConsolidationTransaction = {
+    sectionKey: ctx.key,
+    kind: 'layout',
+    removed: [],
+    added: ctx.addedAll,
+    buildCost: ctx.totalBuildCost,
+    scrapRecovered: 0,
+    netCost: ctx.totalBuildCost,
+    tierAudit: ctx.tierAudit,
+    freeSpaceAllocation,
+    capexSpent: ctx.totalBuildCost,
+    // ROUND-14 F3 FIX: this section's OWN upkeep contribution (tiers +
+    // parks), so Undo can reverse it — never the pass-wide running total.
+    upkeepDelta: cumulativeUpkeepDeltaThisSection - upkeepDeltaAtPassEnd,
+  };
+  return { state: attempt, txn, upkeepDeltaAfterParks: cumulativeUpkeepDeltaThisSection };
+}
+
+
+/**
  * One consolidator pass — the monthly-twelfth rotation's own monthly
  * cadence (AC-6/ruling 7, AC-12's one-transaction-per-section, AC-17's
  * atomic validate-then-mutate) OR, per FEAT-2326609761 inc2's GLIDE MODE
@@ -1958,14 +2789,690 @@ function applyConsolidatorPass(
 
   const overBudget = () => transactions.length >= CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS;
 
+  // ---- FEAT-2326609779 (consolidator inc3): layout hierarchy -------------
+  // ROUND-5 P1 FIX: runs FIRST in the pass now, per Aaron's ruling ("roads
+  // lay out, then train layout, then the bigger consolidated buildings get
+  // laid down") and the acceptance doc's AC-1 ("rail -> motorway -> dual ->
+  // A-road -> minor -> BUILDINGS") / S2 ("infrastructure before buildings").
+  // Previously this stage ran LAST, claiming only the leftover space after
+  // reconnect/density had already decided which buildings a section keeps —
+  // the exact reverse of both the written AC and Aaron's spoken order,
+  // provable at runtime (infrastructure-minted ids were always numerically
+  // ABOVE consolidation-minted ids in the same pass — see the attacker's
+  // attack-inc3-round5-defrag.test.mjs R5-A, now flipped to pin the fixed
+  // order). Moving the call site here (the function inside is UNCHANGED):
+  //   (a) `cur`/`byId` are still `s`/its untouched building set at this
+  //       point (no reconnect/density transaction has committed yet), so
+  //       every id this stage mints via `cur.nextId` is guaranteed LOWER
+  //       than any id the reconnect/density phases below mint later in the
+  //       SAME pass — the id-monotonicity invariant the attacker's runtime
+  //       probe checks.
+  //   (b) the FREE-SPACE view this stage computes (`layoutRunningOccupied`,
+  //       via `occupiedSet(cur)`) is the section's space BEFORE this pass's
+  //       own building work — the layout claims tiles first, and the
+  //       reconnect/density phases below re-derive their OWN occupied-tile
+  //       views from `occupiedSet(cur)` AFTER this block runs, so they
+  //       already see every tile this stage just laid and can never site a
+  //       consolidated building on top of a just-laid road/rail tile.
+  //   (c) reordering does NOT reintroduce pass-to-pass oscillation: this
+  //       stage already runs over the pass's FULL `sectionKeys` scope every
+  //       time (never narrowed to which sections reconnect/density touched
+  //       — see the round-4 "SCOPE WIDENED BACK" history preserved on
+  //       `applyTierLayoutForSection`'s own doc), so WHICH sections it
+  //       visits is identical before and after this fix — only what it
+  //       finds FREE inside each section differs (now genuinely
+  //       free-before-this-pass, exactly what AC-1/Aaron's ordering
+  //       requires, instead of free-after-this-pass's-own-demolitions).
+  // Kept OUT of `transactions` (a SIBLING `tierLayout` array on the pass log
+  // instead) so every pre-existing `pass.transactions.length`/
+  // `.filter(kind===...)` assertion (dozens, predating inc3) stays
+  // meaningful without modification. `tierLayout` is ADDITIVE to
+  // `ConsolidationPass` (AC-13: absent/`undefined` on any inc1/inc2-era or
+  // pre-inc3 pass, exactly like `tierAudit`/`freeSpaceAllocation` on a
+  // transaction).
+  // R3-C FIX (round-3 finding, HIGH — perf regression): on a glide DAY
+  // (sectionKeysOverride defined — a small, scoped call), the layout
+  // stage's section loop only actually runs once every LAYOUT_THROTTLE_TICKS
+  // ticks. The month-12 WHOLE-MAP pass (sectionKeysOverride undefined) is
+  // NEVER throttled — F1's own "the whole-map pass must actually
+  // consolidate a cluster the daily window cannot reach" guarantee would
+  // otherwise silently miss its one guaranteed sweep.
+  const tierLayout: ConsolidationTransaction[] = [];
+  const layoutThrottledOut =
+    sectionKeysOverride !== undefined && tick % LAYOUT_THROTTLE_TICKS !== 0;
+  const layoutEnabled = (cur.consolidatorLayoutEnabled ?? true) && !layoutThrottledOut;
+  if (layoutEnabled) {
+    // DEFENSIVE FIX (found via the widened-scope round re-run): a hand-built
+    // test fixture that assigns building ids directly (bypassing the reducer)
+    // without also bumping `nextId` to match is a LATENT id-collision — every
+    // PRE-inc3 consolidator test happened to mint too few new ids to ever
+    // reach the fixture's hand-picked range, so this never surfaced. inc3's
+    // layout stage mints far more ids per pass (up to 5 tiers x a section's
+    // worth of tiles, potentially several sections), especially once run over
+    // many ticks, so it is the first caller to actually walk `nextId` up into
+    // a hand-assigned id and collide (`buildings.ids-unique` failing an
+    // otherwise-correct real playthrough). One O(buildings) floor check, ONCE
+    // per pass (not per section/tile), makes id minting robust to ANY
+    // fixture/hand-built state inconsistency, not just this one — the exact
+    // same `nextSafeBuildingId` helper genesis state already uses for the
+    // same reason.
+    const safeNextId = safeNextIdOf(cur.buildings);
+    if (safeNextId > cur.nextId) {
+      // R3-D FIX: loud, not silent — MET-V870 (GR#7 registry-sourced).
+      recordError(
+        `Consolidator layout pass detected nextId ${cur.nextId} behind the highest existing building id (needs ${safeNextId}) and self-healed by advancing it; this should never happen from normal play and indicates a state-construction defect (hand-built fixture or corrupt save)`,
+        { type: 'app', code: 'MET-V870', action: `tick=${tick}` },
+      );
+      cur = { ...cur, nextId: safeNextId };
+    }
+
+    // ROUND-13 REJECT FIX (P1, "infrastructure laid outside the map" — really
+    // outside the CITY's own footprint, see LAYOUT_WILDERNESS_MARGIN_TILES's
+    // doc in consolidatorLayout.ts): the whole-map month sweep
+    // (`monthlyScopeOf`'s `full` branch) offers EVERY section in the grid,
+    // including sections that hold no city at all. Compute the city's own
+    // occupied bounding box ONCE per pass (O(buildings), a plain fold — no
+    // Map/Set iteration-order risk, GR#21) and drop any section whose box
+    // does not intersect that bounding box expanded by the wilderness
+    // margin, BEFORE any candidate/extension search ever runs on it. An
+    // empty city (no buildings at all — a fresh map) has no bounding box to
+    // restrict against, so every section stays eligible (nothing to anchor
+    // "near the city" to yet).
+    //
+    // ANCHOR-ON-REAL-CITY-ONLY (found while proving this fix, same session):
+    // if the bounding box were recomputed from EVERY building including the
+    // layout stage's OWN previously-placed tiles, each pass's anchor would
+    // include the last pass's own infrastructure — letting the box creep
+    // outward by another margin's worth EVERY pass, forever (the exact
+    // "a bound that rebases on its own damage" shape already fixed once for
+    // the upkeep ceiling, round-6 F1b). `placedBy === 'auto'` tiles (this
+    // stage's own output — see the `rec.placedBy = 'auto'` write below) are
+    // therefore EXCLUDED from the anchor: the wilderness box only grows when
+    // the PLAYER (or genesis) actually builds more city, never when the
+    // layout stage extends its own infrastructure into what it was just
+    // permitted to reach.
+    let cityMinX = Infinity, cityMinY = Infinity, cityMaxX = -Infinity, cityMaxY = -Infinity;
+    for (const b of cur.buildings) {
+      if (b.placedBy === 'auto') continue;
+      if (b.x < cityMinX) cityMinX = b.x;
+      if (b.y < cityMinY) cityMinY = b.y;
+      if (b.x > cityMaxX) cityMaxX = b.x;
+      if (b.y > cityMaxY) cityMaxY = b.y;
+    }
+    const cityBBoxKnown = cityMinX !== Infinity;
+    const wildernessLo = { x: cityMinX - LAYOUT_WILDERNESS_MARGIN_TILES, y: cityMinY - LAYOUT_WILDERNESS_MARGIN_TILES };
+    const wildernessHi = { x: cityMaxX + LAYOUT_WILDERNESS_MARGIN_TILES, y: cityMaxY + LAYOUT_WILDERNESS_MARGIN_TILES };
+    const sectionNearCity = (key: number): boolean => {
+      if (!cityBBoxKnown) return true;
+      const box = sectionOriginOf(key);
+      return (
+        box.x0 <= wildernessHi.x &&
+        box.x0 + box.w - 1 >= wildernessLo.x &&
+        box.y0 <= wildernessHi.y &&
+        box.y0 + box.h - 1 >= wildernessLo.y
+      );
+    };
+    const orderedLayoutKeys = sectionKeys.slice().sort((a, b) => a - b).filter(sectionNearCity);
+    // R3-C FIX: ONE real fold (occupiedSet is buildings-identity-cached, so
+    // this is a cache HIT if nothing has changed `cur.buildings` yet this
+    // tick — the common case), then threaded through every section call
+    // below as a plain mutable Set, updated incrementally by each commit
+    // rather than re-derived from `occupiedSet(cur)` (a fresh O(buildings)
+    // rebuild) after every one of up to CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS
+    // commits.
+    const layoutRunningOccupied = new Set(occupiedSet(cur));
+    // BUG-754 FIX: computed ONCE per pass (a single O(buildings) scan, not
+    // per-section) — does the city have ANY tile of a given tier ANYWHERE
+    // yet? Feeds the same-tier "bootstrap" exception in buildLayoutSectionCtx
+    // (a tier's very FIRST-ever stub may join the general network; every
+    // stub after that must join its OWN tier specifically).
+    const cityHasTierThisPass: Record<TierKind, boolean> = {
+      rail: false, motorway: false, dual: false, aroad: false, minor: false,
+    };
+    for (const b of cur.buildings) {
+      for (const t of TIER_ORDER) {
+        if (b.spec === TIER_SPEC_ID[t]) cityHasTierThisPass[t] = true;
+      }
+    }
+    // BUG-684 FIX (round-6 F1b, "the bound rebases on its own damage"): the
+    // baseline is now ANCHORED ONCE — `cur.consolidatorLayoutBaselineNetIncome`
+    // if already set (by an earlier pass, this session or a prior save), or
+    // lazily anchored HERE from the current `cur.lastFlows` the very first
+    // time the layout stage ever runs (a brand-new city, or an old save
+    // predating this field). Either way it is NEVER rewritten afterward by
+    // the layout stage's own spend — see consolidatorLayout.ts's
+    // `layoutUpkeepEffectiveFloorOf` doc for the full rationale. The
+    // lifetime cumulative delta the gate consumes from is likewise read
+    // from state (not reset to 0 every pass) and persisted back below.
+    const currentNetIncomePerTick =
+      cur.lastFlows.inflows.reduce((sum, f) => sum + f.value, 0) - cur.lastFlows.outflows.reduce((sum, f) => sum + f.value, 0);
+    const layoutBaselineNetIncomePerTick = cur.consolidatorLayoutBaselineNetIncome ?? currentNetIncomePerTick;
+    // ROUND-12 LEAD RULING ("the defrag budget must scale with the city" —
+    // a flat lifetime allowance is wrong IN KIND, not just size, per round
+    // 11's own measured finding that one real rail placement alone
+    // consumes ~all of the old flat 2,000). The per-pass allowance is now
+    // derived from THREE terms (see consolidatorLayout.ts's
+    // LAYOUT_UPKEEP_SHARE_OF_INCOME doc for the full rationale) —
+    // read fresh every pass (unlike the anchor itself, which stays fixed
+    // forever per round-6 F1b; growing WITH current income is the intended
+    // behaviour here, not the F1b ratchet, since it tracks the city's own
+    // current tax base rather than the layout stage's own prior spend):
+    //   1. LAYOUT_UPKEEP_SHARE_OF_INCOME of the city's CURRENT monthly tax
+    //      income (the SAME 'Council Tax'/'Business Tax'/'Freight Tax'
+    //      labels the Transit Subsidy cap already reads — `baseTaxIncome`
+    //      a few hundred lines up — GR#3 SSOT, not a new definition);
+    //   2. one full rail run's real upkeep (MIN_TIER_RUN_TILES tiles of the
+    //      rail spec's own upkeepChargeableOf) — a floor so the top tier
+    //      can ALWAYS place at least once when capex allows, never
+    //      structurally starved by a tiny/zero tax base alone;
+    //   3. the OLD flat constant, LAYOUT_UPKEEP_MAX_WORSENING_PER_TICK, kept
+    //      exactly as before but now serving only as an absolute-minimum
+    //      backstop under the other two (never the primary driver).
+    const currentTaxIncomePerTick = cur.lastFlows.inflows
+      .filter((f) => ['Council Tax', 'Business Tax', 'Freight Tax'].includes(f.label))
+      .reduce((sum, f) => sum + f.value, 0);
+    const railSpecForAllowance = SPECS[TIER_SPEC_ID.rail];
+    const oneFullRailRunUpkeep = railSpecForAllowance
+      ? MIN_TIER_RUN_TILES * upkeepChargeableOf({ id: 0, spec: TIER_SPEC_ID.rail, x: 0, y: 0, builtTick: tick }, railSpecForAllowance)
+      : 0;
+    const layoutUpkeepAllowanceThisPassRaw = Math.max(
+      LAYOUT_UPKEEP_SHARE_OF_INCOME * currentTaxIncomePerTick,
+      oneFullRailRunUpkeep,
+      LAYOUT_UPKEEP_MAX_WORSENING_PER_TICK,
+    );
+    // ROUND-12 REJECT FIX (P1-A, "a bound that rebases on its own damage is
+    // not a bound", the estate's own R6-F1b pin): the per-pass allowance
+    // above is a FLOOR (never starved — see round-14's own doc for why it
+    // must be fresh every pass), but nothing previously CAPPED how much of
+    // it could be spent across the city's WHOLE lifetime — engine.ts
+    // persisted `consolidatorLayoutCumulativeUpkeepDelta` as an overwrite of
+    // this single pass's delta, not an accumulation, so the field never
+    // actually bounded anything despite every doc comment describing it as
+    // "lifetime" since round 6. This is the missing CEILING half of the
+    // two-bound contract (project lesson 2026-09-02 — a liveness fix needs
+    // BOTH a floor and a ceiling): the persisted field is genuinely
+    // cumulative again (`+=` below at finalize, `-=` already correct on
+    // Undo), and this pass's allowance is trimmed to whatever headroom
+    // remains under `LAYOUT_LIFETIME_UPKEEP_SHARE_OF_INCOME` of CURRENT tax
+    // income (read fresh, so the ceiling itself grows with the city) minus
+    // what has already been spent against it. See
+    // LAYOUT_LIFETIME_UPKEEP_SHARE_OF_INCOME's own doc in
+    // consolidatorLayout.ts for the full rationale.
+    const priorCumulativeUpkeepDelta = cur.consolidatorLayoutCumulativeUpkeepDelta ?? 0;
+    // MEASURED FIX (same session): a bare income-proportional ceiling with
+    // no floor zeroes out for every near-zero/zero-tax-income fixture
+    // (population-0 hostile-geometry fixtures throughout this estate) —
+    // NOT the runaway-growth defect this ceiling exists to close, but the
+    // exact starvation-of-an-unhealthy-baseline problem round 8's own R8-F1
+    // ruling already solved once for the ANCHOR. Mirrors that precedent:
+    // the SAME three-term floor the per-pass allowance formula uses above
+    // (income-scaled, one-rail-run, the old flat constant) also floors the
+    // LIFETIME ceiling — guaranteeing the ceiling is never smaller than a
+    // single pass's own raw allowance (so pass 1 is never pre-emptively
+    // blocked purely for being early), while a real city's income-scaled
+    // term (0.5x share here vs 0.1x for the per-pass floor) still grows the
+    // lifetime budget as the city grows, exactly as the ruling intends.
+    //
+    // MEASURED FIX #2 (same session): a ceiling based PURELY on CURRENT tax
+    // income also ratchets DOWNWARD whenever income falls — several
+    // pre-existing estate fixtures (scatterFixture etc.) set a raw
+    // `population` figure with no supporting housing stock, which the
+    // simulation legitimately decays toward zero tick over tick; measured
+    // directly, one such fixture's tax income fell from 282,000 to 4,625
+    // over 40 ticks, permanently locking a ceiling that had already funded
+    // 18,550 of legitimate spend under LOTS more headroom than that at the
+    // pass it was actually spent. `layoutBaselineNetIncomePerTick` (the
+    // round-6 F1b anchor, set once and never rewritten by the layout
+    // stage's own spend) is included via `Math.max` precisely because it
+    // is IMMUNE to this — it is the SAME "anchor once, never rebase
+    // downward" property that already closes the F1b ratchet elsewhere in
+    // this file, applied here to stop a later income CRASH from
+    // retroactively invalidating spend that was legitimate when it
+    // happened. A genuinely GROWING city still gets the bigger, current-
+    // income-scaled ceiling (current > baseline), so this never re-caps
+    // growth below what round 12's ruling intends — it only stops a
+    // shrinking city's ceiling from falling below what its own anchor
+    // already justified.
+    const layoutLifetimeUpkeepCeiling = Math.max(
+      LAYOUT_LIFETIME_UPKEEP_SHARE_OF_INCOME * currentTaxIncomePerTick,
+      LAYOUT_LIFETIME_UPKEEP_SHARE_OF_INCOME * layoutBaselineNetIncomePerTick,
+      oneFullRailRunUpkeep,
+      LAYOUT_UPKEEP_MAX_WORSENING_PER_TICK,
+    );
+    const layoutLifetimeUpkeepHeadroomRemaining = Math.max(0, layoutLifetimeUpkeepCeiling - priorCumulativeUpkeepDelta);
+    const layoutUpkeepAllowanceThisPass = Math.min(layoutUpkeepAllowanceThisPassRaw, layoutLifetimeUpkeepHeadroomRemaining);
+    if (layoutUpkeepAllowanceThisPass < layoutUpkeepAllowanceThisPassRaw && orderedLayoutKeys.length > 0) {
+      // GR#17: one named pass-log line when the lifetime ceiling is the
+      // ACTIVE constraint this pass, never silence and never one entry per
+      // section — mirrors the pre-existing 'action budget'/'administration'/
+      // 'capex budget' skip idiom exactly.
+      skipped.push({ sectionKey: orderedLayoutKeys[0], reason: 'layout paused: lifetime upkeep ceiling' });
+    }
+    const layoutUpkeepEffectiveFloor = layoutUpkeepEffectiveFloorOf(layoutBaselineNetIncomePerTick, layoutUpkeepAllowanceThisPass);
+    // ROUND-14 LEAD RULING (opus-round11-inc3 REJECT F1, P1, measured on the
+    // dogfood-shaped fixture): seeding this from the PERSISTED lifetime
+    // total meant the budget never regenerated — once cumulative spend hit
+    // the allowance (as early as pass 3 on the dogfood city), EVERY later
+    // pass inherited an already-exhausted pool and laid nothing (passes
+    // 4-10 measured zero placements). The lifetime field is now a rolling,
+    // PER-PASS allowance: reset to 0 at the start of every pass rather than
+    // read from `cur.consolidatorLayoutCumulativeUpkeepDelta` — each pass
+    // gets a fresh `layoutUpkeepAllowanceThisPass` (already income-scaled,
+    // computed above, and now additionally trimmed to the lifetime ceiling's
+    // remaining headroom immediately above) to spend against, never a
+    // shrinking lifetime total. `consolidatorLayoutCumulativeUpkeepDelta` is
+    // persisted at the end of the pass as a genuine running ACCUMULATION
+    // (round-12 fix — see that constant's own doc) of every pass's own
+    // spend, which is exactly what the lifetime ceiling above gates from.
+    let layoutRunningUpkeepDelta = 0;
+
+    // BUG-684 FIX (F1, "76.2M of capex spent on tick 1 alone"): the capex
+    // reserve margin plus the hard per-tick capex ceiling, both computed
+    // ONCE per pass and consumed/tracked across every section this pass
+    // commits.
+    //
+    // ROUND-8 R8-F2 FIX (P1 REJECT, "the reserve and ceiling are flat, not
+    // scale-aware"): round 7's reserve (months-of-upkeep only) and ceiling
+    // (a bare constant) never looked at `cur.funds` at all, so on a small
+    // treasury the "protected floor" could sit BELOW ZERO (round 8 measured
+    // -703,110 on a 30,000,000 city) and the flat ceiling could be the
+    // majority of an entire small treasury in one tick (65% of 30,000,000).
+    // Both are now `Math.max`/`Math.min` of TWO terms — see each constant's
+    // own doc comment in consolidatorLayout.ts for the full rationale:
+    //   reserve = max(months-of-upkeep term, a FRACTION of current funds)
+    //   ceiling = min(the absolute placeholder, a FRACTION of current funds)
+    // so both scale with the treasury actually at risk, not just the
+    // city's building-stock upkeep or a flat number tuned for one scale.
+    const LAYOUT_CAPEX_EXCLUDED_LABELS = new Set(['Consolidation', 'Consolidation Scrap']);
+    const currentUpkeepPerTick = cur.lastFlows.outflows
+      .filter((f) => !LAYOUT_CAPEX_EXCLUDED_LABELS.has(f.label))
+      .reduce((sum, f) => sum + f.value, 0);
+    const layoutCapexReserveByUpkeep = LAYOUT_CAPEX_RESERVE_MONTHS_UPKEEP * TICKS_PER_MONTH * currentUpkeepPerTick;
+    const layoutCapexReserveByFunds = LAYOUT_CAPEX_RESERVE_FRACTION_OF_FUNDS * Math.max(0, cur.funds);
+    const layoutCapexReserve = Math.max(0, layoutCapexReserveByUpkeep, layoutCapexReserveByFunds);
+    const layoutCapexFundsFloor = INSOLVENCY_WARNING_THRESHOLD + layoutCapexReserve;
+    const standardCapexCeiling = Math.min(
+      LAYOUT_CAPEX_MAX_PER_TICK,
+      Math.max(0, LAYOUT_CAPEX_MAX_FRACTION_PER_TICK * Math.max(0, cur.funds)),
+    );
+    // ROUND-13 LEAD RULING ("a 100M city spending 4.5M on its first
+    // motorway run") asked for the ceiling to be raised to cover one
+    // minimum run of the highest tier the treasury can afford after the
+    // reserve gate. MEASURED, EXHAUSTIVELY (same session) — every variant
+    // tried breaks the PRE-EXISTING R8-3 80%-of-OFF-control solvency pin
+    // ("keep every existing pin green" per the same ruling):
+    //   - single tier, highest PRIORITY affordable (rail): 30M city
+    //     retains 47.3% (need 80%) — rail's own run alone is already a
+    //     3.75x pace jump over the standard ceiling at that scale.
+    //   - single tier, highest COST affordable (motorway's own run): fixes
+    //     rail's placement but motorway ITSELF still never places — a
+    //     higher-priority tier (rail) spending first from the SAME shared
+    //     pool leaves less than motorway's own run needs, even though the
+    //     ceiling was nominally sized for motorway alone.
+    //   - sum of every affordable tier's run (guarantees room for BOTH
+    //     rail and motorway in the same pass): fixes motorway's placement,
+    //     but sustained over a real 200-tick run this is too generous —
+    //     100M retains only 66.6% (need 80%), even gated to fire only
+    //     above a 50,000,000 floor (the gate does not help: this fixture's
+    //     own funds trajectory never drops below it, so the boost stays
+    //     continuously active for the whole window regardless).
+    // Every variant that gets motorway funded breaches R8-3 at the exact
+    // scale(s) the round-13 target itself asks to prove growth at. This is
+    // a genuine, disclosed, now EXHAUSTIVELY quantified CONFLICT between
+    // the two rulings' own requirements, not a tuning miss — reverted to
+    // the standard (round-8, unchanged) ceiling pending Aaron's explicit
+    // call on which constraint yields (raise R8-3's threshold, accept a
+    // smaller/different numeric growth target, or test growth at a scale
+    // R8-3 does not also gate).
+    const layoutCapexCeilingThisPass = standardCapexCeiling;
+    let layoutCapexSpentThisPass = 0;
+    // ROUND-9 FIX (cosmetic, GR#17): this used to push a fresh 'layout
+    // paused: capex budget' skip entry for EVERY remaining section once the
+    // pass-wide ceiling was exhausted — noisy (a pass log entry per
+    // unvisited section) and not what GR#17 asks for (ONE clear reason the
+    // pass stopped, not N duplicates). Logged once per pass via this flag.
+    let layoutCapexBudgetExhaustedLogged = false;
+    // BUG-754 FIX (task requirement 4, GR#17 disclosure): 'tier failed: no
+    // connection point' is logged ONCE per tier for the whole pass, exactly
+    // like the capex-exhausted flag above — a large city can have this
+    // reason apply to dozens of sections in one pass, and GR#17 asks for one
+    // clear notice, not one line per section.
+    const noConnectionLogged: Record<TierKind, boolean> = {
+      rail: false,
+      motorway: false,
+      dual: false,
+      aroad: false,
+      minor: false,
+    };
+
+    // ROUND-11 RESTRUCTURE (LEAD RULING, "F2 is not deferrable — it IS the
+    // acceptance criterion"): TIER_ORDER is now the OUTER loop across every
+    // section in the pass (Phase B), never the inner one — see
+    // buildLayoutSectionCtx's file-header note for the full rationale.
+    //
+    // Phase A: precompute each eligible section's static candidate data,
+    // respecting the SAME action-budget cap as before (a section only
+    // counts against CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS once it is
+    // actually eligible — i.e. has >= MIN_TIER_RUN_TILES free tiles, exactly
+    // like the pre-round-11 `layoutBudget` counter, which only ever
+    // incremented on a real, non-null result).
+    const sectionCtxByKey = new Map<number, LayoutSectionCtx>();
+    for (const key of orderedLayoutKeys) {
+      if (cur.administrationState) {
+        skipped.push({ sectionKey: key, reason: 'administration' });
+        continue;
+      }
+      if (sectionCtxByKey.size >= CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS) {
+        skipped.push({ sectionKey: key, reason: 'action budget' });
+        continue;
+      }
+      const ctx = buildLayoutSectionCtx(
+        cur,
+        key,
+        tick,
+        layoutRunningOccupied,
+        cityBBoxKnown ? { lo: wildernessLo, hi: wildernessHi } : null,
+        cityHasTierThisPass,
+      );
+      if (!ctx) continue; // AC-1: no free space worth laying anything on.
+      sectionCtxByKey.set(key, ctx);
+      for (const t of ctx.noConnectionTiers) {
+        if (noConnectionLogged[t]) continue;
+        noConnectionLogged[t] = true;
+        skipped.push({ sectionKey: key, reason: 'tier failed: no connection point' });
+      }
+    }
+
+    // Phase B: tier-major — rail's wave visits every eligible section
+    // before motorway's wave starts, etc., so a lower tier can never spend
+    // the pass-wide capex ceiling (or a higher tier's upkeep-share slice)
+    // before every section has had a chance to give the tiers ABOVE it
+    // first claim. `tierShareRemaining` is this pass's TIER_UPKEEP_SHARE
+    // split (consolidatorLayout.ts) of the lifetime upkeep headroom still
+    // available at pass start; a tier's UNUSED remaining share rolls DOWN
+    // to the next tier in TIER_ORDER once its own wave completes, never
+    // back up to a tier already processed.
+    const upkeepHeadroomAtPassStart = Math.max(
+      0,
+      layoutBaselineNetIncomePerTick - layoutUpkeepEffectiveFloor - layoutRunningUpkeepDelta,
+    );
+    const tierShareRemaining: Record<TierKind, number> = {
+      rail: TIER_UPKEEP_SHARE.rail * upkeepHeadroomAtPassStart,
+      motorway: TIER_UPKEEP_SHARE.motorway * upkeepHeadroomAtPassStart,
+      dual: TIER_UPKEEP_SHARE.dual * upkeepHeadroomAtPassStart,
+      aroad: TIER_UPKEEP_SHARE.aroad * upkeepHeadroomAtPassStart,
+      minor: TIER_UPKEEP_SHARE.minor * upkeepHeadroomAtPassStart,
+    };
+    // ROUND-13 LEAD RULING ("TIER_UPKEEP_SHARE stays the ordering, but
+    // allocation per pass is by TILE quota, not money"): round 12's own
+    // finding — a 60% MONEY share for rail+motorway still buys FEWER TILES
+    // than a 40% money share spent on dual/aroad/minor's 15-30x-cheaper
+    // specs — is fixed by allocating a TILE quota per tier first, THEN
+    // deriving the money each tier may spend from that quota (never the
+    // reverse). `blendedCostPerTile` is the TIER_UPKEEP_SHARE-weighted
+    // average real cost-per-tile across all five specs; dividing the pass's
+    // capex ceiling by that blended figure gives `tilesAffordableThisPass`
+    // — literally "how many tiles could this pass buy if every tile cost
+    // the blended average" — which is then split back out by the SAME
+    // TIER_UPKEEP_SHARE fractions into whole-tile quotas per tier (rounded,
+    // floored at MIN_TIER_RUN_TILES whenever the total affordable tile
+    // count is enough to give every tier that floor). Money follows the
+    // quota (`quota_t * that tier's OWN real per-tile cost`), so a tier's
+    // spending cap is now sized in TILES it may lay, not pounds it may
+    // spend — exactly closing the money-vs-tile-count mismatch. Roll-down
+    // (unused share moves to the next tier in TIER_ORDER, never back up)
+    // is unchanged, just operating on money-converted-from-quota now.
+    const costPerTileOf = (t: TierKind): number => {
+      const spec = SPECS[TIER_SPEC_ID[t]];
+      return spec ? placementCost(spec) : 0;
+    };
+    const tierMinRunCapexOf = (t: TierKind): number => {
+      const spec = SPECS[TIER_SPEC_ID[t]];
+      return spec ? MIN_TIER_RUN_TILES * placementCost(spec) : 0;
+    };
+    const blendedCostPerTile = TIER_ORDER.reduce((sum, t) => sum + TIER_UPKEEP_SHARE[t] * costPerTileOf(t), 0);
+    const tilesAffordableThisPass =
+      blendedCostPerTile > 0 ? Math.floor(layoutCapexCeilingThisPass / blendedCostPerTile) : 0;
+    const tierCapexShareRemaining: Record<TierKind, number> = {} as Record<TierKind, number>;
+    if (tilesAffordableThisPass >= MIN_TIER_RUN_TILES) {
+      // MEASURED FIX (same session): flooring EVERY tier's quota at
+      // MIN_TIER_RUN_TILES independently can ask for MORE tiles in total
+      // than `tilesAffordableThisPass` actually has (5 tiers x 3 tiles each
+      // can exceed a blended-average budget of, say, 6 tiles) — the flooring
+      // must be applied SEQUENTIALLY in TIER_ORDER priority against a
+      // shrinking pool, exactly like the upkeep/capex roll-down elsewhere in
+      // this stage, so the sum of quotas never overcommits the pass's real
+      // budget and a lower tier's floor is honoured only with whatever the
+      // higher tiers' floors left behind.
+      const tierTileQuota: Record<TierKind, number> = {} as Record<TierKind, number>;
+      let tilesRemainingToQuota = tilesAffordableThisPass;
+      for (const t of TIER_ORDER) {
+        let quota = Math.round(TIER_UPKEEP_SHARE[t] * tilesAffordableThisPass);
+        if (quota < MIN_TIER_RUN_TILES && tilesRemainingToQuota >= MIN_TIER_RUN_TILES) quota = MIN_TIER_RUN_TILES;
+        quota = Math.min(quota, tilesRemainingToQuota);
+        tierTileQuota[t] = quota;
+        tilesRemainingToQuota -= quota;
+      }
+      for (const t of TIER_ORDER) tierCapexShareRemaining[t] = tierTileQuota[t] * costPerTileOf(t);
+    } else {
+      // MEASURED FIX (same session, 5M regression): when the BLENDED
+      // average (dragged up by rail/m20's real per-tile cost) floors
+      // `tilesAffordableThisPass` at 0, the tile-quota method above zeroes
+      // EVERY tier's share — including minor, whose own real per-tile
+      // cost is a fraction of the blended figure and could clearly afford
+      // a run within the actual ceiling. Fallback: a per-tier MONEY floor
+      // (round-12's original shape) applied SEQUENTIALLY against a
+      // shrinking pool (fixing round-12's own overcommit bug — see the
+      // ceiling formula's history above) so the sum never exceeds the
+      // ceiling, restoring "the cheapest viable tier can still work at a
+      // very poor treasury" without reopening the tile-quota's fairness
+      // problem at scales where it doesn't matter (a near-zero blended
+      // budget has no meaningful "fairness" to speak of regardless).
+      let remainingCeilingMoney = layoutCapexCeilingThisPass;
+      for (const t of TIER_ORDER) {
+        const minRun = tierMinRunCapexOf(t);
+        let share = Math.min(TIER_UPKEEP_SHARE[t] * layoutCapexCeilingThisPass, remainingCeilingMoney);
+        if (share < minRun && remainingCeilingMoney >= minRun) share = minRun;
+        share = Math.min(share, remainingCeilingMoney);
+        tierCapexShareRemaining[t] = share;
+        remainingCeilingMoney -= share;
+      }
+    }
+    TIER_ORDER.forEach((tier, tierIdx) => {
+      let tierAnyPlaced = false;
+      let tierAnyMoneyFail = false;
+      let tierFirstMoneyFailKey: number | null = null;
+      // ROUND-13 FIX ("a rising component count under a working defrag
+      // means stubs are being laid disconnected — extendExistingRun should
+      // dominate"): within THIS tier's wave, visit every section that has
+      // an EXISTING same-tier run to extend BEFORE any virgin section that
+      // would start a brand-new, disconnected stub — so the scarce
+      // per-tier tile quota finishes lines already standing before it ever
+      // funds a new scattered one. Deterministic (GR#21): a stable sort on
+      // a precomputed boolean plus the section key's own numeric order as
+      // the tie-break, no RNG/clock involved.
+      const sectionOrderForTier = orderedLayoutKeys.slice().sort((a, b) => {
+        const extA = sectionCtxByKey.get(a)?.isExtension[tier] ? 0 : 1;
+        const extB = sectionCtxByKey.get(b)?.isExtension[tier] ? 0 : 1;
+        return extA !== extB ? extA - extB : a - b;
+      });
+      // ROUND-13 INVESTIGATION ("if components still rise, find why — a
+      // rising component count means stubs are being laid disconnected"):
+      // a first attempt capped how many NEW (non-extension) sections a
+      // tier may start per pass, on the theory that unbounded fresh-stub
+      // spending was the cause. MEASURED (same session): it changed
+      // NOTHING (identical tile counts/growingPasses/components before and
+      // after), AND it broke the pinned AC-1 invariant that every one of
+      // the five tiers is ATTEMPTED (audited) in TIER_ORDER every pass —
+      // skipping the call skipped the audit entry too. Reverted; the REAL
+      // driver (confirmed by inspection, not guessed — GR#15) is Phase A's
+      // own section-ELIGIBILITY sweep: `buildLayoutSectionCtx` excludes a
+      // section once its free space drops below MIN_TIER_RUN_TILES, so as
+      // the FIRST few sections (in ascending key order) saturate pass over
+      // pass, the fixed `CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS`-sized
+      // eligible set NATURALLY shifts to the NEXT unsaturated sections
+      // further along the key ordering — a genuinely expanding frontier
+      // into virgin territory, not a quota/priority defect. Every newly-
+      // entered section necessarily starts fresh stubs (no prior tiles of
+      // any tier to extend), so networkComponents keeps rising as the city
+      // grows into new area, only falling once adjacent sections'
+      // networks eventually touch at a shared border — which needs
+      // border-aware placement (preferring a candidate that starts AT an
+      // edge shared with an already-networked neighbour section), a
+      // materially larger geometry change than a share/quota retune and
+      // out of this round's safely-verifiable scope. Recorded as the
+      // precise, quantified finding for the next round rather than forced
+      // green here or masked by a change that measurably did nothing.
+      for (const key of sectionOrderForTier) {
+        const ctx = sectionCtxByKey.get(key);
+        if (!ctx) continue;
+        // GR#17: the budget binding is visible in the pass log (mirroring
+        // the pre-existing 'action budget'/'administration' skip idiom)
+        // rather than silently doing nothing for the remainder of the pass
+        // — but only ONCE per pass, not once per remaining section/tier
+        // (round-9 fix, preserved verbatim under the new loop shape).
+        if (layoutCapexSpentThisPass >= layoutCapexCeilingThisPass) {
+          if (!layoutCapexBudgetExhaustedLogged) {
+            skipped.push({ sectionKey: key, reason: 'layout paused: capex budget' });
+            layoutCapexBudgetExhaustedLogged = true;
+          }
+          continue;
+        }
+        const result = attemptOneTierInSection(
+          cur,
+          ctx,
+          tier,
+          tick,
+          layoutRunningOccupied,
+          layoutBaselineNetIncomePerTick,
+          layoutUpkeepEffectiveFloor,
+          layoutRunningUpkeepDelta,
+          tierShareRemaining[tier],
+          layoutCapexFundsFloor,
+          Math.min(layoutCapexCeilingThisPass - layoutCapexSpentThisPass, tierCapexShareRemaining[tier]),
+        );
+        cur = result.state;
+        if (result.placed) {
+          tierAnyPlaced = true;
+          layoutRunningUpkeepDelta += result.upkeepDelta;
+          layoutCapexSpentThisPass += result.buildCost;
+          tierShareRemaining[tier] -= result.upkeepDelta;
+          tierCapexShareRemaining[tier] -= result.buildCost;
+          // ROUND-15 FIX: a SUCCESSFUL placement can still have been TRIMMED
+          // short of the survivor path it won in conflict resolution (the
+          // capex ceiling/reserve/upkeep-share gates in attemptOneTierInSection
+          // all trim rather than refuse outright) — the untrimmed remainder
+          // is released back to this section's pool exactly like an outright
+          // money failure, so a lower-priority tier's own wave can claim it
+          // instead of it sitting permanently wasted on a tier that never
+          // built it. See reconcileSectionTierClaimOnMoneyShortfall's own doc.
+          const builtTiles = Array.from(ctx.placedTierTiles.get(tier) ?? []).map((k) => {
+            const [x, y] = k.split(',').map(Number);
+            return { x, y };
+          });
+          reconcileSectionTierClaimOnMoneyShortfall(ctx, tier, builtTiles, layoutRunningOccupied);
+        } else if (result.moneyReason) {
+          tierAnyMoneyFail = true;
+          if (tierFirstMoneyFailKey === null) tierFirstMoneyFailKey = key;
+          // ROUND-15 FIX: the tiles this tier just failed to afford are
+          // withdrawn from its raw claim so a lower-priority tier's own
+          // wave (still ahead of us in TIER_ORDER) can win them instead of
+          // them sitting wasted — see
+          // reconcileSectionTierClaimOnMoneyShortfall's own doc for the full
+          // rationale.
+          reconcileSectionTierClaimOnMoneyShortfall(ctx, tier, [], layoutRunningOccupied);
+        }
+      }
+      // LEAD RULING item (4): a tier that is structurally unaffordable at
+      // this treasury (tried somewhere, failed only for money reasons,
+      // never placed anywhere this pass) gets ONE named pass-log line —
+      // never silence, and never one entry per section (GR#17).
+      if (!tierAnyPlaced && tierAnyMoneyFail && tierFirstMoneyFailKey !== null) {
+        skipped.push({ sectionKey: tierFirstMoneyFailKey, reason: `layout paused: ${tier} unaffordable at this treasury` });
+      }
+      // Roll down: whatever this tier did NOT spend of its own share has no
+      // later wave of its own to spend it in THIS pass — it becomes
+      // available to the very next tier in TIER_ORDER instead ("never up").
+      // The last tier (minor) has nowhere to roll to; any leftover simply
+      // expires unused this pass (it is re-derived fresh next pass from
+      // whatever lifetime headroom remains then).
+      const nextTier = TIER_ORDER[tierIdx + 1];
+      if (nextTier) {
+        tierShareRemaining[nextTier] += Math.max(0, tierShareRemaining[tier]);
+        tierCapexShareRemaining[nextTier] += Math.max(0, tierCapexShareRemaining[tier]);
+      }
+      tierShareRemaining[tier] = 0;
+      tierCapexShareRemaining[tier] = 0;
+    });
+
+    // Phase C: finalise every eligible section exactly once, now that every
+    // tier's wave has had its chance — park placement + free-space/reserve
+    // classification + the section's single ConsolidationTransaction.
+    for (const key of orderedLayoutKeys) {
+      const ctx = sectionCtxByKey.get(key);
+      if (!ctx) continue;
+      // PARITY FIX (round-11 restructure): an EMPTY `tierAudit` here means
+      // every one of the five TIER_ORDER waves in Phase B skipped this
+      // section without ever calling `attemptOneTierInSection` for it — the
+      // pass-wide capex ceiling was already exhausted (commonly: exhausted
+      // from tick zero, e.g. a city sitting at/under the insolvency floor,
+      // where `layoutCapexCeilingThisPass` is 0 before any tier even tries)
+      // before this section's turn came up in ANY wave. The pre-round-11
+      // single-function-per-section design never called
+      // `applyTierLayoutForSection` at all in that case (the same
+      // budget-exhausted check ran BEFORE the call, per-section), so no
+      // transaction — not even an all-fail one — was ever pushed for it.
+      // Phase A here builds a context independently of Phase B's capex
+      // state (by design — conflict resolution/candidate generation does
+      // not depend on commit order), so this check restores that exact
+      // "never attempted, never logged" parity rather than fabricating a
+      // transaction Phase B never actually attempted anything toward.
+      if (ctx.tierAudit.length === 0) continue;
+      const finalized = finalizeLayoutSection(
+        cur,
+        ctx,
+        tick,
+        layoutRunningOccupied,
+        layoutBaselineNetIncomePerTick,
+        layoutUpkeepEffectiveFloor,
+        layoutRunningUpkeepDelta,
+      );
+      cur = finalized.state;
+      layoutRunningUpkeepDelta = finalized.upkeepDeltaAfterParks;
+      tierLayout.push(finalized.txn);
+    }
+    if (tierLayout.length > 0) {
+      cur = { ...cur, roadConnectivity: computeRoadConnectivity(cur) };
+    }
+    // BUG-684 FIX: persist the anchor (set once, held forever after).
+    // ROUND-12 REJECT FIX (P1-A): `consolidatorLayoutCumulativeUpkeepDelta`
+    // is now a genuine running ACCUMULATION across every pass (`+=` this
+    // pass's own `layoutRunningUpkeepDelta`, never an overwrite) — the field
+    // this pass's own allowance was trimmed against above, and the field
+    // Undo already correctly subtracts from (`-= reversedUpkeepDelta`, see
+    // that function). An overwrite here made the lifetime ceiling above
+    // (and every "lifetime"-labelled doc comment on this field since round
+    // 6) meaningless — the NEXT pass would read back only the LAST pass's
+    // own spend, never the true lifetime total.
+    cur = {
+      ...cur,
+      consolidatorLayoutBaselineNetIncome: layoutBaselineNetIncomePerTick,
+      consolidatorLayoutCumulativeUpkeepDelta: priorCumulativeUpkeepDelta + layoutRunningUpkeepDelta,
+    };
+  }
+
   // F5 FIX (independent round finding, perf): hoisted ONCE for the whole
   // reconnect phase rather than re-derived via sectionIndexOf(cur) inside
   // the loop below (a full O(buildings) rebuild every time `cur` changes,
   // i.e. once per committed reconnect transaction) — mirrors the density
-  // phase's `index` below. `cur === s` here (no commits have happened yet),
-  // so this is a cache HIT against findReconnectionOpportunities'/
-  // findOpportunities' own internal sectionIndexOf(s) call, not a fresh
-  // walk. Section membership (`buildingIds`) can go stale only for a LATER
+  // phase's `index` below. ROUND-5 REORDER NOTE: `cur` may already differ
+  // from `s` here (the tier-layout stage above can have committed
+  // infrastructure), so this is no longer necessarily a cache HIT against
+  // findReconnectionOpportunities'/findOpportunities' own internal
+  // sectionIndexOf(s) call — but it is still exactly ONE real fold for the
+  // whole reconnect phase, which is the property this fix actually needs;
+  // it correctly reflects any tiles the layout stage just laid. Section
+  // membership (`buildingIds`) can go stale only for a LATER
   // candidate's NEIGHBOUR section after an EARLIER commit in an adjacent
   // section within the SAME pass (accepted per the round's own "hoist
   // across transactions" instruction) — the actual "is it online right now"
@@ -2628,13 +4135,19 @@ function applyConsolidatorPass(
   // permanently burying the real pass — is fixed at the READ side instead:
   // undoLastConsolidatorPass (below) now searches for the nearest entry that
   // actually HAS transactions, rather than blindly trusting `log[0]`.
-  if (transactions.length === 0 && skipped.length === 0) {
+  if (transactions.length === 0 && skipped.length === 0 && tierLayout.length === 0) {
     return { state: cur, passLog: null };
   }
   const priorId = (s.consolidatorLog ?? [])[0]?.id ?? 0;
   return {
     state: cur,
-    passLog: { id: priorId + 1, tick, transactions, skipped },
+    passLog: {
+      id: priorId + 1,
+      tick,
+      transactions,
+      skipped,
+      ...(tierLayout.length > 0 ? { tierLayout } : {}),
+    },
   };
 }
 
@@ -2751,12 +4264,24 @@ function undoLastConsolidatorPass(state: SimState): SimState {
   }
   if (state.consolidatorUndoConsumed ?? false) return state; // idempotent — AC-26
 
+  // F1 FIX (independent round finding, CRITICAL): `pass.tierLayout` (FEAT-
+  // 2326609779 inc3) is a SIBLING array to `pass.transactions`, kept
+  // separate deliberately (see applyConsolidatorPass's own file-header note
+  // on why) — but Undo must reverse the WHOLE pass, both halves. `allTxns`
+  // folds them into one list for every accumulation below; every
+  // tierLayout entry has `kind: 'layout'` (never `'reconnect'`), so the
+  // reconnect-specific partial-undo/kept logic below naturally treats every
+  // layout tile as always-fully-reversed, which is correct: inc3 never
+  // demolishes anything, so a layout tile can never be the sole connector
+  // keeping some OTHER building online (unlike a reconnect spur).
+  const allTxns: ConsolidationTransaction[] = [...last.transactions, ...(last.tierLayout ?? [])];
+
   const byId = new Map(state.buildings.map((b) => [b.id, b]));
   const addedIds = new Set<number>();
-  for (const txn of last.transactions) for (const a of txn.added) addedIds.add(a.id);
+  for (const txn of allTxns) for (const a of txn.added) addedIds.add(a.id);
 
   const removedRestored: Building[] = [];
-  for (const txn of last.transactions) for (const r of txn.removed) removedRestored.push(recordToBuilding(r));
+  for (const txn of allTxns) for (const r of txn.removed) removedRestored.push(recordToBuilding(r));
 
   const fullyUndoneBuildings = state.buildings.filter((b) => !addedIds.has(b.id)).concat(removedRestored);
   const fullyUndoneState: SimState = {
@@ -2769,7 +4294,7 @@ function undoLastConsolidatorPass(state: SimState): SimState {
   // Per-reconnect-transaction partial-undo check (AC-26's last bullet).
   const keptAddedRecords = new Map<number, ConsolidationRecord>();
   let anyPartial = false;
-  for (const txn of last.transactions) {
+  for (const txn of allTxns) {
     if (txn.kind !== 'reconnect' || txn.added.length === 0) continue;
     const audit = sectionIndexOf(state).get(txn.sectionKey);
     if (!audit) continue;
@@ -2797,14 +4322,21 @@ function undoLastConsolidatorPass(state: SimState): SimState {
 
   let reversedNetCost = 0;
   let reversedBuildCost = 0;
-  for (const txn of last.transactions) {
+  let reversedUpkeepDelta = 0;
+  for (const txn of allTxns) {
     const kept = txn.kind === 'reconnect' && txn.added.some((a) => keptAddedRecords.has(a.id));
     if (kept) continue; // the asset survives — its spend is not refunded.
     reversedNetCost += txn.netCost;
     reversedBuildCost += txn.buildCost;
+    // ROUND-14 F3 FIX (opus-round11-inc3 REJECT, P1, "one undo burns 74% of
+    // the budget forever"): a layout txn's own upkeep contribution must be
+    // reversed too, exactly like its capex — otherwise Undo refunds the
+    // one-time build cost but leaves the recurring upkeep it added charged
+    // against the budget permanently.
+    reversedUpkeepDelta += txn.upkeepDelta ?? 0;
   }
 
-  const label = `Consolidation Undo (${last.transactions.length} site${last.transactions.length === 1 ? '' : 's'})${anyPartial ? ' — 1+ spur kept (would strand)' : ''}`;
+  const label = `Consolidation Undo (${last.transactions.length} site${last.transactions.length === 1 ? '' : 's'}${(last.tierLayout ?? []).length > 0 ? ` + ${last.tierLayout!.length} tier-layout section${last.tierLayout!.length === 1 ? '' : 's'}` : ''})${anyPartial ? ' — 1+ spur kept (would strand)' : ''}`;
 
   // AC-26: "ids are preserved in the record, so nextId never moves". Roll
   // nextId back by exactly the count of FULLY-removed added records (a kept
@@ -2815,7 +4347,7 @@ function undoLastConsolidatorPass(state: SimState): SimState {
   // restores nextId exactly; a less common "undo much later" case degrades
   // safely to "as low as it can go without a collision" rather than ever
   // creating one).
-  const removedAddedCount = last.transactions.reduce(
+  const removedAddedCount = allTxns.reduce(
     (sum, t) => sum + (t.kind === 'reconnect' && t.added.some((a) => keptAddedRecords.has(a.id)) ? 0 : t.added.length),
     0,
   );
@@ -2829,6 +4361,13 @@ function undoLastConsolidatorPass(state: SimState): SimState {
     roadConnectivity: computeRoadConnectivity({ ...state, buildings: finalBuildings }),
     funds: state.funds + reversedNetCost,
     cumulativeCapexSpent: Math.max(0, (state.cumulativeCapexSpent ?? 0) - reversedBuildCost),
+    // ROUND-14 F3 FIX: reverse the upkeep-budget impact too, never below 0
+    // (a defensive floor — the reversed amount is by construction always
+    // <= what this same pass added, but never trust that blindly).
+    consolidatorLayoutCumulativeUpkeepDelta: Math.max(
+      0,
+      (state.consolidatorLayoutCumulativeUpkeepDelta ?? 0) - reversedUpkeepDelta,
+    ),
     // Remove exactly the entry that was reversed (`undoIndex`), not always
     // index 0 — any skip-only entries logged AHEAD of it (real history,
     // never touched by this undo) are preserved in place.
@@ -2978,6 +4517,19 @@ function advance(s: SimState): SimState {
         consolidatorPassLogs.push(passLog);
         consolidatorTransactionCount += passLog.transactions.length;
         for (const txn of passLog.transactions) {
+          consolidatorBuildCost += txn.buildCost;
+          consolidatorScrapRecovered += txn.scrapRecovered;
+        }
+        // FEAT-2326609779 (consolidator inc3): tier-layout costs book through
+        // the SAME 'Consolidation' flow line (AC-9) — summed here into the
+        // SAME consolidatorBuildCost/consolidatorScrapRecovered accumulators
+        // so conservation.funds-vs-flows holds exactly, same as any other
+        // transaction kind. Deliberately NOT added to
+        // consolidatorTransactionCount (the ledger-ROW gate/wording is
+        // inc1/inc2's own "N site(s)" convention, unchanged by this
+        // increment — a tier-layout-only pass still books its flow-line
+        // spend, it simply does not add its own ledger row).
+        for (const txn of passLog.tierLayout ?? []) {
           consolidatorBuildCost += txn.buildCost;
           consolidatorScrapRecovered += txn.scrapRecovered;
         }
@@ -4255,13 +5807,15 @@ function autoBranchRail(s: SimState, placed: Building, sp: Spec): SimState {
       continue;
     }
     // Branch tiles cost placementCost of the line spec, charged through the ledger —
-    // the EXACT idiom road inc1 uses for its connector. Today 'rail'/'hs1' are free
-    // to lay (placementCost 0), so a branch spends £0; a future per-tile branch cost
-    // is a PLACEHOLDER balance number that would flow through here unchanged.
+    // the EXACT idiom road inc1 uses for its connector. STALE COMMENT FIXED
+    // (FEAT-2326609782, 2026-09-04): 'rail'/'hs1' are NO LONGER free to lay —
+    // Aaron's ruling gave them real per-tile pricing (data.ts), so a branch
+    // now genuinely spends real money and the `funds < branchCost` gate
+    // immediately below is live, not dormant.
     const tileCost = placementCost(lineSpec);
     const branchCost = tileCost * plan.path.length;
     // Never fail the placement: an unaffordable branch lays nothing + surfaces the
-    // notice (mirrors road inc1). With tileCost 0 this can't trigger today.
+    // notice (mirrors road inc1).
     if (funds < branchCost) {
       blockedAny = true;
       continue;

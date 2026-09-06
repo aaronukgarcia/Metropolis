@@ -138,7 +138,8 @@
       "E1000-E1001": "reserved for feat.saveux (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"E\")",
       "V865-V865": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V866-V866": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V868-V869": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V868-V869": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V870-V879": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -5674,6 +5675,12 @@
       "module": "ui.webconsole",
       "message": "A durable IndexedDB savepoint slot was ignored during the boot-freshness check: corrupt metadata (snapshotTick={snapshotTick}, savedAt={savedAt})",
       "remedy": "FEAT-2326609780/BUG-672: a hand-edited or truncated IndexedDB mirror entry failed the same tick/savedAt shape check every other savepoint reader uses. The slot was skipped (never allowed to win the freshness comparison) so a corrupt mirror entry can never silently replace a good boot -- localStorage's own copy (or another valid mirror slot) is used instead. Re-export the save from a working session if this recurs."
+    },
+    "MET-V870": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "Consolidator layout pass detected nextId behind the highest existing building id and self-healed by advancing it; this should never happen from normal play and indicates a state-construction defect (hand-built fixture or corrupt save). The actual nextId/highest-id values are inlined by the call site (engine.ts's recordError call takes a fully-formatted message, not a templated one) and appear in the recorded error's own text.",
+      "remedy": "Investigate the state that reached this pass - a legitimate save/hydrate path must always derive nextId from nextSafeBuildingId; find and fix the construction site that skipped it"
     }
   }
 }

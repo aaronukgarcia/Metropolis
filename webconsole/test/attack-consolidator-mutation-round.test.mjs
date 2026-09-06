@@ -162,7 +162,20 @@ function lastPass(s) {
 
 describe('ATTACK 1 — money: is every pound the pass spends actually charged?', () => {
   test('a consolidate transaction charges placementCost(successor) ONLY — the connector road it lays is never billed', () => {
-    const s0 = fireFixture({ funds: 100_000_000 });
+    // BUG-684 FIX (round-6 F1 closeout): this test's own subject is the
+    // connector-billing arithmetic, not the layout/density id-disambiguation
+    // this comment used to also exercise — but the layout stage's new capex
+    // cap (LAYOUT_CAPEX_MAX_PER_TICK) means how MUCH infrastructure it lays
+    // in section 1 this exact tick is now bounded/order-sensitive in a way
+    // that can (legitimately, per the fix) leave the density successor's
+    // OWN short autoConnect connector not reaching the wider network this
+    // tick — an emergent interaction between two independently-correct
+    // gates, not a defect in either. `consolidatorLayoutEnabled: false`
+    // isolates this test's real subject, matching the SAME idiom this file
+    // already uses for ATTACK 2/ATTACK 4 (see their own comments) — the
+    // layout-vs-density id-disambiguation this test used to also prove has
+    // its own dedicated coverage (attack-inc3-round6.test.mjs R6-1).
+    const s0 = fireFixture({ funds: 100_000_000, consolidatorLayoutEnabled: false });
     const s1 = reducer(s0, { type: 'tick' });
 
     const pass = lastPass(s1);
@@ -170,8 +183,13 @@ describe('ATTACK 1 — money: is every pound the pass spends actually charged?',
     const txn = pass.transactions[0];
     assert.equal(txn.kind, 'consolidate');
 
+    // Layout is OFF for this fixture (see above) so `pass.tierLayout` is
+    // always empty here — `layoutAddedIds` stays a real (if now vacuous)
+    // exclusion set, kept for symmetry with the reconstruction it always
+    // performed rather than special-cased away.
+    const layoutAddedIds = new Set((pass.tierLayout ?? []).flatMap((t) => t.added.map((a) => a.id)));
     // What the pass actually built, beyond the successor: connector road tiles.
-    const created = s1.buildings.filter((b) => b.id >= s0.nextId);
+    const created = s1.buildings.filter((b) => b.id >= s0.nextId && !layoutAddedIds.has(b.id));
     const connectors = created.filter((b) => b.id !== txn.added[0].id);
     assert.ok(connectors.length > 0, 'setup: the successor needed a connector (it is 14 tiles from the road)');
 
@@ -211,10 +229,21 @@ describe('ATTACK 1 — money: is every pound the pass spends actually charged?',
   });
 
   test('funds move by exactly the booked netCost — which is how the free-road leak stays invisible to conservation', () => {
-    const s0 = fireFixture({ funds: 100_000_000 });
+    // BUG-684 FIX: same isolation as the test above — this test's subject is
+    // the conservation arithmetic, not the layout stage's own spend.
+    const s0 = fireFixture({ funds: 100_000_000, consolidatorLayoutEnabled: false });
     const s1 = reducer(s0, { type: 'tick' });
     const pass = lastPass(s1);
-    const bookedNet = pass.transactions.reduce((n, t) => n + t.netCost, 0);
+    // FEAT-2326609779 (consolidator inc3) FIX: `pass.tierLayout` is a
+    // SIBLING array to `pass.transactions` (kept separate deliberately —
+    // engine.ts's applyConsolidatorPass file header explains why) that ALSO
+    // books through the same 'Consolidation' flow line — this comparison
+    // was blind to it. An independent destructive round adjudicated the
+    // resulting "gap" as exactly this test-scope shortfall, not a leak (see
+    // attack-consolidator-inc3-round.test.mjs's A1-A4 adjudication).
+    const bookedNet =
+      pass.transactions.reduce((n, t) => n + t.netCost, 0) +
+      (pass.tierLayout ?? []).reduce((n, t) => n + t.netCost, 0);
     // Ordinary tick income/upkeep is tiny in this fixture but non-zero, so the
     // comparison is bounded rather than exact — the point is that the connector
     // (27,000 x 14 = 378,000) is nowhere in the money path.
@@ -231,7 +260,9 @@ describe('ATTACK 1 — money: is every pound the pass spends actually charged?',
   });
 
   test('the 50% scrap rate is charged per demolished unit, and a zero-cost zone refunds nothing', () => {
-    const s1 = reducer(fireFixture(), { type: 'tick' });
+    // BUG-684 FIX: same isolation — this test's subject is the scrap-rate
+    // arithmetic on `pass.transactions[0]`, not the layout stage.
+    const s1 = reducer(fireFixture({ consolidatorLayoutEnabled: false }), { type: 'tick' });
     const txn = lastPass(s1).transactions[0];
     assert.equal(txn.scrapRecovered, 5 * Math.round(placementCost(SPECS.fire_post) * CONSOLIDATOR_SCRAP_FRACTION));
     assert.equal(txn.netCost, txn.buildCost - txn.scrapRecovered);
@@ -252,8 +283,19 @@ describe('ATTACK 2 — can it destroy something it should not? (AC-19 + the skip
     // `if (s.funds < totalCost)` branch then returns the state UNCHANGED — no
     // tiles appended — so `roadTopologyMayHaveChanged` is false, the AC-19
     // recheck is SKIPPED, and the transaction commits.
+    //
+    // FEAT-2326609779 (consolidator inc3, round-5 reorder) FIX:
+    // `consolidatorLayoutEnabled: false` here — this test's own subject is
+    // the DENSITY phase's exact funds arithmetic (funds sized to
+    // netCost + 60,000 pounds precisely), which now runs AFTER the
+    // tier-layout stage (AC-1's ordering). With layout ON by default it
+    // would spend an unpredictable slice of this tightly-budgeted fixture's
+    // funds before density ever sees them, breaking this test's own
+    // narrative without saying anything about F2 (the successor-stranding
+    // hole this test actually proves). Layout's own money gates have their
+    // own dedicated coverage (attack-inc3-round5-defrag.test.mjs R5-C).
     const funds = NET_COST + 60_000; // one connector tile costs 27,000; the route needs 14.
-    const s0 = fireFixture({ funds });
+    const s0 = fireFixture({ funds, consolidatorLayoutEnabled: false });
 
     const onlineBefore = s0.buildings.filter((b) => b.spec === 'fire_post' && isRoadAdjacent(s0, b) && isRoadConnected(s0, b));
     assert.equal(onlineBefore.length, 5, 'setup: all five fire_post start road-adjacent AND road-connected');
@@ -279,7 +321,10 @@ describe('ATTACK 2 — can it destroy something it should not? (AC-19 + the skip
   });
 
   test('the same transaction is SAFE when the connector is affordable — proving the fixture, not the harness, is what differs (RED-proof control)', () => {
-    const s1 = reducer(fireFixture({ funds: 100_000_000 }), { type: 'tick' });
+    // BUG-684 FIX: same isolation as this describe's own first test above —
+    // this is the RED-proof CONTROL for that fixture, so it must stay
+    // isolated the same way for the comparison to mean anything.
+    const s1 = reducer(fireFixture({ funds: 100_000_000, consolidatorLayoutEnabled: false }), { type: 'tick' });
     const pass = lastPass(s1);
     const successor = s1.buildings.find((b) => b.id === pass.transactions[0].added[0].id);
     assert.ok(isRoadAdjacent(s1, successor) && isRoadConnected(s1, successor), 'control: with money, autoConnect connects it');
@@ -328,8 +373,15 @@ describe('ATTACK 3 — Undo: the safety net Aaron asked for', () => {
     const capexAfterPass = s1.cumulativeCapexSpent ?? 0;
     const u = reducer(s1, { type: 'consolidatorUndo' });
 
-    const net = pass.transactions.reduce((n, t) => n + t.netCost, 0);
-    const gross = pass.transactions.reduce((n, t) => n + t.buildCost, 0);
+    // FEAT-2326609779 (consolidator inc3) FIX: undoLastConsolidatorPass now
+    // ALSO reverses the sibling `pass.tierLayout` array (F1 CRITICAL fix),
+    // and with the layout stage ON by default + full-twelfth scope this
+    // pass very likely carries real tierLayout entries too.
+    const net =
+      pass.transactions.reduce((n, t) => n + t.netCost, 0) + (pass.tierLayout ?? []).reduce((n, t) => n + t.netCost, 0);
+    const gross =
+      pass.transactions.reduce((n, t) => n + t.buildCost, 0) +
+      (pass.tierLayout ?? []).reduce((n, t) => n + t.buildCost, 0);
     assert.equal(u.funds, fundsAfterPass + net, 'funds reversed exactly');
     assert.equal(u.cumulativeCapexSpent ?? 0, capexAfterPass - gross, 'capex reversed exactly');
     const ids = u.buildings.map((b) => b.id);
@@ -345,8 +397,26 @@ describe('ATTACK 3 — Undo: the safety net Aaron asked for', () => {
     const posts = [];
     for (let i = 0; i < 10; i++) posts.push({ id: 100 + i, spec: 'fire_post', x: 16 + i, y: 14, builtTick: -1000 });
     const headroom = [200, 210, 220, 230].map((x, i) => ({ id: 900 + i, spec: 'fire_station', x, y: 200, builtTick: -1000 }));
+    // FEAT-2326609779 (consolidator inc3) FIX: `consolidatorLayoutEnabled:
+    // false` here — this test's own subject is pass-log/Undo SEQUENCING
+    // (exactly which historical pass a second Undo press reaches), which
+    // depends on the log holding EXACTLY the two fire_post consolidation
+    // passes it constructs. With the layout stage ON by default (and
+    // scoped to the whole twelfth), an otherwise-empty 440x260 map finds
+    // free space to lay tier infrastructure in almost every monthly
+    // boundary, pushing many MORE entries onto the log and breaking this
+    // test's own pass-identity narrative — a real, disclosed interaction,
+    // not a defect in the sequencing this test actually verifies (which
+    // has its own dedicated coverage: attack-consolidator-inc3-round.
+    // test.mjs's F1/Undo tests, WITH the layout stage on).
     let s = withConnectivity(
-      mk({ buildings: [...roadRow(15, 40), ...posts, ...headroom], tick: TICKS_PER_MONTH - 1, consolidatorEnabled: true, nextId: 9000 }),
+      mk({
+        buildings: [...roadRow(15, 40), ...posts, ...headroom],
+        tick: TICKS_PER_MONTH - 1,
+        consolidatorEnabled: true,
+        consolidatorLayoutEnabled: false,
+        nextId: 9000,
+      }),
     );
     for (let i = 0; i < 340; i++) s = reducer(s, { type: 'tick' });
     assert.equal((s.consolidatorLog ?? []).length, 2, 'setup: two passes ran');
@@ -373,13 +443,22 @@ describe('ATTACK 3 — Undo: the safety net Aaron asked for', () => {
 
 describe('ATTACK 4 — gates that hold', () => {
   test('a pass can never spend money the city does not have, and the refusal is on the record (AC-23)', () => {
-    const s0 = fireFixture({ funds: NET_COST - 1 });
+    // FEAT-2326609779 (consolidator inc3, round-5 reorder) FIX:
+    // `consolidatorLayoutEnabled: false` on both fixtures below — this test
+    // pins the DENSITY phase's exact netCost boundary (one pound either
+    // side of NET_COST). Layout now runs FIRST in the pass (AC-1's
+    // ordering) and, left on, would spend an unpinned amount of this
+    // section's free space/funds before density is ever evaluated,
+    // decoupling `funds` from the netCost boundary this test exists to
+    // prove. Layout's own affordability gate has its own dedicated
+    // coverage (attack-inc3-round5-defrag.test.mjs R5-C).
+    const s0 = fireFixture({ funds: NET_COST - 1, consolidatorLayoutEnabled: false });
     const s1 = reducer(s0, { type: 'tick' });
     assert.equal(lastPass(s1).transactions.length, 0, 'refused one pound short');
     assert.ok(lastPass(s1).skipped.some((k) => k.reason === 'insufficient funds'), 'and says why');
     assert.ok(s1.funds > INSOLVENCY_WARNING_THRESHOLD, 'nowhere near the floor');
     // RED-proof: exactly netCost and it commits — the boundary is where it claims.
-    const s2 = reducer(fireFixture({ funds: NET_COST }), { type: 'tick' });
+    const s2 = reducer(fireFixture({ funds: NET_COST, consolidatorLayoutEnabled: false }), { type: 'tick' });
     assert.equal(lastPass(s2).transactions.length, 1, 'RED-proof: one pound more and the same fixture acts');
 
     // OBSERVATION (not a defect, recorded for the report): because
@@ -495,7 +574,9 @@ describe('ATTACK 4 — gates that hold', () => {
   });
 
   test('provenance: consolidator-created buildings are tagged auto, restored player buildings keep player (AC-21)', () => {
-    const s1 = reducer(fireFixture({ funds: 100_000_000 }), { type: 'tick' });
+    // BUG-684 FIX: same isolation — this test's subject is placedBy
+    // provenance on the density successor, not the layout stage.
+    const s1 = reducer(fireFixture({ funds: 100_000_000, consolidatorLayoutEnabled: false }), { type: 'tick' });
     const pass = lastPass(s1);
     const successor = s1.buildings.find((b) => b.id === pass.transactions[0].added[0].id);
     assert.equal(successor.placedBy, 'auto');

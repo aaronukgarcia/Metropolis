@@ -38,6 +38,11 @@ import {
   buildingByIdOf,
 } from './data.ts';
 import type { Spec, Tag } from './data.ts';
+// FEAT-2326609779 (consolidator inc3): consolidatorLayout.ts is a true leaf
+// (zero imports of its own — see its file header), so importing its TYPES
+// here creates no cycle, mirroring how this file already imports types from
+// data.ts without risk.
+import type { TierImplementation, FreeSpaceAllocation } from './consolidatorLayout.ts';
 
 /**
  * MUTATION-LANE NOTE (FEAT-2326609761, 2026-09-04): this module used to
@@ -1635,14 +1640,62 @@ export interface ConsolidationRecord {
  * a meaningless placeholder object (GR#16: never fabricate a value nothing
  * computed).
  */
+/**
+ * FEAT-2326609779 (consolidator inc3, additive): `'layout'` is a NEW
+ * transaction kind — the tier-hierarchy infrastructure pass (rail/motorway/
+ * dual/A-road/minor) laid on a section's genuinely FREE tiles, separate from
+ * `'consolidate'`/`'relocate'` (which act on EXISTING buildings) and
+ * `'reconnect'` (which repairs stranded capacity). Additive: every existing
+ * `kind === 'reconnect'` / other equality check in engine.ts and the tab
+ * already narrows by exact string match (never an exhaustive switch over
+ * `kind`), so this widening cannot break inc1/inc2 consumers (AC-13).
+ * `tierAudit`/`freeSpaceAllocation` are OPTIONAL and populated ONLY on a
+ * `'layout'` transaction — an inc1/inc2 transaction (or one loaded from an
+ * old save) simply has them `undefined`, per AC-13's "no tierAudit... default
+ * to undefined" contract.
+ */
 export interface ConsolidationTransaction {
   sectionKey: number;
-  kind: 'consolidate' | 'relocate' | 'reconnect';
+  kind: 'consolidate' | 'relocate' | 'reconnect' | 'layout';
   removed: ConsolidationRecord[];
   added: ConsolidationRecord[];
   buildCost: number;
   scrapRecovered: number;
   netCost: number;
+  /** FEAT-2326609779 AC-11: populated only for kind === 'layout'. */
+  tierAudit?: TierImplementation[];
+  /** FEAT-2326609779 AC-7: populated only for kind === 'layout'. */
+  freeSpaceAllocation?: FreeSpaceAllocation;
+  /**
+   * BUG-684 FIX (round-8 R8-F3, GR#17 visibility): the one-time capex the
+   * layout stage actually committed for this transaction — identical to
+   * `buildCost` for a `kind: 'layout'` txn (both are `totalBuildCost` from
+   * `applyTierLayoutForSection`), carried under this ALSO-named field
+   * because that is what the per-tick capex ceiling (LAYOUT_CAPEX_MAX_
+   * PER_TICK) actually governs and what round 8's own attack estate reads
+   * to prove the ceiling binds — `applyTierLayoutForSection` computed and
+   * returned this value from day one, but engine.ts's caller only ever used
+   * it to track the PASS-WIDE running total (`layoutCapexSpentThisPass`)
+   * and never carried it onto the pushed transaction, so every persisted
+   * `consolidatorLog` entry read capex 0 while millions of pounds moved —
+   * invisible to the player and to any test reading the log. Populated
+   * only for `kind === 'layout'` (undefined/absent for every other kind,
+   * exactly like `tierAudit`/`freeSpaceAllocation`).
+   */
+  capexSpent?: number;
+  /**
+   * ROUND-14 LEAD RULING (opus-round11-inc3 REJECT F3, P1): the total
+   * recurring upkeep this LAYOUT transaction added (every placed tier's
+   * upkeep delta plus any parks placed in the same section) — populated
+   * only for `kind === 'layout'`, exactly like `capexSpent`/`tierAudit`.
+   * Exists so `undoLastConsolidatorPass` (engine.ts) can reverse the
+   * upkeep-budget impact of an undone pass, not just its one-time capex —
+   * before this field existed, Undo refunded funds/capex but left
+   * `consolidatorLayoutCumulativeUpkeepDelta` untouched, so a single Undo
+   * could burn a large fraction of the pass's upkeep allowance forever
+   * with nothing to show for it.
+   */
+  upkeepDelta?: number;
 }
 
 /**
@@ -1659,4 +1712,14 @@ export interface ConsolidationPass {
   tick: number;
   transactions: ConsolidationTransaction[];
   skipped: Array<{ sectionKey: number; reason: string }>;
+  /**
+   * FEAT-2326609779 (consolidator inc3, additive): the tier-hierarchy
+   * layout transactions this pass applied, kept SEPARATE from `transactions`
+   * deliberately — see engine.ts's applyConsolidatorPass file-header note on
+   * why (a regression finding: mixing them into `transactions` broke a dozen
+   * pre-existing inc1/inc2 tests' exact-count assertions). Absent/undefined
+   * on any pass that did no tier-layout work, and on every pre-inc3/old-save
+   * pass (AC-13).
+   */
+  tierLayout?: ConsolidationTransaction[];
 }

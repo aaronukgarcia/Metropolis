@@ -906,6 +906,84 @@ export interface SimState {
    * pass actually runs).
    */
   consolidatorUndoConsumed?: boolean;
+  /**
+   * FEAT-2326609779 (consolidator inc3, AC-8). F5 FIX (independent round
+   * finding, MEDIUM — "write-only and grows unboundedly"): keyed by
+   * SECTION KEY (stringified), value = the growth-reserve tile "x,y" keys
+   * CURRENTLY unclaimed in that section. Every time a layout pass touches a
+   * section it REPLACES that section's own entry wholesale from its fresh
+   * `FreeSpaceAllocation.reserve` (never merges/accumulates across passes),
+   * so the structure is bounded by "sections ever touched x that section's
+   * own tile count" at any snapshot, not by how many PASSES have ever run —
+   * the previous per-tile-flat-map design merged forever and never pruned a
+   * section once written, which is what made it grow unboundedly. A tile
+   * dropping out of a section's list the next time that section is
+   * revisited (because it got claimed by a tier, per `reservedTilesReused`
+   * on the audit) is the AC-8 "reuse" path; a section with zero remaining
+   * reserve tiles has its key removed entirely rather than kept as `[]`.
+   * Optional for backward tolerance (AC-13): an old save predating inc3, or
+   * one with no reserve state yet, is read as `{}` — every read site uses
+   * `state.consolidatorReservedTiles ?? {}`, never a bare property access.
+   */
+  consolidatorReservedTiles?: Record<string, string[]>;
+  /**
+   * FEAT-2326609779 (consolidator inc3): master on/off for the whole
+   * tier-hierarchy layout stage, separate from `consolidatorEnabled` (the
+   * inc1/inc2 building-consolidation/reconnect engine, unaffected either
+   * way). Defaults to `true` (`?? true` at every read site) since the
+   * independent destructive round's adjudication (2026-09-04): the
+   * conservation fear that originally justified an `?? false` rollout-safety
+   * default was FOUND UNFOUNDED (`advance()` re-derives funds wholly from
+   * flow lines computed AFTER this stage runs, so new tiles' upkeep is
+   * already booked — see engine.ts's applyConsolidatorPass file header for
+   * the full adjudication and the round's A1-A4 proofs). AC-13 still holds:
+   * an old save predating this field reads as `true` — the layout stage
+   * simply starts running the NEXT time `consolidatorEnabled` is on and a
+   * pass fires, exactly the same "opt-in behaviour resumes on the next
+   * pass" contract inc1/inc2 fields already use; it never touches or
+   * reinterprets any EXISTING pre-inc3 log entry (still read-only, still
+   * `tierLayout: undefined`). An explicit `consolidatorLayoutEnabled: false`
+   * still turns the whole stage off.
+   */
+  consolidatorLayoutEnabled?: boolean;
+  /**
+   * BUG-684 FIX (round-6 F1b): the tier-layout upkeep-affordability gate's
+   * anchor — the city's net income per tick, measured ONCE (the first pass
+   * the layout stage ever runs, or lazily on the first such pass after an
+   * old save without this field loads) and NEVER rewritten by the layout
+   * stage's own subsequent spend. See consolidatorLayout.ts's
+   * `layoutUpkeepEffectiveFloorOf` doc for the full rationale (recomputing
+   * this every pass from `cur.lastFlows` let the floor ratchet down forever
+   * on its own damage). `null`/absent = "not yet anchored".
+   */
+  consolidatorLayoutBaselineNetIncome?: number | null;
+  /**
+   * BUG-684 FIX (round-6 F1b): running LIFETIME total of recurring upkeep
+   * the tier-layout stage has committed since `consolidatorLayoutBaselineNetIncome`
+   * was anchored, across every pass — genuinely accumulated (`+=` each
+   * pass's own delta at finalize, `-=` on Undo), never reset or overwritten.
+   * Absent/undefined (old saves) reads as 0.
+   *
+   * ROUND-12 REJECT CORRECTION (P1-A, dated 2026-09-05): this doc has
+   * described the field as "lifetime" since round 6, but engine.ts actually
+   * OVERWROTE it with each pass's own delta rather than accumulating —
+   * making the doc false and letting lifetime upkeep growth run unbounded
+   * (measured ~1,300/pass forever on a dogfood city). Fixed to match this
+   * doc, not the other way round. TWO separate mechanisms now read this
+   * field, and neither is "the per-pass gate consumes from it" (that
+   * sentence described the round-6-era design, superseded by round 14):
+   *   - the per-pass upkeep-affordability floor
+   *     (`layoutUpkeepEffectiveFloorOf`) uses a FRESH, income-scaled
+   *     per-pass allowance every pass (never this field) — see round 14's
+   *     own doc in consolidatorLayout.ts for why a shrinking lifetime pool
+   *     there caused permanent starvation;
+   *   - the NEW lifetime ceiling (`LAYOUT_LIFETIME_UPKEEP_SHARE_OF_INCOME`,
+   *     consolidatorLayout.ts) reads THIS field to cap how much of the
+   *     per-pass allowance may still be spent before the city's total
+   *     layout-added upkeep would exceed that share of its current tax
+   *     income — the missing ceiling half of the two-bound contract.
+   */
+  consolidatorLayoutCumulativeUpkeepDelta?: number;
 }
 
 /**

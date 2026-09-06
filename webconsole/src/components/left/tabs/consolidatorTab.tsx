@@ -383,7 +383,84 @@ export function ConsolidatorTab() {
         <h4>Whole-map opportunities (informational — NOT this month's scope; shown for context only)</h4>
         {renderOpportunityTable(wholeMapTop, 'No opportunities found anywhere on the map.')}
       </section>
+
+      {renderTierAuditSection(state)}
     </div>
+  );
+}
+
+/**
+ * FEAT-2326609779 (consolidator inc3, AC-11): read-only display of the
+ * three-stage tier audit for the most recent passes carrying one. A
+ * `consolidatorLog` entry from inc1/inc2 (or one loaded from a pre-inc3 save,
+ * AC-13) simply has no `kind === 'layout'` transaction and no `tierAudit` on
+ * any transaction it does have — those passes render under the plain
+ * "inc1/inc2 (no tier data)" label rather than throwing on the missing
+ * field, per AC-13's "log entries are read-only in the audit display and do
+ * not attempt to deserialize tier data" contract. Reads `state.consolidatorLog`
+ * directly (a plain array, not an O(buildings) computation) — no need for
+ * this tab's throttled `frame` snapshot.
+ */
+function renderTierAuditSection(state: SimState) {
+  const log = state.consolidatorLog ?? [];
+  if (log.length === 0) return null;
+  const recent = log.slice(0, 5);
+  return (
+    <section>
+      <h4>Layout hierarchy — recent passes (inc3)</h4>
+      {recent.map((pass) => {
+        const layoutTxns = pass.tierLayout ?? [];
+        if (layoutTxns.length === 0) {
+          return (
+            <p key={pass.id} className="consolidator-empty">
+              Pass #{pass.id} (tick {pass.tick}): inc1/inc2 (no tier data).
+            </p>
+          );
+        }
+        return (
+          <div key={pass.id} className="consolidator-tier-pass">
+            <p>
+              Pass #{pass.id} (tick {pass.tick}): {layoutTxns.length} section
+              {layoutTxns.length === 1 ? '' : 's'} laid out.
+            </p>
+            <table className="consolidator-opportunities">
+              <thead>
+                <tr>
+                  <th>Section</th>
+                  <th>Tier</th>
+                  <th>Placed?</th>
+                  <th>Tiles</th>
+                  <th>Cost</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {layoutTxns.flatMap((t) =>
+                  (t.tierAudit ?? []).map((ta) => (
+                    <tr key={`${t.sectionKey}-${ta.tier}`}>
+                      <td>{t.sectionKey}</td>
+                      <td>{ta.tier}</td>
+                      <td>{ta.actuallyPlaced ? 'yes' : 'no'}</td>
+                      <td>{ta.actualTiles.length}</td>
+                      <td>{fmtMoney(ta.actualCost)}</td>
+                      <td>{ta.failureReason ?? '—'}</td>
+                    </tr>
+                  )),
+                )}
+              </tbody>
+            </table>
+            {layoutTxns.some((t) => (t.freeSpaceAllocation?.reserveCount ?? 0) > 0) && (
+              <p className="consolidator-note">
+                Growth reserve tiles set aside:{' '}
+                {layoutTxns.reduce((sum, t) => sum + (t.freeSpaceAllocation?.reserveCount ?? 0), 0)}
+                {' · '}Parks allocated:{' '}
+                {layoutTxns.reduce((sum, t) => sum + (t.freeSpaceAllocation?.parkCount ?? 0), 0)}
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </section>
   );
 }
 

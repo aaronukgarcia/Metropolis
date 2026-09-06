@@ -1023,7 +1023,23 @@ export function runConsistencyChecks(
       // surcharge keyed off active-bailout state, NOT per-building `upkeep` —
       // exclude it from the upkeep-total reconciliation exactly like
       // Overdraft Interest / Wages.
-      flow.label !== BAILOUT_STANDING_COST_LABEL
+      flow.label !== BAILOUT_STANDING_COST_LABEL &&
+      // BUG-684 FIX (round-6 R6-3, "the missing exclusion"): 'Consolidation'
+      // is the consolidator/tier-layout stage's own ONE-TIME capex/scrap
+      // flow line (engine.ts's applyConsolidatorPass, both inc1/inc2's
+      // density consolidation AND inc3's tier-layout stage book through it)
+      // — never recurring per-building `upkeep`, exactly like Road/Building
+      // Auto-Scale above. This exclusion was missing since inc1 but rarely
+      // fired because the consolidator only ran on monthly boundaries; the
+      // inc3 layout stage runs every glide tick (LAYOUT_THROTTLE_TICKS=1),
+      // which made this omission land often enough that TWO occurrences
+      // could coincidentally share the exact same delta within one
+      // GRACE_WINDOW_SIZE window and force a real red (round-6's own R6-3
+      // measurement: a spurious divergence of EXACTLY that tick's
+      // 'Consolidation' buildCost, e.g. 990,000). Excluded here exactly like
+      // every other one-time capital-spend line already is.
+      flow.label !== 'Consolidation' &&
+      flow.label !== 'Consolidation Scrap'
     ) {
       actualUpkeep += flow.value;
     }

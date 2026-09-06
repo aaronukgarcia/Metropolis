@@ -208,12 +208,25 @@ describe('CONSOLIDATOR mutation lane — the monthly pass (AC-12/17/22/24/36)', 
     // useful comparison on its own — 30 ticks of ordinary city income
     // (Council Tax etc.) ran in between — so this checks the actual flow
     // lines the boundary tick recorded.
+    // FEAT-2326609779 (consolidator inc3) FIX: the 'Consolidation' flow
+    // lines book BOTH `pass.transactions` and the sibling `pass.tierLayout`
+    // array (kept separate deliberately — see engine.ts's
+    // applyConsolidatorPass file header) — with the tier-layout stage now
+    // ON by default and scoped to the WHOLE twelfth (not just this
+    // fixture's own fire_post section), this boundary tick also lays real
+    // infrastructure in OTHER sections of the same twelfth, so the flow
+    // lines must be compared against the PASS TOTAL, not this one
+    // transaction alone.
+    const layoutBuildCost = (pass.tierLayout ?? []).reduce((n, t) => n + t.buildCost, 0);
+    const layoutScrap = (pass.tierLayout ?? []).reduce((n, t) => n + t.scrapRecovered, 0);
     const buildLine = s.lastFlows.outflows.find((f) => f.label === 'Consolidation');
     assert.ok(buildLine, 'a Consolidation outflow line was recorded');
-    assert.equal(buildLine.value, txn.buildCost);
+    assert.equal(buildLine.value, txn.buildCost + layoutBuildCost);
     const scrapLine = s.lastFlows.inflows.find((f) => f.label === 'Consolidation Scrap');
-    assert.ok(scrapLine, 'a Consolidation Scrap inflow line was recorded');
-    assert.equal(scrapLine.value, txn.scrapRecovered);
+    if (txn.scrapRecovered + layoutScrap > 0) {
+      assert.ok(scrapLine, 'a Consolidation Scrap inflow line was recorded');
+      assert.equal(scrapLine.value, txn.scrapRecovered + layoutScrap);
+    }
   });
 
   test('reconnection opportunities are ranked and applied ABOVE density consolidation in the same pass (Aaron ruling)', () => {
@@ -338,10 +351,22 @@ describe('CONSOLIDATOR mutation lane — Undo (AC-26)', () => {
     assert.equal(new Set(ids).size, ids.length, 'no id collision after Undo');
 
     // Money reversed EXACTLY, relative to the state right after the pass —
-    // funds += netCost, cumulativeCapexSpent -= buildCost.
+    // funds += netCost, cumulativeCapexSpent -= buildCost. FEAT-2326609779
+    // (consolidator inc3) FIX: Undo now ALSO reverses the sibling
+    // `pass.tierLayout` array (F1 CRITICAL, independent round finding — see
+    // engine.ts's undoLastConsolidatorPass), and with the layout stage ON
+    // by default and scoped to the whole twelfth, this boundary tick's pass
+    // very likely carries real tierLayout entries too — both halves must be
+    // summed for the exact-equality to hold.
     const txn = pass.transactions.find((t) => t.kind === 'consolidate');
-    assert.equal(s.funds, fundsAfterPass + txn.netCost, 'funds reversed by exactly netCost');
-    assert.equal(s.cumulativeCapexSpent ?? 0, capexAfterPass - txn.buildCost, 'cumulativeCapexSpent reversed by exactly buildCost');
+    const layoutNet = (pass.tierLayout ?? []).reduce((n, t) => n + t.netCost, 0);
+    const layoutBuild = (pass.tierLayout ?? []).reduce((n, t) => n + t.buildCost, 0);
+    assert.equal(s.funds, fundsAfterPass + txn.netCost + layoutNet, 'funds reversed by exactly netCost (transactions + tierLayout)');
+    assert.equal(
+      s.cumulativeCapexSpent ?? 0,
+      capexAfterPass - txn.buildCost - layoutBuild,
+      'cumulativeCapexSpent reversed by exactly buildCost (transactions + tierLayout)',
+    );
 
     // The log entry is popped.
     assert.equal((s.consolidatorLog ?? []).length, 0);
@@ -500,7 +525,20 @@ describe('CONSOLIDATOR mutation lane — monthly rotation (ruling 7)', () => {
   test('consolidatorLog is capped at CONSOLIDATOR_LOG_CAP over many months', () => {
     // A fresh fire_post group every month so a NEW pass keeps finding work
     // (otherwise the log stops growing once nothing is left to consolidate).
-    let s = fireStationFixture();
+    // FEAT-2326609779 (consolidator inc3) FIX: funds bumped WAY up — with
+    // the tier-layout stage now ON by default and scoped to the FULL
+    // section scope (not just the sections this test's own opportunities
+    // touch), a whole-map (month-12) pass lays real infrastructure across
+    // ~476 sections every 12 months, which legitimately drains this
+    // fixture's original 100,000,000 into FINAL DECLINE well before
+    // month 37 — and declineState is a HARD STOP (advance() never changes
+    // `tick` again once set), which turns `advanceToNextBoundary`'s
+    // `while (cur.tick % TICKS_PER_MONTH !== 0)` loop into a genuine
+    // infinite loop (tick frozen, condition never satisfied) rather than a
+    // test failure. This test's OWN oracle (the log ring respects its cap)
+    // has nothing to do with economic survival, so the honest fix is
+    // headroom, not a weaker assertion.
+    let s = { ...fireStationFixture(), funds: 100_000_000_000 };
     s = reducer(s, { type: 'toggleConsolidator' });
     for (let m = 0; m < CONSOLIDATOR_LOG_CAP + 5; m++) {
       // Re-seed a fresh, unrelated group each month so there is always

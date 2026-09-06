@@ -66,7 +66,22 @@ test('MEASURE: turning glide-mode consolidator ON adds only ONE fold worth of bu
   for (let i = 0; i < TICKS; i++) sOff = reducer(sOff, { type: 'tick' });
 
   const on = countingBuildingsOf(N);
-  let sOn = { ...initialState(), buildings: on.proxy, consolidatorEnabled: true, consolidatorMode: 'glide' };
+  // FEAT-2326609779 (consolidator inc3, round-5 reorder) FIX:
+  // `consolidatorLayoutEnabled: false` here — this test's own subject is
+  // occupiedColumnsOf's MEMO (does the glide-window column scan re-fold
+  // O(buildings) every tick, or once), which is entirely unrelated to the
+  // tier-layout stage. With layout ON by default, this "static" 500-post
+  // scattered city (abundant genuinely free ground, no roads at all) is
+  // exactly the shape the layout stage exists to fill — so the ON run's
+  // `buildings` array would legitimately grow every tick it finds a run of
+  // free tiles, breaking this test's own precondition (buildings identity
+  // survives 100 no-op ticks) without saying anything about the memo this
+  // test actually audits. Same isolation already applied for the same
+  // reason in attack-consolidator-mutation-round.test.mjs (ATTACK 2 / AC-23
+  // tests) and consolidator-mutation.test.mjs's Undo-sequencing test; the
+  // tier-layout stage's own money/perf/order coverage lives in
+  // attack-inc3-round5-defrag.test.mjs and consolidator-layout-inc3-*.
+  let sOn = { ...initialState(), buildings: on.proxy, consolidatorEnabled: true, consolidatorMode: 'glide', consolidatorLayoutEnabled: false };
   for (let i = 0; i < TICKS; i++) sOn = reducer(sOn, { type: 'tick' });
 
   assert.equal(sOff.buildings, off.proxy, 'OFF run: buildings array identity must survive 100 no-op ticks (precondition for the memo to have anything to hit on)');

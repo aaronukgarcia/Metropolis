@@ -329,6 +329,14 @@ export interface DebugJson {
     consolidatorLog: ConsolidationPass[];
     /** FEAT-2326609761 (CONSOLIDATOR, AC-26/ASM-1502, F4 fix) — single-level undo consumed-flag. */
     consolidatorUndoConsumed: boolean;
+    /** FEAT-2326609779 (consolidator inc3, AC-8) — growth-reserve tiles keyed "x,y", reusable at zero scrap cost. */
+    consolidatorReservedTiles: Record<string, string[]>;
+    /** FEAT-2326609779 (consolidator inc3) — master on/off for the tier-layout stage, defaults false (see engine.ts's applyConsolidatorPass file header). */
+    consolidatorLayoutEnabled: boolean;
+    /** BUG-684 FIX (round-6 F1b) — the tier-layout upkeep gate's anchor net income per tick, or null if not yet anchored. */
+    consolidatorLayoutBaselineNetIncome: number | null;
+    /** BUG-684 FIX (round-6 F1b) — lifetime recurring upkeep the layout stage has committed since the anchor above was set. */
+    consolidatorLayoutCumulativeUpkeepDelta: number;
     /** BUG-652 GRANDFATHERING (2026-09-04) — economy schema-version counter; see SimState.economyEpoch's own doc comment. */
     economyEpoch: number;
     /** FEAT-2326609781 (2026-09-04) — Channel Tunnel footprint schema counter; see SimState.tunnelFootprintEpoch's own doc comment. */
@@ -638,6 +646,12 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   // FEAT-2326609761 (CONSOLIDATOR mutation lane).
   consolidatorLog: 'sim.consolidatorLog',
   consolidatorUndoConsumed: 'sim.consolidatorUndoConsumed',
+  // FEAT-2326609779 (consolidator inc3).
+  consolidatorReservedTiles: 'sim.consolidatorReservedTiles',
+  consolidatorLayoutEnabled: 'sim.consolidatorLayoutEnabled',
+  // BUG-684 FIX (round-6 F1b, consolidator inc3 layout upkeep budget).
+  consolidatorLayoutBaselineNetIncome: 'sim.consolidatorLayoutBaselineNetIncome',
+  consolidatorLayoutCumulativeUpkeepDelta: 'sim.consolidatorLayoutCumulativeUpkeepDelta',
   // BUG-652 GRANDFATHERING (2026-09-04).
   economyEpoch: 'sim.economyEpoch',
   // P0 RCA fix (2026-09-04) — per-city lineage identity, see SimState.lineageId's own doc comment.
@@ -1044,6 +1058,15 @@ export function buildDebugJson(
       // CONSOLIDATOR_ENABLED_DEFAULT).
       consolidatorLog: s.consolidatorLog ?? [],
       consolidatorUndoConsumed: s.consolidatorUndoConsumed ?? false,
+      // FEAT-2326609779 (consolidator inc3, AC-13): old-save default — no
+      // reserved tiles exist until the first inc3 layout pass runs.
+      consolidatorReservedTiles: s.consolidatorReservedTiles ?? {},
+      consolidatorLayoutEnabled: s.consolidatorLayoutEnabled ?? true,
+      // BUG-684 FIX (round-6 F1b, GR#16): an old save predating this field
+      // has never anchored the layout upkeep budget — null/0 read exactly
+      // like a brand-new city (engine.ts anchors lazily on the next pass).
+      consolidatorLayoutBaselineNetIncome: s.consolidatorLayoutBaselineNetIncome ?? null,
+      consolidatorLayoutCumulativeUpkeepDelta: s.consolidatorLayoutCumulativeUpkeepDelta ?? 0,
       // BUG-652 GRANDFATHERING (2026-09-04, GR#16): legacy state predating the
       // field reads epoch 0 — see SimState.economyEpoch's own doc comment.
       economyEpoch: s.economyEpoch ?? 0,
