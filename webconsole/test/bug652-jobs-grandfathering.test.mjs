@@ -385,7 +385,47 @@ test('BUG-652 conservation: a mix of grandfathered (zero-job) and freshly-placed
 
 // ========== 6. the round's mid-game city now survives 400 ticks ==========
 
-test('BUG-652 GRANDFATHERING: the round\'s mid-game city (60k pop, £30M treasury, one land_airport) survives 400 ticks once the airport is grandfathered, where the SAME fixture without grandfathering would carry a wage bill dwarfing its income', () => {
+// RETUNE (2026-09-05, cite BUG-391): the ORIGINAL cumulative-funds pin below
+// ("grandfathered must end 400 ticks with MORE money than the ungrandfathered
+// control") went RED the instant BUG-391 landed. Diagnosis, measured directly
+// against the live engine (not assumed):
+//
+//   PER-TICK, while the fixture still has population (ticks 1-~50): the
+//   control's airport wage bill DOES still dwarf its own tax income exactly
+//   as this test's name claims. Measured at tick 1: Wages=£1,870,000 vs
+//   Institutional Tax=£58,520 — a ~32x ratio (76,000 capacity jobs *
+//   commercial rate 11 * INSTITUTIONAL_TAX_YIELD_FACTOR 0.07, against 33,000
+//   workforce-limited filled jobs * £1,700/mo / 30 ticks). The wage-vs-tax
+//   PREMISE this test is named for is therefore still TRUE and is now
+//   asserted directly below (section 6a), instead of only being implied by a
+//   downstream 400-tick funds comparison.
+//
+//   WHY THE 400-TICK CUMULATIVE COMPARISON FLIPPED (and is retired, not
+//   retuned): this fixture's population collapses to ZERO by tick ~100
+//   REGARDLESS of the airport or grandfathering — verified independently on
+//   the identical fixture with NO airport at all (population 60,000 -> 0 by
+//   tick 100, funds still healthy throughout) — a pre-existing, unrelated
+//   fixture/migration artifact, not something this commit introduces or
+//   should paper over. Once population is 0, filled jobs go to 0 so Wages
+//   drop to £0 in BOTH cases, but Institutional Tax is computed from
+//   effectiveJobsOf() CAPACITY (fiscal.ts's institutionalJobs, engine.ts
+//   ~line 681), not from filled/worked jobs the way sectorWagesPerTick() is
+//   — so the control keeps collecting a flat £58,520/tick of "free" tax on a
+//   76,000-job airport with a workforce of literally nobody, for the
+//   remaining ~300 zero-population ticks. That accrues to MORE than the
+//   control's brief early wage-bill deficit, so the control ends 400 ticks
+//   AHEAD of the grandfathered city (measured: grandfathered £29,863,847 vs
+//   control £34,142,420 — the exact numbers the round's now-red assertion
+//   cited). This is a genuine catalogue-balance finding (Institutional Tax
+//   should plausibly scale with FILLED jobs, mirroring the wages fix at
+//   fiscal.ts's own sectorWagesPerTick() doc comment above, so a
+//   fully-vacated building stops paying tax same as it stops paying wages) —
+//   filed for Aaron's balance pass, NOT fixed here (this commit is a test
+//   retune, not an economy change). The pin below no longer asserts the
+//   now-false cumulative-funds ordering; asserting it as false explicitly per
+//   the brief's own instruction ("if tax now exceeds wages... assert that
+//   explicitly and flag it") — see 6b.
+test('BUG-652 GRANDFATHERING: the round\'s mid-game city (60k pop, £30M treasury, one land_airport) survives 400 ticks once the airport is grandfathered, and while the city still has population the ungrandfathered control\'s airport wage bill dwarfs its own airport tax income', () => {
   function buildFixture() {
     let s = initialState();
     s = { ...s, funds: 30_000_000, population: 60_000 };
@@ -407,23 +447,63 @@ test('BUG-652 GRANDFATHERING: the round\'s mid-game city (60k pop, £30M treasur
   // would have produced on load).
   let grandfathered = injectBuilding(buildFixture(), 'land_airport', 10, 150, { jobsOverride: 0 });
   const grandfatheredStartFunds = grandfathered.funds;
-  for (let i = 0; i < 400; i++) grandfathered = reducer(grandfathered, { type: 'tick' });
+
+  // 6a. FIRST tick, population still present: grandfathering must remove
+  // BOTH the wage bill AND the tax on the grandfathered building (the pinned
+  // BUG-652 contract), and the SAME tick on the ungrandfathered control must
+  // show its airport's wage bill dwarfing its own airport's Institutional
+  // Tax — the honest, currently-true form of this test's premise.
+  let ungrandfathered = injectBuilding(buildFixture(), 'land_airport', 10, 150);
+  grandfathered = reducer(grandfathered, { type: 'tick' });
+  ungrandfathered = reducer(ungrandfathered, { type: 'tick' });
+
+  const gInflows = grandfathered.lastFlows?.inflows ?? [];
+  const gOutflows = grandfathered.lastFlows?.outflows ?? [];
+  assert.equal(gInflows.find((f) => f.label === 'Institutional Tax'), undefined, 'a grandfathered airport must contribute ZERO Institutional Tax (capacity is overridden to 0)');
+  const gWages = gOutflows.find((f) => f.label === 'Wages');
+  assert.equal(gWages?.value ?? 0, 0, 'a grandfathered airport with no other job-bearing buildings must contribute ZERO wages');
+
+  const cInflows = ungrandfathered.lastFlows?.inflows ?? [];
+  const cOutflows = ungrandfathered.lastFlows?.outflows ?? [];
+  const cTax = cInflows.find((f) => f.label === 'Institutional Tax');
+  const cWages = cOutflows.find((f) => f.label === 'Wages');
+  assert.ok(cTax && cTax.value > 0, 'the ungrandfathered control must show a positive Institutional Tax line from the real-jobs airport');
+  assert.ok(cWages && cWages.value > 0, 'the ungrandfathered control must show a positive Wages outflow from the real-jobs airport');
+  assert.ok(
+    cWages.value > cTax.value * 10,
+    `the control's airport wage bill must still dwarf its own airport tax income while population exists (wages £${cWages.value} vs tax £${cTax.value})`,
+  );
+
+  // 6b. Run both out to 400 ticks. The grandfathered city must survive
+  // solvent (unchanged pin). The cumulative-funds ORDERING pin is RETIRED —
+  // see the dated note above: it is now measurably false for reasons
+  // unrelated to grandfathering (the fixture's population collapses to zero
+  // by ~tick 100 regardless of the airport, and Institutional Tax keeps
+  // paying out on job CAPACITY even at zero population/workforce) — asserted
+  // explicitly here, per the brief, as a flagged balance finding rather than
+  // silently dropped.
+  for (let i = 1; i < 400; i++) grandfathered = reducer(grandfathered, { type: 'tick' });
+  for (let i = 1; i < 400; i++) ungrandfathered = reducer(ungrandfathered, { type: 'tick' });
+
   assert.ok(Number.isFinite(grandfathered.funds), 'funds must stay finite over 400 ticks');
   assert.ok(
     grandfathered.funds > grandfatheredStartFunds - 30_000_000,
     `grandfathered city must survive 400 ticks without a catastrophic wage-driven collapse (start £${grandfatheredStartFunds}, end £${grandfathered.funds})`,
   );
-
-  // CONTROL: the exact same fixture, but the airport carries its REAL
-  // 76,000 jobs (no override) — reproducing the round's pre-grandfathering
-  // finding for comparison. This is expected to fare dramatically worse.
-  let ungrandfathered = injectBuilding(buildFixture(), 'land_airport', 10, 150);
-  for (let i = 0; i < 400; i++) ungrandfathered = reducer(ungrandfathered, { type: 'tick' });
   assert.ok(Number.isFinite(ungrandfathered.funds), 'even the control must never go non-finite (no NaN/Infinity funds regardless of insolvency)');
 
+  // BALANCE FINDING (flagged for Aaron, not fixed here): under current
+  // economics the CONTROL now ends 400 ticks with MORE funds than the
+  // grandfathered city — the opposite of the original pin — because
+  // Institutional Tax is capacity-based and keeps paying out through the
+  // fixture's ~300-tick zero-population tail while Wages correctly drop to
+  // zero. Asserted explicitly (not silently reversed) so a future economy
+  // change that fixes the capacity-vs-filled mismatch is EXPECTED to flip
+  // this assertion back — whoever does that fix should also restore the
+  // original "grandfathered ends up better off" pin as 6c.
   assert.ok(
-    grandfathered.funds > ungrandfathered.funds,
-    `grandfathering must leave the city meaningfully BETTER OFF than the ungrandfathered control (grandfathered £${grandfathered.funds} vs control £${ungrandfathered.funds})`,
+    ungrandfathered.funds > grandfathered.funds,
+    `BALANCE FINDING (BUG-391, flag for Aaron's catalogue pass): the control currently ends 400 ticks AHEAD of the grandfathered city (control £${ungrandfathered.funds} vs grandfathered £${grandfathered.funds}) because Institutional Tax is job-CAPACITY-based (fiscal.ts institutionalJobs via effectiveJobsOf) rather than filled-job-based like Wages, so it keeps paying out through the fixture's zero-population tail; this is a vacuous-pin symptom, not evidence grandfathering stopped mattering — see 6a above for the still-true per-tick wage-vs-tax premise`,
   );
 });
 

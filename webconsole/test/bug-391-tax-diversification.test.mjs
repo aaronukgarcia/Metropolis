@@ -18,9 +18,13 @@
 //        were too loose: reverting OFFICE_TAX_YIELD_FACTOR 0.17 -> 0.05 left
 //        every test green. This file now PINS an exact Office Tax value on
 //        the mixed-city fixture and tightens the office share band, with a
-//        LIVE mutation-prove (scratch-copy the real fiscal.ts, mutate, run in
-//        a fresh child process, restore — GR#24: never a git revert) proving
-//        the pin actually catches the 0.05 reversion.
+//        LIVE mutation-prove proving the pin actually catches the 0.05
+//        reversion — via testsupport/mutant.mjs's createMutantShadow
+//        in-process shadow copy (P1 follow-up, 2026-09-06: an EARLIER
+//        version of this mutation-prove scratch-copied and rewrote the REAL
+//        engine.ts/fiscal.ts on disk, which raced BUG-519's parallel-file
+//        safety check under `node --test`'s concurrent execution — see the
+//        import section below for the full incident note).
 //   B2 — the office-jobs sum read raw `sp.jobs`, bypassing the
 //        jobsOverride/capacityTier SSOT (data.ts's effectiveJobsOf()) that
 //        totalJobs()/totalJobsBySector() use for wages — an off_tower grown
@@ -50,16 +54,13 @@
 //
 // node --test type-strips the .ts imports; every bound assertion below can
 // FAIL against the pre-fix shape — proved directly by the MUTATION-PROVE
-// tests (never a git revert, GR#24: verified live via a scratch copy of
-// fiscal.ts, restored immediately after in a try/finally).
+// tests (never a git revert, GR#24: every LIVE mutant runs against an
+// in-process SHADOW copy of webconsole/src via testsupport/mutant.mjs's
+// createMutantShadow — the real files are never written to).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
-import fs from 'node:fs';
-import os from 'node:os';
-import { execFileSync } from 'node:child_process';
 import { computeFlows, initialState, reducer } from '../src/sim/engine.ts';
 import { loadDevCity1 } from '../src/sim/devcity.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
@@ -75,11 +76,20 @@ import {
 // (pre-fix) officeJobs-sweep formula inline as plain arithmetic to prove the
 // bound this file enforces is not vacuously true for any formula.
 import { countByKindOnline as countByKindOnlineLocal, totalJobs as totalJobsLocal, SPECS, isOnline as isOnlineLocal } from '../src/sim/data.ts';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FISCAL_PATH = path.resolve(__dirname, '../src/sim/fiscal.ts');
-const ENGINE_PATH = path.resolve(__dirname, '../src/sim/engine.ts');
-const ENGINE_URL = pathToFileURL(ENGINE_PATH).href;
+// BUG-391 P1 follow-up (2026-09-06, landed as c14f4fc then flagged): the
+// PRIOR version of this file's live mutation-proves scratch-copied and
+// REWROTE the real webconsole/src/sim/{engine,fiscal}.ts on disk in place
+// before restoring them. Under `node --test`'s (and CI's) PARALLEL file
+// execution this raced BUG-519's runMutantSelfReinvoke safety check, which
+// observed the real engine.ts changing on disk mid-run from THIS file's
+// process and failed with "real file changed on disk during a mutant run"
+// (reproduced on main: bug-519 + bug-391 together in one scoped run). Tests
+// must never write into webconsole/src (the BUG-744 tracer rule). Every
+// live mutation-prove below now goes through testsupport/mutant.mjs's
+// createMutantShadow — an IN-PROCESS shadow copy of the whole src tree; the
+// real files are never touched (see bug-519-approval-services.test.mjs for
+// the established pattern this file now follows).
+import { createMutantShadow } from '../testsupport/mutant.mjs';
 
 /** Replace only the Nth (0-indexed) occurrence of an exact substring. Used by
  * the F1 mutation-proves below, where engine.ts's two `poweredIncome` Sets
@@ -92,37 +102,6 @@ function replaceNthOccurrence(haystack, needle, replacement, n) {
     if (idx === -1) throw new Error(`occurrence ${n} of ${JSON.stringify(needle)} not found`);
   }
   return haystack.slice(0, idx) + replacement + haystack.slice(idx + needle.length);
-}
-
-/** Runs `childScript` (an ESM module source string) in a fresh child node
- * process and returns its parsed JSON stdout — used so an on-disk mutation of
- * engine.ts/fiscal.ts is guaranteed to be seen cold (this test file's own
- * top-level imports already cached the pre-mutation module in THIS process). */
-function runChildScript(childScript) {
-  const scriptPath = path.join(os.tmpdir(), `bug391-mutation-check-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`);
-  fs.writeFileSync(scriptPath, childScript, 'utf8');
-  try {
-    const stdout = execFileSync(process.execPath, [scriptPath], { encoding: 'utf8', timeout: 30000 });
-    return JSON.parse(stdout);
-  } finally {
-    fs.unlinkSync(scriptPath);
-  }
-}
-
-/** Scratch-copy `filePath`, apply `mutate(content) -> newContent`, run `fn()`,
- * then ALWAYS restore the original from the backup — GR#24: never a git
- * command, a scratch copy only (cp/mv equivalent via fs). */
-function withMutatedFile(filePath, mutate, fn) {
-  const original = fs.readFileSync(filePath, 'utf8');
-  const backupPath = filePath + '.bak391';
-  fs.copyFileSync(filePath, backupPath);
-  try {
-    fs.writeFileSync(filePath, mutate(original), 'utf8');
-    return fn();
-  } finally {
-    fs.copyFileSync(backupPath, filePath);
-    fs.unlinkSync(backupPath);
-  }
 }
 
 const TAX_LABELS = ['Council Tax', 'Business Tax', 'Freight Tax', 'Office Tax', INSTITUTIONAL_TAX_LABEL];
@@ -481,55 +460,57 @@ test('MUTATION-PROVE: the pre-fix officeJobs-sweep basis DOES change with a non-
 });
 
 // ────────────────────────────────────────────────────────────────────────
-// B1 — LIVE mutation-prove: scratch-copy the REAL fiscal.ts, flip
-// OFFICE_TAX_YIELD_FACTOR back to the pre-fix 0.05, run the pinned-value
-// assertion in a FRESH child process (so no module cache can hide the
-// change), and prove it now fails. Restored immediately after in a
-// try/finally — GR#24: never a git command, a scratch copy only.
+// B1 — LIVE mutation-prove, IN-PROCESS SHADOW (BUG-519 P1 follow-up,
+// 2026-09-06): the ORIGINAL version of this test scratch-copied and
+// REWROTE the real fiscal.ts on disk in place before restoring it — under
+// `node --test`'s (and CI's) PARALLEL file execution, BUG-519's
+// runMutantSelfReinvoke safety check observed the real file changing on
+// disk mid-run from a DIFFERENT test file's process and failed with "real
+// file changed on disk during a mutant run" (reproduced on main: bug-519 +
+// bug-391 in one scoped run). Tests must never write into webconsole/src
+// (BUG-744 tracer rule). Fixed by routing through
+// testsupport/mutant.mjs's `createMutantShadow` (see bug-519-approval-
+// services.test.mjs for the established pattern): the mutation is applied
+// to an IN-MEMORY copy of fiscal.ts inside a private, disposable shadow
+// directory — the real src tree is never written to at all. `cleanup()`
+// itself re-verifies the real file was untouched (throws if not).
 // ────────────────────────────────────────────────────────────────────────
 
-test('MUTATION-PROVE (B1, LIVE): reverting OFFICE_TAX_YIELD_FACTOR 0.17 -> 0.05 breaks the pinned exact-value assertion', () => {
-  const original = fs.readFileSync(FISCAL_PATH, 'utf8');
-  const needle = 'export const OFFICE_TAX_YIELD_FACTOR = 0.17;';
-  assert.ok(original.includes(needle), 'fiscal.ts must still contain the exact OFFICE_TAX_YIELD_FACTOR declaration this mutation targets');
-  const mutated = original.replace(needle, 'export const OFFICE_TAX_YIELD_FACTOR = 0.05;');
-  const backupPath = FISCAL_PATH + '.bak391';
-  fs.copyFileSync(FISCAL_PATH, backupPath);
-  let childScriptPath;
+test('MUTATION-PROVE (B1, SHADOW): reverting OFFICE_TAX_YIELD_FACTOR 0.17 -> 0.05 breaks the pinned exact-value assertion', async () => {
+  const shadow = createMutantShadow({
+    targetRelPath: path.join('sim', 'fiscal.ts'),
+    mutate: (original) => {
+      const needle = 'export const OFFICE_TAX_YIELD_FACTOR = 0.17;';
+      assert.ok(original.includes(needle), 'fiscal.ts must still contain the exact OFFICE_TAX_YIELD_FACTOR declaration this mutation targets');
+      return original.replace(needle, 'export const OFFICE_TAX_YIELD_FACTOR = 0.05;');
+    },
+  });
   try {
-    fs.writeFileSync(FISCAL_PATH, mutated, 'utf8');
-
-    // Fresh child process: ESM module caching means the SAME process could
-    // never see the on-disk mutation if engine.ts/fiscal.ts were already
-    // imported (as they are, at the top of this very file) — a new process
-    // guarantees a cold import of the mutated file.
-    const childScript = `
-      import { computeFlows, initialState } from ${JSON.stringify(ENGINE_URL)};
-      function addBuilding(state, spec, n = 1) {
-        let s = state;
-        for (let i = 0; i < n; i++) {
-          s = { ...s, buildings: [...s.buildings, { id: s.nextId, spec, x: s.nextId % 500, y: 10 + Math.floor(s.nextId / 500), builtTick: null }], nextId: s.nextId + 1 };
-        }
-        return s;
+    // engine.ts itself imports fiscal.ts, so importing engine.ts FROM THE
+    // SHADOW (shadow-relative specifier, per mutant.mjs's own doc on why
+    // this matters) resolves the mutated fiscal.ts too — no separate
+    // fiscal.ts import needed.
+    const mod = await import(shadow.importUrl(path.join('sim', 'engine.ts')));
+    function addBuilding(state, spec, n = 1) {
+      let s = state;
+      for (let i = 0; i < n; i++) {
+        s = { ...s, buildings: [...s.buildings, { id: s.nextId, spec, x: s.nextId % 500, y: 10 + Math.floor(s.nextId / 500), builtTick: null }], nextId: s.nextId + 1 };
       }
-      let s = { ...initialState(), population: 6000, taxRates: { residential: 9, commercial: 11, industrial: 13 } };
-      s = addBuilding(s, 'com_market', 80);
-      s = addBuilding(s, 'com_super', 50);
-      s = addBuilding(s, 'com_mall', 20);
-      s = addBuilding(s, 'ind_light', 60);
-      s = addBuilding(s, 'ind_warehouse', 30);
-      s = addBuilding(s, 'ind_heavy', 10);
-      s = addBuilding(s, 'off_suite', 20);
-      s = addBuilding(s, 'off_tower', 10);
-      s = addBuilding(s, 'mine_quarry', 4);
-      const { inflows } = computeFlows(s);
-      const officeTax = inflows.find((f) => f.label === 'Office Tax');
-      process.stdout.write(JSON.stringify({ value: officeTax ? officeTax.value : 0 }));
-    `;
-    childScriptPath = path.join(os.tmpdir(), `bug391-mutation-check-${process.pid}-${Date.now()}.mjs`);
-    fs.writeFileSync(childScriptPath, childScript, 'utf8');
-    const stdout = execFileSync(process.execPath, [childScriptPath], { encoding: 'utf8', timeout: 30000 });
-    const { value: mutatedOfficeTax } = JSON.parse(stdout);
+      return s;
+    }
+    let s = { ...mod.initialState(), population: 6000, taxRates: { residential: 9, commercial: 11, industrial: 13 } };
+    s = addBuilding(s, 'com_market', 80);
+    s = addBuilding(s, 'com_super', 50);
+    s = addBuilding(s, 'com_mall', 20);
+    s = addBuilding(s, 'ind_light', 60);
+    s = addBuilding(s, 'ind_warehouse', 30);
+    s = addBuilding(s, 'ind_heavy', 10);
+    s = addBuilding(s, 'off_suite', 20);
+    s = addBuilding(s, 'off_tower', 10);
+    s = addBuilding(s, 'mine_quarry', 4);
+    const { inflows } = mod.computeFlows(s);
+    const officeTax = inflows.find((f) => f.label === 'Office Tax');
+    const mutatedOfficeTax = officeTax ? officeTax.value : 0;
 
     // The pinned real assertion expects EXACTLY 6545. Prove the mutant
     // produces a DIFFERENT value (round(3500*11*0.05) = 1925) — i.e. the pin
@@ -537,9 +518,38 @@ test('MUTATION-PROVE (B1, LIVE): reverting OFFICE_TAX_YIELD_FACTOR 0.17 -> 0.05 
     assert.notEqual(mutatedOfficeTax, 6545, 'the 0.05-reverted factor must NOT still produce the pinned 6,545 value');
     assert.equal(mutatedOfficeTax, 1925, `expected the reverted factor to yield 1,925 (round(3500*11*0.05)), got ${mutatedOfficeTax}`);
   } finally {
-    fs.copyFileSync(backupPath, FISCAL_PATH);
-    fs.unlinkSync(backupPath);
-    if (childScriptPath && fs.existsSync(childScriptPath)) fs.unlinkSync(childScriptPath);
+    shadow.cleanup();
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// Institutional Tax yield factor — LIVE mutation-prove, IN-PROCESS SHADOW.
+// Mirrors B1 exactly, for INSTITUTIONAL_TAX_YIELD_FACTOR (0.07 -> 0.02).
+// ────────────────────────────────────────────────────────────────────────
+
+test('MUTATION-PROVE (Institutional yield, SHADOW): reverting INSTITUTIONAL_TAX_YIELD_FACTOR 0.07 -> 0.02 breaks the pinned exact-value assertion', async () => {
+  const shadow = createMutantShadow({
+    targetRelPath: path.join('sim', 'fiscal.ts'),
+    mutate: (original) => {
+      const needle = 'export const INSTITUTIONAL_TAX_YIELD_FACTOR = 0.07;';
+      assert.ok(original.includes(needle), 'fiscal.ts must still contain the exact INSTITUTIONAL_TAX_YIELD_FACTOR declaration this mutation targets');
+      return original.replace(needle, 'export const INSTITUTIONAL_TAX_YIELD_FACTOR = 0.02;');
+    },
+  });
+  try {
+    const mod = await import(shadow.importUrl(path.join('sim', 'engine.ts')));
+    const s = { ...mod.initialState(), population: 2000, taxRates: { residential: 9, commercial: 11, industrial: 13 } };
+    const withStation = { ...s, buildings: [...s.buildings, { id: 91000, spec: 'station_ashford', x: 5, y: 5, builtTick: null }] };
+    const { inflows } = mod.computeFlows(withStation);
+    const institutionalTax = inflows.find((f) => f.label === 'Institutional Tax');
+    const mutatedValue = institutionalTax ? institutionalTax.value : 0;
+
+    // Unthrottled pinned value elsewhere in this file (F1 tests below) is
+    // 154 = round(200 jobs * 11 * 0.07). At 0.02: round(200*11*0.02) = 44.
+    assert.notEqual(mutatedValue, 154, 'the 0.02-reverted factor must NOT still produce the pinned 154 value');
+    assert.equal(mutatedValue, 44, `expected the reverted factor to yield 44 (round(200*11*0.02)), got ${mutatedValue}`);
+  } finally {
+    shadow.cleanup();
   }
 });
 
@@ -581,37 +591,37 @@ test('F1 (brownout): Institutional Tax is throttled by brownout.incomeFactor exa
   assert.equal(throttledTax, 62, 'brownout-throttled Institutional Tax must equal round(154 * 0.4) = 62 — the SAME incomeFactor Office/Business Tax use');
 });
 
-test('F1 MUTATION-PROVE (brownout, LIVE): dropping INSTITUTIONAL_TAX_LABEL from the brownout poweredIncome set leaves it un-throttled', () => {
+test('F1 MUTATION-PROVE (brownout, SHADOW): dropping INSTITUTIONAL_TAX_LABEL from the brownout poweredIncome set leaves it un-throttled', async () => {
   const needle = "const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax', INSTITUTIONAL_TAX_LABEL]);";
-  const original = fs.readFileSync(ENGINE_PATH, 'utf8');
-  const occurrences = original.split(needle).length - 1;
-  assert.equal(occurrences, 2, 'engine.ts must contain exactly the two expected poweredIncome Set literals this mutation targets');
+  const shadow = createMutantShadow({
+    targetRelPath: path.join('sim', 'engine.ts'),
+    mutate: (original) => {
+      const occurrences = original.split(needle).length - 1;
+      assert.equal(occurrences, 2, 'engine.ts must contain exactly the two expected poweredIncome Set literals this mutation targets');
+      return replaceNthOccurrence(
+        original,
+        needle,
+        "const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);", // INSTITUTIONAL_TAX_LABEL dropped from the FIRST (brownout) set only
+        0,
+      );
+    },
+  });
+  try {
+    const mod = await import(shadow.importUrl(path.join('sim', 'engine.ts')));
+    const s = mod.initialState();
+    s.population = 2000;
+    s.buildings = [{ id: 91000, spec: 'station_ashford', x: 5, y: 5, builtTick: null }];
+    const { inflows } = mod.computeFlows({ ...s, gridImportEnabled: false });
+    const inst = inflows.find((f) => f.label === 'Institutional Tax');
+    const mutatedValue = inst ? inst.value : 0;
 
-  const mutated = replaceNthOccurrence(
-    original,
-    needle,
-    "const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);", // INSTITUTIONAL_TAX_LABEL dropped from the FIRST (brownout) set only
-    0,
-  );
-  const result = withMutatedFile(ENGINE_PATH, () => mutated, () =>
-    runChildScript(`
-      import { computeFlows, initialState } from ${JSON.stringify(ENGINE_URL)};
-      function state(overrides) {
-        const s = initialState();
-        s.population = 2000;
-        s.buildings = [{ id: 91000, spec: 'station_ashford', x: 5, y: 5, builtTick: null }];
-        return { ...s, ...overrides };
-      }
-      const { inflows } = computeFlows(state({ gridImportEnabled: false }));
-      const inst = inflows.find((f) => f.label === 'Institutional Tax');
-      process.stdout.write(JSON.stringify({ value: inst ? inst.value : 0 }));
-    `),
-  );
-
-  // The real test above requires 62 (throttled). With the mutant, Institutional
-  // Tax escapes the brownout throttle and stays at the full 154.
-  assert.notEqual(result.value, 62, 'the mutant must NOT still produce the throttled 62 value');
-  assert.equal(result.value, 154, `expected the mutant to leave Institutional Tax un-throttled at 154, got ${result.value}`);
+    // The real test above requires 62 (throttled). With the mutant, Institutional
+    // Tax escapes the brownout throttle and stays at the full 154.
+    assert.notEqual(mutatedValue, 62, 'the mutant must NOT still produce the throttled 62 value');
+    assert.equal(mutatedValue, 154, `expected the mutant to leave Institutional Tax un-throttled at 154, got ${mutatedValue}`);
+  } finally {
+    shadow.cleanup();
+  }
 });
 
 test('F1 (congestion): Institutional Tax is throttled by the congestion income factor exactly like Office/Business Tax', () => {
@@ -661,48 +671,51 @@ test('F1 (congestion): Institutional Tax is throttled by the congestion income f
   assert.ok(Math.abs(instRatio - bizRatio) < 0.005, `Institutional Tax ratio ${instRatio} must match Business Tax ratio ${bizRatio} (same congestionIncomeFactor)`);
 });
 
-test('F1 MUTATION-PROVE (congestion, LIVE): dropping INSTITUTIONAL_TAX_LABEL from the congestion poweredIncome set leaves it un-throttled', () => {
+test('F1 MUTATION-PROVE (congestion, SHADOW): dropping INSTITUTIONAL_TAX_LABEL from the congestion poweredIncome set leaves it un-throttled', async () => {
   const needle = "const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax', INSTITUTIONAL_TAX_LABEL]);";
-  const original = fs.readFileSync(ENGINE_PATH, 'utf8');
-  const occurrences = original.split(needle).length - 1;
-  assert.equal(occurrences, 2, 'engine.ts must contain exactly the two expected poweredIncome Set literals this mutation targets');
+  const shadow = createMutantShadow({
+    targetRelPath: path.join('sim', 'engine.ts'),
+    mutate: (original) => {
+      const occurrences = original.split(needle).length - 1;
+      assert.equal(occurrences, 2, 'engine.ts must contain exactly the two expected poweredIncome Set literals this mutation targets');
+      return replaceNthOccurrence(
+        original,
+        needle,
+        "const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);", // INSTITUTIONAL_TAX_LABEL dropped from the SECOND (congestion) set only
+        1,
+      );
+    },
+  });
+  try {
+    const mod = await import(shadow.importUrl(path.join('sim', 'engine.ts')));
+    function city(congestionTicksBySpec) {
+      const s = mod.initialState();
+      s.population = 2000;
+      s.buildings = [
+        { id: 91000, spec: 'm20', x: 5, y: 5 },
+        { id: 91001, spec: 'res_highrise', x: 3, y: 4 },
+        { id: 91002, spec: 'res_highrise', x: 5, y: 3 },
+        { id: 91003, spec: 'res_highrise', x: 6, y: 5 },
+        { id: 91004, spec: 'res_highrise', x: 4, y: 6 },
+        { id: 91005, spec: 'com_shop', x: 30, y: 30 },
+        { id: 91006, spec: 'com_shop', x: 35, y: 30 },
+        { id: 91007, spec: 'com_shop', x: 40, y: 30 },
+        { id: 91008, spec: 'com_shop', x: 45, y: 30 },
+        { id: 91009, spec: 'station_ashford', x: 150, y: 150, builtTick: null },
+      ];
+      return { ...s, congestionTicksBySpec };
+    }
+    const { inflows } = mod.computeFlows(city({ m20: 60 }));
+    const inst = inflows.find((f) => f.label === 'Institutional Tax');
+    const mutatedValue = inst ? inst.value : 0;
 
-  const mutated = replaceNthOccurrence(
-    original,
-    needle,
-    "const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);", // INSTITUTIONAL_TAX_LABEL dropped from the SECOND (congestion) set only
-    1,
-  );
-  const result = withMutatedFile(ENGINE_PATH, () => mutated, () =>
-    runChildScript(`
-      import { computeFlows, initialState } from ${JSON.stringify(ENGINE_URL)};
-      function city(congestionTicksBySpec) {
-        const s = initialState();
-        s.population = 2000;
-        s.buildings = [
-          { id: 91000, spec: 'm20', x: 5, y: 5 },
-          { id: 91001, spec: 'res_highrise', x: 3, y: 4 },
-          { id: 91002, spec: 'res_highrise', x: 5, y: 3 },
-          { id: 91003, spec: 'res_highrise', x: 6, y: 5 },
-          { id: 91004, spec: 'res_highrise', x: 4, y: 6 },
-          { id: 91005, spec: 'com_shop', x: 30, y: 30 },
-          { id: 91006, spec: 'com_shop', x: 35, y: 30 },
-          { id: 91007, spec: 'com_shop', x: 40, y: 30 },
-          { id: 91008, spec: 'com_shop', x: 45, y: 30 },
-          { id: 91009, spec: 'station_ashford', x: 150, y: 150, builtTick: null },
-        ];
-        return { ...s, congestionTicksBySpec };
-      }
-      const { inflows } = computeFlows(city({ m20: 60 }));
-      const inst = inflows.find((f) => f.label === 'Institutional Tax');
-      process.stdout.write(JSON.stringify({ value: inst ? inst.value : 0 }));
-    `),
-  );
-
-  // The real test above shows the throttled case is strictly lower than 154.
-  // With the mutant, Institutional Tax escapes the congestion throttle and
-  // stays at the full unthrottled 154 — exactly reproducing the bug.
-  assert.equal(result.value, 154, `expected the mutant to leave Institutional Tax un-throttled at the full 154, got ${result.value}`);
+    // The real test above shows the throttled case is strictly lower than 154.
+    // With the mutant, Institutional Tax escapes the congestion throttle and
+    // stays at the full unthrottled 154 — exactly reproducing the bug.
+    assert.equal(mutatedValue, 154, `expected the mutant to leave Institutional Tax un-throttled at the full 154, got ${mutatedValue}`);
+  } finally {
+    shadow.cleanup();
+  }
 });
 
 // ────────────────────────────────────────────────────────────────────────

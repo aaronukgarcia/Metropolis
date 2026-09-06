@@ -209,8 +209,17 @@ func (p *pageDirClaim) Release() {
 		// Unreadable (corrupt/torn) claim file: cannot confirm ownership,
 		// so do NOT delete -- an unconfirmed guess here risks the exact
 		// live-holder-disarmed shape this fix exists to close.
+		// Every template token of MET-G821 is supplied (the errs render gate
+		// scans the whole tree for call sites that leave a {token} literal):
+		// the recorded side is unknown here, so it is stated as such.
 		_ = errs.New(ErrCitizenPagingClaimOwnershipMismatch, errs.NewCorrelationID(), map[string]any{
-			"dir": filepath.Dir(p.path), "reason": "claim file unreadable at Release time", "cause": err.Error(),
+			"dir":           filepath.Dir(p.path),
+			"reason":        "claim file unreadable at Release time",
+			"cause":         err.Error(),
+			"recordedPid":   "unreadable",
+			"recordedEpoch": "unreadable",
+			"pid":           p.record.PID,
+			"epoch":         p.record.Epoch,
 		})
 		return
 	}
@@ -414,8 +423,24 @@ func claimPageDir(dir string, city persist.CityKey, reclaim bool, correlationID 
 			})
 		}
 		if err := tryCreate(); err != nil {
+			// Supply every MET-G819 template token (errs render gate): the
+			// racing claimant's record is whatever tryCreate lost to, so re-read
+			// it; on a read failure the fields say so rather than render as
+			// literal {tokens}.
+			// The ctx is an inline literal (not a named variable) so the errs
+			// render gate can prove the token set statically rather than
+			// classify the site as dynamic-ctx.
+			var racedPid, racedTenant, racedCity, racedEpoch any = "unreadable", "unreadable", "unreadable", "unreadable"
+			if raced, racedErr := readPageClaim(claimPath); racedErr == nil {
+				racedPid, racedTenant, racedCity, racedEpoch = raced.PID, raced.TenantID, raced.CityID, raced.Epoch
+			}
 			return nil, errs.Wrap(ErrCitizenPagingDirectoryClaimed, correlationID, err, map[string]any{
-				"dir": dir, "reason": "reclaim raced a concurrent claimant",
+				"dir":            dir,
+				"reason":         "reclaim raced a concurrent claimant",
+				"recordedPid":    racedPid,
+				"recordedTenant": racedTenant,
+				"recordedCity":   racedCity,
+				"recordedEpoch":  racedEpoch,
 			})
 		}
 		return &pageDirClaim{path: claimPath, record: rec}, nil
@@ -436,16 +461,25 @@ func claimPageDir(dir string, city persist.CityKey, reclaim bool, correlationID 
 		// fall through to refuse if the auto-reclaim race lost
 	}
 
-	ctx := map[string]any{"dir": dir}
+	// Inline literal with every MET-G819 token on BOTH branches (the errs
+	// render gate proves inline literals statically; a named ctx var is only
+	// reported as dynamic-ctx, and the old else branch would have rendered
+	// literal {recordedPid}-style tokens).
+	var recPid, recTenant, recCity, recEpoch any = "unreadable", "unreadable", "unreadable", "unreadable"
+	claimReadError := ""
 	if readErr == nil {
-		ctx["recordedPid"] = existing.PID
-		ctx["recordedTenant"] = existing.TenantID
-		ctx["recordedCity"] = existing.CityID
-		ctx["recordedEpoch"] = existing.Epoch
+		recPid, recTenant, recCity, recEpoch = existing.PID, existing.TenantID, existing.CityID, existing.Epoch
 	} else {
-		ctx["claimReadError"] = readErr.Error()
+		claimReadError = readErr.Error()
 	}
-	return nil, errs.New(ErrCitizenPagingDirectoryClaimed, correlationID, ctx)
+	return nil, errs.New(ErrCitizenPagingDirectoryClaimed, correlationID, map[string]any{
+		"dir":            dir,
+		"recordedPid":    recPid,
+		"recordedTenant": recTenant,
+		"recordedCity":   recCity,
+		"recordedEpoch":  recEpoch,
+		"claimReadError": claimReadError,
+	})
 }
 
 // readPageClaim reads dir's claim record, if any.
