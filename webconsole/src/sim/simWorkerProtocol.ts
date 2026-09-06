@@ -29,20 +29,62 @@
 // building — that is explicitly Landing 3's territory.
 import { reducer } from './engine.ts';
 import type { SimState } from './types.ts';
+import type { SimStateDelta } from './simWorkerDelta.ts';
 
 /** Main -> worker. */
 export type MainToWorkerMessage =
   /** Run exactly one tick against `state` (a full snapshot of main's current
    *  live state at request time — see the scope note above) and reply with
-   *  the resulting state. */
-  | { type: 'runTick'; state: SimState; requestId: number };
+   *  the resulting state. Sent whenever the sender has no proof the
+   *  receiver already holds a matching cache (the very first request ever,
+   *  or — for a real worker — always, since only the real simWorker.ts
+   *  advertises delta capability; see `deltaCapable` below). */
+  | { type: 'runTick'; state: SimState; requestId: number }
+  /**
+   * FEAT-2326609777 (2026-09-06) — run exactly one tick against a state
+   * reconstructed by applying `delta` to the receiver's own cached copy of
+   * the last state it is known to hold, and reply with a `tickResultDelta`
+   * describing only what THIS tick changed. See simWorkerDelta.ts's header
+   * for the full protocol/invariant writeup (buildings dominate the wire
+   * payload at 92%+ measured on the capture-13 dogfood city; this message
+   * carries only the buildings that actually changed, not the whole array).
+   * Only ever sent once the sender has previously received a `tickResult`
+   * reply with `deltaCapable: true` — see store.tsx's issueTickRequest.
+   */
+  | { type: 'runTickDelta'; requestId: number; delta: SimStateDelta };
 
 /** Worker -> main. */
 export type WorkerToMainMessage =
   /** The tick this `requestId` asked for has finished; `state` is the full
    *  post-tick SimState (advance() already applied, roadConnectivity fresh —
-   *  see runTick below). */
-  | { type: 'tickResult'; state: SimState; requestId: number };
+   *  see runTick below). `deltaCapable: true` (set by the real simWorker.ts,
+   *  never by a legacy/mocked worker) is the sender's advertisement that it
+   *  now holds `state` cached and will accept a `runTickDelta` request
+   *  diffed against it — see simWorkerDelta.ts's "BACKWARD COMPATIBILITY"
+   *  section for why this is opt-in rather than assumed. */
+  | { type: 'tickResult'; state: SimState; requestId: number; deltaCapable?: boolean }
+  /** FEAT-2326609777 — the delta-mode counterpart of `tickResult`: `delta`
+   *  describes the change from the sender's PREVIOUS cached state (the one
+   *  the matching `runTickDelta`/`tickResult` request was diffed against)
+   *  to the state this tick produced. The receiver reconstructs the full
+   *  post-tick state via `applyStateDelta(basisState, delta)` — see
+   *  store.tsx's worker.onmessage. */
+  | { type: 'tickResultDelta'; requestId: number; delta: SimStateDelta }
+  /**
+   * FEAT-2326609777 round follow-up (opus-round-feat777, 2026-09-06) — the
+   * worker detected that a `runTickDelta` request's `delta.baseTick` did not
+   * match its own cached state's tick (simWorkerDelta.ts's
+   * DeltaBasisMismatchError) BEFORE computing anything against it. No tick
+   * was run — the worker cannot safely patch a basis it does not actually
+   * hold. The worker resets its own cache to null (so its NEXT request,
+   * whatever type, is treated as a fresh full sync) and sends this instead
+   * of a tick result; store.tsx's worker.onmessage records the
+   * registry-sourced MET-V891 error, resets `workerKnownStateRef` to null
+   * to match, and discards this round trip exactly like any other discarded
+   * reply — the tick-driver's next scheduled interval fire issues a fresh
+   * (full) request.
+   */
+  | { type: 'basisMismatch'; requestId: number; expectedBaseTick: number; actualBaseTick: number };
 
 /**
  * The worker's entire computational job, expressed as a pure function so it

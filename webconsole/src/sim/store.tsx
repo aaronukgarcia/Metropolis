@@ -87,6 +87,11 @@ import { encode, decode } from './saveCodec';
 // and its documented Landing-2-vs-Landing-3 scope tradeoff.
 import { webWorkerOffloadEnabled } from './webWorkerFlag';
 import type { MainToWorkerMessage, WorkerToMainMessage } from './simWorkerProtocol';
+// FEAT-2326609777 (2026-09-06): delta-sync — see simWorkerDelta.ts's header
+// for the full design (buildings dominate the wire payload at 92%+ measured
+// on the capture-13 dogfood city; this diffs/patches it instead of cloning
+// the whole ~3.5MB array every tick, in both directions).
+import { diffSimState, applyStateDelta, DeltaBasisMismatchError, RESYNC_EVERY_TICKS } from './simWorkerDelta';
 import { getGlobalWorkerQueueTracker } from './workerQueueDepth';
 // BUG-618: the engine-lag gauge tracker (always-active, no DEV/flag gating —
 // see engineLag.ts's header for why perfhud.ts's DEV-only tick tracker was
@@ -1615,6 +1620,37 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // `ReturnType<typeof setTimeout>` (NodeJS.Timeout under @types/node) — see
   // the arm site below, now window-bound.
   const workerHandshakeTimeoutRef = useRef<number | null>(null);
+  // FEAT-2326609777 (2026-09-06) — delta-sync bookkeeping. `workerKnownStateRef`
+  // mirrors what the ACTUAL worker instance currently has cached (simWorker.ts's
+  // own `cachedState`): null until the worker's first reply proves it holds
+  // one (via `deltaCapable` — see worker.onmessage below), then updated on
+  // EVERY subsequent reply, applied or discarded alike, because the worker
+  // itself computed and cached that result unconditionally either way (same
+  // "unconditional, regardless of match" convention as clearWorkerBusy — see
+  // simWorkerOffloadController.ts's BUG-592 comment). While null,
+  // issueTickRequest always sends a full `runTick` (today's protocol,
+  // unchanged) — this is also what keeps every pre-existing FakeWorker-based
+  // test passing unmodified, since a mocked worker that never sets
+  // `deltaCapable` never flips this ref away from null (see
+  // simWorkerDelta.ts's "BACKWARD COMPATIBILITY" section).
+  const workerKnownStateRef = useRef<SimState | null>(null);
+  // The exact main-thread state a `runTickDelta` request's diff was computed
+  // against — needed at reply time to reconstruct the full post-tick state
+  // via applyStateDelta(basis, delta). Safe as a single ref (not a per-request
+  // map) because at most one request is ever outstanding at a time
+  // (beginTickRequest's `workerBusy` gate) — see simWorkerDelta.ts's header.
+  const pendingRequestBasisStateRef = useRef<SimState | null>(null);
+  // FEAT-2326609777 round follow-up (opus-round-feat777, 2026-09-06) — count
+  // of CONSECUTIVE delta-mode requests issued since the last full resync
+  // (reset to 0 whenever a full `runTick` request is issued, for ANY
+  // reason — bootstrap, a basisMismatch recovery, or this counter itself
+  // hitting RESYNC_EVERY_TICKS). Bounds any future silent-desync regression
+  // to at most RESYNC_EVERY_TICKS ticks of drift, independent of whether the
+  // baseTick integrity check (simWorkerDelta.ts's DeltaBasisMismatchError)
+  // happens to catch it — see RESYNC_EVERY_TICKS's own header for why a
+  // same-tick-number-but-different-content corruption could in principle
+  // slip past that check alone.
+  const deltaRequestsSinceResyncRef = useRef(0);
 
   /**
    * B1/B2/"lesser" fix, superseding the FIRST cut's buffer-while-in-flight
@@ -1779,11 +1815,33 @@ export function SimProvider({ children }: { children: ReactNode }) {
     if (!begun) return true; // already pending — nothing to do, no fallback needed.
     offloadControllerRef.current = begun.state;
     getGlobalWorkerQueueTracker().enqueue();
-    const msg: MainToWorkerMessage = {
-      type: 'runTick',
-      state: stateRefForDispatch.current,
-      requestId: begun.requestId,
-    };
+    const currentState = stateRefForDispatch.current;
+    // FEAT-2326609777: this request's basis, captured NOW — needed at reply
+    // time (worker.onmessage's 'tickResultDelta' branch) to reconstruct the
+    // full post-tick state via applyStateDelta(basis, delta). Safe to
+    // overwrite unconditionally: at most one request is ever outstanding
+    // (workerBusy), so the previous value (if any) has already been
+    // consumed by its own reply before this line can run again.
+    pendingRequestBasisStateRef.current = currentState;
+    // FEAT-2326609777 round follow-up: force a full resync every
+    // RESYNC_EVERY_TICKS delta-mode requests, independent of whether
+    // anything has ever looked wrong — see deltaRequestsSinceResyncRef's own
+    // header for why this bound exists ALONGSIDE the baseTick integrity
+    // check rather than instead of it.
+    const useDelta = workerKnownStateRef.current !== null && deltaRequestsSinceResyncRef.current < RESYNC_EVERY_TICKS;
+    const msg: MainToWorkerMessage = useDelta
+      ? {
+          type: 'runTickDelta',
+          requestId: begun.requestId,
+          delta: diffSimState(workerKnownStateRef.current as SimState, currentState),
+        }
+      : {
+          type: 'runTick',
+          state: currentState,
+          requestId: begun.requestId,
+        };
+    if (useDelta) deltaRequestsSinceResyncRef.current += 1;
+    else deltaRequestsSinceResyncRef.current = 0;
     try {
       // BUG-618: stamp the post time BEFORE the actual postMessage call so
       // the recorded duration includes the structured-clone cost of handing
@@ -1827,6 +1885,14 @@ export function SimProvider({ children }: { children: ReactNode }) {
           workerRef.current = null;
           getGlobalWorkerQueueTracker().reset();
           offloadControllerRef.current = initialOffloadControllerState();
+          // FEAT-2326609777: this worker instance is gone — its cache (and
+          // any pending delta basis) goes with it. Defensive hygiene: no
+          // production code path currently reconstructs a worker after this
+          // (workerRef stays null for the rest of the session), but leaving
+          // these stale would be a landmine for any future change that does.
+          workerKnownStateRef.current = null;
+          pendingRequestBasisStateRef.current = null;
+          deltaRequestsSinceResyncRef.current = 0;
           getGlobalWorkerFallbackTracker().report('handshake-timeout');
           recordError(
             `Web Worker tick offload: first tick reply did not arrive within ${timeoutMs}ms; falling back to synchronous tick.`,
@@ -1948,7 +2014,88 @@ export function SimProvider({ children }: { children: ReactNode }) {
         engineLagTracker.recordTickDuration(performance.now() - workerPostAtRef.current);
         workerPostAtRef.current = null;
       }
-      if (msg.type !== 'tickResult') return;
+      if (msg.type === 'basisMismatch') {
+        // FEAT-2326609777 round follow-up (opus-round-feat777, 2026-09-06):
+        // the worker detected its cache didn't match the basis our
+        // `runTickDelta` request assumed (simWorkerDelta.ts's
+        // DeltaBasisMismatchError) and declined to compute a tick at all.
+        // Record the registry-sourced integrity error exactly once per
+        // detection, reset OUR belief about the worker's cache to null (the
+        // worker already reset its own — see simWorker.ts), and discard
+        // this round trip like any other discard: the tick-driver's next
+        // scheduled interval fire issues a fresh, full `runTick` request
+        // (workerKnownStateRef is null again, so issueTickRequest's
+        // `useDelta` check is false) — no tick is silently lost, it is
+        // simply re-run one interval later, exactly the AC-8-style
+        // tolerance every other worker-malfunction path in this file
+        // already accepts.
+        recordError(
+          `Web Worker tick offload: delta basis mismatch detected (expected tick ${msg.expectedBaseTick}, worker held ${msg.actualBaseTick}); forcing a full resync.`,
+          { type: 'app', action: 'worker-delta-basis-mismatch', code: 'MET-V891' }
+        );
+        workerKnownStateRef.current = null;
+        deltaRequestsSinceResyncRef.current = 0;
+        return;
+      }
+      if (msg.type !== 'tickResult' && msg.type !== 'tickResultDelta') return;
+      // FEAT-2326609777: resolve the actual full post-tick SimState this
+      // reply describes, and (unconditionally — same "regardless of
+      // apply/discard" convention as clearWorkerBusy above, since the
+      // worker genuinely computed/cached this result either way) update
+      // `workerKnownStateRef` to match what the worker now holds, so the
+      // NEXT request's diff is always computed against the worker's real
+      // cache rather than a stale belief about it.
+      let resultState: SimState;
+      if (msg.type === 'tickResult') {
+        resultState = msg.state;
+        // Only a worker that explicitly advertises delta capability (the
+        // real simWorker.ts) is ever switched into delta mode — see
+        // simWorkerDelta.ts's "BACKWARD COMPATIBILITY" section. A legacy/
+        // mocked worker that never sets this flag leaves workerKnownStateRef
+        // null forever, so issueTickRequest keeps sending full `runTick`
+        // requests exactly as before this feature existed.
+        if (msg.deltaCapable) workerKnownStateRef.current = resultState;
+      } else {
+        // 'tickResultDelta' is only ever sent in reply to a `runTickDelta`
+        // request, which issueTickRequest only ever issues once
+        // `workerKnownStateRef` is already non-null — so
+        // `pendingRequestBasisStateRef.current` is guaranteed (by the
+        // at-most-one-request-in-flight invariant — see
+        // simWorkerOffloadController.ts's `workerBusy`) to hold the exact
+        // pre-tick state this delta was computed against.
+        const basis = pendingRequestBasisStateRef.current;
+        if (!basis) {
+          // Defense in depth (GR#1) — unreachable given the invariant
+          // above; if it somehow fires, treat it like any other worker
+          // protocol malfunction: record and let the next interval fire
+          // retry/fall back, rather than dereference a null basis.
+          recordError(
+            'Web Worker tick offload: delta reply arrived with no known basis state (protocol invariant violated); skipping this reply.',
+            { type: 'app', action: 'worker-delta-no-basis', code: 'MET-V856' }
+          );
+          return;
+        }
+        // FEAT-2326609777 round follow-up: mirror simWorker.ts's own
+        // DeltaBasisMismatchError handling on this side too — the same
+        // integrity check runs wherever applyStateDelta is called, and a
+        // reply's delta could in principle be diffed against a basis that
+        // no longer matches ours (the round's own "no integrity check on
+        // the delta basis" finding was specifically about this class of
+        // silent corruption).
+        try {
+          resultState = applyStateDelta(basis, msg.delta);
+        } catch (err) {
+          if (!(err instanceof DeltaBasisMismatchError)) throw err;
+          recordError(
+            `Web Worker tick offload: delta basis mismatch detected (expected tick ${err.expectedBaseTick}, main held ${err.actualBaseTick}); forcing a full resync.`,
+            { type: 'app', action: 'worker-delta-basis-mismatch', code: 'MET-V891' }
+          );
+          workerKnownStateRef.current = null;
+          deltaRequestsSinceResyncRef.current = 0;
+          return;
+        }
+        workerKnownStateRef.current = resultState;
+      }
       // B2/B3 fix: ALL of "is this reply stale", "should it be applied",
       // and "what tick number (if any) to journal" are decided by the pure
       // controller — see simWorkerOffloadController.ts's decideTickReply
@@ -1957,7 +2104,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // current by the time this runs).
       const { state: nextControllerState, decision } = decideTickReply(
         offloadControllerRef.current,
-        { requestId: msg.requestId, resultTick: msg.state.tick },
+        { requestId: msg.requestId, resultTick: resultState.tick },
         stateRefForDispatch.current.tick
       );
       const wasStaleMismatch = nextControllerState === offloadControllerRef.current;
@@ -2004,7 +2151,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // its once-per-load ceremonies (AC-31 over-cap notice re-fired every
         // second without this, undismissably). Re-applied here after the
         // BUG-669 merge (the estate's store.tsx predated the BUG-677 fix).
-        dispatch({ type: 'hydrate', state: msg.state, source: 'tick' });
+        dispatch({ type: 'hydrate', state: resultState, source: 'tick' });
         // BUG-618: this IS an applied tick (bypasses wrappedDispatch's own
         // 'tick' branch entirely — raw `dispatch` above — so it must be
         // counted here, the only place a worker-sourced tick actually lands).
@@ -2070,6 +2217,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // there is nothing left to selectively drain first.
       tracker.reset(); // also clears the reported supersedeStreak — a torn-down worker has nothing left to be "behind" on.
       offloadControllerRef.current = initialOffloadControllerState();
+      // FEAT-2326609777: see the handshake-timeout path's identical reset —
+      // this worker's cache is gone with it.
+      workerKnownStateRef.current = null;
+      pendingRequestBasisStateRef.current = null;
+      deltaRequestsSinceResyncRef.current = 0;
       if (hadPendingTick) {
         // Run the abandoned request's tick NOW, through the ordinary
         // main-thread fallback reducer — same call, same reasoning as the
@@ -2088,6 +2240,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // outstanding pendingTick/workerBusy, so no selective drain is needed.
       tracker.reset();
       offloadControllerRef.current = initialOffloadControllerState();
+      // FEAT-2326609777: see worker.onerror's identical reset just above.
+      workerKnownStateRef.current = null;
+      pendingRequestBasisStateRef.current = null;
+      deltaRequestsSinceResyncRef.current = 0;
       // FEAT-2326609771: an ordinary unmount/teardown is not a failure — no
       // fallback reason is reported here — but a still-armed handshake
       // watchdog must be cancelled regardless, or it would fire against a
