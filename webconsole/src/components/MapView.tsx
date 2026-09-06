@@ -23,6 +23,7 @@ import {
   buildingDisplayStates,
   constructionTicks,
   lineUsageOf,
+  stationUtilisationOf,
   lineSegmentIdByTileOf,
   lineSegmentByIdOf,
   isLineSpec,
@@ -2041,6 +2042,38 @@ export function BuildingCard({
             : 'Not connected — no road touches this station yet'}
         </p>
       )}
+      {/* BUG-816: stationUtilisationOf (AC-3, FEAT-2326609772 inc2) had no
+          production caller — the per-station attribution never reached a
+          screen. Wired here: null (disconnected, or connected but its class
+          has no LineUsage entry yet — BUG-814's honest-absence convention)
+          renders "no line yet"; otherwise the percentage is the station's
+          CLASS-level saturation/overCapacity straight off lineUsageOf — the
+          SAME SSOT the Lines overlay's HOT/OK tint already uses (data.ts,
+          GR#3: no second saturation derivation) — coloured with the
+          existing .in/.out (done/danger) convention. */}
+      {sp.kind === 'station' &&
+        (() => {
+          const stationStat = stationUtilisationOf(state).find((x) => x.id === building.id);
+          const cls =
+            stationStat && stationStat.utilisation !== null
+              ? lineUsageOf(state).find((u) => u.spec === stationStat.lineSpec)
+              : undefined;
+          if (!cls || !stationStat || stationStat.utilisation === null)
+            return <p>Line utilisation: no line yet</p>;
+          const pct = Math.round(cls.saturation * 100);
+          // BUG-816 round finding 1 (opus-round-bug816): the CLASS percentage
+          // alone is NOT the AC-3 number this item is about — every station on
+          // a class shows the same figure, so stationUtilisationOf's PER-STATION
+          // attribution still never reached a screen. The station's own
+          // attributed commuter count is displayed alongside it, formatted with
+          // the file's existing fmtNum.
+          return (
+            <p className={cls.overCapacity ? 'out' : 'in'}>
+              Line utilisation: {pct}% of class · {fmtNum(stationStat.utilisation)} commuters via
+              this station
+            </p>
+          );
+        })()}
       <BuildingProfileView spec={sp} taxRates={state.taxRates} hideProduces={underConstruction} />
     </div>
   );
