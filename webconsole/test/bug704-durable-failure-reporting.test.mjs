@@ -98,13 +98,17 @@ function mutateCallSite(src, replacement) {
 
 function stripCatch(src) {
   // Several functions in store.tsx have their own `.catch((e: unknown) => {`
-  // clause — scope the search to the one INSIDE `mirrorSavepointDirect`
+  // clause — scope the search to the one INSIDE `mirrorSavepointDirectAwaitable`
   // specifically, or an earlier, unrelated occurrence gets stripped instead
   // (reproduced: the naive `indexOf` from the top of the file hit a
   // different function's catch entirely, leaving THIS one untouched and the
   // RED-PROOF vacuous).
-  const fnStart = src.indexOf('function mirrorSavepointDirect(');
-  if (fnStart < 0) throw new Error('RED-PROOF setup is broken: mirrorSavepointDirect not found — has it moved/renamed?');
+  // BUG-781: renamed from the old void `mirrorSavepointDirect` wrapper —
+  // `mirrorAfterPersist` now awaits this function's own outcome so a local
+  // (localStorage) failure the durable mirror rescues is never reported as
+  // an outright save failure.
+  const fnStart = src.indexOf('function mirrorSavepointDirectAwaitable(');
+  if (fnStart < 0) throw new Error('RED-PROOF setup is broken: mirrorSavepointDirectAwaitable not found — has it moved/renamed?');
   const needle = `.catch((e: unknown) => {`;
   const start = src.indexOf(needle, fnStart);
   if (start < 0) throw new Error('RED-PROOF setup is broken: the .catch clause was not found — has it moved?');

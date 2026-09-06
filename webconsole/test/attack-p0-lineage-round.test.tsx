@@ -338,11 +338,29 @@ test('(b) saveGameAs against a REFUSING storage: the journal is NOT cleared, the
       ),
     );
 
+    // BUG-781: this scenario wedges ONLY localStorage — the fake IndexedDB
+    // backing has no quota ceiling, so the durable mirror rescues the write.
+    // The message contract changed accordingly: a local-quota refusal the
+    // durable copy rescues must NOT claim "NOT being saved" (Aaron's
+    // dogfood capture-13 finding — that exact wrong wording, x11, on a real
+    // ~15.8MB city whose durable copy had in fact landed); it must instead
+    // say the city IS saved durably and the local fast-cache was skipped
+    // (MET-V884, warn severity). The un-rescued case (both stores fail)
+    // keeps the old loud "NOT being saved" wording — see
+    // bug-781-mirror-quota-message.test.mjs for that contrast, exercised
+    // directly against `mirrorAfterPersist`/`surfaceSaveRefusal`.
     const added = recentErrors().slice(0, Math.max(0, recentErrors().length - errorsBefore));
     pin(() =>
       assert.ok(
-        added.some((e: any) => /Save (failed|refused)/i.test(e.msg) && /NOT being saved|quota/i.test(e.msg)),
-        'THE REFUSAL WAS SILENT (GR#1/GR#17): no recordError names the failure. Recorded since the attempt: ' +
+        added.some((e: any) => e.code === 'MET-V884' && /saved/i.test(e.msg)),
+        'THE REFUSAL WAS SILENT (GR#1/GR#17), or wrongly worded: no MET-V884 durable-rescue message was recorded. Recorded since the attempt: ' +
+          JSON.stringify(added.map((e: any) => e.msg)),
+      ),
+    );
+    pin(() =>
+      assert.ok(
+        !added.some((e: any) => /NOT being saved/i.test(e.msg)),
+        'a durable-rescued local failure must NOT claim the city is "NOT being saved" — the IndexedDB copy has it. Recorded: ' +
           JSON.stringify(added.map((e: any) => e.msg)),
       ),
     );

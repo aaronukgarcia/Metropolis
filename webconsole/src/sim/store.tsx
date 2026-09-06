@@ -415,26 +415,66 @@ function recordDurableSavepointRefusal(lineageId: string | undefined, reason: 's
   recordError(message, { type: 'app', action: 'save' });
 }
 
-function mirrorSavepointDirect(encodedSavepoint: string, lineageId?: string, extraExistingRaw: string[] = []): void {
-  try {
-    void mirrorSavepointDirectToStore(getDefaultSaveStore(), encodedSavepoint, lineageId, extraExistingRaw)
-      .then((result) => {
-        if (!result.ok) recordDurableSavepointRefusal(lineageId, result.reason, result.error);
-      })
-      .catch((e: unknown) => {
-        // BUG-704 re-round 2 (P3 item 3): `mirrorSavepointDirectToStore`
-        // documents a never-throws contract, but this chain had no `.catch`
-        // at all — an unexpected rejection (a future regression in that
-        // contract, or a truly exotic host failure) would otherwise become
-        // an UNHANDLED PROMISE REJECTION, silently dropping the one signal
-        // that the durable mirror never advanced. Never trusted blindly:
-        // recorded exactly like any other storage-error failure.
-        recordDurableSavepointRefusal(lineageId, 'storage-error', e instanceof Error ? e.message : String(e));
-      });
-  } catch {
-    /* best-effort */
-  }
+/** Outcome of the durable (IndexedDB) leg of a `mirrorAfterPersist` call. */
+export interface MirrorAfterPersistOutcome {
+  /** true ONLY when the write landed in REAL, reload-surviving IndexedDB. */
+  ok: boolean;
+  reason?: 'stale' | 'storage-error';
+  /**
+   * BUG-781: true when the durable write "succeeded" only into
+   * `createSaveStore`'s in-memory overlay (IndexedDB itself is unavailable
+   * or failing) — NOT actually durable, and NOT reported as `ok:true` here
+   * even though `saveStore.ts` never rejects that write. `createSaveStore`
+   * already recorded its own loud MET-V858/MET-V859 error the moment this
+   * happened; this flag exists so a caller never ALSO claims "saved
+   * durably" (MET-V884) on top of that.
+   */
+  degraded?: boolean;
 }
+
+/**
+ * BUG-781: awaitable counterpart of the old fire-and-forget
+ * `mirrorSavepointDirect` — resolves with the durable write's own outcome
+ * (never throws, never rejects, matching `mirrorSavepointDirectToStore`'s own
+ * documented contract) so a caller that cares which store ACTUALLY ended up
+ * holding the savepoint can word its player-facing message honestly instead
+ * of always assuming "the local write failed" means "nothing was saved".
+ */
+function mirrorSavepointDirectAwaitable(
+  encodedSavepoint: string,
+  lineageId: string | undefined,
+  extraExistingRaw: string[],
+): Promise<MirrorAfterPersistOutcome> {
+  return mirrorSavepointDirectToStore(getDefaultSaveStore(), encodedSavepoint, lineageId, extraExistingRaw)
+    .then((result): MirrorAfterPersistOutcome => {
+      if (!result.ok) {
+        recordDurableSavepointRefusal(lineageId, result.reason, result.error);
+        return { ok: false, reason: result.reason };
+      }
+      if (result.degraded) {
+        // Landed only in the in-memory overlay — NOT durable. `createSaveStore`
+        // already recorded MET-V858/MET-V859 loudly for this; do not ALSO
+        // report a fabricated "Durable (IndexedDB) save FAILED" (nothing threw
+        // — it just isn't durable), and never let the caller report MET-V884
+        // ("saved durably") for a copy that will not survive a reload.
+        return { ok: false, degraded: true };
+      }
+      return { ok: true };
+    })
+    .catch((e: unknown) => {
+      // BUG-704 re-round 2 (P3 item 3): `mirrorSavepointDirectToStore` documents
+      // a never-throws contract, but this chain had no `.catch` at all — an
+      // unexpected rejection (a future regression in that contract, or a truly
+      // exotic host failure) would otherwise become an UNHANDLED PROMISE
+      // REJECTION, silently dropping the one signal that the durable mirror
+      // never advanced. Never trusted blindly: recorded exactly like any other
+      // storage-error failure.
+      const msg = e instanceof Error ? e.message : String(e);
+      recordDurableSavepointRefusal(lineageId, 'storage-error', msg);
+      return { ok: false, reason: 'storage-error' } as MirrorAfterPersistOutcome;
+    });
+}
+
 
 /**
  * FEAT-2326609780 inc2: the single call-site pattern every `persistSavepoint`
@@ -468,17 +508,39 @@ function mirrorSavepointDirect(encodedSavepoint: string, lineageId?: string, ext
  * baselines are passed — the durable gate falls back to comparing against
  * ONLY its own prior contents, exactly as before this fix.
  */
-export function mirrorAfterPersist(persisted: boolean, savepoint: Savepoint, reason?: SavepointRejectReason): void {
+export function mirrorAfterPersist(persisted: boolean, savepoint: Savepoint, reason?: SavepointRejectReason): Promise<MirrorAfterPersistOutcome> {
   // P0 RCA fix, item 2: `savepoint.lineageId` (stamped automatically by
   // createSavepoint from the state that produced it) threads straight
   // through to the IDB mirror keys, so two lineages' durable copies can
   // never collide either.
   if (persisted) {
     mirrorSavepointCheckpoint(savepoint.lineageId);
-  } else {
-    const baselines = reason === 'stale-overwrite' ? localSavepointBaselines(savepoint.lineageId) : [];
-    mirrorSavepointDirect(JSON.stringify(savepoint), savepoint.lineageId, baselines);
+    return Promise.resolve({ ok: true });
   }
+  const baselines = reason === 'stale-overwrite' ? localSavepointBaselines(savepoint.lineageId) : [];
+  const outcome = mirrorSavepointDirectAwaitable(JSON.stringify(savepoint), savepoint.lineageId, baselines);
+  // BUG-781: Aaron's dogfood capture-13 ring showed 'Save failed (storage
+  // quota)' x11 even though IndexedDB (the store the NEXT boot actually
+  // trusts, FEAT-2326609780/2bd94ad) is the one with practically no size
+  // ceiling — the local (localStorage) write is the one that is genuinely
+  // 5-10MB-quota-constrained on a ~15MB city. When the durable write lands
+  // despite the local one failing, the city IS safely saved; say so (warn,
+  // MET-V884) instead of leaving the only signal be whatever LOUDER message
+  // the caller was about to record on the (wrong) assumption that a local
+  // failure means nothing was saved at all.
+  void outcome.then((result) => {
+    if (result.ok) {
+      const why = reason === 'stale-overwrite' ? 'a fresher local copy already existed' : 'local storage quota';
+      recordError(
+        `City saved (durable IndexedDB copy updated) - the local fast-cache write was skipped (${why}). The save is safe and will be restored from the durable copy.`,
+        { type: 'app', action: 'save', code: 'MET-V884' },
+      );
+    }
+    // A durable failure too is already recorded loudly by
+    // `mirrorSavepointDirectAwaitable` itself (recordDurableSavepointRefusal)
+    // — nothing further to do here in that branch.
+  });
+  return outcome;
 }
 
 /** The shape every savepoint-freshness comparison in this module operates on. */
@@ -2435,7 +2497,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
           // Mirror unconditionally, exactly like every other persistSavepoint
           // call site now does — success mirrors the localStorage bytes,
           // failure mirrors `healed` directly into the overflow slot.
-          mirrorAfterPersist(healedOk, healed, healedResult.reason);
+          void mirrorAfterPersist(healedOk, healed, healedResult.reason);
           if (!healedOk) {
             recordError(
               'Self-heal save failed after a large-tail load (storage quota). The replayed city is active now, but the large tail may reappear on the next load — clear journal in Config, then Save.',
@@ -2521,7 +2583,17 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // savepoint that just failed to reach localStorage directly into the
         // durable store's overflow slot, so IndexedDB keeps advancing even
         // while every localStorage slot is wedged.
-        mirrorAfterPersist(success, savepoint, autosaveResult.reason);
+        const mirrorPromise = mirrorAfterPersist(success, savepoint, autosaveResult.reason);
+        if (!success) {
+          // BUG-781: the "⚠ save" quiet indicator was set above assuming the
+          // local write's own result — correct it once the durable leg
+          // resolves, so a quota-wedged localStorage whose durable copy
+          // lands (MET-V884, recorded by mirrorAfterPersist itself) does not
+          // leave the indicator lit for the whole AUTOSAVE_INTERVAL_MS.
+          void mirrorPromise.then((mirrorResult) => {
+            if (mirrorResult.ok) setAutoSaveError(false);
+          });
+        }
       } catch (e) {
         // Catch-all for any error during autosave (e.g., localStorage throws).
         setAutoSaveError(true);
@@ -2907,7 +2979,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
             if (Number.isFinite(rebuiltSave.saveSeq) && (rebuiltSave.saveSeq as number) > saveSeqRef.current) {
               saveSeqRef.current = rebuiltSave.saveSeq as number;
             }
-            mirrorAfterPersist(true, rebuiltSave);
+            void mirrorAfterPersist(true, rebuiltSave);
             persistStashedCamera(window.localStorage, decision.camera ?? currentCamera());
             // BUG-458: flush (not schedule) — a rebuild is a wipe/replace boundary.
             if (hotJournalRef.current) journalPersisterRef.current?.flush(hotJournalRef.current);
@@ -3186,6 +3258,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
     setRebuildInProgress(true);
 
     window.setTimeout(() => {
+      void (async () => {
       try {
         setRebuildProgress({ actionsDone: 1, actionsTotal: 4, phaseLabel: 'Archiving current city…' });
         if (!captureOutgoingOrDownload()) {
@@ -3242,7 +3315,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // FEAT-2326609780 inc2: mirror unconditionally (was `if (persisted)`
         // — a quota failure here left IndexedDB holding the PREVIOUS city's
         // savepoint even though the player just loaded a different one).
-        mirrorAfterPersist(persisted, savepointToPersist, loadPersistResult.reason);
+        // BUG-781: await it — see saveGame's identical reasoning for why a
+        // local-quota failure the durable mirror rescues is not "failed".
+        const loadMirrorResult = await mirrorAfterPersist(persisted, savepointToPersist, loadPersistResult.reason);
         persistStashedCamera(window.localStorage, save.savepoint.camera ?? currentCamera());
         setRebuildProgress({ actionsDone: 3, actionsTotal: 4, phaseLabel: 'Hydrating city…' });
         setCityName(displayCityName(save.name));
@@ -3284,11 +3359,20 @@ export function SimProvider({ children }: { children: ReactNode }) {
         idbSwapAttemptedRef.current = true;
         // Lineage pointer already written above, BEFORE the persist (see
         // comment there for why the ordering matters).
-        if (!persisted) {
-          recordError('City loaded in memory; session persist failed (quota). Use Config → Clear journal, then Save.', {
+        if (!persisted && !loadMirrorResult.ok) {
+          // Neither store took the session savepoint — a genuine primary
+          // failure (BUG-781: distinct from the durable-rescue case below,
+          // which MET-V885/MET-V884 already cover at warn severity via
+          // mirrorAfterPersist).
+          recordError('City loaded in memory; session persist failed (quota, both local and durable storage). Use Config → Clear journal, then Save.', {
             type: 'app',
             action: 'load',
           });
+        } else if (!persisted && loadMirrorResult.ok) {
+          recordError(
+            'City loaded and its session save reached the durable IndexedDB copy; the local fast-cache write was skipped (quota). Reloading will restore from the durable copy.',
+            { type: 'app', action: 'load', code: 'MET-V885' },
+          );
         }
         rememberOpened(save);
         setRebuildProgress({ actionsDone: 4, actionsTotal: 4, phaseLabel: 'Loaded' });
@@ -3297,6 +3381,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         const msg = e instanceof Error ? e.message : String(e);
         finishLoadOverlay(false, `Load failed: ${msg}. Current city left intact.`);
       }
+      })();
     }, 50);
   };
 
@@ -3310,7 +3395,29 @@ export function SimProvider({ children }: { children: ReactNode }) {
    * again (they already had: saveGameAs previously ignored its own return
    * value entirely).
    */
-  const surfaceSaveRefusal = (reason: SavepointRejectReason | undefined): void => {
+  // BUG-781: `mirrorOk` says whether the durable (IndexedDB) copy — the store
+  // the NEXT boot actually trusts, FEAT-2326609780/2bd94ad — landed despite
+  // the local (localStorage) write being refused. Aaron's dogfood capture-13
+  // ring showed 'Save failed (storage quota)' x11 on a ~15.8MB city even
+  // though localStorage's practical 5-10MB ceiling, not IndexedDB's (which
+  // has no such ceiling), was the thing that actually ran out — telling the
+  // player "This city is NOT being saved" in that case is simply false. The
+  // conservative side effects (no rename, no download, journal preserved —
+  // see `saveGame`/`saveGameAs`'s own comments) are UNCHANGED by this: only
+  // the wording changes, distinguishing a real "nothing was saved anywhere"
+  // from "the durable copy has it, only the local fast-cache is behind".
+  const surfaceSaveRefusal = (reason: SavepointRejectReason | undefined, mirrorOk: boolean): void => {
+    if (mirrorOk) {
+      // The durable (IndexedDB) copy already landed — `mirrorAfterPersist`
+      // itself just recorded the accurate, warn-severity MET-V884 message
+      // ("saved durably, local fast-cache skipped"). Recording a SECOND,
+      // differently-worded message here would just be noise; only the
+      // quiet "⚠ save" indicator (which exists to flag a save that needs
+      // player attention) needs updating, and a durable-rescued local
+      // failure is not that condition.
+      setAutoSaveError(false);
+      return;
+    }
     const msg =
       reason === 'stale-overwrite'
         ? 'Save refused: a fresher save already exists for this city (an ordering/lineage conflict). This city is NOT being saved — your recent play is safe only in memory until you try again.'
@@ -3325,15 +3432,24 @@ export function SimProvider({ children }: { children: ReactNode }) {
       const result = persistSavepointWithReason(window.localStorage, save.savepoint);
       // FEAT-2326609780 inc2: mirror unconditionally, success or failure, so
       // a quota-failed manual save still advances the durable IndexedDB copy.
-      mirrorAfterPersist(result.ok, save.savepoint, result.reason);
+      // BUG-781: AWAIT the durable outcome before deciding what to tell the
+      // player — a local (localStorage) failure that the durable (IndexedDB)
+      // mirror rescues is NOT "Save failed... NOT being saved" (capture-13's
+      // dogfood ring showed that exact wrong message x11 on a 15.8MB city).
+      const mirrorResult = await mirrorAfterPersist(result.ok, save.savepoint, result.reason);
       if (!result.ok) {
         // P0 RCA fix, item 4: a REFUSED save must NOT clear the journal —
         // the player's real, unsaved history is the ONLY record of what
         // happened since the last successful checkpoint; the OLD code
         // cleared it here UNCONDITIONALLY, silently discarding it on every
         // refusal while claiming (via the quiet autosave dot alone) that
-        // nothing was wrong.
-        surfaceSaveRefusal(result.reason);
+        // nothing was wrong. Renamed/downloaded state is likewise left
+        // untouched here regardless of the durable outcome — ONLY the
+        // player-facing wording (via `surfaceSaveRefusal`) distinguishes a
+        // durable-rescued local failure from a genuine total failure
+        // (BUG-781); the conservative side effects stay identical to the
+        // pre-fix contract this file's own P0-round tests pin.
+        surfaceSaveRefusal(result.reason, mirrorResult.ok);
         return false;
       }
       // BUG-458: flush — a save is exactly the boundary where losing the
@@ -3372,7 +3488,14 @@ export function SimProvider({ children }: { children: ReactNode }) {
       const save = buildCurrentSave(label, nextSaveSeq());
       const savedAsResult = persistSavepointWithReason(window.localStorage, save.savepoint);
       // FEAT-2326609780 inc2: mirror unconditionally (see mirrorAfterPersist).
-      mirrorAfterPersist(savedAsResult.ok, save.savepoint, savedAsResult.reason);
+      // BUG-781: await it — the wording (via `surfaceSaveRefusal`) must
+      // distinguish a local-quota failure the durable IndexedDB mirror
+      // rescues from a genuine total failure (see saveGame's own comment on
+      // this exact pattern). The conservative side effects below (no journal
+      // clear, no city-name switch, no download) stay gated on the LOCAL
+      // outcome regardless — unchanged from the pre-fix contract this file's
+      // own P0-round tests pin.
+      const mirrorResult = await mirrorAfterPersist(savedAsResult.ok, save.savepoint, savedAsResult.reason);
       if (!savedAsResult.ok) {
         // P0 RCA fix, item 4 — "the aggravator inside the P0": this return
         // value was PREVIOUSLY IGNORED ENTIRELY (store.tsx:2319 in the RCA's
@@ -3382,7 +3505,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // recent history while claiming success. Refuse the SAME way
         // saveGame does: no journal clear, no city-name switch, no file
         // download, a loud error, and an honest `ok:false` returned.
-        surfaceSaveRefusal(savedAsResult.reason);
+        surfaceSaveRefusal(savedAsResult.reason, mirrorResult.ok);
         return { ok: false };
       }
       // BUG-458: flush — Save As is a save boundary, same as saveGame.

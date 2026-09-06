@@ -139,7 +139,9 @@
       "V865-V865": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V866-V866": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V868-V869": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-05 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V870-V879": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V870-V879": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-04 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V884-V885": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-06 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\"; re-keyed from V882-V884 same-session after a parallel-lane collision with the BUG-791 lane's V880-V883 claim from the same HEAD)"
+    
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -5693,6 +5695,18 @@
       "module": "ui.webconsole",
       "message": "Savepoint grid {gridW}x{gridH} exceeds this build's map size {mapW}x{mapH} - refusing to load (would truncate buildings)",
       "remedy": "Update to a build with a map at least {gridW}x{gridH}, or load an older savepoint"
+    },
+    "MET-V884": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "City saved (durable IndexedDB copy updated) but the local fast-cache mirror was skipped ({reason}) - the save is safe; only the quick same-tab local copy is behind",
+      "remedy": "No action needed; the durable IndexedDB copy is authoritative on next load. Config > Reclaim storage frees the local cache if this repeats."
+    },
+    "MET-V885": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "City loaded and running; the durable IndexedDB copy is up to date but the local fast-cache mirror was skipped ({reason}) - session is recoverable on reload from the durable copy",
+      "remedy": "No action needed; the durable IndexedDB copy is authoritative. Config > Reclaim storage frees the local cache if this repeats."
     }
   }
 }

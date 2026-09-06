@@ -177,6 +177,7 @@ test('FEAT-2326609780 inc2: quota wedge — localStorage rejects every savepoint
 
     const { occupiedSet, fits, MAP_W, MAP_H } = await import('../src/sim/data.ts');
     const { SAVEPOINT_KEY_PREFIX, readAllSavepoints, mostRecentSavepoint, readCurrentLineageId, LEGACY_LINEAGE_ID } = await import('../src/sim/replay.ts');
+    const { recentErrors } = await import('../src/sim/backend.ts');
     const React = await import('react');
     const { createRoot } = await import('react-dom/client');
     const { act } = await import('react-dom/test-utils');
@@ -293,8 +294,23 @@ test('FEAT-2326609780 inc2: quota wedge — localStorage rejects every savepoint
       });
     }
     assert.equal(latestState.buildings.length, baselineCount + 1 + WEDGED_SAVE_ATTEMPTS);
-    assert.equal(wedgedSaveOk, false, 'every wedged save must FAIL — localStorage is wedged');
+    // `saveGame()`'s boolean return keeps its pre-BUG-781 conservative
+    // meaning (the LOCAL fast-cache write did not land, so the UI's "needs
+    // attention" surface still lights up) — see the P0-round tests for why
+    // rename/download/journal-clear must stay gated on the LOCAL outcome.
+    assert.equal(wedgedSaveOk, false, 'the local (fast-cache) write is still refused — saveGame()\'s return value is unchanged by BUG-781');
     assert.ok(rejectedWrites > 0, 'the quota shim must actually have rejected a savepoint write');
+    // BUG-781: what MUST change is the MESSAGE — Aaron's dogfood capture-13
+    // ring showed 'Save failed (storage quota)' x11 on a real ~15.8MB city
+    // even though the durable IndexedDB copy (the store the NEXT boot
+    // actually trusts) landed every time. Assert the accurate, warn-severity
+    // MET-V884 message is recorded, and that the loud "NOT being saved"
+    // wording is NOT — the durable copy rescues every one of these 5 writes.
+    const recorded = recentErrors();
+    const durableRescueWarnings = recorded.filter((e: any) => e.code === 'MET-V884');
+    assert.ok(durableRescueWarnings.length > 0, 'a durable-rescue (MET-V884) message must be recorded when the local write fails but IndexedDB succeeds');
+    const falseFailureMessages = recorded.filter((e: any) => /NOT being saved/i.test(e.msg));
+    assert.equal(falseFailureMessages.length, 0, `no message may claim the city is "NOT being saved" when the durable copy holds it: ${JSON.stringify(falseFailureMessages.map((e: any) => e.msg))}`);
 
     // THE CORE CLAIM (1a): IndexedDB's overflow slot must hold the ADVANCED
     // city directly, bypassing the (still-stale) localStorage read entirely.

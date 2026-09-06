@@ -757,6 +757,18 @@ export interface MirrorSavepointDirectResult {
   reason?: 'stale' | 'storage-error';
   /** The underlying detail string, when available — surfaced verbatim by the caller so the recorded message is accurate rather than a generic canned string. */
   error?: string;
+  /**
+   * BUG-781: true when an `ok:true` result landed in `createSaveStore`'s
+   * in-memory OVERLAY, not real IndexedDB — i.e. IndexedDB itself is
+   * unavailable or failing (already loudly reported, separately, via
+   * MET-V858/MET-V859 by `createSaveStore`'s own `markDegraded`). A caller
+   * must NOT report this as "saved durably" — the memory overlay does not
+   * survive a reload, so `ok:true, degraded:true` is NOT the rescue this
+   * function otherwise exists to provide; it is the genuine "both stores
+   * failed" case wearing an `ok:true` shape because `createSaveStore` never
+   * rejects. Absent (`undefined`) on any `ok:false` result.
+   */
+  degraded?: boolean;
 }
 
 export async function mirrorSavepointDirect(
@@ -779,7 +791,7 @@ export async function mirrorSavepointDirect(
 ): Promise<MirrorSavepointDirectResult> {
   try {
     const result = await guardedSavepointSetItem(store, overflowKeyForLineage(lineageId), encodedSavepoint, extraExistingRaw);
-    if (result.ok) return { ok: true };
+    if (result.ok) return { ok: true, degraded: result.degraded };
     const reason: 'stale' | 'storage-error' = result.error?.startsWith('refused:') ? 'stale' : 'storage-error';
     return { ok: false, reason, error: result.error };
   } catch (e) {
