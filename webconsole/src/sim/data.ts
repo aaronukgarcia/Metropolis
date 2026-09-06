@@ -3235,6 +3235,164 @@ export const lineUsageOf: (s: SimState) => LineUsage[] = memoOnState((s) => {
   return out;
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-2326609772 inc1 — PER-SEGMENT ROAD CAPACITY/UTILISATION. Read-only
+// decomposition of lineUsageOf()'s already-computed per-class usage across
+// contiguous same-class road runs (AC-1/AC-2). Scope this increment: rd_aroad
+// / rd_dual / m20 only — the doc's own §8 inc1 slice (Aaron's literal
+// "motorways" ask); rail/hs1 segments are inc2, the map overlay is inc3.
+// NO new demand model, no new simulation loop, no new balance constant — this
+// is pure arithmetic apportionment of a number lineUsageOf already produces
+// (GR#3: one congestion mechanic, not two). PURE + DETERMINISTIC (GR#21): no
+// Date.now / Math.random, no map-iteration-with-break, strict-sorted output.
+// memoOnState (BUG-602 class): O(tiles-of-in-scope-classes) per call, cached
+// on state identity — same discipline as lineUsageOf/stationLinks above.
+// AC-8 forward-compat: segmentId is derived from the SORTED tile-adjacency
+// chain (a stable hash of the run's own tile coordinates), never an array
+// index, so it survives re-derivation and a future underground-metro medium
+// relabel unchanged.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Road classes in scope for inc1 (Aaron's literal "motorways" ask + doc §8). */
+export const SEGMENT_ROAD_CLASSES: ReadonlySet<string> = new Set(['rd_aroad', 'rd_dual', 'm20']);
+
+export interface LineSegment {
+  /** Line spec id this segment belongs to. */
+  spec: string;
+  kind: 'rail' | 'road';
+  /** Stable segment key — see AC-6/AC-8 (survives re-derivation and, later, undergrounding). */
+  segmentId: string;
+  /** Tiles making up this contiguous run. */
+  tiles: number;
+  /** Per-tile capacity (ROAD_TIER_CAPACITY, unchanged) × tiles. */
+  capacity: number;
+  /** This run's share of its class's total usage, apportioned by capacity share. */
+  usage: number;
+  saturation: number;
+  headroom: number;
+  overCapacity: boolean;
+}
+
+/**
+ * Deterministic 32-bit FNV-1a hash, hex-encoded. Used ONLY to compress a
+ * segment's sorted tile-coordinate chain into a stable, bounded-length key —
+ * not a security hash, just a cheap deterministic fingerprint (GR#21: no
+ * Date/random inputs, pure function of the string).
+ */
+function fnv1a(str: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * Per-segment road usage/capacity/saturation (FEAT-2326609772 inc1). One
+ * entry per contiguous connected run of same-spec drivable-road tiles, within
+ * the SEGMENT_ROAD_CLASSES scope. Reuses `lineUsageOf`'s class-level usage as
+ * the SSOT and apportions it across a class's segments by capacity share —
+ * the SAME proportional-split idiom `lineUsageOf` already applies for the
+ * hs1/rail commuter split (AC-2). Integer-exact: Σ segment.usage over one
+ * spec's segments === that spec's LineUsage.usage (floor-per-segment, with
+ * the rounding remainder assigned to the LAST segment in segmentId order —
+ * deterministic, mirrors the hs1/rail "one bucket takes the remainder" rule).
+ */
+export const lineSegmentsOf: (s: SimState) => LineSegment[] = memoOnState((s) => {
+  const classUsage = new Map<string, LineUsage>();
+  for (const u of lineUsageOf(s)) classUsage.set(u.spec, u);
+
+  // Bucket in-scope road tiles by spec, indexed by "x,y" for O(1) adjacency lookups.
+  const bySpec = new Map<string, Map<string, { x: number; y: number }>>();
+  for (const b of s.buildings) {
+    if (!SEGMENT_ROAD_CLASSES.has(b.spec)) continue;
+    let m = bySpec.get(b.spec);
+    if (!m) {
+      m = new Map();
+      bySpec.set(b.spec, m);
+    }
+    m.set(`${b.x},${b.y}`, { x: b.x, y: b.y });
+  }
+
+  const out: LineSegment[] = [];
+  // Strict spec-id order for GR#21 hygiene (Map iteration order is insertion
+  // order in practice, but nothing downstream should rely on that).
+  const specsSorted = [...bySpec.keys()].sort();
+  for (const spec of specsSorted) {
+    const tileMap = bySpec.get(spec)!;
+    const sp = SPECS[spec];
+    const cls = classUsage.get(spec);
+    if (!sp || !cls || cls.capacity <= 0) continue;
+
+    // Flood-fill 4-adjacent same-spec tiles into contiguous runs — the same
+    // connected-component shape as stationLinks'/computeRoadConnectivity's
+    // own adjacency walks (AC-1: reuse, don't reinvent, GR#3).
+    const visited = new Set<string>();
+    const keysSorted = [...tileMap.keys()].sort();
+    type Run = { runKeys: string[]; tiles: number; capacity: number };
+    const runs: Run[] = [];
+    for (const startKey of keysSorted) {
+      if (visited.has(startKey)) continue;
+      const runKeys: string[] = [];
+      const queue = [startKey];
+      visited.add(startKey);
+      while (queue.length) {
+        const key = queue.pop()!;
+        runKeys.push(key);
+        const t = tileMap.get(key)!;
+        const neighbours = [
+          `${t.x + 1},${t.y}`,
+          `${t.x - 1},${t.y}`,
+          `${t.x},${t.y + 1}`,
+          `${t.x},${t.y - 1}`,
+        ];
+        for (const nk of neighbours) {
+          if (tileMap.has(nk) && !visited.has(nk)) {
+            visited.add(nk);
+            queue.push(nk);
+          }
+        }
+      }
+      runKeys.sort();
+      const tiles = runKeys.length;
+      runs.push({ runKeys, tiles, capacity: lineCapacityOf(sp) * tiles });
+    }
+
+    // Deterministic segmentId order (hash of the sorted tile chain) BEFORE
+    // apportioning usage, so the "last segment takes the remainder" rule is
+    // itself order-independent of tile-discovery order.
+    const withIds = runs
+      .map((r) => ({ ...r, segmentId: `${spec}:${fnv1a(r.runKeys.join('|'))}` }))
+      .sort((a, b) => (a.segmentId < b.segmentId ? -1 : a.segmentId > b.segmentId ? 1 : 0));
+
+    let allocated = 0;
+    for (let i = 0; i < withIds.length; i++) {
+      const r = withIds[i];
+      const isLast = i === withIds.length - 1;
+      const usage = isLast
+        ? cls.usage - allocated
+        : Math.floor((cls.usage * r.capacity) / cls.capacity);
+      allocated += usage;
+      const saturation = r.capacity > 0 ? Math.min(1, Math.max(0, usage / r.capacity)) : 0;
+      const headroom = r.capacity - usage;
+      out.push({
+        spec,
+        kind: 'road',
+        segmentId: r.segmentId,
+        tiles: r.tiles,
+        capacity: r.capacity,
+        usage,
+        saturation,
+        headroom,
+        overCapacity: headroom < 0,
+      });
+    }
+  }
+  out.sort((a, b) => (a.segmentId < b.segmentId ? -1 : a.segmentId > b.segmentId ? 1 : 0));
+  return out;
+});
+
 /**
  * FEAT-congestion-teeth-2026-09-02 (Q100057 A1 "congestion must have felt
  * consequences", Q100071 rec-on-all — every BA recommendation in the spec
