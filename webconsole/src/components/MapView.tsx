@@ -23,8 +23,8 @@ import {
   buildingDisplayStates,
   constructionTicks,
   lineUsageOf,
-  lineSegmentsOf,
   lineSegmentIdByTileOf,
+  lineSegmentByIdOf,
   isLineSpec,
   isRoadSpec,
   isRailSpec,
@@ -627,7 +627,7 @@ export function MapView() {
     // would need before "which stretch is the bottleneck" is actually true.
     //
     // READ-ONLY, ZERO NEW COMPUTATION (GR#3): every number painted here comes
-    // straight off lineSegmentsOf(state)/lineSegmentIdByTileOf(state)/
+    // straight off lineSegmentByIdOf(state)/lineSegmentIdByTileOf(state)/
     // lineUsageOf(state) — pure decomposition already derived in data.ts;
     // this component does no capacity/usage arithmetic of its own.
     // Pure/deterministic: no Date.now / Math.random / localStorage (GR#21),
@@ -640,7 +640,11 @@ export function MapView() {
       const OK = '#3fb950'; // --done (surplus / within capacity)
       const HOT = '#ff7b72'; // --danger (over capacity / shortfall)
       const segmentIdByTile = lineSegmentIdByTileOf(state);
-      const segmentById = new Map(lineSegmentsOf(state).map((seg) => [seg.segmentId, seg]));
+      // BUG-815: read the memoised segmentById map straight off data.ts
+      // instead of allocating a fresh lookup Map from lineSegmentsOf's array
+      // on every draw frame — this component builds nothing proportional to
+      // the city per frame.
+      const segmentById = lineSegmentByIdOf(state);
       const classUsageBySpec = new Map(lineUsageOf(state).map((u) => [u.spec, u]));
       for (const b of visibleBuildings) {
         const sp = SPECS[b.spec];

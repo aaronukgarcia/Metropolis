@@ -3322,6 +3322,15 @@ function fnv1a(str: string): string {
 interface LineSegmentIndex {
   segments: LineSegment[];
   tileToSegment: Map<string, string>;
+  /**
+   * BUG-815: segmentId -> LineSegment, built ONCE in the same flood pass as
+   * `segments`/`tileToSegment` (GR#3: no second derivation) so callers never
+   * need to rebuild `new Map(segments.map(...))` themselves. Exposed via
+   * `lineSegmentByIdOf` below; memoised on state identity like everything
+   * else in this index, so two calls against the SAME state return the
+   * SAME Map object (identity-stable — no per-frame allocation).
+   */
+  segmentById: Map<string, LineSegment>;
 }
 
 /**
@@ -3360,6 +3369,7 @@ export const lineSegmentIndexOf: (s: SimState) => LineSegmentIndex = memoOnState
 
   const segments: LineSegment[] = [];
   const tileToSegment = new Map<string, string>();
+  const segmentById = new Map<string, LineSegment>();
   // Strict spec-id order for GR#21 hygiene (Map iteration order is insertion
   // order in practice, but nothing downstream should rely on that).
   const specsSorted = [...bySpec.keys()].sort();
@@ -3423,7 +3433,7 @@ export const lineSegmentIndexOf: (s: SimState) => LineSegmentIndex = memoOnState
       allocated += usage;
       const saturation = r.capacity > 0 ? Math.min(1, Math.max(0, usage / r.capacity)) : 0;
       const headroom = r.capacity - usage;
-      segments.push({
+      const segment: LineSegment = {
         spec,
         kind: cls.kind,
         segmentId: r.segmentId,
@@ -3433,12 +3443,14 @@ export const lineSegmentIndexOf: (s: SimState) => LineSegmentIndex = memoOnState
         saturation,
         headroom,
         overCapacity: headroom < 0,
-      });
+      };
+      segments.push(segment);
+      segmentById.set(segment.segmentId, segment);
       for (const k of r.runKeys) tileToSegment.set(k, r.segmentId);
     }
   }
   segments.sort((a, b) => (a.segmentId < b.segmentId ? -1 : a.segmentId > b.segmentId ? 1 : 0));
-  return { segments, tileToSegment };
+  return { segments, tileToSegment, segmentById };
 });
 
 /**
@@ -3470,6 +3482,18 @@ export const lineSegmentsOf: (s: SimState) => LineSegment[] = (s) => lineSegment
  */
 export const lineSegmentIdByTileOf: (s: SimState) => Map<string, string> = (s) =>
   lineSegmentIndexOf(s).tileToSegment;
+
+/**
+ * BUG-815 — memoised segmentId -> LineSegment lookup, thin reader of
+ * `lineSegmentIndexOf` (GR#3: no second derivation). Overlay draw code
+ * (MapView's Lines pass) previously rebuilt `new Map(lineSegmentsOf(state)
+ * .map(...))` on EVERY draw frame — O(total segments) allocation per frame,
+ * unbounded by viewport. Reading this instead returns the SAME Map object
+ * for the SAME state (memoOnState identity), so a draw loop calling it every
+ * frame builds nothing proportional to the city.
+ */
+export const lineSegmentByIdOf: (s: SimState) => Map<string, LineSegment> = (s) =>
+  lineSegmentIndexOf(s).segmentById;
 
 /**
  * AC-3 — per-station utilisation (FEAT-2326609772 inc2). "How much is a
@@ -3510,6 +3534,10 @@ export const stationUtilisationOf: (s: SimState) => StationUtilisation[] = memoO
   for (const b of allStations) {
     if (!links.connectedIds.has(b.id)) continue;
     const lineSpec: 'rail' | 'hs1' = b.spec === 'station_ashford' ? 'hs1' : 'rail';
+    // BUG-814 F2: this ×3 vs ×1 split is inert arithmetic while every class
+    // is weight-homogeneous (Ashford is the only ×3 in the hs1 bucket, every
+    // other station is ×1 in the rail bucket) — it only produces a real
+    // apportionment split once a class has stations at MIXED weights.
     const weight = b.spec === 'station_ashford' ? 3 : 1;
     let arr = byClass.get(lineSpec);
     if (!arr) {
@@ -3542,7 +3570,16 @@ export const stationUtilisationOf: (s: SimState) => StationUtilisation[] = memoO
 
   return allStations.map((b) => {
     const lineSpec: 'rail' | 'hs1' = b.spec === 'station_ashford' ? 'hs1' : 'rail';
-    const utilisation = links.connectedIds.has(b.id) ? (utilByStation.get(b.id) ?? 0) : null;
+    // BUG-814: a CONNECTED station whose class has no LineUsage entry yet (no
+    // rail tiles laid) must report null — honest absence of a usage basis —
+    // NOT a fabricated 0 indistinguishable from "connected but genuinely
+    // idle". utilByStation is only populated per-class when classUsage has an
+    // entry AND totalWeight > 0 (see the loop above); a connected station
+    // missing from that map has no usage basis at all, so `.get()` returning
+    // undefined must map to null here, never `?? 0`.
+    const utilisation = links.connectedIds.has(b.id)
+      ? (utilByStation.get(b.id) ?? null)
+      : null;
     return { id: b.id, spec: b.spec, lineSpec, utilisation };
   });
 });
