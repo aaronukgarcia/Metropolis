@@ -46,6 +46,8 @@ import {
   scanAllSavepointLineages,
   migrateLegacySavepointsInPlace,
   persistSavepointWithReason,
+  persistSavepointWithReasonAsync,
+  fencePersistGeneration,
   persistSavepointForced,
   decodeSavepointBytes,
   type Savepoint,
@@ -1508,6 +1510,19 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // (no journal record, no dispatch — state untouched) and surface an error.
       if (action.type === 'reset') {
         try {
+          // BUG-798 round REJECT finding D / BUG-687 shape: fence the persist
+          // generation FIRST, before anything else in this boundary. Any
+          // autosave/explicit persist already in flight for the OLD city
+          // (started before this reset, still awaiting its off-thread
+          // encode) must read as superseded once it resolves — otherwise
+          // `persistSavepointWithReason`'s absent-lineageId ambient default
+          // (reads `metropolis.currentLineage` at WRITE time, which by then
+          // names the NEW city) could stamp a lineage-less OLD-city
+          // savepoint straight into the NEW city's slots. This is
+          // unconditional (unlike the autosave/explicit priority rule) —
+          // a reset is a deliberate replace-the-city boundary, so nothing
+          // from the old city may land after it, explicit saves included.
+          fencePersistGeneration();
           // BUG-458: flush any debounced journal write BEFORE the pre-wipe
           // capture/wipe boundary — never let a wipe proceed with a stale
           // on-disk journal tail sitting behind a pending debounce timer.
@@ -2558,6 +2573,14 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // BUG-721: window-bound — see TopBar.tsx's EngineLagChip for why the
     // bare global setInterval/clearInterval pair is the wrong shape under
     // tsx/jsdom (dom.window.close() cannot stop a Node-bound timer).
+    // BUG-798: the compression step is offloaded off the main thread
+    // (saveCodecAsync.ts) — on Aaron's 9.48M-citizen capture (38,251
+    // buildings, ~14MB savepoint) saveCodec.encode()'s LZ step blocked the
+    // main thread ~2.4s per autosave, twice a minute. The interval callback
+    // itself stays a plain (non-async) function — window.setInterval does
+    // not await its callback anyway — but it now kicks off an async persist
+    // and handles the result in a `.then`, exactly like the pre-existing
+    // `mirrorPromise` handling just below it.
     const intervalId = window.setInterval(() => {
       try {
         // Calculate journalTail: entries added since last savepoint.
@@ -2566,34 +2589,44 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // boot on a new build can detect the change and offer a rebuild.
         const savepoint = createSavepoint(state, tail, new Date(), currentBuildVersion(), currentCamera(), nextSaveSeq());
         // BUG-704 round REJECT (P2): need the REASON, not just the boolean —
-        // `persistSavepointWithReason` distinguishes a genuine quota wedge
-        // (`storage-error`, this timer's whole reason for existing per
+        // `persistSavepointWithReasonAsync` distinguishes a genuine quota
+        // wedge (`storage-error`, this timer's whole reason for existing per
         // FEAT-2326609780 inc2) from a stale-overwrite refusal, and
         // `mirrorAfterPersist` below must treat them differently.
-        const autosaveResult = persistSavepointWithReason(window.localStorage, savepoint);
-        const success = autosaveResult.ok;
-        setAutoSaveError(!success);
-        if (success) {
-          // Update lastSaveIndex to mark this checkpoint.
-          setLastSaveIndex(journal.entries.length);
-        }
-        // FEAT-2326609780 inc2: mirror UNCONDITIONALLY — on success this is
-        // the inc1 savepoint-slots-before-journal crash-consistency mirror;
-        // on failure (the quota-wedge shape) this instead writes the
-        // savepoint that just failed to reach localStorage directly into the
-        // durable store's overflow slot, so IndexedDB keeps advancing even
-        // while every localStorage slot is wedged.
-        const mirrorPromise = mirrorAfterPersist(success, savepoint, autosaveResult.reason);
-        if (!success) {
-          // BUG-781: the "⚠ save" quiet indicator was set above assuming the
-          // local write's own result — correct it once the durable leg
-          // resolves, so a quota-wedged localStorage whose durable copy
-          // lands (MET-V884, recorded by mirrorAfterPersist itself) does not
-          // leave the indicator lit for the whole AUTOSAVE_INTERVAL_MS.
-          void mirrorPromise.then((mirrorResult) => {
-            if (mirrorResult.ok) setAutoSaveError(false);
-          });
-        }
+        //
+        // BUG-798 stale-result discard: if a NEWER persist (a later autosave
+        // fire, or an explicit saveGame/saveGameAs) starts before this one's
+        // off-thread encode resolves, `autosaveResult.reason` comes back
+        // 'superseded' — this call's own write never touched storage, so it
+        // must NOT flip the "⚠ save" indicator or advance `lastSaveIndex`
+        // (that would incorrectly mark THIS tail as checkpointed when it
+        // never was); the newer call is the one whose own outcome matters.
+        void persistSavepointWithReasonAsync(window.localStorage, savepoint, 'autosave').then((autosaveResult) => {
+          if (autosaveResult.reason === 'superseded') return;
+          const success = autosaveResult.ok;
+          setAutoSaveError(!success);
+          if (success) {
+            // Update lastSaveIndex to mark this checkpoint.
+            setLastSaveIndex(journal.entries.length);
+          }
+          // FEAT-2326609780 inc2: mirror UNCONDITIONALLY — on success this is
+          // the inc1 savepoint-slots-before-journal crash-consistency mirror;
+          // on failure (the quota-wedge shape) this instead writes the
+          // savepoint that just failed to reach localStorage directly into the
+          // durable store's overflow slot, so IndexedDB keeps advancing even
+          // while every localStorage slot is wedged.
+          const mirrorPromise = mirrorAfterPersist(success, savepoint, autosaveResult.reason);
+          if (!success) {
+            // BUG-781: the "⚠ save" quiet indicator was set above assuming the
+            // local write's own result — correct it once the durable leg
+            // resolves, so a quota-wedged localStorage whose durable copy
+            // lands (MET-V884, recorded by mirrorAfterPersist itself) does not
+            // leave the indicator lit for the whole AUTOSAVE_INTERVAL_MS.
+            void mirrorPromise.then((mirrorResult) => {
+              if (mirrorResult.ok) setAutoSaveError(false);
+            });
+          }
+        });
       } catch (e) {
         // Catch-all for any error during autosave (e.g., localStorage throws).
         setAutoSaveError(true);
@@ -3296,7 +3329,18 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // while the current lineage is already further along is exactly the
         // stale-overwrite shape mirrorAfterPersist must gate against; a
         // genuine storage-error here must not be gated the same way.
-        const loadPersistResult = persistSavepointWithReason(window.localStorage, savepointToPersist);
+        // BUG-798: off-main-thread compression — this call is already inside
+        // an async chunked-load flow (this whole block runs inside the
+        // `(async () => { ... })()` IIFE above `mirrorAfterPersist` is
+        // already awaited from), so awaiting here adds no new async
+        // boundary the caller isn't already handling. A 'superseded' result
+        // is treated as an honest, non-durable-yet local write (persisted
+        // stays false, exactly as a genuine storage-error would read) —
+        // this path only ever races against the autosave timer or an
+        // explicit save happening mid-load, both vanishingly rare, and the
+        // mirror step right below still runs against `savepointToPersist`
+        // either way, so the durable (IndexedDB) copy is never skipped.
+        const loadPersistResult = await persistSavepointWithReasonAsync(window.localStorage, savepointToPersist, 'explicit');
         const persisted = loadPersistResult.ok;
         // BUG-439 FIX: restore the loaded save's FULL journal (save.journal) into
         // the live journal state/on-disk journal file instead of discarding it as
@@ -3428,8 +3472,36 @@ export function SimProvider({ children }: { children: ReactNode }) {
 
   const saveGame = async (): Promise<boolean> => {
     try {
-      const save = buildCurrentSave(cityName, nextSaveSeq());
-      const result = persistSavepointWithReason(window.localStorage, save.savepoint);
+      // BUG-798: off-main-thread compression (saveCodecAsync.ts) — this is
+      // the explicit "click Save" path a player is actively waiting on, the
+      // other felt-freeze scenario alongside the autosave timer. `'explicit'`
+      // gives this persist priority over the autosave timer (an autosave
+      // firing mid-encode can never supersede it — see
+      // persistSavepointWithReasonAsync's doc comment).
+      let save = buildCurrentSave(cityName, nextSaveSeq());
+      let result = await persistSavepointWithReasonAsync(window.localStorage, save.savepoint, 'explicit');
+      if (result.reason === 'superseded') {
+        // opus-round-bug798 REJECT finding A: an EXPLICIT save can only be
+        // superseded by a LATER EXPLICIT save (e.g. Save As clicked while
+        // THIS Save's encode was still in flight) — never by an autosave.
+        // That later save may target a DIFFERENT storage slot (saveGame vs
+        // saveGameAs write to different slots), so it does NOT necessarily
+        // cover what THIS call was asked to do. Retry ONCE, rebuilding the
+        // save from the CURRENT (now presumably-newer) state rather than
+        // reporting success for a write that never touched storage.
+        save = buildCurrentSave(cityName, nextSaveSeq());
+        result = await persistSavepointWithReasonAsync(window.localStorage, save.savepoint, 'explicit');
+        if (result.reason === 'superseded') {
+          // A THIRD explicit save raced in during the retry itself —
+          // vanishingly rare. Fail loudly rather than retry forever or
+          // silently claim success for a write that never happened.
+          recordError(
+            'Save did not complete: another save kept starting before this one could finish. Your city is unsaved — try again.',
+            { type: 'app', action: 'save' },
+          );
+          return false;
+        }
+      }
       // FEAT-2326609780 inc2: mirror unconditionally, success or failure, so
       // a quota-failed manual save still advances the durable IndexedDB copy.
       // BUG-781: AWAIT the durable outcome before deciding what to tell the
@@ -3485,8 +3557,27 @@ export function SimProvider({ children }: { children: ReactNode }) {
         );
         return { ok: false, collision };
       }
-      const save = buildCurrentSave(label, nextSaveSeq());
-      const savedAsResult = persistSavepointWithReason(window.localStorage, save.savepoint);
+      let save = buildCurrentSave(label, nextSaveSeq());
+      // BUG-798: off-main-thread compression — see saveGame's identical
+      // reasoning, including the 'explicit' priority kind.
+      let savedAsResult = await persistSavepointWithReasonAsync(window.localStorage, save.savepoint, 'explicit');
+      if (savedAsResult.reason === 'superseded') {
+        // opus-round-bug798 REJECT finding A — see saveGame's identical
+        // retry-once branch: a LATER explicit save superseded this one
+        // (never an autosave); retry against the freshest state rather than
+        // claiming success for a write that never reached storage. Save and
+        // Save As target DIFFERENT slots, so the other save's success does
+        // NOT cover this one.
+        save = buildCurrentSave(label, nextSaveSeq());
+        savedAsResult = await persistSavepointWithReasonAsync(window.localStorage, save.savepoint, 'explicit');
+        if (savedAsResult.reason === 'superseded') {
+          recordError(
+            'Save As did not complete: another save kept starting before this one could finish. Try again.',
+            { type: 'app', action: 'save' },
+          );
+          return { ok: false };
+        }
+      }
       // FEAT-2326609780 inc2: mirror unconditionally (see mirrorAfterPersist).
       // BUG-781: await it — the wording (via `surfaceSaveRefusal`) must
       // distinguish a local-quota failure the durable IndexedDB mirror

@@ -114,16 +114,25 @@ test('R2-A2: THE BACK DOOR IS CLOSED BY CONSTRUCTION — every in-tree persist s
   // that satisfies neither, this test must be updated deliberately — that is
   // the point: the ambient default makes "which lineage" a whole-file property,
   // so it needs a whole-file check.
-  const persistCalls = src.match(/persistSavepoint(WithReason)?\(window\.localStorage, [A-Za-z.]+\)/g) ?? [];
+  // BUG-798: the autosave timer and saveGame/saveGameAs/applyLoadedSave call
+  // sites now go through `persistSavepointWithReasonAsync` (off-main-thread
+  // compression) instead of the synchronous `persistSavepointWithReason` —
+  // same ambient-default contract, renamed literal. BUG-798 round REJECT
+  // finding A also added a required 3rd ('autosave'|'explicit' priority
+  // `kind`) argument to every Async call — match an optional trailing
+  // `, 'kind'` too.
+  const persistCalls = src.match(/persistSavepoint(WithReason(Async)?)?\(window\.localStorage, [A-Za-z.]+(?:, '(?:autosave|explicit)')?\)/g) ?? [];
   assert.ok(persistCalls.length >= 4, `expected the known persist sites, found ${persistCalls.length}`);
 
   // applyLoadedSave: the pointer write MUST precede its persist (F1's fix).
   // BUG-704 round REJECT (P2): this call site now goes through
   // `persistSavepointWithReason` (need the reason for mirrorAfterPersist's
   // gating) instead of the boolean `persistSavepoint` wrapper — same call,
-  // same ordering requirement, renamed literal.
+  // same ordering requirement, renamed literal. BUG-798: further renamed to
+  // the off-main-thread `persistSavepointWithReasonAsync` variant, called
+  // with the 'explicit' priority kind (round REJECT finding A).
   const pointerWrite = src.indexOf('writeCurrentLineageId(window.localStorage, normalizeLineageId(savepointToPersist.lineageId))');
-  const loadPersist = src.indexOf('persistSavepointWithReason(window.localStorage, savepointToPersist)');
+  const loadPersist = src.indexOf("persistSavepointWithReasonAsync(window.localStorage, savepointToPersist, 'explicit')");
   pin(() => assert.ok(pointerWrite > 0, 'applyLoadedSave must normalise + write the pointer (F1 fix missing)'));
   pin(() =>
     assert.ok(

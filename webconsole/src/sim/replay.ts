@@ -20,6 +20,25 @@ import { SPECS, stampJobsGrandfather, stampJobsGrandfatherForce, needsJobsGrandf
 import { emptyJournal } from './journal.ts';
 import { safeSetItem } from './safeStorage.ts';
 import { encode, decode } from './saveCodec.ts';
+// BUG-798: off-main-thread variant of saveCodec's encode() step, used ONLY by
+// persistSavepointWithReasonAsync below — every other call site in this file
+// (restampSavepointsBuildVersion, migrateLegacySavepointsInPlace, the forced
+// rebuild re-stamp walk) keeps calling the synchronous `encode` directly,
+// unchanged, since none of those run on the hot autosave/save path this bug
+// targets.
+import {
+  encodeOffMainThread,
+  nextPersistGeneration,
+  isCurrentPersistGeneration,
+  settlePersistGeneration,
+  runSerializedExplicitWrite,
+  type PersistKind,
+} from './saveCodecAsync.ts';
+// Re-exported so store.tsx (this bug's other call sites) never needs its own
+// direct import of saveCodecAsync.ts — replay.ts is the one place that
+// already owns the persist-site contract.
+export { fencePersistGeneration } from './saveCodecAsync.ts';
+export type { PersistKind } from './saveCodecAsync.ts';
 // FEAT-2326609790: grid.ts is a zero-import leaf (see its own header), so
 // importing MAP_W/MAP_H here for the gridW/gridH save-compat stamp/gate adds
 // no import-cycle risk.
@@ -380,8 +399,18 @@ export function scanAllSavepointLineages(storage: StorageLike): string[] {
   return Array.from(found);
 }
 
-/** P0 RCA fix, item 3/4: why `persistSavepointWithReason` refused a write. */
-export type SavepointRejectReason = 'stale-overwrite' | 'storage-error';
+/**
+ * P0 RCA fix, item 3/4: why `persistSavepointWithReason` refused a write.
+ *
+ * BUG-798: `'superseded'` — the off-main-thread encode variant
+ * (`persistSavepointWithReasonAsync`) discovered, once its worker-side
+ * compression resolved, that a NEWER persist request had started in the
+ * meantime (see that function's own comment). The stale encode result was
+ * discarded WITHOUT ever touching storage — this is not a storage failure
+ * and must never set the loud/quiet save-error indicators the other reasons
+ * do; the newer request's own outcome is the one that matters.
+ */
+export type SavepointRejectReason = 'stale-overwrite' | 'storage-error' | 'superseded';
 
 export interface PersistSavepointResult {
   ok: boolean;
@@ -515,6 +544,20 @@ export interface PersistSavepointOptions {
    * unset so a genuinely stale write is still rejected.
    */
   force?: boolean;
+
+  /**
+   * BUG-798: when set, the write step below uses THIS already-compressed
+   * string instead of calling `encode(JSON.stringify(savepoint))` itself.
+   * Set exclusively by `persistSavepointWithReasonAsync`, which computes it
+   * off the main thread (saveCodecAsync.ts) BEFORE calling into this
+   * function — every synchronous decision this function makes (purge, slot
+   * selection, staleness comparison) still runs unchanged, against
+   * whatever storage looks like at the moment this function actually runs;
+   * only the compression step itself is swapped for a precomputed value.
+   * Never set by any other caller — the JSON text must always match
+   * `savepoint` exactly, and only the async wrapper can guarantee that.
+   */
+  precomputedEncoded?: string;
 }
 
 export function persistSavepointWithReason(
@@ -654,7 +697,10 @@ export function persistSavepointWithReason(
     // setItem — the outer try/catch still covers readSlot/removeItem.
     // FEAT-1972079935: encode() compresses the (large) serialized savepoint
     // before it hits localStorage — smaller payload, same quota-safe path.
-    const result = safeSetItem(storage, savepointKey(target.slot, lineageId), encode(JSON.stringify(savepoint)));
+    // BUG-798: a precomputed (off-main-thread) encode wins over calling
+    // encode() here synchronously — see PersistSavepointOptions.precomputedEncoded.
+    const encoded = opts?.precomputedEncoded ?? encode(JSON.stringify(savepoint));
+    const result = safeSetItem(storage, savepointKey(target.slot, lineageId), encoded);
     if (!result.ok) return { ok: false, reason: 'storage-error' };
     return restampFailures.length > 0 ? { ok: true, restampFailures } : { ok: true };
   } catch {
@@ -675,6 +721,109 @@ export function persistSavepoint(
   now: Date = new Date()
 ): boolean {
   return persistSavepointWithReason(storage, savepoint, now).ok;
+}
+
+/**
+ * BUG-798: off-main-thread variant of `persistSavepointWithReason` for the
+ * two hot, felt-by-the-player call sites — the autosave timer (every 30s)
+ * and an explicit saveGame/saveGameAs — where Aaron's 9.48M-citizen capture
+ * (38,251 buildings, ~14MB savepoint) measured saveCodec.encode()'s LZ step
+ * blocking the main thread for ~2.4s.
+ *
+ * `JSON.stringify(savepoint)` stays synchronous (measured ~45ms on that same
+ * capture — not worth offloading) and is captured BEFORE the await, so the
+ * text handed to the worker reflects `savepoint` exactly as it was when this
+ * call was made, not whatever it may have mutated into by the time the
+ * worker replies (savepoints are plain data snapshots, never mutated in
+ * place elsewhere in this codebase, but capturing the string immediately is
+ * the same defensive discipline as the rest of this module).
+ *
+ * STALE-RESULT DISCARD, WITH PRIORITY (opus-round-bug798 REJECT, finding A
+ * — the original single-shared-counter design let an autosave silently
+ * defeat an in-flight explicit save on ~8% of Aaron's manual saves; Save/Save
+ * As reported success while never touching storage): `kind` says whether
+ * this is the unattended autosave timer or a player-initiated explicit save
+ * (saveGame/saveGameAs/an applied load). saveCodecAsync.ts's
+ * nextPersistGeneration/isCurrentPersistGeneration enforce the asymmetry —
+ * see that module's own header comment for the full reasoning:
+ *
+ *   - An AUTOSAVE is superseded by ANY later call, either kind (the case the
+ *     round explicitly named: "an autosave in flight is the one discarded").
+ *   - An EXPLICIT save is superseded ONLY by a LATER EXPLICIT call — an
+ *     autosave that happens to start while an explicit save's encode is
+ *     still in flight can never silently defeat it.
+ *
+ * A superseded result is returned as `{ ok: false, reason: 'superseded' }`
+ * and this function NEVER touches storage for it. Callers must treat that
+ * reason as inert for an AUTOSAVE (no error indicator, no side effects — the
+ * newer call's own outcome is the one that matters). For an EXPLICIT call,
+ * a superseded result can ONLY mean a LATER explicit save started first —
+ * critically, that later save may be writing to a DIFFERENT storage target
+ * (saveGame vs saveGameAs write different slots), so silently treating this
+ * as success would be a real, distinct data-loss shape, not a no-op.
+ * store.tsx's saveGame/saveGameAs therefore retry ONCE, against the
+ * freshest state, rather than reporting success for a write that never
+ * happened — see their own comments.
+ *
+ * Every OTHER decision (lineage stamping, slot purge/selection, the
+ * `isIncomingSavepointNewerOrEqual` staleness comparison, `force`'s
+ * lineage-authority re-stamp walk) is untouched — this function does not
+ * duplicate any of that logic (GR#21): it only precomputes the compressed
+ * payload off-thread and then calls straight into
+ * `persistSavepointWithReason` with `precomputedEncoded` set, so the
+ * synchronous decision logic still runs exactly once, in exactly one place,
+ * against whatever storage looks like the instant this resumes after the
+ * await.
+ */
+export async function persistSavepointWithReasonAsync(
+  storage: StorageLike,
+  savepoint: Savepoint,
+  kind: PersistKind,
+  now: Date = new Date(),
+  opts?: PersistSavepointOptions
+): Promise<PersistSavepointResult> {
+  const myGeneration = nextPersistGeneration(kind);
+  try {
+    // opus-reround-bug798 P2 finding 1: `JSON.stringify` (or, in principle,
+    // anything else between the mint above and the generation-check/write
+    // below) can throw — a hostile/circular `savepoint`, for instance. The
+    // surrounding try/finally guarantees `settlePersistGeneration` still
+    // runs even then; without it, an EXPLICIT call that mints a generation
+    // and then throws before ever settling leaks `explicitInFlightCount`
+    // forever, permanently dooming every future autosave (silently — no
+    // error, no supersede reason, just autosaves that mysteriously never
+    // persist again for the rest of the session).
+    const json = JSON.stringify(savepoint);
+    const encoded = await encodeOffMainThread(json);
+    const current = isCurrentPersistGeneration(myGeneration, kind);
+    if (!current) {
+      return { ok: false, reason: 'superseded' };
+    }
+    if (kind === 'explicit') {
+      // opus-reround-bug798 P2 finding 2: serialise the ACTUAL WRITE for
+      // every explicit persist through a single ordered chain — passing the
+      // generation check above is necessary but not sufficient; see
+      // runSerializedExplicitWrite's own doc comment for why the check and
+      // the write can otherwise land out of order relative to another
+      // explicit call's write.
+      const written = await runSerializedExplicitWrite(myGeneration, () =>
+        persistSavepointWithReason(storage, savepoint, now, { ...opts, precomputedEncoded: encoded })
+      );
+      if (written === undefined) {
+        // A higher-generation explicit write already landed while this one
+        // waited its turn in the chain — never overwrite it.
+        return { ok: false, reason: 'superseded' };
+      }
+      return written;
+    }
+    return persistSavepointWithReason(storage, savepoint, now, { ...opts, precomputedEncoded: encoded });
+  } finally {
+    // Retire this call's generation bookkeeping unconditionally — success,
+    // supersede, OR an exception anywhere above. See settlePersistGeneration's
+    // own doc comment for why an EXPLICIT call must release its
+    // `explicitInFlightCount` slot the instant it resolves.
+    settlePersistGeneration(myGeneration, kind);
+  }
 }
 
 /**
