@@ -224,7 +224,14 @@ describe('R9-1 the absolute capex ceiling vs the tier generator', () => {
 // ===========================================================================
 
 describe('R9-2 starvation sweep', () => {
-  test('R9-2a (P1): a GBP 5,000,000 city lays NOTHING in 200 ticks — the layout feature is dead for the early-game player', { skip: 'BUG-788 (2026-09-06): placeholder capex floor - at a GBP5M treasury the 2%/tick ceiling (100k) is below one minimum minor run (~180k) so nothing lays; pinned red until the balance-pass retune; re-enable with BUG-788' }, () => {
+  // BUG-788 RETUNE (2026-09-06): this test's ORIGINAL premise — "the hamlet
+  // lays NOTHING in 200 ticks" — no longer holds now that the BUG-788 fix
+  // (engine.ts: a capex-ceiling floor pinned to the CHEAPEST tier's own
+  // MIN_TIER_RUN_TILES run, plus a per-tier fallback split that no longer
+  // burns an unaffordable tier's crumb) closes the starvation gap. Retuned
+  // to assert the NEW, correct behaviour — a real placement now lands —
+  // rather than deleted, so the starvation regression stays covered.
+  test('R9-2a (P1) RETUNED (BUG-788): a GBP 5,000,000 city gets a real first placement within 200 ticks (was: lays NOTHING, the layout feature was dead for the early-game player)', () => {
     const rows = [];
     for (const funds of [5_000_000, 10_000_000, 20_000_000, 30_000_000]) {
       const base = withHealthyBaseline(fireFixture({ funds }));
@@ -248,10 +255,13 @@ describe('R9-2 starvation sweep', () => {
     const hamlet = rows[0];
     assert.ok(
       hamlet.placements > 0,
-      `R9-F2 (P1): starvation sweep ${JSON.stringify(rows)}. At GBP 5,000,000 the layout stage places NOTHING ` +
-        'over 200 ticks and spends GBP 0 — same root cause as R9-F1: the per-tick ceiling (2% of funds = 100,000) ' +
-        'is below the cost of the untrimmed minor-road run the generator emits (~180,000), and the tier is ' +
-        'refused whole instead of trimmed. THIS ASSERTION IS THE FINDING.',
+      `BUG-788 RETUNED PIN: starvation sweep ${JSON.stringify(rows)}. Before the BUG-788 fix, GBP 5,000,000 laid ` +
+        'NOTHING over 200 ticks and spent GBP 0 — the pass-wide ceiling (2% of funds) got diluted by the per-tier ' +
+        'TIER_UPKEEP_SHARE split into crumbs too small for ANY tier, including minor, to build even its own ' +
+        'MIN_TIER_RUN_TILES run. The fix (engine.ts) adds a ceiling floor pinned to the cheapest tier\'s own ' +
+        "minimum run (never raised past what the treasury's reserve allows) plus a per-tier split fix that stops " +
+        'an unaffordable tier\'s wasted crumb from starving a cheaper tier downstream — this assertion is now the ' +
+        'PERMANENT regression guard that the hamlet keeps getting a real placement.',
     );
   });
 
@@ -275,7 +285,10 @@ describe('R9-2 starvation sweep', () => {
     );
   });
 
-  test('R9-2d PERMANENT: the starvation sweep (5M/10M/20M/30M) — the trim fix means EVERY scale gets a real first placement, and never breaches the insolvency floor', { skip: 'BUG-788 (2026-09-06): placeholder capex floor - at a GBP5M treasury the 2%/tick ceiling (100k) is below one minimum minor run (~180k) so nothing lays; pinned red until the balance-pass retune; re-enable with BUG-788' }, () => {
+  // BUG-788 RETUNE (2026-09-06): re-enabled now the ceiling-floor + per-tier
+  // fix (engine.ts) gives the hamlet a real placement too — see R9-2a's own
+  // dated note for the fix's full rationale.
+  test('R9-2d PERMANENT: the starvation sweep (5M/10M/20M/30M) — the trim fix means EVERY scale gets a real first placement, and never breaches the insolvency floor', () => {
     // R9-F1/R9-F2 CLOSED, made permanent: before the round-9 trim fix, a
     // GBP 5,000,000 city placed NOTHING in 200 ticks (R9-2a's own pinned
     // finding, above). Re-measured against the fix: a real first placement

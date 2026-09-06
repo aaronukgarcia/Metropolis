@@ -3326,7 +3326,74 @@ function applyConsolidatorPass(
     // call on which constraint yields (raise R8-3's threshold, accept a
     // smaller/different numeric growth target, or test growth at a scale
     // R8-3 does not also gate).
-    const layoutCapexCeilingThisPass = standardCapexCeiling;
+    //
+    // BUG-788 FIX (Aaron's ruling, 2026-09-06, "the ceiling has a FLOOR
+    // equal to the cost of one minimum run of the top affordable tier ...
+    // if even one minimum MINOR run does not fit within the reserve, the
+    // stage honestly lays nothing"): at a GBP5,000,000 treasury the layout
+    // stage placed NOTHING for 200+ ticks, dead for the early-game player.
+    //
+    // THE RULING'S LITERAL WORDING ("most expensive tier whose one-run
+    // cost fits within funds-minus-reserve") WAS TRIED FIRST and MEASURED
+    // to violate the ruling's OWN other stated requirement ("a 100M city's
+    // behaviour is unchanged, the floor never binds there"): at
+    // GBP100,000,000 motorway's own 3-tile run (4,500,000) comfortably
+    // fits within funds available above reserve (~90,750,000), so
+    // `max(standardCeiling=2,000,000, 4,500,000)` unconditionally raised
+    // the 100M ceiling 2.25x — measured to move capexSpent 8,820,000 ->
+    // 26,916,000 and the pre-existing R8-3 ON/OFF retention ratio 0.87 ->
+    // 0.69 over the identical 200-tick run, a real behaviour change the
+    // ruling explicitly rules out. FIX: the floor targets the CHEAPEST
+    // tier's own minimum run (`bug788CheapestTierMinRunCost`, always
+    // minor's 36,000 in the current catalogue) rather than the priciest
+    // affordable one — this is the literal reading of the ruling's OWN
+    // fallback sentence ("one minimum MINOR run... the reserve"), and only
+    // ever exceeds `standardCapexCeiling` at treasuries so poor the
+    // 2%/absolute terms already sit below 36,000 (measured: never true at
+    // 10M/20M/30M/100M/1bn across this suite's own fixtures — only a
+    // GBP5,000,000 city whose funds have ALREADY been driven down by the
+    // fixture's own ambient upkeep, independent of layout spend, ever dips
+    // this low). If not even minor's own run fits above the reserve, the
+    // floor computes to 0 extra and the reserve wins (honestly lays
+    // nothing), exactly per the ruling's own words.
+    //
+    // AN EARLIER DRAFT OF THIS FIX ALSO CHANGED THE PER-TIER SPLIT below
+    // (TIER_UPKEEP_SHARE-proportional "fallback" branch), on the theory
+    // that a tier whose slice couldn't reach its own minimum run was
+    // "wasting" that money and starving minor. REJECTED by an independent
+    // round (opus-round-bug788, 2026-09-06): the end-of-wave roll-down a
+    // few dozen lines below (`tierCapexShareRemaining[nextTier] += ...`)
+    // ALREADY forwards a tier's entire unspent share to the next tier at
+    // runtime — nothing was actually being burned, so zeroing the
+    // allocation there instead DELETED real spending capacity (measured:
+    // 10M lost 76% of spend, 100M lost 56%, 48 -> 42 placements). That
+    // change is REVERTED — see the fallback loop's own comment below. THIS
+    // ceiling-floor change is the entire BUG-788 fix; the per-tier split
+    // is byte-for-byte the pre-BUG-788 (round-12) shape.
+    //
+    // PLACEHOLDER-tier (Aaron's balance pass pending), same disclosure as
+    // every other capex constant in this file — a first cut proven to
+    // unblock the starvation sweep, not a tuned economy.
+    // `costPerTileOf`/`tierMinRunCapexOf` are defined once here (used by
+    // both this floor and the tile-quota/fallback split below).
+    const costPerTileOf = (t: TierKind): number => {
+      const spec = SPECS[TIER_SPEC_ID[t]];
+      return spec ? placementCost(spec) : 0;
+    };
+    const tierMinRunCapexOf = (t: TierKind): number => {
+      const spec = SPECS[TIER_SPEC_ID[t]];
+      return spec ? MIN_TIER_RUN_TILES * placementCost(spec) : 0;
+    };
+    const availableAboveCapexFloor = Math.max(0, cur.funds - layoutCapexFundsFloor);
+    let bug788CheapestTierMinRunCost = 0;
+    for (const t of TIER_ORDER) {
+      const minRun = tierMinRunCapexOf(t);
+      if (minRun > 0 && (bug788CheapestTierMinRunCost === 0 || minRun < bug788CheapestTierMinRunCost)) {
+        bug788CheapestTierMinRunCost = minRun;
+      }
+    }
+    const bug788CeilingFloor = bug788CheapestTierMinRunCost <= availableAboveCapexFloor ? bug788CheapestTierMinRunCost : 0;
+    const layoutCapexCeilingThisPass = Math.max(standardCapexCeiling, bug788CeilingFloor);
     let layoutCapexSpentThisPass = 0;
     // ROUND-9 FIX (cosmetic, GR#17): this used to push a fresh 'layout
     // paused: capex budget' skip entry for EVERY remaining section once the
@@ -3424,14 +3491,9 @@ function applyConsolidatorPass(
     // spend — exactly closing the money-vs-tile-count mismatch. Roll-down
     // (unused share moves to the next tier in TIER_ORDER, never back up)
     // is unchanged, just operating on money-converted-from-quota now.
-    const costPerTileOf = (t: TierKind): number => {
-      const spec = SPECS[TIER_SPEC_ID[t]];
-      return spec ? placementCost(spec) : 0;
-    };
-    const tierMinRunCapexOf = (t: TierKind): number => {
-      const spec = SPECS[TIER_SPEC_ID[t]];
-      return spec ? MIN_TIER_RUN_TILES * placementCost(spec) : 0;
-    };
+    // BUG-788: costPerTileOf/tierMinRunCapexOf are now defined earlier
+    // (alongside the ceiling-floor computation above) so both this
+    // tile-quota split and that floor share the same single definition.
     const blendedCostPerTile = TIER_ORDER.reduce((sum, t) => sum + TIER_UPKEEP_SHARE[t] * costPerTileOf(t), 0);
     const tilesAffordableThisPass =
       blendedCostPerTile > 0 ? Math.floor(layoutCapexCeilingThisPass / blendedCostPerTile) : 0;
@@ -3470,6 +3532,24 @@ function applyConsolidatorPass(
       // very poor treasury" without reopening the tile-quota's fairness
       // problem at scales where it doesn't matter (a near-zero blended
       // budget has no meaningful "fairness" to speak of regardless).
+      //
+      // BUG-788 ROUND REJECT (opus-round-bug788, 2026-09-06, narrow): an
+      // earlier version of this fix ALSO changed this loop — a tier whose
+      // proportional share couldn't reach its own minimum run (and
+      // couldn't be bumped to it) was given share=0 instead of its small
+      // proportional crumb, on the theory that the crumb was being
+      // "burned" and starving minor. MEASURED WRONG by the independent
+      // round: `tierCapexShareRemaining[nextTier] += ...` a few dozen
+      // lines below (the end-of-wave roll-down) ALREADY forwards a tier's
+      // entire UNSPENT share to the next tier in TIER_ORDER at runtime —
+      // the crumb was never actually burned, it was rolling down exactly
+      // as designed. Zeroing the allocation here instead DELETED that
+      // money outright: the round measured a 76% spend loss at 10M and a
+      // 56% loss at 100M (48 -> 42 placements, dual tiles 488 -> 307) with
+      // NO pin catching it. Reverted to the original round-12 shape below;
+      // BUG-788's real fix is the ceiling-floor change on
+      // `layoutCapexCeilingThisPass` above ONLY — this per-tier split is
+      // unchanged from pre-BUG-788.
       let remainingCeilingMoney = layoutCapexCeilingThisPass;
       for (const t of TIER_ORDER) {
         const minRun = tierMinRunCapexOf(t);

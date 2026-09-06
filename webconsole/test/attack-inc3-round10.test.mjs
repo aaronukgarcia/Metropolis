@@ -365,7 +365,12 @@ describe('R10-4 reserve vs trim', () => {
 // R10-5 — the atomicity relaxation: can a stub be mis-read as a finished tier?
 // ---------------------------------------------------------------------------
 describe('R10-5 stub re-read', () => {
-  test('a trimmed tier is revisited on later passes (not treated as done)', { skip: 'BUG-788 (2026-09-06): placeholder capex floor - at a GBP5M treasury the 2%/tick ceiling (100k) is below one minimum minor run (~180k) so nothing lays; pinned red until the balance-pass retune; re-enable with BUG-788' }, () => {
+  // BUG-788 RETUNE (2026-09-06): re-enabled — the ceiling-floor + per-tier
+  // fix (engine.ts, see attack-inc3-round9's R9-2a note for the full
+  // rationale) gives the GBP5,000,000 city a real placement within 300
+  // ticks, so this test's own premise ("5M city must lay something") holds
+  // again.
+  test('a trimmed tier is revisited on later passes (not treated as done)', () => {
     const end = runTicks(withHealthyBaseline(fireFixture({ funds: 5_000_000 })), 300);
     const rows = layoutRows(end).filter((r) => r.actuallyPlaced);
     const bySection = new Map();
@@ -522,6 +527,19 @@ describe('R10-10 the capex-budget pause actually fires (not just capped)', () =>
     // the per-pass ceiling before every section gets a turn is the positive
     // control: the reason MUST fire, and the round-9/10 fix (log it once,
     // not once per remaining section) must still cap it at 1.
+    //
+    // BUG-788 RETUNE, THEN REVERTED (2026-09-06): an earlier draft of the
+    // BUG-788 fix ALSO changed the per-tier fallback split (engine.ts),
+    // which stopped an unaffordable tier's unspent crumb from rolling down
+    // and inflating whichever tier downstream actually built — that made
+    // this fixture's pause unreachable at 50,000,000, so the funds figure
+    // was moved to 10,000,000 to compensate. An independent round
+    // (opus-round-bug788) REJECTED that per-tier change as a real
+    // regression (the roll-down a few lines below `tierCapexShareRemaining`
+    // already forwarded unspent shares correctly; zeroing the allocation
+    // deleted spending capacity instead — 10M lost 76% of spend, 100M lost
+    // 56%). With that change reverted, this fixture's pause fires at
+    // 50,000,000 again exactly as it always did — reverted back.
     let s = withHealthyBaseline(scatterFixture({ funds: 50_000_000, population: 200_000, consolidatorMode: 'monthly-twelfth' }));
     s = reducer(s, { type: 'toggleConsolidator' });
     let sawPause = false;
