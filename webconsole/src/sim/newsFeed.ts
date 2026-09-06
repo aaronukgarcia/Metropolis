@@ -36,6 +36,7 @@ export type NewsSource =
   | 'milestone'
   | 'placeNotice'
   | 'consolidatorCapacityUnknown'
+  | 'consolidatorFundsFloor'
   | 'payrollShortfall'
   | 'insolvency';
 
@@ -132,6 +133,18 @@ export interface NewsFeedTracker {
    */
   consolidatorCapacityUnknownKey: string | null;
   consolidatorCapacityUnknownMaxId: number;
+  /**
+   * BUG-684 (2026-09-06): the density-merge apply lane's treasury-floor/
+   * per-pass-spend-ceiling refusal ('funds floor' skip reason) — same
+   * (id, tick) + high-water-mark dedupe as consolidatorCapacityUnknownKey/
+   * MaxId above, same rationale (a pass log entry can resurface on Undo:
+   * either the exact same observation re-rendering, or an OLDER entry
+   * popping back to log[0]), kept as its own independent key/mark pair so
+   * the two skip reasons' drains never interfere with each other's dedupe
+   * state.
+   */
+  consolidatorFundsFloorKey: string | null;
+  consolidatorFundsFloorMaxId: number;
   /** BUG-723: true while the last-observed payrollShortfall source was
    *  active (amountMicropounds > 0) — a plain boolean gate rather than a
    *  remembered value, because the AMOUNT legitimately changes every
@@ -152,6 +165,8 @@ export function createNewsFeedTracker(): NewsFeedTracker {
     placeNotice: null,
     consolidatorCapacityUnknownKey: null,
     consolidatorCapacityUnknownMaxId: -Infinity,
+    consolidatorFundsFloorKey: null,
+    consolidatorFundsFloorMaxId: -Infinity,
     payrollShortfallActive: false,
     insolvencyActive: false,
   };
@@ -273,6 +288,30 @@ export function observeNews(
           ? `Consolidator skipped section ${sectionList}: capacity unknown (a corrupt capacityTier made it unrepresentable) — nothing was merged or lost.`
           : `Consolidator skipped ${capacityUnknownSections.length} sections (${sectionList}): capacity unknown — nothing was merged or lost.`;
       push('consolidatorCapacityUnknown', 'warning', text);
+    }
+  }
+
+  // BUG-684 (2026-09-06): the density-merge apply lane's treasury-floor/
+  // per-pass-spend-ceiling refusal ('funds floor' skip reason, engine.ts's
+  // applyConsolidatorPass) — same OUTBOX drain shape as 'capacity unknown'
+  // immediately above, MET-V895 (GR#7 registry-sourced) instead of MET-V866.
+  // A refused group is never lost (it WAITS and is re-offered by a future
+  // pass once headroom recovers) — this is purely informational, hence
+  // 'warning' not 'error'.
+  const fundsFloorSections = pass?.skipped.filter((k) => k.reason === 'funds floor') ?? [];
+  if (pass && fundsFloorSections.length > 0) {
+    const key = `${pass.id}:${sources.tick}`;
+    const isSameObservation = tracker.consolidatorFundsFloorKey === key;
+    const isStaleResurface = pass.id < tracker.consolidatorFundsFloorMaxId;
+    if (!isSameObservation && !isStaleResurface) {
+      tracker.consolidatorFundsFloorKey = key;
+      tracker.consolidatorFundsFloorMaxId = Math.max(tracker.consolidatorFundsFloorMaxId, pass.id);
+      const sectionList = fundsFloorSections.map((k) => k.sectionKey).join(', ');
+      const text =
+        fundsFloorSections.length === 1
+          ? `Consolidator is waiting on section ${sectionList}: merging now would breach the treasury floor — nothing was merged or lost, it will retry once funds recover.`
+          : `Consolidator is waiting on ${fundsFloorSections.length} sections (${sectionList}): merging now would breach the treasury floor — nothing was merged or lost, they will retry once funds recover.`;
+      push('consolidatorFundsFloor', 'warning', text);
     }
   }
 

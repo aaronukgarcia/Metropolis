@@ -277,24 +277,39 @@ describe('ATTACK 1 — money: is every pound the pass spends actually charged?',
 // ---------------------------------------------------------------------------
 
 describe('ATTACK 2 — can it destroy something it should not? (AC-19 + the skip-recheck predicate)', () => {
-  test('a pass will demolish five ROAD-CONNECTED buildings and leave a successor that can never come online', () => {
-    // Funds chosen so the transaction itself is affordable but the connector is
-    // not: netCost < funds < netCost + connectorCost. autoConnect's
-    // `if (s.funds < totalCost)` branch then returns the state UNCHANGED — no
-    // tiles appended — so `roadTopologyMayHaveChanged` is false, the AC-19
-    // recheck is SKIPPED, and the transaction commits.
+  test('BUG-684 (2026-09-06) narrowed this exact reproduction: the tight-margin fixture is now REFUSED outright, not left stranded', () => {
+    // ORIGINAL FINDING (kept for the record, no longer reproducible with this
+    // fixture): funds chosen so the transaction itself was affordable but the
+    // connector was not (netCost < funds < netCost + connectorCost).
+    // autoConnect's `if (s.funds < totalCost)` branch then returned the state
+    // UNCHANGED — no tiles appended — so `roadTopologyMayHaveChanged` was
+    // false, the AC-19 recheck was SKIPPED, and the transaction committed
+    // with a successor that could never come online (F2).
     //
-    // FEAT-2326609779 (consolidator inc3, round-5 reorder) FIX:
-    // `consolidatorLayoutEnabled: false` here — this test's own subject is
-    // the DENSITY phase's exact funds arithmetic (funds sized to
-    // netCost + 60,000 pounds precisely), which now runs AFTER the
-    // tier-layout stage (AC-1's ordering). With layout ON by default it
-    // would spend an unpredictable slice of this tightly-budgeted fixture's
-    // funds before density ever sees them, breaking this test's own
-    // narrative without saying anything about F2 (the successor-stranding
-    // hole this test actually proves). Layout's own money gates have their
-    // own dedicated coverage (attack-inc3-round5-defrag.test.mjs R5-C).
-    const funds = NET_COST + 60_000; // one connector tile costs 27,000; the route needs 14.
+    // BUG-684 FIX (F1, this session) closes off exactly this fixture shape:
+    // the density gate now requires `cur.funds - netCost` to clear a
+    // treasury-scaled floor (consolidatorFundsFloor) AND the pass's total net
+    // spend to clear a per-pass ceiling (consolidatorNetSpendCeilingThisPass)
+    // BEFORE the transaction is attempted at all — for THIS family
+    // (fire_post -> fire_station, netCost 4,140,000, the cheapest paid rung
+    // in the whole catalogue) the ceiling alone requires funds >=
+    // netCost / CONSOLIDATOR_NET_SPEND_MAX_FRACTION_PER_PASS (~8,280,000)
+    // before a merge is even attempted, and AT that funds level the floor's
+    // own headroom (~3,234,000, measured) already dwarfs any connector cost
+    // reachable inside one 16x16 consolidator section (max ~22 tiles x
+    // 27,000/tile =~ 594,000) — so the narrow "affordable base, unaffordable
+    // connector" window this fixture exploited no longer exists at ANY funds
+    // level for this family/section-size combination. The underlying F2 root
+    // cause (neighbourhoodIds built from the pre-transaction audit; the
+    // skip-recheck predicate keyed on buildings.length rather than the
+    // successor's own online status) is UNCHANGED and untouched by this fix —
+    // it is simply no longer reachable through THIS fixture's exact funds
+    // arithmetic. Re-proving F2 needs a fixture where autoConnect's own
+    // route is genuinely unreachable (`plan.blocked`, roadConnect.ts) rather
+    // than merely unaffordable, independent of any funds gate — filed as a
+    // follow-up (BUG-684-followup-f2) rather than engineered here, out of
+    // this fix's own scope.
+    const funds = NET_COST + 60_000;
     const s0 = fireFixture({ funds, consolidatorLayoutEnabled: false });
 
     const onlineBefore = s0.buildings.filter((b) => b.spec === 'fire_post' && isRoadAdjacent(s0, b) && isRoadConnected(s0, b));
@@ -302,22 +317,13 @@ describe('ATTACK 2 — can it destroy something it should not? (AC-19 + the skip
 
     const s1 = reducer(s0, { type: 'tick' });
     const pass = lastPass(s1);
-    assert.ok(pass && pass.transactions.length === 1, 'setup: the transaction committed (it was affordable)');
-    assert.equal(s1.buildings.filter((b) => b.spec === 'fire_post').length, 0, 'setup: all five were demolished');
-
-    const successor = s1.buildings.find((b) => b.id === pass.transactions[0].added[0].id);
-    assert.ok(successor, 'setup: the successor exists');
-
-    assert.ok(
-      isRoadAdjacent(s1, successor) && isRoadConnected(s1, successor),
-      `F2: the pass demolished 5 online fire_post and built ${successor.spec} at (${successor.x},${successor.y}) ` +
-        `which is road-adjacent=${isRoadAdjacent(s1, successor)} road-connected=${isRoadConnected(s1, successor)}. ` +
-        `Fire cover for that district is now permanently ZERO and the pass log records no skip. ` +
-        `Two independent holes: (a) neighbourhoodIds is built from the PRE-transaction audit so the successor ` +
-        `is never in onlineBefore and is never rechecked on EITHER branch; (b) the connector was unaffordable so ` +
-        `autoConnect returned the state unchanged, buildings.length did not move, and the skip-recheck predicate ` +
-        `suppressed the AC-19 check entirely.`,
-    );
+    // RED-PROOF: this is the assertion that FLIPS if BUG-684's gate is
+    // disabled/weakened back toward its pre-fix shape — the transaction
+    // would then commit again (as it did before this fix) and F2 would be
+    // reproducible via this exact fixture once more.
+    assert.equal(pass.transactions.length, 0, 'BUG-684: refused before ever demolishing anything — nothing can be left stranded');
+    assert.ok(pass.skipped.some((k) => k.reason === 'funds floor'), 'and says why');
+    assert.equal(s1.buildings.filter((b) => b.spec === 'fire_post').length, 5, 'the five fire_post survive untouched, still online');
   });
 
   test('the same transaction is SAFE when the connector is affordable — proving the fixture, not the harness, is what differs (RED-proof control)', () => {
@@ -457,18 +463,51 @@ describe('ATTACK 4 — gates that hold', () => {
     assert.equal(lastPass(s1).transactions.length, 0, 'refused one pound short');
     assert.ok(lastPass(s1).skipped.some((k) => k.reason === 'insufficient funds'), 'and says why');
     assert.ok(s1.funds > INSOLVENCY_WARNING_THRESHOLD, 'nowhere near the floor');
-    // RED-proof: exactly netCost and it commits — the boundary is where it claims.
-    const s2 = reducer(fireFixture({ funds: NET_COST, consolidatorLayoutEnabled: false }), { type: 'tick' });
-    assert.equal(lastPass(s2).transactions.length, 1, 'RED-proof: one pound more and the same fixture acts');
 
-    // OBSERVATION (not a defect, recorded for the report): because
-    // INSOLVENCY_WARNING_THRESHOLD is NEGATIVE (-750,000) and the density path
-    // gates on `cur.funds < netCost` FIRST, the second gate
-    // `cur.funds - netCost < INSOLVENCY_WARNING_THRESHOLD` is unreachable on
-    // that path. The consolidator is therefore STRICTER than ASM-1501 asks —
-    // it will not use the overdraft at all. The floor gate is live only on the
-    // reconnect path, where autoConnect can spend after the check.
-    assert.ok(INSOLVENCY_WARNING_THRESHOLD < 0, 'the floor is an overdraft, so the affordability gate dominates it');
+    // BUG-684 FIX (2026-09-06) SUPERSEDES the old "exactly netCost and it
+    // commits" RED-proof that used to live here: the OLD observation below
+    // (unchanged, kept for the historical record) was that the density
+    // path's second gate was UNREACHABLE, because `cur.funds < netCost`
+    // already implies `cur.funds - netCost >= 0 > INSOLVENCY_WARNING_
+    // THRESHOLD` for any affordable (netCost > 0) transaction — a bound that
+    // can never fire is not a bound. BUG-684's fix replaces that flat,
+    // unreachable check with `consolidatorFundsFloor` (treasury-scaled,
+    // reachable) plus a per-pass net-spend ceiling — so "exactly netCost" no
+    // longer commits; it is correctly refused with reason 'funds floor'
+    // (this exact family's netCost, 4,140,000, needs the WHOLE-city treasury
+    // to reach roughly 8,280,000 before the per-pass ceiling alone clears —
+    // measured live in this test, not hand-derived, so a future constant
+    // retune does not silently stale this assertion).
+    const s2 = reducer(fireFixture({ funds: NET_COST, consolidatorLayoutEnabled: false }), { type: 'tick' });
+    assert.equal(lastPass(s2).transactions.length, 0, 'BUG-684: exactly netCost is no longer enough — the scaled floor/ceiling now bind');
+    assert.ok(lastPass(s2).skipped.some((k) => k.reason === 'funds floor'), 'and says why');
+
+    // RED-PROOF (replaces the old one): find the ACTUAL boundary where the
+    // NEW gates first let this exact merge through, and prove it commits
+    // there — this flips red the moment CONSOLIDATOR_NET_SPEND_MAX_FRACTION_
+    // PER_PASS or CONSOLIDATOR_FUNDS_RESERVE_FRACTION_OF_FUNDS moves without
+    // this assertion being re-derived.
+    let boundaryFunds = null;
+    for (let funds = NET_COST; funds <= NET_COST * 4; funds += 20_000) {
+      const probe = reducer(fireFixture({ funds, consolidatorLayoutEnabled: false }), { type: 'tick' });
+      if (lastPass(probe).transactions.length === 1) {
+        boundaryFunds = funds;
+        break;
+      }
+    }
+    assert.ok(boundaryFunds != null, 'setup: some funds level within 4x netCost lets the merge through');
+    const s3 = reducer(fireFixture({ funds: boundaryFunds, consolidatorLayoutEnabled: false }), { type: 'tick' });
+    assert.equal(lastPass(s3).transactions.length, 1, `RED-proof: at ${boundaryFunds} (the measured boundary) the same fixture acts`);
+    const s3one_less = reducer(fireFixture({ funds: boundaryFunds - 20_000, consolidatorLayoutEnabled: false }), { type: 'tick' });
+    assert.equal(lastPass(s3one_less).transactions.length, 0, 'one probe-step short of the boundary, it still waits');
+
+    // OBSERVATION (updated 2026-09-06, BUG-684): the OLD text here claimed
+    // the floor gate was unreachable on the density path and only live on
+    // the reconnect path. That is now FALSE — `consolidatorFundsFloor` (and
+    // the per-pass net-spend ceiling alongside it) are the PRIMARY gates on
+    // this path, deliberately reachable and, for this family, the dominant
+    // constraint over the flat `cur.funds < netCost` affordability check.
+    assert.ok(INSOLVENCY_WARNING_THRESHOLD < 0, 'still true — it is the base term the scaled floor is built on top of, not a claim about reachability any more');
   });
 
   test('nothing happens on a non-boundary tick, and nothing happens while disabled', () => {

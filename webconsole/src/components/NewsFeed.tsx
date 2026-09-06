@@ -275,10 +275,16 @@ export function NewsFeed() {
   const recordedIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     for (const entry of ring) {
-      if (entry.source !== 'consolidatorCapacityUnknown') continue;
+      // BUG-684 (2026-09-06): the density-merge treasury-floor/per-pass-
+      // spend-ceiling refusal ('funds floor' skip reason) mirrors the
+      // capacity-unknown drain immediately above exactly — same dedupe,
+      // same effect, just MET-V895 (GR#7 registry-sourced) instead of
+      // MET-V866.
+      if (entry.source !== 'consolidatorCapacityUnknown' && entry.source !== 'consolidatorFundsFloor') continue;
       if (recordedIdsRef.current.has(entry.id)) continue;
       recordedIdsRef.current.add(entry.id);
-      recordError(entry.text, { type: 'app', action: 'consolidator', code: 'MET-V866' });
+      const code = entry.source === 'consolidatorFundsFloor' ? 'MET-V895' : 'MET-V866';
+      recordError(entry.text, { type: 'app', action: 'consolidator', code });
     }
   }, [ring]);
 

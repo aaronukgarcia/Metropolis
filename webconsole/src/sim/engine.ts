@@ -1982,6 +1982,103 @@ const CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS = 4;
 const CONSOLIDATOR_MAX_FAMILY_SHARE = 0.5;
 
 /**
+ * BUG-684 FIX (F1, 2026-09-06, "the automatic consolidator can spend a
+ * small-funds city into FINAL DECLINE with zero player action"): the
+ * density-merge apply loop's PRE-EXISTING funds gate (below, at the
+ * `cur.funds - netCost < ...` check) compared only against the flat,
+ * city-size-blind INSOLVENCY_WARNING_THRESHOLD (-750,000 — half of
+ * STARTING_TREASURY). On a SMALL city (this bug's own reproduction range,
+ * treasury 2,000,000-5,000,000) that floor sits most of an entire treasury
+ * away, so the automatic regenerator could legally walk a small city's
+ * funds all the way down to near -750,000 — deep in the 'warning'/'crisis'
+ * band — purely from its OWN repeated density-merge spend, with zero player
+ * action, repeatedly tripping the crisis/bailout chain over the following
+ * ticks. Reproduced in bug-684-repro.test.mjs.
+ *
+ * Mirrors BUG-788's layoutCapexReserve/layoutCapexFundsFloor shape
+ * (consolidatorLayout.ts — the SIBLING capex-floor gate already built for
+ * the LAYOUT stage, same file-header note as this fix's "extend the
+ * existing treasury+insolvency floor, don't invent a third shape") — GR#3
+ * single source of truth for "how a background spend gate scales with
+ * treasury size".
+ *
+ * ROUND REJECT (opus-round-bug684, 2026-09-06, finding 1): the ORIGINAL
+ * shape here (a fixed 6-MONTH-of-outflow term, 180 ticks, GREATER-of'd
+ * with a flat 0.2-of-funds fraction) was ITSELF too short — measured live
+ * on a 9,000,000 fire-section city with real ongoing outflow: consolidator
+ * ON drove the city into bailout (funds crossed DEBT_THRESHOLD_FOR_BAILOUT)
+ * at tick 609, while the SAME city with the consolidator OFF never dropped
+ * below +2,280,000 over the same window. The merge leaves behind a drawdown
+ * that takes the city roughly 650 ticks to recover from — longer than the
+ * 180-tick reserve was sized to survive. A floor must guarantee the city
+ * can survive its OWN CURRENT drawdown for the REST of its runway, not an
+ * arbitrary fixed number of months. FIXED: the reserve is now `max(the
+ * merge's own netCost, netOutflowPerTick * CONSOLIDATOR_MIN_RUNWAY_TICKS)`
+ * — i.e. a merge is only allowed if, AFTER paying it, `(funds - netCost) /
+ * max(netOutflowPerTick, 1) >= CONSOLIDATOR_MIN_RUNWAY_TICKS` (the city can
+ * still run for at least that many ticks at its CURRENT burn rate). The
+ * `netCost` term of the `max` is still needed independently of the runway
+ * term: a low/zero-outflow small city (this bug's own original
+ * 2,000,000-5,000,000 reproduction range, outflow ~91-514/tick on that
+ * fixture) would otherwise see its runway requirement trivially satisfied
+ * (900 * ~500 =~ 450,000, far less than a 4,140,000 netCost) and the floor
+ * would stop protecting the exact scenario BUG-684 was filed for — the
+ * netCost floor is the ORIGINAL fix's own protection, kept as a floor
+ * under the new runway term rather than replaced by it. See
+ * CONSOLIDATOR_MIN_RUNWAY_TICKS and consolidatorFundsFloorFor below for the
+ * actual formula.
+ */
+/**
+ * BUG-684 ROUND REJECT FIX (finding 1): a merge is refused unless, after
+ * paying its own netCost, the city can still run at its CURRENT net-outflow
+ * rate for at least this many ticks — see the doc block above for the full
+ * derivation (a 9,000,000-fixture measurement, not a guess) and
+ * consolidatorFundsFloorFor's own doc for how this combines with the
+ * netCost floor. PLACEHOLDER (Aaron's balance pass pending) — 900 is stated
+ * explicitly in the round's own ruling, not re-derived here.
+ */
+const CONSOLIDATOR_MIN_RUNWAY_TICKS = 900;
+/**
+ * BUG-684 ROUND REJECT FIX (finding 1, GR#3 SSOT): the ONE funds-floor
+ * formula both the reconnect lane (BEFORE the density phase in
+ * applyConsolidatorPass) and the density lane must route through — finding
+ * 2 of the same round rejected the reconnect lane for still gating on the
+ * bare INSOLVENCY_WARNING_THRESHOLD instead of this. `spend` is the
+ * candidate transaction's own cost (density: netCost; reconnect: the
+ * cumulative autoConnect spend so far/in total for the section being
+ * evaluated) — see CONSOLIDATOR_MIN_RUNWAY_TICKS's doc for the rationale of
+ * each term of the `max`.
+ */
+function consolidatorFundsFloorFor(spend: number, netOutflowPerTick: number): number {
+  return INSOLVENCY_WARNING_THRESHOLD + Math.max(spend, netOutflowPerTick * CONSOLIDATOR_MIN_RUNWAY_TICKS);
+}
+/**
+ * BUG-684 FIX (F1): per-pass cap on the consolidator's OWN total
+ * density-merge net spend (successor cost minus scrap, summed across every
+ * transaction the pass commits) — mirrors LAYOUT_CAPEX_MAX_FRACTION_PER_TICK's
+ * role for the layout stage. Without this, several individually-affordable
+ * merges committed in the SAME pass (up to CONSOLIDATOR_MAX_TRANSACTIONS_
+ * PER_PASS) could each clear the per-transaction floor check yet
+ * collectively bleed far more of the treasury in one tick than any single
+ * merge would have alone.
+ *
+ * MEASURED (same session): the density ladder's own CHEAPEST real rung
+ * (fire_post -> fire_station, netCost 4,140,000 on this catalogue) is
+ * already a large one-off spend relative to most cities' funds — a tight
+ * fraction here (0.1 was tried first) ends up the DOMINANT gate ahead of
+ * the funds-reserve floor above for almost every realistic treasury size,
+ * turning a "secondary backstop against several merges stacking in one
+ * pass" into a de-facto "no merge ever, at any scale" gate, which is not
+ * this fix's intent (that job belongs to the floor). 0.5 keeps this a true
+ * backstop: it only ever binds tighter than the floor when MULTIPLE
+ * transactions would collectively overspend in the same pass, not on an
+ * ordinary single merge a healthy treasury can otherwise afford.
+ * PLACEHOLDER-balance (Aaron's pass pending), same disclosure as every
+ * other consolidator/layout money constant.
+ */
+const CONSOLIDATOR_NET_SPEND_MAX_FRACTION_PER_PASS = 0.5;
+
+/**
  * Ring-buffer cap for SimState.consolidatorLog, mirroring LEDGER_CAP's role
  * for the ledger. WIDENED 20 -> 32 for FEAT-2326609761 inc2 (Aaron's ask:
  * "either widen the ring or document [that glide-mode undo only covers the
@@ -2991,6 +3088,97 @@ function applyConsolidatorPass(
 
   const overBudget = () => transactions.length >= CONSOLIDATOR_MAX_TRANSACTIONS_PER_PASS;
 
+  // BUG-684 RE-ROUND FIX (opus-reround-bug684, 2026-09-06, finding 1):
+  // computed ONCE, HERE, before EITHER the reconnect or density phase runs —
+  // both lanes route their own funds-floor check through
+  // consolidatorFundsFloorFor(spend, netOutflowPerTick), so this must exist
+  // before the reconnect loop (which now runs first) needs it.
+  //
+  // "THE FLOOR IS RIGHT, ITS INPUT IS NOT" (the re-round's own verdict): the
+  // PREVIOUS shape of this block read the ENTIRE outflow figure from
+  // `cur.lastFlows` — but `cur.lastFlows` is the PREVIOUS tick's economy
+  // snapshot (advance() computes and WRITES the real one only AFTER
+  // applyConsolidatorPass has already run this same tick — see advance()'s
+  // own call-site comment on applyConsolidatorPass), so on the very FIRST
+  // pass ever run for a city (genesis tick 0, a fresh load, or the tick a
+  // player first toggles the consolidator on) `cur.lastFlows` is still
+  // `initialState()`'s pristine `{ inflows: [], outflows: [] }` — COLD.
+  // Measured live on the re-round's own 9,000,000 fire-section fixture: cold
+  // read 91/tick, real structural upkeep 7,635/tick — an 84x under-read that
+  // let an unsafe merge straight through the (correctly-shaped) runway floor
+  // on the exact fixture and tick (monthly-twelfth, pass at tick 0) the
+  // round reproduced.
+  //
+  // FIX: the per-BUILDING upkeep component — the dominant, and in a
+  // population-0/no-wages fixture the ENTIRE, real outflow — is now computed
+  // STRUCTURALLY, directly from `cur.buildings`, NEVER from `cur.lastFlows`:
+  // mirrors computeFlows' own upkeep loop exactly (isOnline gate, `sp.upkeep`
+  // truthy check, `upkeepChargeableOf`'s genesis-free m20/rail exemption —
+  // GR#3, one formula) so this can never drift from what a WARM tick would
+  // have reported, whether cold or warm. Everything computeFlows charges
+  // that is NOT building upkeep (wages, transit subsidy, overdraft interest,
+  // bailout standing costs, grid import, etc. — collectively "the terms this
+  // fix cannot cheaply re-derive structurally") is still read from
+  // `cur.lastFlows.outflows`, filtered to exclude every UPKEEP_BUCKET label
+  // (already counted structurally above) and the consolidator's own prior
+  // spend (same self-rebasing-bound rationale as before).
+  //
+  // COLD IS A REFUSAL, NEVER A PERMISSIVE READING (the round's explicit
+  // instruction): when `cur.lastFlows` is cold, THAT residual (wages/other)
+  // term is unknowable — a cold city might genuinely have zero population
+  // and zero wages (fine), or it might have a real wage bill this snapshot
+  // simply hasn't been computed yet (unsafe to treat as zero). Rather than
+  // guess, `consolidatorFlowsAreCold` is threaded to every candidate site
+  // below and refuses the merge outright (reason 'funds floor') until the
+  // FIRST full tick's real advance() has run and lastFlows is warm — which,
+  // since passes only fire on month boundaries, affects at most the one
+  // very first pass a city ever runs.
+  const consolidatorFlowsAreCold = cur.lastFlows.outflows.length === 0 && cur.lastFlows.inflows.length === 0;
+  const consolidatorBuildingUpkeepPerTick = cur.buildings.reduce((sum, b) => {
+    if (!isOnline(cur, b)) return sum;
+    const sp = SPECS[b.spec];
+    if (!sp || !sp.upkeep) return sum;
+    return sum + upkeepChargeableOf(b, sp);
+  }, 0);
+  // BUG-684 RE-ROUND FIX (finding 1, GR#3 SSOT): wages are the OTHER
+  // dominant, cheaply-structural outflow — computeFlows' own real 'Wages'
+  // line (a few hundred lines up) is exactly `sectorWagesPerTick(
+  // filledJobsBySector(s)).totalPerTick`, a pure function of the CURRENT
+  // buildings/population (filledJobsBySector is memoOnState-cached, so this
+  // is a cache hit whenever nothing has changed `cur` yet this pass — the
+  // common case). Computed structurally for the SAME reason building
+  // upkeep is: cur.lastFlows lags by a full tick and is cold at genesis, so
+  // reading wages from it risks the identical under-read this whole fix
+  // exists to close.
+  const consolidatorWagesPerTick = sectorWagesPerTick(filledJobsBySector(cur)).totalPerTick;
+  // Everything else computeFlows charges (transit subsidy, overdraft
+  // interest, bailout standing costs, grid import, austerity-discounted
+  // amounts, etc.) is policy/insolvency-state-gated rather than a plain
+  // function of the building stock, and NOT cheaply re-derivable here
+  // without duplicating a good third of computeFlows — still read from
+  // `cur.lastFlows.outflows`, filtered to exclude the labels now computed
+  // structurally above (UPKEEP_BUCKET's labels, 'Wages') plus the
+  // consolidator's own prior spend (self-rebasing-bound rationale,
+  // unchanged). `consolidatorFlowsAreCold` is the explicit REFUSAL fallback
+  // for exactly this residual, non-structural term: a genuinely empty
+  // lastFlows (genesis, a fresh load, or the tick the consolidator is first
+  // toggled on) means this residual is UNKNOWABLE, not zero — see its own
+  // doc above (its declaration, a few lines up).
+  const CONSOLIDATOR_UPKEEP_LABELS = new Set(Object.values(UPKEEP_BUCKET));
+  const CONSOLIDATOR_FUNDS_RESERVE_EXCLUDED_LABELS = new Set([
+    'Consolidation',
+    'Consolidation Scrap',
+    'Wages',
+    ...CONSOLIDATOR_UPKEEP_LABELS,
+  ]);
+  const consolidatorOtherOutflowPerTick = cur.lastFlows.outflows
+    .filter((f) => !CONSOLIDATOR_FUNDS_RESERVE_EXCLUDED_LABELS.has(f.label))
+    .reduce((sum, f) => sum + f.value, 0);
+  const consolidatorOutflowPerTick =
+    consolidatorBuildingUpkeepPerTick + consolidatorWagesPerTick + consolidatorOtherOutflowPerTick;
+  const consolidatorInflowPerTick = cur.lastFlows.inflows.reduce((sum, f) => sum + f.value, 0);
+  const consolidatorNetOutflowPerTick = Math.max(0, consolidatorOutflowPerTick - consolidatorInflowPerTick);
+
   // ---- FEAT-2326609779 (consolidator inc3): layout hierarchy -------------
   // ROUND-5 P1 FIX: runs FIRST in the pass now, per Aaron's ruling ("roads
   // lay out, then train layout, then the bigger consolidated buildings get
@@ -3783,6 +3971,14 @@ function applyConsolidatorPass(
       skipped.push({ sectionKey: opp.sectionKey, reason: 'administration' });
       continue;
     }
+    // BUG-684 RE-ROUND FIX (finding 1): a cold lastFlows means the runway
+    // floor's residual (non-upkeep) outflow term is unknowable — refuse
+    // outright rather than risk treating "not yet computed" as "zero" (see
+    // consolidatorFlowsAreCold's own doc above).
+    if (consolidatorFlowsAreCold) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'funds floor' });
+      continue;
+    }
 
     const audit = reconnectIndex.get(opp.sectionKey);
     if (!audit) continue;
@@ -3859,7 +4055,17 @@ function applyConsolidatorPass(
         anyConnected = true;
       }
       // AC-23: never spend a background process through the insolvency floor.
-      if (attempt.funds < INSOLVENCY_WARNING_THRESHOLD) break;
+      // BUG-684 ROUND REJECT FIX (finding 2, GR#3): routed through the SAME
+      // consolidatorFundsFloorFor the density lane uses, not the bare flat
+      // INSOLVENCY_WARNING_THRESHOLD — this lane runs BEFORE the density
+      // phase, so leaving it on the flat threshold left a hole the round's
+      // finding 2 explicitly named: a reconnect-heavy pass could still walk
+      // funds down to the old, unscaled floor before density ever got a
+      // chance to apply the (already-fixed) scaled one. `spend so far`
+      // (preFunds - attempt.funds at THIS point in the per-building loop) is
+      // this candidate's own running cost, mirroring how the density lane's
+      // `netCost` feeds the same formula.
+      if (attempt.funds < consolidatorFundsFloorFor(preFunds - attempt.funds, consolidatorNetOutflowPerTick)) break;
     }
 
     const spend = preFunds - attempt.funds;
@@ -3869,12 +4075,15 @@ function applyConsolidatorPass(
       // there is nothing to roll back.
       continue; // not a chargeable transaction.
     }
-    if (attempt.funds < INSOLVENCY_WARNING_THRESHOLD) {
+    // BUG-684 ROUND REJECT FIX (finding 2): same routing as the break above,
+    // now checked against the SECTION'S TOTAL reconnect spend rather than
+    // the running per-building figure.
+    if (attempt.funds < consolidatorFundsFloorFor(spend, consolidatorNetOutflowPerTick)) {
       for (const key of tentativeKeys) {
         reconnectOccupied.delete(key);
         reconnectRoads.delete(key);
       }
-      skipped.push({ sectionKey: opp.sectionKey, reason: 'insufficient funds' });
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'funds floor' });
       continue; // revert — `cur` is untouched since we mutated only the local `attempt`.
     }
 
@@ -3926,6 +4135,29 @@ function applyConsolidatorPass(
   // per-commit update sites below.
   const familyCapacityDelta = new Map<string, number>();
   const runningOccupied = new Set(occupiedSet(cur));
+  // BUG-684 ROUND REJECT FIX (finding 1): the funds floor is now PER-
+  // CANDIDATE (consolidatorFundsFloorFor(netCost, consolidatorNetOutflowPerTick)
+  // at each candidate's own funds-check site below), because its reserve
+  // depends on the specific merge's own netCost — it can no longer be
+  // hoisted to a single once-per-pass value the way the OLD (rejected)
+  // months/fraction shape was. `consolidatorNetOutflowPerTick` itself is
+  // still computed exactly once per pass (hoisted above, before the
+  // reconnect phase — GR#3, ONE reading shared by both lanes). Only the
+  // per-pass net-spend CEILING (a pass-wide total, not candidate-specific)
+  // still needs its own once-per-pass value here.
+  const consolidatorNetSpendCeilingThisPass = Math.max(
+    0,
+    CONSOLIDATOR_NET_SPEND_MAX_FRACTION_PER_PASS * Math.max(0, cur.funds),
+  );
+  let consolidatorNetSpendThisPass = 0;
+  // BUG-684 FIX (F1): a group refused purely by the floor/ceiling gates
+  // below is recorded into `skipped` with reason 'funds floor' (same as
+  // every other gate in this loop) — newsFeed.ts's existing OUTBOX drain
+  // (the same pattern BUG-742's 'capacity unknown' skip already uses) reads
+  // that reason straight off the pass log and surfaces it ONCE via MET-V895,
+  // never a reducer-side recordError call (this runs inside the pure
+  // reducer; see the 'capacity unknown' skip's own doc a few hundred lines
+  // up for why).
   for (const opp of consolidateOpps) {
     if (overBudget()) {
       skipped.push({ sectionKey: opp.sectionKey, reason: 'action budget' });
@@ -3934,6 +4166,12 @@ function applyConsolidatorPass(
     if (sectionsDone.has(opp.sectionKey)) continue;
     if (cur.administrationState) {
       skipped.push({ sectionKey: opp.sectionKey, reason: 'administration' });
+      continue;
+    }
+    // BUG-684 RE-ROUND FIX (finding 1): same cold-flows refusal as the
+    // reconnect lane above — see consolidatorFlowsAreCold's own doc.
+    if (consolidatorFlowsAreCold) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'funds floor' });
       continue;
     }
 
@@ -4155,8 +4393,47 @@ function applyConsolidatorPass(
       skipped.push({ sectionKey: opp.sectionKey, reason: 'insufficient funds' });
       continue;
     }
-    if (cur.funds - netCost < INSOLVENCY_WARNING_THRESHOLD) {
-      skipped.push({ sectionKey: opp.sectionKey, reason: 'insufficient funds' });
+    // BUG-684 RE-ROUND FIX (finding 2, "successors can cost more" — BUG-796):
+    // the runway term must reflect the CITY THE MERGE CREATES, not the one
+    // that exists right now — a successor whose own upkeep exceeds the sum
+    // of the (online) originals it replaces makes the city's STRUCTURAL
+    // outflow WORSE the instant it commits, and a floor computed against the
+    // pre-merge outflow would under-protect exactly that case. `toSpec` is
+    // never a GENESIS_FREE_UPKEEP_SPECS kind (m20/rail — data.ts), so its
+    // upkeep is always `toSpec.upkeep` outright, no upkeepChargeableOf call
+    // needed for the successor half; the removed half mirrors this pass's
+    // own structural-upkeep loop exactly (isOnline gate, same helper) so an
+    // OFFLINE original (already contributing 0 to the baseline) is not
+    // double-subtracted.
+    const removedGroupUpkeepPerTick = group.reduce((sum, b) => {
+      if (!isOnline(cur, b)) return sum;
+      const sp = SPECS[b.spec];
+      if (!sp || !sp.upkeep) return sum;
+      return sum + upkeepChargeableOf(b, sp);
+    }, 0);
+    const postMergeNetOutflowPerTick = Math.max(
+      0,
+      consolidatorNetOutflowPerTick + (toSpec.upkeep ?? 0) - removedGroupUpkeepPerTick,
+    );
+    // BUG-684 ROUND REJECT FIX (finding 1): the runway-scaled treasury floor
+    // (consolidatorFundsFloorFor — see its own doc above) — not the bare
+    // flat threshold a small city could be walked almost all the way down
+    // to, and not the original fixed-months reserve either (too short on a
+    // real 9,000,000 fixture's own drawdown, per the round's measurement).
+    // A refused merge here WAITS (the group is untouched and will be
+    // re-offered by a future pass once headroom recovers) and is recorded
+    // via the news-feed outbox drain below.
+    const consolidatorFundsFloor = consolidatorFundsFloorFor(netCost, postMergeNetOutflowPerTick);
+    if (cur.funds - netCost < consolidatorFundsFloor) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'funds floor' });
+      continue;
+    }
+    // BUG-684 FIX (F1): the per-pass net-spend ceiling — several individually
+    // -affordable merges in the SAME pass must not collectively bleed more
+    // than this share of the treasury in one tick (see
+    // CONSOLIDATOR_NET_SPEND_MAX_FRACTION_PER_PASS's doc above).
+    if (consolidatorNetSpendThisPass + Math.max(0, netCost) > consolidatorNetSpendCeilingThisPass) {
+      skipped.push({ sectionKey: opp.sectionKey, reason: 'funds floor' });
       continue;
     }
 
@@ -4222,10 +4499,16 @@ function applyConsolidatorPass(
     // the connector against that, then reconcile the REAL spend against the
     // true funds baseline below — this can never let the transaction commit
     // for more than the floor allows, because the reconciled total is
-    // provably >= INSOLVENCY_WARNING_THRESHOLD by construction (the boost
-    // itself is capped there).
+    // provably >= consolidatorFundsFloor by construction (the boost itself
+    // is capped there).
+    //
+    // BUG-684 FIX (F1): headroom is granted down to `consolidatorFundsFloor`
+    // (the scaled floor), NOT the flat INSOLVENCY_WARNING_THRESHOLD this used
+    // to read — otherwise a successor's own connector spend could still walk
+    // funds past the new floor even though the pre-check above correctly
+    // gated the base netCost against it.
     const fundsBeforeConnect = attempt.funds; // cur.funds - netCost, captured before autoConnect touches it
-    const floorHeadroom = fundsBeforeConnect - INSOLVENCY_WARNING_THRESHOLD; // always >= 0: the cheap pre-filter above already proved cur.funds >= netCost
+    const floorHeadroom = fundsBeforeConnect - consolidatorFundsFloor; // always >= 0: the pre-filter above already proved cur.funds - netCost >= consolidatorFundsFloor
     attempt = autoConnect(
       { ...attempt, funds: floorHeadroom },
       successorBuilding,
@@ -4345,6 +4628,11 @@ function applyConsolidatorPass(
     }
 
     cur = attemptConn;
+    // BUG-684 FIX (F1): the REAL spend (including any connector cost), not
+    // the pre-check estimate, is what the per-pass net-spend ceiling must
+    // track — matches the "bill the REAL spend" idiom this same transaction
+    // already applies to buildCost/netCost above.
+    consolidatorNetSpendThisPass += Math.max(0, realNetCost);
     byId.set(successorBuilding.id, successorBuilding);
     for (const id of groupIds) byId.delete(id);
     // F5 FIX (independent round finding): DO NOT recompute sectionIndexOf
