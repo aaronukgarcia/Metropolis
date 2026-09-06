@@ -1517,7 +1517,59 @@ func TestFEAT169_CrossModuleIDCollisionRegression(t *testing.T) {
 	// driven migration admits — the baseline-one attract config keeps
 	// A > A_world from month 0 (see TestHeadless_MigrationIsAttractivenessDriven),
 	// so migration admits happen essentially every month of this run.
-	advanceInChunks(t, e, feat169CoupleRunMonths*int64(core.DailyTicksPerMonth))
+	//
+	// BUG-380 (2026-09-06, opus round on the CI regression from e410aad):
+	// this used to be one advanceInChunks() call followed by a FINAL-STATE
+	// scan of attract.MigrantIDBase+[1,probeBound] via CitizenAt. That
+	// scan is no longer trustworthy on its own: BUG-380 made admitted
+	// migrants emigration-eligible (with a 12-month tenure grace,
+	// migration.go), and this seed's own immigration schedule tapers to
+	// zero by ~month 120 (attractiveness converges to the world baseline)
+	// while emigration keeps drawing on the same resident pool for the
+	// remaining ~215 months — a TestZZDebugFEAT169 scratch probe (this
+	// round, not committed) showed all 927 migrants ever admitted by this
+	// seed are gone by month 335 (mortality + the now-legal emigration
+	// path), even though comp.NetMigration()'s cumulative sum still reads
+	// positive. That is a real production behaviour change, not a test
+	// bug to paper over by re-exempting migrants from emigration — so the
+	// fix here is to prove disjointness against ids AS THEY ARE MINTED
+	// (each id is queried via CitizenAt the same month attract's own
+	// MigrantsAdmitted() counter reports it, i.e. before any later
+	// emigration/mortality can remove it), not by re-deriving them from
+	// end-of-run survivors. The collision guarantee this test exists to
+	// prove is about the ID SPACE (do minted ids ever fall in the wrong
+	// range or repeat), which does not depend on who is still alive at
+	// the last tick.
+	seen := map[uint64]bool{}
+	migrantsFound := 0
+	var lastAdmitted uint64
+	for m := int64(0); m < feat169CoupleRunMonths; m++ {
+		if err := e.AdvanceTicks(errs.NewCorrelationID(), int64(core.DailyTicksPerMonth)); err != nil {
+			t.Fatalf("month %d AdvanceTicks: %v", m, err)
+		}
+		admitted := comp.state.attract.MigrantsAdmitted()
+		for i := lastAdmitted + 2; i <= admitted; i++ {
+			id := attract.MigrantIDBase + i
+			if _, ok := comp.state.citizens.CitizenAt(id, comp.state.cid); !ok {
+				// mintMigrantID's own documented +1 phantom-counter quirk
+				// (compose.go's migrantIDsFromCount doc comment) — never a
+				// real minted id, harmlessly skipped exactly like every
+				// other consumer's CitizenAt !ok check.
+				continue
+			}
+			migrantsFound++
+			if seen[id] {
+				t.Fatalf("migrant id %d collides with an id already seen (another migrant)", id)
+			}
+			seen[id] = true
+			// Every migrant id found must fall strictly inside attract's
+			// own range, never reaching into citizens' fertility range.
+			if id >= citizens.FertilityChildIDBase {
+				t.Fatalf("migrant id %d falls at or past citizens.FertilityChildIDBase (%d) — range collision", id, citizens.FertilityChildIDBase)
+			}
+		}
+		lastAdmitted = admitted
+	}
 
 	if got := comp.NetMigration(); got <= 0 {
 		t.Fatalf("NetMigration() = %d, want > 0 (this regression needs REAL migrant ids in play, not just fertility)", got)
@@ -1529,46 +1581,20 @@ func TestFEAT169_CrossModuleIDCollisionRegression(t *testing.T) {
 		t.Fatalf("conservation suite reported %d violations while both migration admits and a fertility birth were live, want 0", got)
 	}
 
-	// The fertility child must exist, addressable, and distinct.
+	// The fertility child must exist, addressable, and distinct — checked
+	// at end of run (FEAT-160's child never departs/dies inside this
+	// window, unlike migrants which BUG-380 now makes emigration-eligible
+	// — see the loop above's doc comment).
 	childID := citizens.FertilityChildIDBase
 	child, ok := comp.state.citizens.CitizenAt(childID, comp.state.cid)
 	if !ok {
 		t.Fatalf("expected fertility child %d to exist", childID)
 	}
-
-	// Walk attract's sequential migrant-id counter space directly
-	// (attract.MigrantIDBase+1, +2, ...) and collect every id that
-	// resolves to a REAL citizen — proving actual migrant ids exist in
-	// this run (not just that NetMigration is positive) and that none of
-	// them collides with the fertility child id or each other.
-	seen := map[uint64]bool{childID: true}
-	migrantsFound := 0
-	const probeBound = 20000 // must exceed the true migrant-id count with headroom — checked below, not merely assumed
-	for i := uint64(1); i <= probeBound; i++ {
-		id := attract.MigrantIDBase + i
-		if _, ok := comp.state.citizens.CitizenAt(id, comp.state.cid); !ok {
-			continue
-		}
-		migrantsFound++
-		if seen[id] {
-			t.Fatalf("migrant id %d collides with an id already seen (the fertility child id or another migrant)", id)
-		}
-		seen[id] = true
-		// Every migrant id found must fall strictly inside attract's own
-		// range, never reaching into citizens' fertility range.
-		if id >= citizens.FertilityChildIDBase {
-			t.Fatalf("migrant id %d falls at or past citizens.FertilityChildIDBase (%d) — range collision", id, citizens.FertilityChildIDBase)
-		}
+	if seen[childID] {
+		t.Fatalf("fertility child id %d collides with a migrant id minted during the run", childID)
 	}
 	if migrantsFound == 0 {
-		t.Fatalf("no migrant citizen found in attract.MigrantIDBase+[1,%d] after %d months with NetMigration=%d — cannot prove disjointness against a REAL migrant id", probeBound, feat169CoupleRunMonths, comp.NetMigration())
-	}
-	// Fail loudly rather than silently under-count: hitting the probe
-	// ceiling means the true migrant-id count may exceed it, which would
-	// make "zero collisions found" an unproven claim, not a verified one
-	// (a gate that cannot evaluate the full range must not report success).
-	if migrantsFound >= probeBound-10 {
-		t.Fatalf("migrantsFound=%d is within 10 of probeBound=%d — the probe range is too small to trust a full scan; raise probeBound", migrantsFound, probeBound)
+		t.Fatalf("no migrant citizen resolved via CitizenAt in any month of the %d-month run with NetMigration=%d — cannot prove disjointness against a REAL migrant id", feat169CoupleRunMonths, comp.NetMigration())
 	}
 
 	// The fertility child id itself must never fall inside attract's
@@ -1577,5 +1603,5 @@ func TestFEAT169_CrossModuleIDCollisionRegression(t *testing.T) {
 		t.Fatalf("fertility child id %d falls inside attract's migrant range [%d, %d) — collision", childID, attract.MigrantIDBase, citizens.FertilityChildIDBase)
 	}
 	_ = child
-	t.Logf("cross-module regression: %d unique migrant ids + 1 fertility child id, zero collisions, zero conservation violations", migrantsFound)
+	t.Logf("cross-module regression: %d unique migrant ids minted + 1 fertility child id, zero collisions, zero conservation violations", migrantsFound)
 }
