@@ -43,15 +43,15 @@
 // day's glide window server-side, and consolidator.ts already imports
 // TICKS_PER_MONTH/CONNECT_EXEMPT_KINDS FROM engine.ts — so an
 // engine.ts -> consolidatorGlide.ts -> consolidator.ts -> engine.ts cycle
-// would exist the moment this file imported MAP_W/MAP_H from consolidator.ts
-// (which is exactly what it did in the inc2 read-only build, when only
-// MapView.tsx — outside the sim module graph — consumed it). Mirrors
-// consolidator.ts's OWN header note on why CONSOLIDATOR_ENABLED_DEFAULT
-// lives in engine.ts rather than being imported, and its own MAP_W/MAP_H
-// local mirror of data.ts's values for the identical reason.
-/** Local mirror of consolidator.ts's MAP_W/MAP_H (itself a mirror of data.ts's) — VALUES must stay in sync (both are 440x260), see the cycle-avoidance note above for why this is a duplicated constant rather than an import. */
-const MAP_W = 440;
-const MAP_H = 260;
+// would exist if this file imported MAP_W/MAP_H from consolidator.ts.
+//
+// FEAT-2326609790 (2026-09-05): the fix is grid.ts, a genuine zero-import
+// leaf — importing from it keeps this module a leaf too (grid.ts has no
+// edges back into consolidator.ts/engine.ts, so no cycle is possible),
+// which is strictly better than the hand-duplicated local mirror this file
+// carried before (a GR#3 SSOT violation matching consolidator.ts's own
+// former local mirror of data.ts's values — both now import grid.ts).
+import { MAP_W, MAP_H } from './grid.ts';
 
 /**
  * The glide grid's shape for a given section-tile size: how many distinct

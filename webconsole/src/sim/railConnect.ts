@@ -52,11 +52,17 @@ const DIRS: Pt[] = [
  * Default exploration budget (max cells settled) before a branch is declared
  * blocked. PLACEHOLDER-balance (flagged for Aaron): a gateway can sit far from the
  * nearest line (a corner airport reaching a mid-map HS1 line), so this is sized
- * ABOVE the whole board's cell count (MAP_W·MAP_H = 440·260 = 114,400) — a branch is
- * therefore only ever "blocked" when the line is genuinely walled off, never merely
- * distant. Runs only on the rare gateway placement, so the sweep cost is a non-issue.
+ * ABOVE the whole board's cell count (MAP_W·MAP_H) — a branch is therefore only
+ * ever "blocked" when the line is genuinely walled off, never merely distant.
+ * Runs only on the rare gateway placement, so the sweep cost is a non-issue.
+ * FEAT-2326609790 (2026-09-05, "double the land mass"): the grid grew from
+ * 440x260 (114,400 cells) to 624x368 (229,632 cells) — this file is
+ * deliberately kept free of grid.ts/data.ts imports (see the header comment:
+ * pure + unit-testable with plain sets), so the budget is a hand-raised
+ * literal rather than a derived MAP_W*MAP_H product; re-check this constant
+ * again if the grid ever grows further.
  */
-export const RAIL_BRANCH_BUDGET = 200000;
+export const RAIL_BRANCH_BUDGET = 260000;
 
 const key = (x: number, y: number) => `${x},${y}`;
 

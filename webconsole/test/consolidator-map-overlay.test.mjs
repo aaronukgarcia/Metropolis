@@ -19,6 +19,8 @@ import {
   SECTIONS_X,
   SECTIONS_Y,
   TOTAL_SECTIONS,
+  MAP_W,
+  MAP_H,
 } from '../src/sim/consolidator.ts';
 import { publishConsolidatorFocus, currentConsolidatorFocus } from '../src/sim/consolidatorFocus.ts';
 import { TICKS_PER_MONTH } from '../src/sim/engine.ts';
@@ -59,19 +61,30 @@ test('EXHAUSTIVE at several camera positions/zooms: every section screen-rect co
   }
 });
 
-test('the ruled 16x16-tile (800m) section grid: geometry is correct at the map edges (partial sections)', () => {
-  // 440/16 = 27.5, 260/16 = 16.25 — both axes have a partial final section.
+test('the ruled 16x16-tile (800m) section grid: geometry is correct at the map edges (last-column/row clipping, GR#15 derived from MAP_W/MAP_H, never hand-computed)', () => {
+  // FEAT-2326609790 (2026-09-05, "double the land mass"): the grid grew
+  // from 440x260 to 624x368. Both new dimensions happen to be EXACT
+  // multiples of SECTION_TILES=16 (624/16=39, 368/16=23), so the last
+  // column/row is no longer PARTIAL at this particular map size the way
+  // 440x260 was (440/16=27.5, 260/16=16.25) — this test used to pin the
+  // partial-clip numbers literally, which would have gone stale (and
+  // silently stopped proving anything) the moment the grid resized. Every
+  // expected value below is now DERIVED from MAP_W/MAP_H/SECTION_TILES so
+  // the same test keeps proving the real formula (clip-to-map-edge, whether
+  // that clip removes 0 tiles or several) across any future grid size.
   assert.equal(SECTION_TILES, 16);
-  assert.equal(SECTIONS_X, 28);
-  assert.equal(SECTIONS_Y, 17);
-  const lastColKey = sectionKeyOf(439, 0); // rightmost tile, top row
+  assert.equal(SECTIONS_X, Math.ceil(MAP_W / SECTION_TILES));
+  assert.equal(SECTIONS_Y, Math.ceil(MAP_H / SECTION_TILES));
+  const lastColKey = sectionKeyOf(MAP_W - 1, 0); // rightmost tile, top row
   const { x0, w } = sectionOriginOf(lastColKey);
-  assert.equal(x0, 27 * 16); // 27th section starts at tile 432
-  assert.equal(w, 440 - 27 * 16); // clipped to 8 tiles, not the full 16
-  const lastRowKey = sectionKeyOf(0, 259); // leftmost tile, bottom row
+  const expectedLastColX0 = (SECTIONS_X - 1) * SECTION_TILES;
+  assert.equal(x0, expectedLastColX0);
+  assert.equal(w, MAP_W - expectedLastColX0, 'last column clips to whatever remainder is left at the map edge (0 remainder is a valid, exact-fit case)');
+  const lastRowKey = sectionKeyOf(0, MAP_H - 1); // leftmost tile, bottom row
   const { y0, h } = sectionOriginOf(lastRowKey);
-  assert.equal(y0, 16 * 16); // 16th section starts at tile 256
-  assert.equal(h, 260 - 16 * 16); // clipped to 4 tiles, not 16
+  const expectedLastRowY0 = (SECTIONS_Y - 1) * SECTION_TILES;
+  assert.equal(y0, expectedLastRowY0);
+  assert.equal(h, MAP_H - expectedLastRowY0, 'last row clips to whatever remainder is left at the map edge (0 remainder is a valid, exact-fit case)');
 });
 
 test('the draw-loop geometry function never references buildings — pure section arithmetic only', () => {

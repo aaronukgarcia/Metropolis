@@ -5681,6 +5681,12 @@
       "module": "ui.webconsole",
       "message": "Consolidator layout pass detected nextId behind the highest existing building id and self-healed by advancing it; this should never happen from normal play and indicates a state-construction defect (hand-built fixture or corrupt save). The actual nextId/highest-id values are inlined by the call site (engine.ts's recordError call takes a fully-formatted message, not a templated one) and appear in the recorded error's own text.",
       "remedy": "Investigate the state that reached this pass - a legitimate save/hydrate path must always derive nextId from nextSafeBuildingId; find and fix the construction site that skipped it"
+    },
+    "MET-V873": {
+      "severity": "fatal",
+      "module": "ui.webconsole",
+      "message": "Savepoint grid {gridW}x{gridH} exceeds this build's map size {mapW}x{mapH} - refusing to load (would truncate buildings)",
+      "remedy": "Update to a build with a map at least {gridW}x{gridH}, or load an older savepoint"
     }
   }
 }

@@ -43,6 +43,12 @@ import type { Spec, Tag } from './data.ts';
 // here creates no cycle, mirroring how this file already imports types from
 // data.ts without risk.
 import type { TierImplementation, FreeSpaceAllocation } from './consolidatorLayout.ts';
+// FEAT-2326609790 (2026-09-05): grid.ts is a zero-import leaf, so importing
+// the REAL MAP_W/MAP_H here (instead of the local mirror this file used to
+// carry) introduces no import-cycle risk at all, unlike importing them from
+// data.ts (data.ts and consolidator.ts already have a real call-time cycle —
+// see data.ts's own header comment on familyKeyOf).
+import { MAP_W, MAP_H } from './grid.ts';
 
 /**
  * MUTATION-LANE NOTE (FEAT-2326609761, 2026-09-04): this module used to
@@ -153,13 +159,18 @@ export const CONSOLIDATOR_SECTION_METRES = 800;
  * DERIVED, never a literal `16` (GR#15). At the current ruling value this is
  * exactly 800/50 = 16 (a 16x16-tile / 256-tile section).
  *
- * Section count at 16x16: ceil(440/16) x ceil(260/16) = 28 x 17 = 476
- * sections (down from 7,150 at 4x4) — note 440/16=27.5 and 260/16=16.25, so
- * BOTH axes have a partial final section (the map does not divide evenly by
- * 16); `sectionOriginOf`'s existing clip-to-map-edge logic (`Math.min(
- * SECTION_TILES, MAP_W - x0)` / same for h) already handles this without any
- * change — the exhaustive tile-coverage test re-proves it at the new grid
- * size. For a 29,831-building city that is ~62.7 buildings/section on
+ * Section count at 16x16, ORIGINAL 440x260 grid: ceil(440/16) x ceil(260/16)
+ * = 28 x 17 = 476 sections (down from 7,150 at 4x4) — note 440/16=27.5 and
+ * 260/16=16.25, so BOTH axes had a partial final section (the map did not
+ * divide evenly by 16); `sectionOriginOf`'s clip-to-map-edge logic (`Math.min(
+ * SECTION_TILES, MAP_W - x0)` / same for h) handles this regardless.
+ * FEAT-2326609790 (2026-09-05, "double the land mass"): the grid is now
+ * 624x368 — ceil(624/16) x ceil(368/16) = 39 x 23 = 897 sections, and both
+ * new dimensions happen to be EXACT multiples of 16, so this particular size
+ * has no partial edge section at all; the clip-to-map-edge formula above is
+ * unchanged and correctly produces a 0-tile clip in that case (re-proven by
+ * the exhaustive tile-coverage test at the current grid size, whatever it
+ * is). For a 29,831-building city that is ~62.7 buildings/section on
  * average (up from ~4.2 at 4x4) — coarser, as intended: the whole point of
  * the ruling is that inc1's locality constraint (CEIL-1: a group must lie
  * wholly inside one section) needs a section large enough to actually
@@ -175,9 +186,11 @@ export const CONSOLIDATOR_SECTION_METRES = 800;
  */
 export const SECTION_TILES = Math.round(CONSOLIDATOR_SECTION_METRES / TILE_METRES);
 
-/** Local mirror of data.ts's MAP_W/MAP_H (data.ts:43-44) — read-only constants, safe to duplicate the VALUE reference without importing the whole data module surface twice. */
-export const MAP_W = 440;
-export const MAP_H = 260;
+// FEAT-2326609790: MAP_W/MAP_H now imported from grid.ts (above) rather than
+// duplicated here — re-exported so every existing `from './consolidator.ts'`
+// import site (MapView.tsx, debugjson.ts, keyhandler.ts) keeps working
+// unchanged.
+export { MAP_W, MAP_H };
 
 /**
  * FEAT-2326609761 inc2 (Aaron's ruling, 2026-09-03): the player-adjustable

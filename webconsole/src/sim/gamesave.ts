@@ -8,6 +8,8 @@ import { gameDate } from './utils.ts';
 import { sanitizeTreasury } from './engine.ts';
 import { codedError } from './backend.ts';
 import { coerceBuildingCapacityTier } from './data.ts';
+// FEAT-2326609790: grid.ts is a zero-import leaf — see its own header.
+import { MAP_W, MAP_H } from './grid.ts';
 
 export const GAME_SAVE_FORMAT = 'metropolis-save/1';
 
@@ -164,6 +166,21 @@ function validateGameSaveShape(parsed: unknown): {
     rejectSave('Snapshot is missing tick or buildings');
   }
   (snap.buildings as unknown[]).forEach((b, i) => validateBuildingElement(b, i));
+  // FEAT-2326609790 (2026-09-05): a File->Open save stamped with a grid
+  // LARGER than this build defines must be refused loudly (MET-V873), same
+  // gate as replay.ts's restoreFromSavepoint — see Savepoint.gridW/gridH's
+  // doc comment (replay.ts) for why only this direction is dangerous. An
+  // absent stamp (pre-FEAT-2326609790 save) is always safe — treated as the
+  // original 440x260, a strict subset of every later size.
+  const spRec = sp as Record<string, unknown>;
+  const savedGridW = typeof spRec.gridW === 'number' ? spRec.gridW : undefined;
+  const savedGridH = typeof spRec.gridH === 'number' ? spRec.gridH : undefined;
+  if ((savedGridW !== undefined && savedGridW > MAP_W) || (savedGridH !== undefined && savedGridH > MAP_H)) {
+    throw codedError(
+      'MET-V873',
+      `Savepoint grid ${savedGridW}x${savedGridH} exceeds this build's map size ${MAP_W}x${MAP_H} - refusing to load (would truncate buildings)`
+    );
+  }
   // BUG-742 round F3/E1: coerce AFTER structural validation passes — every
   // element is already proven to be an object with the right FIELD TYPES;
   // this only repairs capacityTier's VALUE, via the shared data.ts boundary

@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import { strictEqual, deepStrictEqual, ok } from 'node:assert';
 import { reducer, initialState } from '../src/sim/engine.ts';
-import { placementCost, SPECS } from '../src/sim/data.ts';
+import { placementCost, SPECS, MAP_W, MAP_H } from '../src/sim/data.ts';
 import type { Clipboard, Building } from '../src/sim/types.ts';
 
 describe('clone-stamp', () => {
@@ -121,11 +121,13 @@ describe('clone-stamp', () => {
     };
 
     // Should succeed (fits barely).
+    // FEAT-2326609790 (2026-09-05): derived from MAP_W/MAP_H, not the old
+    // 440/260 literals, so this stays correct across any future grid resize.
     const result1 = reducer(state, {
       type: 'stampRegion',
       clipboard,
-      x: 439, // MAP_W - 1
-      y: 259, // MAP_H - 1
+      x: MAP_W - 1,
+      y: MAP_H - 1,
     });
     ok(result1.buildings.length === state.buildings.length + 1);
 
@@ -133,7 +135,7 @@ describe('clone-stamp', () => {
     const result2 = reducer(state, {
       type: 'stampRegion',
       clipboard,
-      x: 440, // MAP_W
+      x: MAP_W,
       y: 50,
     });
     ok(result2.buildings.length === state.buildings.length);
@@ -144,7 +146,7 @@ describe('clone-stamp', () => {
       h: 5,
       items: [
         { spec: 'road', dx: 0, dy: 0 },
-        { spec: 'road', dx: 440, dy: 0 },
+        { spec: 'road', dx: MAP_W, dy: 0 },
       ],
     };
     const result3 = reducer(state, {

@@ -154,7 +154,12 @@ test('fractional camera positions (sub-tile pan/zoom) do not lose or duplicate b
   const fractionalRects = [
     { minX: 100.37, minY: 60.91, maxX: 160.12, maxY: 110.44 },
     { minX: -0.5, minY: -0.5, maxX: 20.33, maxY: 20.66 },
-    { minX: 439.9, minY: 259.9, maxX: 440.1, maxY: 260.1 },
+    // FEAT-2326609790 (2026-09-05): derived from MAP_W/MAP_H (was a
+    // hardcoded 439.9/440.1 literal pinned to the old 440x260 grid's
+    // bottom-right corner) so this genuinely straddles the map's real
+    // bottom-right edge after any future grid resize, not an arbitrary
+    // interior point.
+    { minX: MAP_W - 0.1, minY: MAP_H - 0.1, maxX: MAP_W + 0.1, maxY: MAP_H + 0.1 },
   ];
   for (const rect of fractionalRects) {
     const got = visibleBuildingsOf(buildings, rect).map((b) => b.id).sort((a, b) => a - b);

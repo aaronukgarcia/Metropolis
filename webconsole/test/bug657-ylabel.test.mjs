@@ -26,8 +26,15 @@ test('BUG-657: distinct bands get DISTINCT letters (the defect made them all Z)'
     seen.size > 1,
     `every band collapsed to a single letter (${[...seen]}) — this is the BUG-657 defect`
   );
-  // MAP_H 260 / ROW_BAND 10 = 26 bands, exactly A..Z with no collisions.
-  assert.equal(seen.size, Math.ceil(MAP_H / ROW_BAND), 'every band has its own letter');
+  // FEAT-2326609790 (2026-09-05, dated note): before the "double the land
+  // mass" grid resize, MAP_H 260 / ROW_BAND 10 = exactly 26 bands, so every
+  // band up to the map's own last row got its own distinct A..Z letter with
+  // no saturation actually being exercised by this loop. MAP_H is now 368
+  // (37 bands), which exceeds the 26-letter alphabet yLabel() saturates at
+  // (see data.ts's yLabel doc comment) — so this loop now legitimately
+  // covers the saturating case too. Expected distinct-letter count is
+  // capped at 26 (A..Z), not the raw band count.
+  assert.equal(seen.size, Math.min(26, Math.ceil(MAP_H / ROW_BAND)), 'every band has its own letter, up to the alphabet cap');
 });
 
 test('BUG-657: the clamp saturates at Z rather than running past the alphabet', () => {

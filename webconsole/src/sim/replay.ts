@@ -20,6 +20,11 @@ import { SPECS, stampJobsGrandfather, stampJobsGrandfatherForce, needsJobsGrandf
 import { emptyJournal } from './journal.ts';
 import { safeSetItem } from './safeStorage.ts';
 import { encode, decode } from './saveCodec.ts';
+// FEAT-2326609790: grid.ts is a zero-import leaf (see its own header), so
+// importing MAP_W/MAP_H here for the gridW/gridH save-compat stamp/gate adds
+// no import-cycle risk.
+import { MAP_W, MAP_H } from './grid.ts';
+import { codedError } from './backend.ts';
 
 /**
  * Complete savepoint persisted to localStorage. Includes snapshot, journal tail,
@@ -93,6 +98,25 @@ export interface Savepoint {
    * tolerant with zero storage migration required.
    */
   lineageId?: string;
+  /**
+   * FEAT-2326609790 (2026-09-05, "double the land mass"): the MAP_W/MAP_H
+   * this savepoint's `snapshot.buildings` coordinates were placed against,
+   * stamped automatically by `createSavepoint` from grid.ts's current
+   * constants. Optional for backward tolerance — a savepoint written before
+   * this field existed predates every grid-size change so far and is
+   * treated as the original 440x260 (always <= any later size, i.e. always
+   * a safe subset to load). The ONLY thing this guards against is the
+   * dangerous direction: a save stamped with a LARGER grid than the
+   * CURRENT build defines. Loading it verbatim would silently accept
+   * buildings whose (x,y) can exceed this build's MAP_W/MAP_H — every
+   * MAP_W/MAP_H bounds check in the codebase assumes buildings are already
+   * in-range, so an out-of-range coordinate would not be caught, it would
+   * just corrupt whatever reads it (viewport math, section indices,
+   * connectivity floods). restoreFromSavepoint refuses loudly (MET-V873)
+   * rather than risk that silent truncation/corruption.
+   */
+  gridW?: number;
+  gridH?: number;
 }
 
 /**
@@ -928,6 +952,25 @@ export function prepareRestoreForChunkedTail(storage: StorageLike, lineageId?: s
       return { success: false, reason: 'No valid savepoint found' };
     }
 
+    // FEAT-2326609790: same gate as restoreFromSavepoint above — this is the
+    // PRIMARY boot path (store.tsx's lazy initializer calls this first, and
+    // only falls back to restoreFromSavepoint if this fails), so the guard
+    // must live here too, not only on the fallback. See the gridW/gridH
+    // field's own doc comment (Savepoint interface, above) for the reasoning.
+    if (
+      (most.gridW !== undefined && most.gridW > MAP_W) ||
+      (most.gridH !== undefined && most.gridH > MAP_H)
+    ) {
+      const err = codedError(
+        'MET-V873',
+        `Savepoint grid ${most.gridW}x${most.gridH} exceeds this build's map size ${MAP_W}x${MAP_H} - refusing to load (would truncate buildings)`
+      );
+      // The `.code` property does not survive into RestoreResult.reason
+      // (a plain string) on its own — prefix it explicitly so a caller (and
+      // a test) can pin the CODE, not just match on the prose.
+      return { success: false, reason: `${err.code}: ${err.message}` };
+    }
+
     let state = most.snapshot;
     {
       const clean = state.buildings.filter((b) => SPECS[b.spec]?.placeholder !== true);
@@ -1083,6 +1126,30 @@ export function restoreFromSavepoint(storage: StorageLike, lineageId?: string): 
       return { success: false, reason: 'No valid savepoint found' };
     }
 
+    // FEAT-2326609790 (2026-09-05): a savepoint stamped with a LARGER grid
+    // than this build defines cannot be loaded safely — every MAP_W/MAP_H
+    // bounds check downstream (viewport math, section indices, connectivity
+    // floods) assumes buildings are already in-range, so an out-of-range
+    // coordinate from a bigger-grid save would not be caught, it would just
+    // corrupt whatever reads it. A save from a SMALLER (or unstamped
+    // pre-FEAT-2326609790) grid is always safe — expansion is a strict
+    // superset, see grid.ts's SIZE HISTORY note — so only the "stamped grid
+    // exceeds current build" direction is refused, loudly (MET-V873),
+    // fail-closed, before any of the snapshot's buildings are read.
+    if (
+      (most.gridW !== undefined && most.gridW > MAP_W) ||
+      (most.gridH !== undefined && most.gridH > MAP_H)
+    ) {
+      const err = codedError(
+        'MET-V873',
+        `Savepoint grid ${most.gridW}x${most.gridH} exceeds this build's map size ${MAP_W}x${MAP_H} - refusing to load (would truncate buildings)`
+      );
+      // The `.code` property does not survive into RestoreResult.reason
+      // (a plain string) on its own — prefix it explicitly so a caller (and
+      // a test) can pin the CODE, not just match on the prose.
+      return { success: false, reason: `${err.code}: ${err.message}` };
+    }
+
     // Start from the snapshot state.
     let state = most.snapshot;
 
@@ -1222,6 +1289,12 @@ export function createSavepoint(
     // AUTOMATICALLY here — no call site anywhere in the app needs to pass
     // it explicitly; it simply rides whatever `state` is being saved.
     ...(state.lineageId ? { lineageId: state.lineageId } : {}),
+    // FEAT-2326609790: stamp the CURRENT build's grid size — see the
+    // gridW/gridH field's own doc comment for why restoreFromSavepoint
+    // gates on it (a save from a larger grid than this build defines must
+    // be refused, never truncated).
+    gridW: MAP_W,
+    gridH: MAP_H,
   };
 }
 

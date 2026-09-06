@@ -69,6 +69,15 @@ function anySpecId() {
   return id;
 }
 
+// FEAT-2326609790 (2026-09-05, dated note): the 440/260 bounds below are a
+// SELF-CONTAINED synthetic fixture — this test never imports the real
+// MAP_W/MAP_H (grid.ts, now 624x368) and never compares against them, so it
+// is unaffected by the "double the land mass" resize; 440x260 here just
+// means "the extent of THIS fixture's own map", correctness-checked
+// internally (brute-force cross-check) rather than against the real grid.
+// Left as literals deliberately rather than importing MAP_W/MAP_H, so this
+// file's coverage never silently balloons/shrinks with a future real-grid
+// resize.
 function buildMixedFixture() {
   const spec = anySpecId();
   const buildings = [];

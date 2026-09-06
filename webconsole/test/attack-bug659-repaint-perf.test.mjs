@@ -72,6 +72,7 @@ import { buildScaleFixture } from './scale/fixture.mjs';
 import { measureCurrentDrawLoopJsCost, measureCulledDrawLoopJsCost } from '../src/render/perfHarness.ts';
 import { visibleBuildingsOf } from '../src/render/viewportCull.ts';
 import { runMutantSelfReinvoke } from '../testsupport/mutant.mjs';
+import { MAP_W, MAP_H } from '../src/sim/data.ts';
 
 const REPAINT_BOUND_MS = 8; // see derivation above: 4x observed ~0.41ms, rounded up generously.
 
@@ -113,7 +114,11 @@ test('BUG-659: viewport-culled repaint cost scales with VISIBLE count, not total
 });
 
 test('BUG-659: zoom-to-fit (full-map viewport) is NOT worse than the pre-fix unculled cost', () => {
-  const rect = { minX: 0, minY: 0, maxX: 440, maxY: 260 };
+  // FEAT-2326609790 (2026-09-05): derived from MAP_W/MAP_H (was a hardcoded
+  // 440x260 literal) so "full map" genuinely means the whole map after any
+  // future grid resize, not a stale sub-rectangle that silently stops
+  // covering every building.
+  const rect = { minX: 0, minY: 0, maxX: MAP_W, maxY: MAP_H };
 
   // Timing is measured and LOGGED for the historical record only — never
   // asserted on. Absolute wall-clock bounds in CI are a forbidden timing

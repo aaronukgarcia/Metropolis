@@ -51,8 +51,14 @@ import {
 // module-eval safe and introduces no cycle.
 import { codedError, recordError } from './backend.ts';
 
-export const MAP_W = 440;
-export const MAP_H = 260;
+// FEAT-2326609790 (2026-09-05): MAP_W/MAP_H moved to grid.ts (a
+// zero-import leaf) so consolidator.ts/consolidatorGlide.ts can import the
+// real constants instead of hand-duplicated local mirrors. Imported (not
+// just re-exported) here because this file also uses them directly below;
+// re-exported alongside so every existing `from './data.ts'` import site
+// keeps working with no call-site churn.
+import { MAP_W, MAP_H } from './grid.ts';
+export { MAP_W, MAP_H };
 
 export const ROW_BAND = 10;
 
@@ -64,8 +70,12 @@ export const ROW_BAND = 10;
 // and because coordLabel() builds on this, EVERY coordinate shown to the player
 // — the inspector's "grid Z,374", place notices, the debug JSON — carried the
 // same dead letter. Intended: clamp the band into 0..25 (A..Z), i.e. the 25
-// belongs inside the min. ROW_BAND is 10 and MAP_H is 260, so bands run 0..25
-// and the clamp is exactly saturating at the last row.
+// belongs inside the min. ROW_BAND is 10; this saturates at row 259 (the
+// original MAP_H of 260) — after FEAT-2326609790's 2026-09-05 doubling to
+// MAP_H=368, every row from 260 onward (the new southern extension) also
+// saturates to 'Z'. Cosmetic only (no AA/AB-style multi-letter band was in
+// scope for "double the land mass") — filed as a P3 follow-up, not a
+// buildability defect: yLabel/coordLabel never gate placement.
 export function yLabel(y: number): string {
   return String.fromCharCode(65 + Math.max(0, Math.min(Math.floor(y / ROW_BAND), 25)));
 }

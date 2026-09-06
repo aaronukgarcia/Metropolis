@@ -77,11 +77,15 @@ test('section grid dimensions are derived from MAP_W/MAP_H, never hand-computed'
   assert.equal(SECTIONS_X, Math.ceil(MAP_W / SECTION_TILES));
   assert.equal(SECTIONS_Y, Math.ceil(MAP_H / SECTION_TILES));
   assert.equal(TOTAL_SECTIONS, SECTIONS_X * SECTIONS_Y);
-  assert.equal(MAP_W, 440);
-  assert.equal(MAP_H, 260);
+  // FEAT-2326609790 (2026-09-05, "double the land mass"): grid grew from
+  // 440x260 to 624x368 — this assertion is deliberately pinned to the exact
+  // constant (not just the derivation above) so a future accidental resize
+  // still fails loudly here, same as it would have caught this one.
+  assert.equal(MAP_W, 624);
+  assert.equal(MAP_H, 368);
 });
 
-test('EXHAUSTIVE: every tile of the real 440x260 map maps to exactly one section, no gaps, no overlaps', () => {
+test('EXHAUSTIVE: every tile of the real 624x368 map maps to exactly one section, no gaps, no overlaps', () => {
   const touchedKeys = new Set();
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {

@@ -115,7 +115,13 @@ test('BUG-657 (re-found on this branch): yLabel every row band renders its own d
   assert.equal(yLabel(15), 'B', "the reported bug symptom -- row 15 must be 'B', the original defect made this 'Z'");
   assert.equal(yLabel(100), 'K', 'row 100 -> band 10 -> the 11th letter, K');
   assert.equal(yLabel(250), 'Z', 'row 250 -> band 25 -> Z, the LAST legitimate band, not a floor everything else pegs to');
-  assert.equal(yLabel(259), 'Z', 'row 259 (MAP_H - 1) is genuinely the last row, correctly Z');
+  // FEAT-2326609790 (2026-09-05, dated note): row 259 was MAP_H - 1 (the
+  // genuine last row) when this test was written against the original
+  // 440x260 grid. MAP_H is now 368, so row 259 is an interior row that
+  // happens to still land on the saturating band (yLabel is a pure function
+  // of ROW_BAND alone, never MAP_H) -- this assertion is unchanged and
+  // still correct, just no longer describing "the last row".
+  assert.equal(yLabel(259), 'Z', 'row 259 saturates to Z regardless of MAP_H (yLabel never reads MAP_H)');
 });
 
 test('BUG-657: yLabel bands are monotonic and distinct -- no row band ever silently collapses onto another', () => {

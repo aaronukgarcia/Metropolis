@@ -324,23 +324,26 @@ test('geometric-only underestimate: even with ZERO obstacles, the section-radius
 // PRIORITY 3 — SECTION GEOMETRY (independent re-verification at 800m/16x16)
 // ===========================================================================
 
-test('SECTIONS_X/Y and TOTAL_SECTIONS match the documented 28x17=476 grid with partial edge sections (440/16=27.5, 260/16=16.25)', () => {
+test('SECTIONS_X/Y and TOTAL_SECTIONS match the documented grid, derived from MAP_W/MAP_H (never hand-computed)', () => {
+  // FEAT-2326609790 (2026-09-05, "double the land mass"): the grid grew from
+  // 440x260 (28x17=476 sections, both axes had a PARTIAL final section:
+  // 440/16=27.5, 260/16=16.25) to 624x368. Both new dimensions happen to be
+  // EXACT multiples of SECTION_TILES=16 (624/16=39, 368/16=23), so this
+  // particular map size no longer exercises the partial-edge-section case —
+  // every assertion below is derived from MAP_W/MAP_H/SECTION_TILES so it
+  // keeps proving the real formula (whether the remainder is 0 or not)
+  // across any future grid size, rather than re-pinning stale literals.
   assert.equal(SECTION_TILES, 16);
-  assert.equal(SECTIONS_X, 28);
-  assert.equal(SECTIONS_Y, 17);
-  assert.equal(TOTAL_SECTIONS, 476);
-  // Both axes must have a partial final section.
+  assert.equal(SECTIONS_X, Math.ceil(MAP_W / SECTION_TILES));
+  assert.equal(SECTIONS_Y, Math.ceil(MAP_H / SECTION_TILES));
+  assert.equal(TOTAL_SECTIONS, SECTIONS_X * SECTIONS_Y);
   const lastCol = sectionOriginOf(SECTIONS_X - 1);
   const lastRow = sectionOriginOf((SECTIONS_Y - 1) * SECTIONS_X);
   assert.equal(lastCol.w, MAP_W - lastCol.x0);
-  assert.ok(lastCol.w < SECTION_TILES, 'last column section must be a partial (440 - 27*16 = 8 tiles)');
-  assert.equal(lastCol.w, 8);
   assert.equal(lastRow.h, MAP_H - lastRow.y0);
-  assert.ok(lastRow.h < SECTION_TILES, 'last row section must be a partial (260 - 16*16 = 4 tiles)');
-  assert.equal(lastRow.h, 4);
 });
 
-test('EXHAUSTIVE independent re-derivation: every one of the 440*260 tiles maps to exactly one section key, and every section key\'s tile set is a disjoint, contiguous, correctly-clipped rectangle', () => {
+test('EXHAUSTIVE independent re-derivation: every tile of the real map maps to exactly one section key, and every section key\'s tile set is a disjoint, contiguous, correctly-clipped rectangle', () => {
   const owner = new Int32Array(MAP_W * MAP_H).fill(-1);
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
