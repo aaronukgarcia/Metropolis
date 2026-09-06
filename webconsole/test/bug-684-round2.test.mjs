@@ -166,23 +166,41 @@ describe('BUG-684 ROUND REJECT finding 1: the 9M/12M/20M fire-section table', ()
     });
   }
 
-  test('100,000,000: byte-identical to the pre-BUG-684 git HEAD (this fix never binds at that scale)', async () => {
-    // Compares the LIVE (fixed) engine.ts against the git HEAD (pre-BUG-684,
-    // and pre-round-2) version, both run against the IDENTICAL fireSectionCity
-    // fixture for 400 ticks — a rigorous version of "unaffected at scale",
-    // not just an assertion that the transaction still happens. Uses
-    // createMutantShadow's in-process shadow-copy mechanism (testsupport/
-    // mutant.mjs) so the real src tree is never touched even transiently.
+  test('100,000,000: byte-identical to the pre-BUG-684 git HEAD (this fix never binds at that scale)', async (t) => {
+    // Compares the LIVE (fixed) engine.ts against a PINNED pre-fix commit
+    // (630b104, the parent of BUG-684's a48f68c landing), both run against
+    // the IDENTICAL fireSectionCity fixture for 400 ticks — a rigorous
+    // version of "unaffected at scale", not just an assertion that the
+    // transaction still happens. Uses createMutantShadow's in-process
+    // shadow-copy mechanism (testsupport/mutant.mjs) so the real src tree is
+    // never touched even transiently.
+    //
+    // CI FIX (2026-09-06): this originally read `git show HEAD:...` as the
+    // pre-fix baseline, which is correct only on a checkout where HEAD has
+    // NOT yet landed the fix — once a48f68c merges to the branch CI actually
+    // runs against, HEAD *is* the fix, so `headEngineSrc === original` and
+    // the test proves nothing (or, worse, silently compares the fix against
+    // itself). Pinning to the known pre-fix commit makes the comparison
+    // meaningful regardless of which commit HEAD is on. A shallow clone
+    // without that commit available skips outright rather than fabricate a
+    // baseline.
+    const PRE_FIX_COMMIT = '630b104';
     const REPO_ROOT = repoRootOrNull();
     assert.ok(REPO_ROOT, 'setup: this test needs a real .git checkout (never true inside a mutant shadow re-invocation)');
-    const headEngineSrc = execFileSync('git', ['show', 'HEAD:webconsole/src/sim/engine.ts'], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-    });
+    let headEngineSrc;
+    try {
+      headEngineSrc = execFileSync('git', ['show', `${PRE_FIX_COMMIT}:webconsole/src/sim/engine.ts`], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      });
+    } catch {
+      t.skip(`BUG-684: pre-fix baseline commit ${PRE_FIX_COMMIT} unavailable in this clone`);
+      return;
+    }
     const shadow = createMutantShadow({
       targetRelPath: 'sim/engine.ts',
       mutate: (original) => {
-        assert.notEqual(headEngineSrc, original, 'setup: HEAD engine.ts must differ from the live (fixed) file, or this proves nothing');
+        assert.notEqual(headEngineSrc, original, `setup: ${PRE_FIX_COMMIT} engine.ts must differ from the live (fixed) file, or this proves nothing`);
         return headEngineSrc;
       },
     });

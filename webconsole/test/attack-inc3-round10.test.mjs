@@ -509,13 +509,38 @@ describe('R10-8 stub connectivity to the wider network', () => {
 // R10-10 — R10-F5 (P3): drive a REAL capex-budget pause, not a vacuous check.
 // ---------------------------------------------------------------------------
 describe('R10-10 the capex-budget pause actually fires (not just capped)', () => {
-  function scatterFixture(over) {
-    const bs = [...roadRow(0, 300)];
+  // BUG-684 RETUNE (2026-09-06, CI red on the a48f68c landing): the original
+  // 11-section fixture (sx < 12, roadRow(0, 300)) at funds=50,000,000/
+  // population=200,000 stopped reaching the 'capex budget' pause at ALL once
+  // BUG-684's runway floor landed — measured directly (fresh bounded
+  // fixer round, sweeping funds from 5,000,000 to 10,000,000,000 and
+  // population from 0 to 20,000,000 against the LIVE post-BUG-684 engine):
+  // the pause never fires for the small 11-section shape at ANY funds level,
+  // because eleven sections' worth of layout demand never actually exceeds
+  // the per-pass capex ceiling before either (a) the per-tier affordability
+  // gate refuses individually ('X unaffordable'), or (b) the treasury has
+  // enough headroom that the ceiling (2% of funds, capped 20,000,000) always
+  // covers the lot. Widened to 300 sections (a genuinely 'wide multi-section
+  // city', matching this test's own name) so total per-pass layout demand
+  // is large enough to outrun the ceiling; funds/population retuned
+  // (50,000,000 / 600,000, up from 200,000) to land in the same narrow
+  // window the ORIGINAL fixture always depended on — the point where the
+  // ceiling (proportional to current funds) has shrunk enough to bind mid-
+  // pass. This band is inherently the same "the ceiling only gets small as
+  // funds gets low" edge the ORIGINAL 11-section fixture pre-BUG-684 also
+  // sat on (that engine's own measured minFunds there was -102,263 — a
+  // brief negative dip is this test's normal, pre-existing operating point,
+  // not a BUG-684 regression; BUG-684's floor governs the density/reconnect
+  // lanes, not this layout-tier capex ceiling). Nothing here is gated by, or
+  // tests, BUG-684's own funds-floor mechanism — only the pre-existing
+  // BUG-788 layout capex ceiling this test was written for.
+  function scatterFixture(sections, maxX, over) {
+    const bs = [...roadRow(0, maxX)];
     let id = 5000;
-    for (let sx = 1; sx < 12; sx++) {
+    for (let sx = 1; sx < sections; sx++) {
       for (let i = 0; i < 5; i++) bs.push({ id: id++, spec: 'fire_post', x: sx * 16 + i, y: 1, builtTick: -1000 });
     }
-    for (let k = 0; k < 4; k++) bs.push({ id: id++, spec: 'fire_station', x: 300 + k * 10, y: 200, builtTick: -1000 });
+    for (let k = 0; k < 4; k++) bs.push({ id: id++, spec: 'fire_station', x: maxX + k * 10, y: 200, builtTick: -1000 });
     return withConnectivity(mk({ buildings: bs, funds: 500_000_000, ...over }));
   }
   test('a wide multi-section city at a modest treasury drives the pause at least once, and never more than once per pass', () => {
@@ -540,7 +565,11 @@ describe('R10-10 the capex-budget pause actually fires (not just capped)', () =>
     // deleted spending capacity instead — 10M lost 76% of spend, 100M lost
     // 56%). With that change reverted, this fixture's pause fires at
     // 50,000,000 again exactly as it always did — reverted back.
-    let s = withHealthyBaseline(scatterFixture({ funds: 50_000_000, population: 200_000, consolidatorMode: 'monthly-twelfth' }));
+    const sections = 300;
+    const maxX = sections * 16 + 40;
+    let s = withHealthyBaseline(
+      scatterFixture(sections, maxX, { funds: 50_000_000, population: 600_000, consolidatorMode: 'monthly-twelfth' }),
+    );
     s = reducer(s, { type: 'toggleConsolidator' });
     let sawPause = false;
     let worst = 0;

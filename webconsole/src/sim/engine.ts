@@ -76,6 +76,8 @@ import {
   MILESTONE_REWARDS,
   sanitizeClaimedMilestones,
   filledJobsBySector,
+  totalJobsBySector,
+  filledJobsFromCapacityAndPopulation,
   surplusInstancesOf,
   remainingAllowance,
   constructionTicks,
@@ -3049,6 +3051,111 @@ function finalizeLayoutSection(
  * function's own `funds` field for the tick's conservation bookkeeping —
  * see advance()'s consolidator block below for why.
  */
+/**
+ * PERF FIX (attack-skip-empty-round.test.mjs "MEASURE" red, 2026-09-06,
+ * BUG-642/BUG-674 family): BUG-684's re-round fix (see the big comment block
+ * inside applyConsolidatorPass, a few lines below) computes the structural
+ * per-building upkeep outflow FRESH every pass via `cur.buildings.reduce(...)`
+ * AND calls `sectorWagesPerTick(filledJobsBySector(cur))` — both correct, but
+ * in GLIDE MODE (Aaron's default) applyConsolidatorPass runs once per game
+ * TICK, not once a month, so an unmemoised O(buildings) fold/call here
+ * reintroduces exactly the "re-walk buildings[] every tick" cost class
+ * BUG-642/BUG-674 exist to prevent. Measured: 500 static buildings x 100
+ * ticks read the buildings array ~101,500 times before this fix (should be
+ * O(N) ONCE) — the upkeep `.reduce` alone accounted for half of that; the
+ * other half is `filledJobsBySector`/`totalJobsBySector` (data.ts), which
+ * ARE memoised, but via `memoOnState`'s WeakMap<SimState, T> keyed on the
+ * WHOLE state object — advance() builds a brand-new state object every tick
+ * (this codebase's immutable-replace discipline) even when buildings/
+ * roadConnectivity are byte-identical to last tick, so that memo cache-misses
+ * on this call site every single tick regardless of whether anything the
+ * jobs figure actually depends on changed.
+ *
+ * Cached the same way roadGateMapOf (above, in data.ts) caches isOnline's own
+ * road gates: keyed on the pair (s.buildings identity, s.roadConnectivity
+ * identity) — the combined fold's provable read-set (isOnline reads exactly
+ * s.buildings/s.tick/s.roadConnectivity; upkeepChargeableOf/SPECS/
+ * totalJobsBySector's own bucketing read only the building+spec, which are
+ * immutable once minted). A `buildings`/`roadConnectivity` change (place/
+ * demolish/upgrade/reconnect) always mints a brand-new array/object, so that
+ * pair correctly invalidates on any building addition/removal/upgrade.
+ * `totalJobsBySector(s)` itself is still called (never re-derived here —
+ * GR#3 SSOT: one formula for the jobs-by-sector bucketing), just called AT
+ * MOST once per (buildings, roadConnectivity) pair instead of once per tick;
+ * `filledJobsFromCapacityAndPopulation` layers the current, unmemoised
+ * `s.population` on top afterward (cheap, O(1), no buildings fold), so a
+ * growing/declining population between two ticks that share the SAME
+ * buildings/connectivity still gets the right filled-jobs figure — only the
+ * job CAPACITY bucketing is cached, never the population term.
+ *
+ * The one read-set member the CACHE KEY deliberately omits is `s.tick` —
+ * because isOnline's G1 (construction-time) gate is the ONE part of its
+ * read-set that changes every tick even when buildings/roadConnectivity do
+ * not (a building finishing construction flips false -> true with no new
+ * buildings array). Mirrors BUG-674's own fix for exactly this: G1 is never
+ * folded into the cached totals un-checked. Instead every cache entry also
+ * records `nextTransitionTick` — the earliest tick at which some
+ * still-under-construction building in THIS buildings/connectivity pair will
+ * complete and flip online (G1 only ever transitions false -> true, never
+ * back, so no other transition needs tracking). A cache hit is only honoured
+ * while `s.tick < nextTransitionTick`; once that tick is reached the fold
+ * re-runs (still O(buildings), but only on the tick a real transition can
+ * actually occur, not every tick) and a fresh `nextTransitionTick` is
+ * recorded. A city with nothing under construction gets `Infinity` and never
+ * re-folds until buildings/roadConnectivity themselves change.
+ */
+const consolidatorUpkeepMemoSentinel: object = {};
+const consolidatorUpkeepMemoCache = new WeakMap<
+  SimState['buildings'],
+  WeakMap<object, { total: number; jobsCapacity: ReturnType<typeof totalJobsBySector>; nextTransitionTick: number }>
+>();
+function consolidatorEconomyBaselineOf(
+  s: SimState,
+): { upkeepPerTick: number; jobsCapacity: ReturnType<typeof totalJobsBySector> } {
+  let byConnectivity = consolidatorUpkeepMemoCache.get(s.buildings);
+  if (!byConnectivity) {
+    byConnectivity = new WeakMap();
+    consolidatorUpkeepMemoCache.set(s.buildings, byConnectivity);
+  }
+  const connKey: object = s.roadConnectivity ?? consolidatorUpkeepMemoSentinel;
+  const cached = byConnectivity.get(connKey);
+  if (cached && s.tick < cached.nextTransitionTick) {
+    return { upkeepPerTick: cached.total, jobsCapacity: cached.jobsCapacity };
+  }
+
+  let total = 0;
+  let nextTransitionTick = Infinity;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) {
+      // Still gated (construction and/or road) — never contributes upkeep
+      // yet, but if it is ONLY the construction-time gate holding it back
+      // (b.builtTick set, spec resolvable), record when G1 will flip it
+      // online so the cache knows to re-fold at that tick. A building held
+      // back by the ROAD gates instead has no such deterministic future
+      // tick (it only changes when roadConnectivity itself changes, which
+      // is already a separate cache key), so it contributes no bound here.
+      if (b.builtTick != null) {
+        const sp = SPECS[b.spec];
+        if (sp) {
+          const completesAt = b.builtTick + constructionTicks(sp);
+          if (completesAt > s.tick) nextTransitionTick = Math.min(nextTransitionTick, completesAt);
+        }
+      }
+      continue;
+    }
+    const sp = SPECS[b.spec];
+    if (!sp || !sp.upkeep) continue;
+    total += upkeepChargeableOf(b, sp);
+  }
+  // SSOT (GR#3): the jobs-by-sector bucketing formula itself is NOT
+  // reimplemented here — totalJobsBySector(s) (data.ts) is still the one
+  // place that logic lives. This call is real O(buildings) work, same as
+  // the reduce above, but now happens at most once per (buildings,
+  // roadConnectivity) pair rather than once per tick.
+  const jobsCapacity = totalJobsBySector(s);
+  byConnectivity.set(connKey, { total, jobsCapacity, nextTransitionTick });
+  return { upkeepPerTick: total, jobsCapacity };
+}
 function applyConsolidatorPass(
   s: SimState,
   tick: number,
@@ -3134,23 +3241,28 @@ function applyConsolidatorPass(
   // since passes only fire on month boundaries, affects at most the one
   // very first pass a city ever runs.
   const consolidatorFlowsAreCold = cur.lastFlows.outflows.length === 0 && cur.lastFlows.inflows.length === 0;
-  const consolidatorBuildingUpkeepPerTick = cur.buildings.reduce((sum, b) => {
-    if (!isOnline(cur, b)) return sum;
-    const sp = SPECS[b.spec];
-    if (!sp || !sp.upkeep) return sum;
-    return sum + upkeepChargeableOf(b, sp);
-  }, 0);
+  const { upkeepPerTick: consolidatorBuildingUpkeepPerTick, jobsCapacity: consolidatorJobsCapacity } =
+    consolidatorEconomyBaselineOf(cur);
   // BUG-684 RE-ROUND FIX (finding 1, GR#3 SSOT): wages are the OTHER
   // dominant, cheaply-structural outflow — computeFlows' own real 'Wages'
   // line (a few hundred lines up) is exactly `sectorWagesPerTick(
-  // filledJobsBySector(s)).totalPerTick`, a pure function of the CURRENT
-  // buildings/population (filledJobsBySector is memoOnState-cached, so this
-  // is a cache hit whenever nothing has changed `cur` yet this pass — the
-  // common case). Computed structurally for the SAME reason building
-  // upkeep is: cur.lastFlows lags by a full tick and is cold at genesis, so
-  // reading wages from it risks the identical under-read this whole fix
-  // exists to close.
-  const consolidatorWagesPerTick = sectorWagesPerTick(filledJobsBySector(cur)).totalPerTick;
+  // filledJobsBySector(s)).totalPerTick`, i.e.
+  // `sectorWagesPerTick(filledJobsFromCapacityAndPopulation(totalJobsBySector(s),
+  // s.population)).totalPerTick` — a pure function of the CURRENT
+  // buildings/population. `totalJobsBySector(cur)`'s own O(buildings)
+  // bucketing is folded into `consolidatorEconomyBaselineOf` above (see its
+  // doc comment for why calling `filledJobsBySector(cur)` directly here
+  // would reintroduce a per-tick O(buildings) refold in glide mode);
+  // `filledJobsFromCapacityAndPopulation` itself is O(1) so applying the
+  // CURRENT `cur.population` here — rather than whatever population was live
+  // when the capacity was last folded — is free and always current.
+  // Computed structurally for the SAME reason building upkeep is:
+  // cur.lastFlows lags by a full tick and is cold at genesis, so reading
+  // wages from it risks the identical under-read this whole fix exists to
+  // close.
+  const consolidatorWagesPerTick = sectorWagesPerTick(
+    filledJobsFromCapacityAndPopulation(consolidatorJobsCapacity, cur.population),
+  ).totalPerTick;
   // Everything else computeFlows charges (transit subsidy, overdraft
   // interest, bailout standing costs, grid import, austerity-discounted
   // amounts, etc.) is policy/insolvency-state-gated rather than a plain
