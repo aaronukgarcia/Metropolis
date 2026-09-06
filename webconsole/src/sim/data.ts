@@ -3241,6 +3241,9 @@ export const lineUsageOf: (s: SimState) => LineUsage[] = memoOnState((s) => {
 // contiguous same-class road runs (AC-1/AC-2). Scope this increment: rd_aroad
 // / rd_dual / m20 only — the doc's own §8 inc1 slice (Aaron's literal
 // "motorways" ask); rail/hs1 segments are inc2, the map overlay is inc3.
+// inc2 ADDENDUM (below, same file region): the SAME connected-run
+// decomposition is extended to rail/hs1 (§8 inc2) via SEGMENT_RAIL_CLASSES,
+// plus AC-3's per-station attribution (stationUtilisationOf).
 // NO new demand model, no new simulation loop, no new balance constant — this
 // is pure arithmetic apportionment of a number lineUsageOf already produces
 // (GR#3: one congestion mechanic, not two). PURE + DETERMINISTIC (GR#21): no
@@ -3251,10 +3254,23 @@ export const lineUsageOf: (s: SimState) => LineUsage[] = memoOnState((s) => {
 // chain (a stable hash of the run's own tile coordinates), never an array
 // index, so it survives re-derivation and a future underground-metro medium
 // relabel unchanged.
+// RAIL/ROAD NEVER MERGE (inc2): bySpec below buckets tiles by SPEC ID, and
+// the flood-fill only walks adjacency within one spec's own tile map — a
+// rail tile and a road tile are never in the same bucket, so a run can never
+// span both kinds even when a rail tile sits next to a road tile on the map.
 // ════════════════════════════════════════════════════════════════════════════
 
 /** Road classes in scope for inc1 (Aaron's literal "motorways" ask + doc §8). */
 export const SEGMENT_ROAD_CLASSES: ReadonlySet<string> = new Set(['rd_aroad', 'rd_dual', 'm20']);
+
+/** Rail classes in scope for inc2 (doc §8 inc2: "extending the same connected-run logic to rail/hs1"). */
+export const SEGMENT_RAIL_CLASSES: ReadonlySet<string> = new Set(['rail', 'hs1']);
+
+/** Every line-class spec id this item decomposes into segments (road ∪ rail). */
+export const SEGMENT_LINE_CLASSES: ReadonlySet<string> = new Set([
+  ...SEGMENT_ROAD_CLASSES,
+  ...SEGMENT_RAIL_CLASSES,
+]);
 
 export interface LineSegment {
   /** Line spec id this segment belongs to. */
@@ -3289,24 +3305,30 @@ function fnv1a(str: string): string {
 }
 
 /**
- * Per-segment road usage/capacity/saturation (FEAT-2326609772 inc1). One
- * entry per contiguous connected run of same-spec drivable-road tiles, within
- * the SEGMENT_ROAD_CLASSES scope. Reuses `lineUsageOf`'s class-level usage as
- * the SSOT and apportions it across a class's segments by capacity share —
- * the SAME proportional-split idiom `lineUsageOf` already applies for the
- * hs1/rail commuter split (AC-2). Integer-exact: Σ segment.usage over one
- * spec's segments === that spec's LineUsage.usage (floor-per-segment, with
- * the rounding remainder assigned to the LAST segment in segmentId order —
- * deterministic, mirrors the hs1/rail "one bucket takes the remainder" rule).
+ * Per-segment road/rail usage/capacity/saturation (FEAT-2326609772 inc1+inc2).
+ * One entry per contiguous connected run of same-spec tiles, within
+ * SEGMENT_LINE_CLASSES scope (road tiers inc1, rail/hs1 inc2). Reuses
+ * `lineUsageOf`'s class-level usage as the SSOT and apportions it across a
+ * class's segments by capacity share — the SAME proportional-split idiom
+ * `lineUsageOf` already applies for the hs1/rail commuter split (AC-2).
+ * Integer-exact: Σ segment.usage over one spec's segments === that spec's
+ * LineUsage.usage (floor-per-segment, with the rounding remainder assigned
+ * to the LAST segment in segmentId order — deterministic, mirrors the
+ * hs1/rail "one bucket takes the remainder" rule). `kind` is read straight
+ * off the class's own LineUsage.kind (`data.ts:3223`, isRoad ? 'road' :
+ * 'rail') — never re-derived — so a segment's kind can never disagree with
+ * its class's.
  */
 export const lineSegmentsOf: (s: SimState) => LineSegment[] = memoOnState((s) => {
   const classUsage = new Map<string, LineUsage>();
   for (const u of lineUsageOf(s)) classUsage.set(u.spec, u);
 
-  // Bucket in-scope road tiles by spec, indexed by "x,y" for O(1) adjacency lookups.
+  // Bucket in-scope road/rail tiles by spec, indexed by "x,y" for O(1)
+  // adjacency lookups. Bucketing by SPEC ID (not by kind) is what makes
+  // rail/road runs never merge — see the header comment above.
   const bySpec = new Map<string, Map<string, { x: number; y: number }>>();
   for (const b of s.buildings) {
-    if (!SEGMENT_ROAD_CLASSES.has(b.spec)) continue;
+    if (!SEGMENT_LINE_CLASSES.has(b.spec)) continue;
     let m = bySpec.get(b.spec);
     if (!m) {
       m = new Map();
@@ -3378,7 +3400,7 @@ export const lineSegmentsOf: (s: SimState) => LineSegment[] = memoOnState((s) =>
       const headroom = r.capacity - usage;
       out.push({
         spec,
-        kind: 'road',
+        kind: cls.kind,
         segmentId: r.segmentId,
         tiles: r.tiles,
         capacity: r.capacity,
@@ -3391,6 +3413,82 @@ export const lineSegmentsOf: (s: SimState) => LineSegment[] = memoOnState((s) =>
   }
   out.sort((a, b) => (a.segmentId < b.segmentId ? -1 : a.segmentId > b.segmentId ? 1 : 0));
   return out;
+});
+
+/**
+ * AC-3 — per-station utilisation (FEAT-2326609772 inc2). "How much is a
+ * station being used" = its share of its class's already-computed usage,
+ * where the share is the EXACT SAME weight lineUsageOf's rail path already
+ * assigns per station: Ashford International ×3 into hs1, every other
+ * connected station ×1 into rail (`data.ts:3164-3175` — reused verbatim, not
+ * re-derived, per GR#3 "no second weighting"). `stationLinks()`'s own
+ * `connectedIds` set (`data.ts:3005-3050`) is the SAME connectivity test
+ * lineUsageOf uses, so a station counted here is exactly a station counted
+ * there. A disconnected station gets `utilisation: null` — honest absence,
+ * mirroring `utilisationOf`'s null-basis convention (`data.ts:1083-1097`),
+ * never a fabricated zero indistinguishable from "connected but idle".
+ */
+export interface StationUtilisation {
+  /** Building id of the station. */
+  id: number;
+  spec: string;
+  /** Which line class this station's weight counts toward. */
+  lineSpec: 'rail' | 'hs1';
+  /** Station's share of its class's usage; null when not road-connected. */
+  utilisation: number | null;
+}
+
+export const stationUtilisationOf: (s: SimState) => StationUtilisation[] = memoOnState((s) => {
+  const links = stationLinks(s);
+  const classUsage = new Map<string, LineUsage>();
+  for (const u of lineUsageOf(s)) classUsage.set(u.spec, u);
+
+  const allStations = s.buildings
+    .filter((b) => SPECS[b.spec]?.kind === 'station')
+    .sort((a, b) => a.id - b.id);
+
+  // Group CONNECTED stations by the class they weight into, using the exact
+  // per-station weight rule cited above — no second weighting scheme.
+  type Entry = { id: number; weight: number };
+  const byClass = new Map<'rail' | 'hs1', Entry[]>();
+  for (const b of allStations) {
+    if (!links.connectedIds.has(b.id)) continue;
+    const lineSpec: 'rail' | 'hs1' = b.spec === 'station_ashford' ? 'hs1' : 'rail';
+    const weight = b.spec === 'station_ashford' ? 3 : 1;
+    let arr = byClass.get(lineSpec);
+    if (!arr) {
+      arr = [];
+      byClass.set(lineSpec, arr);
+    }
+    arr.push({ id: b.id, weight });
+  }
+
+  // Apportion each class's usage across its connected stations, floor-per-
+  // station with the remainder on the LAST station by id (deterministic,
+  // same discipline as the segment split above), so the connected stations
+  // of one class sum EXACTLY to that class's LineUsage.usage.
+  const utilByStation = new Map<number, number>();
+  for (const [lineSpec, entries] of byClass) {
+    const cls = classUsage.get(lineSpec);
+    const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
+    if (!cls || totalWeight <= 0) continue;
+    const sorted = [...entries].sort((a, b) => a.id - b.id);
+    let allocated = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      const isLast = i === sorted.length - 1;
+      const u = isLast
+        ? cls.usage - allocated
+        : Math.floor((cls.usage * sorted[i].weight) / totalWeight);
+      allocated += u;
+      utilByStation.set(sorted[i].id, u);
+    }
+  }
+
+  return allStations.map((b) => {
+    const lineSpec: 'rail' | 'hs1' = b.spec === 'station_ashford' ? 'hs1' : 'rail';
+    const utilisation = links.connectedIds.has(b.id) ? (utilByStation.get(b.id) ?? 0) : null;
+    return { id: b.id, spec: b.spec, lineSpec, utilisation };
+  });
 });
 
 /**
