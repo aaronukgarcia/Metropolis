@@ -276,8 +276,18 @@ test('A2a (F1 FIX-PROOF, was BLOCKING): an OLD journal tail placing a land_airpo
 });
 
 test('A2b (F1 FIX-PROOF): tail-journalled placements are NEVER dropped regardless of whether they would trip the affordability gate — including specs that genuinely DO still trip it post-F3-fix', () => {
+  // BUG-394 note (2026-09-06): "tripped.length > 0" needs the tertiary
+  // WORKFORCE to exceed the airport's fixed 76,000-job capacity — below
+  // that, filled jobs are workforce-capped and nothing's marginal wage can
+  // ever exceed the threshold. Pre-BUG-394 growth was unbounded (~800x/yr
+  // measured), so 40 ticks from this 60k-population fixture blew straight
+  // past the ~138k-population crossover; BUG-394's capped-growth fix
+  // (<=15% capacity/month) only reaches ~104k population in 40 ticks, still
+  // workforce-capped, so nothing trips any more. 100 ticks reaches ~163k
+  // population (workers ~89.9k, above the 76k capacity), restoring the
+  // capacity-bound regime this test's setup sanity check requires.
   let city = r1City(5_000_000_000);
-  for (let i = 0; i < 40; i++) city = reducer(city, { type: 'tick' });
+  for (let i = 0; i < 100; i++) city = reducer(city, { type: 'tick' });
   const gross = grossInflowOf(city);
   const tripped = Object.entries(SPECS)
     .filter(([, sp]) => placementAffordability(city, sp).exceedsThreshold)
@@ -352,8 +362,13 @@ test('A3 (F4 FIX-PROOF): an airport that lives in the TAIL rather than the snaps
 // ══════════════════════════════════════════════════════════════════════════
 
 test('A4a (F2 FIX-PROOF, was BLOCKING): the REDUCER always places, charges, and never touches placeNotice for affordability reasons — the gate moved entirely to the UI dispatch site, so it cannot silently swallow a placement any more', () => {
+  // BUG-394 note (2026-09-06): same crossover as A2b above — this fixture's
+  // "genuinely is disproportionate" check needs the tertiary workforce to
+  // exceed the airport's 76,000-job capacity, which now takes ~100 ticks
+  // (not 40) under BUG-394's capped growth model. See A2b's comment for the
+  // full derivation.
   let city = r1City(5_000_000_000);
-  for (let i = 0; i < 40; i++) city = reducer(city, { type: 'tick' });
+  for (let i = 0; i < 100; i++) city = reducer(city, { type: 'tick' });
   const before = city.buildings.length;
   const beforeFunds = city.funds;
   const spot = findClearSpot(city, SPECS.land_airport);

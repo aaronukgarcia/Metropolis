@@ -47,8 +47,18 @@ function rawWagesAt(s, basis) {
 
 // Build a state with ample residential capacity AND a large-capacity job building (so
 // filled jobs scale with population, not job-capacity), then advance until we hit a tick
-// that grows population from a NON-ZERO base (start-of-tick pop > 0), which is exactly the
-// condition under which start-of-tick and end-of-tick population differ.
+// that grows population from a NON-ZERO base (start-of-tick pop > 0) AND whose growth is
+// large enough that the start-of-tick and end-of-tick wage bases actually round to
+// different filled-job counts.
+//
+// BUG-394 note (2026-09-06): the growth model now caps organic inflow at 0.5% of
+// capacity per tick with a small progress-guarantee floor, so early ticks on a small
+// fixture typically grow population by exactly +1 — and roughly half of those +1 steps
+// round to the SAME sectorWagesPerTick figure (job-count rounding is coarser than 1
+// person), where under the pre-BUG-394 model the first growing tick already jumped by
+// enough people to guarantee a visible wage delta. The loop now keeps advancing past a
+// same-wage +1 tick instead of stopping on the first population delta, so it still finds
+// a tick that genuinely exercises the start-vs-end basis divergence this test targets.
 function advanceToGrowingTick() {
   let s = initialState();
   for (let y = 40; y < 70; y += 2) {
@@ -61,11 +71,11 @@ function advanceToGrowingTick() {
     buildings: [...s.buildings, { id: s.nextId, spec: 'off_towers_downtown', x: 300, y: 200 }],
     nextId: s.nextId + 1,
   };
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 200; i++) {
     const startPop = s.population;
     s = reducer(s, { type: 'tick' });
     const endPop = s.population;
-    if (endPop > startPop && startPop > 0) {
+    if (endPop > startPop && startPop > 0 && rawWagesAt(s, endPop) !== rawWagesAt(s, startPop)) {
       return { s, startPop, endPop };
     }
   }

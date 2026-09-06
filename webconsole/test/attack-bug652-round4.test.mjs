@@ -63,8 +63,23 @@ function r1City(funds = 30_000_000, economyEpoch = 0) {
 // ══════════════════════════════════════════════════════════════════════════
 
 test('B1 (FIX-PROOF): 3 drag-painted Channel Tunnel Portals now aggregate to ONE confirmation at the batch total — round r4\'s exact live reproduction ("180% of gross inflow, zero confirmation")', () => {
+  // BUG-394 note (2026-09-06): this fixture's marginal-wage signal only shows
+  // up once the tertiary WORKFORCE exceeds the airport's fixed 76,000-job
+  // capacity — below that, filled jobs are workforce-capped and adding more
+  // tunnel capacity changes nothing (marginal wage stays 0 for both single
+  // and batch). Pre-BUG-394 the growth model was unbounded (measured
+  // ~800x/yr) so 40 ticks from a 60k-population fixture blew straight past
+  // that 138k-population threshold; BUG-394's capped-growth fix (<=15%
+  // capacity/month) means 40 ticks only reaches ~104k population — still
+  // workforce-capped, so the marginal signal this FIX-PROOF depends on never
+  // appears. 100 ticks reaches ~163k population (workers ~89.9k, above both
+  // the current 76k and the batch-hypothetical 81.4k capacity), restoring the
+  // capacity-bound regime the test's own arithmetic requires — derived live,
+  // not hand-tuned (verified: single tunnel adds £102,000/tick, 3 tunnels add
+  // £306,000/tick, both > any single unit and the batch exceeds 50% of the
+  // ~£312k/tick gross income).
   let city = r1City(5_000_000_000);
-  for (let i = 0; i < 40; i++) city = reducer(city, { type: 'tick' });
+  for (let i = 0; i < 100; i++) city = reducer(city, { type: 'tick' });
   const gross = city.lastFlows.inflows.reduce((a, f) => a + f.value, 0);
   assert.ok(gross > 0, 'setup: city must have real recorded income');
 

@@ -129,9 +129,55 @@ test('ATTACK: isStateAffecting classifies resolveDemandAll as journaled', () => 
  *  ordinary future balance/price tuning, instead of sitting right at the
  *  edge the way the original fixed 800 did. If the catalogue moves far
  *  enough that this calibration itself goes stale, the precondition assert
- *  below will say so explicitly (not a silent pass). */
-const CAP_FIXTURE_CALIBRATION_BLOCKS = 800;
-const CAP_FIXTURE_CALIBRATION_TICKS = 250;
+ *  below will say so explicitly (not a silent pass).
+ *
+ *  BUG-394 follow-up (2026-09-06): 250 ticks stopped being long enough to
+ *  calibrate from. BUG-394 made organic growth job-driven and rate-capped
+ *  (grossInflow proportional to CURRENT population, not the vacant capacity
+ *  on offer — the old model's growth was unbounded, ~800x/yr measured, so
+ *  250 ticks from empty land used to blow well past any capacity ceiling).
+ *  A near-empty city's growth is now dominated by the "progress guarantee"
+ *  floor (>= 0.1% of capacity per tick while vacancy stays above 20%), which
+ *  fills roughly the same ~80-90% of whatever capacity exists after a FIXED
+ *  ~800-900 ticks regardless of how large that capacity is (the fill rate is
+ *  itself proportional to capacity, so the two scale out) — so reaching the
+ *  same population now genuinely requires ~900 ticks of real reducer work,
+ *  not 250.
+ *
+ *  FIRST ATTEMPT (measured live, then abandoned — kept here as the record of
+ *  why): keeping res_estate (1,500 residents/building) and raising
+ *  CALIBRATION_TICKS to 900 does restore a working blocks->units
+ *  relationship (1,600 res_estate blocks/900 ticks plans 2,180 units,
+ *  population ~1.85M), but the reducer's own per-tick cost scales with
+ *  BUILDING COUNT, and this whole fixture pays for that cost SIX-TO-SEVEN
+ *  times over (the calibration probe, the doubling-loop's guess probe, this
+ *  test's own precondition slice, driveAndRecord's live run, one
+ *  replayFromGenesis, and replayIsDeterministic's own INTERNAL two more
+ *  replayFromGenesis calls) — 1,600 buildings x 900 ticks measured ~90s per
+ *  run standalone, so the full test exceeded the 15-minute AARON WATCHDOG
+ *  ceiling (tools/test/scoped.mjs) outright; this is the finding this note
+ *  exists to record, not a hang.
+ *
+ *  THE FIX: swap the fixture's building from res_estate (1,500
+ *  residents/5x5) to res_tower_sgp ('Singapore-style Mega-Estate', 20,000
+ *  residents/9x9 — src/sim/data.ts's biggest residential spec). Population
+ *  growth is driven by total CAPACITY (residents-per-building x count), so
+ *  the same target capacity is reachable with ~13x FEWER buildings, and
+ *  since reducer per-tick cost scales with building count (not total
+ *  capacity), this cuts the dominant cost by the same ~13x — measured live,
+ *  160 res_tower_sgp blocks/900 ticks reaches population ~2.1M and plans
+ *  2,764 units (38% clear of the 2,000 cap) in ~6.5s standalone, against
+ *  1,600 res_estate blocks/900 ticks' ~90s for a WORSE (2,180) result. The
+ *  full test file (all 6-7 replays of this fixture plus the six funds-sweep
+ *  cases) now completes in well under a minute. GR#21: res_tower_sgp is
+ *  still placed via the same real journaled 'placeMany' action and grown by
+ *  the same real reducer/tick loop — nothing about determinism or the
+ *  replay path changes, only which catalogue spec supplies the capacity. */
+const CAP_FIXTURE_CALIBRATION_BLOCKS = 160;
+const CAP_FIXTURE_CALIBRATION_TICKS = 900;
+const CAP_FIXTURE_SPEC = 'res_tower_sgp';
+const CAP_FIXTURE_TILE_STEP = 12; // res_tower_sgp is a 9x9 footprint; 12 leaves clearance
+const CAP_FIXTURE_ROW_WRAP_X = 600; // MAP_W is 624 (src/sim/grid.ts) — stay clear of the edge
 const CAP_FIXTURE_TARGET_MARGIN = 1.3; // aim ~30% clear of the cap, not right at its edge
 const CAP_FIXTURE_MAX_DOUBLINGS = 4;
 
@@ -175,16 +221,16 @@ function capTriggerScriptFor(blockCount) {
   let y = 5;
   for (let i = 0; i < blockCount; i++) {
     tiles.push({ x, y });
-    x += 8;
-    if (x > 430) {
+    x += CAP_FIXTURE_TILE_STEP;
+    if (x > CAP_FIXTURE_ROW_WRAP_X) {
       x = 5;
-      y += 8;
+      y += CAP_FIXTURE_TILE_STEP;
     }
   }
   return [
     { type: 'debugFunds', amount: 100_000_000_000 },
     { type: 'unlockAll' },
-    { type: 'placeMany', spec: 'res_estate', tiles },
+    { type: 'placeMany', spec: CAP_FIXTURE_SPEC, tiles },
     ...ticks(CAP_FIXTURE_CALIBRATION_TICKS),
     { type: 'debugFunds', amount: -100_000_000_000 },
     { type: 'debugFunds', amount: 1_000_000_000_000 },
