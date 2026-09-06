@@ -5734,6 +5734,24 @@
       "module": "ui.webconsole",
       "message": "Consolidator skipped {sectionCount} section(s) ({sections}): treasury floor would be breached — nothing was merged or lost, the group waits for a wealthier pass",
       "remedy": "No action needed; the group is re-considered automatically once the city's funds/net-income headroom recovers (raise treasury or reduce spend elsewhere to unblock sooner)"
+    },
+    "MET-V871": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "Consolidator re-plan produced a plan violating its own invariant",
+      "remedy": "Inspect the box plan metrics in the consolidator pass log; the plan is discarded for this pass and the box is left untouched"
+    },
+    "MET-V872": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "Consolidator re-plan refused a demolition step that would have reduced conserved capacity",
+      "remedy": "The replacement consolidated building must be placed and online before the originals are removed; the step is deferred to a later tick"
+    },
+    "MET-V874": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "Consolidator re-plan dwell budget exhausted on a box that never converged",
+      "remedy": "The red box moves on so nothing waits forever; inspect the box's remaining steps in the consolidator log - a box that repeatedly exhausts its dwell is under-funded or its plan is unreachable"
     }
   }
 }

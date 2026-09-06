@@ -126,7 +126,9 @@ import {
   monthlyScopeOf,
   findReconnectionOpportunities,
   findOpportunities,
+  findCityWideOpportunities,
   capacityOf,
+  consolidationLadder,
   buildingCapacityOf,
   familyKeyOf,
   sectionOriginOf,
@@ -173,8 +175,31 @@ import {
   LAYOUT_LIFETIME_UPKEEP_SHARE_OF_INCOME,
   LAYOUT_WILDERNESS_MARGIN_TILES,
   LAYOUT_EXTENSION_SEARCH_MARGIN_TILES,
+  TIER_RANK,
 } from './consolidatorLayout.ts';
 import type { TierKind, TileXY, TierPlan, TierImplementation, ResolvedTierPaths } from './consolidatorLayout.ts';
+// FEAT-2326609779 inc4 — THE RED BOX RE-PLAN. LEAD RULING (this session):
+// "the re-plan SUPERSEDES the extender inside the red box; the extender keeps
+// the rest of the map."
+import {
+  planBox as replanBox,
+  findPorts as replanFindPorts,
+  progressOf as replanProgressOf,
+  realWorkRemaining as replanWorkRemaining,
+  REPLAN_STEPS_PER_TICK,
+  REPLAN_CAPEX_SHARE,
+  REPLAN_MAX_DWELL_DAYS,
+  latticePhaseOf as replanLatticePhaseOf,
+  onCityLattice,
+} from './consolidatorReplan.ts';
+import type {
+  BoxPlan,
+  CityWideCivicGroup,
+  ReplanBox,
+  ReplanContent,
+  ReplanLadderRung,
+  ReplanStep,
+} from './consolidatorReplan.ts';
 import type { ConsolidationPass, ConsolidationTransaction, ConsolidationRecord, SectionAudit } from './consolidator.ts';
 import type {
   FlowItem,
@@ -796,6 +821,14 @@ function rawState(): SimState {
     // use" contract as consolidatorReservedTiles starting `{}`.
     consolidatorLayoutBaselineNetIncome: null,
     consolidatorLayoutCumulativeUpkeepDelta: 0,
+    // ROUND-16 (A): the re-plan's OWN lifetime upkeep book, never the extender's.
+    consolidatorReplanCumulativeUpkeepDelta: 0,
+    // FEAT-2326609779 inc4: no red-box re-plan job running on a brand-new city.
+    consolidatorReplanPlanKey: null,
+    consolidatorReplanStepCursor: 0,
+    consolidatorReplanDwellStartTick: null,
+    consolidatorReplanDwellResumeDay: null,
+    consolidatorReplanPinnedDay: null,
   };
 }
 
@@ -2123,6 +2156,50 @@ export const CONSOLIDATOR_LOG_CAP = 32;
  * — deduped via a Set, so applyConsolidatorPass never processes the same
  * fixed section twice in one day.
  */
+/**
+ * FEAT-2326609779 inc4, LEAD RULING "THE BOX DWELLS" (2026-09-06): which game
+ * day the glide window is derived from RIGHT NOW. Normally the live tick; but
+ * while a red-box re-plan is dwelling (`consolidatorReplanDwellStartTick`),
+ * the window is pinned to the tick that dwell began on, so the box does not
+ * slide out from under a job that has not reached its civic steps yet.
+ *
+ * ONE definition, read by BOTH `sectionKeysForGlideWindow` (the extender's
+ * section scope) and the re-plan stage's own box — GR#3. If these two ever
+ * disagreed, the extender would be working a different rectangle than the
+ * re-plan claims to own, and the "supersedes inside the box" ruling would
+ * silently stop holding.
+ *
+ * The dwell is released by the re-plan stage itself (convergence, discard, or
+ * REPLAN_MAX_DWELL_DAYS), but this function ALSO enforces the bound
+ * defensively: a state whose dwell start is stale/corrupt beyond the cap
+ * reads as free-running rather than pinning the scanline forever (GR#16 —
+ * never trust stored data to be sane).
+ */
+function effectiveGlideDayOf(s: SimState, tick: number): number {
+  const start = s.consolidatorReplanDwellStartTick ?? null;
+  // While dwelling, the box is pinned to the glide day it landed on. The cap
+  // below is measured in REAL TICKS against `start` — see
+  // SimState.consolidatorReplanPinnedDay for why these must never be the same
+  // field.
+  if (start != null && Number.isFinite(start) && start <= tick && tick - start < REPLAN_MAX_DWELL_DAYS) {
+    const pinned = s.consolidatorReplanPinnedDay ?? null;
+    if (pinned != null && Number.isFinite(pinned)) return pinned;
+    return start;
+  }
+  {
+    // ROUND-15 (5): "fix the window stepping so column coverage is not
+    // 1-in-31". While a box dwells, the live tick keeps advancing; when the
+    // dwell ends, resuming from the LIVE tick teleports the window forward by
+    // however many days the dwell lasted — so with a 30-day dwell on a
+    // 16-wide box, 30 of every 31 columns were never visited by a re-plan at
+    // all. The window instead resumes ONE BOX WIDTH past where it dwelled,
+    // which is the next box, not the next daily position.
+    const resume = s.consolidatorReplanDwellResumeDay ?? null;
+    if (resume != null && Number.isFinite(resume) && resume <= tick) return resume;
+    return tick;
+  }
+}
+
 function sectionKeysForGlideWindow(s: SimState, tick: number): number[] {
   // SKIP-EMPTY-LAND (Aaron, 2026-09-04): occupiedColumnsOf(s) is the
   // memoised (keyed on s.buildings' array identity, data.ts) list of tile
@@ -2133,6 +2210,41 @@ function sectionKeysForGlideWindow(s: SimState, tick: number): number[] {
   // pre-existing dense behaviour whenever this list is empty (see
   // consolidatorGlide.ts's own doc comment) — a genesis city with zero
   // buildings still produces a valid, non-throwing window.
+  // ROUND-16 FOLLOW-UP RULING (2) WAIVED, 2026-09-06, ON MEASUREMENT. The
+  // proposed restriction — "rail/motorway may be extended only from tiles
+  // inside a CONVERGED box or from genesis/player tiles" — was raised because
+  // the re-plan seeds anchors the extender could never reach before ("rail
+  // extends rail"), and pre-convergence the extender's spend had risen to
+  // GBP 225.4M against a GBP 176.1M baseline. Measured again on the CONVERGED
+  // tree (dogfood, 900 ticks, per-pass accumulator): extender total is
+  // GBP 153,456,000 with the re-plan live — BELOW the GBP 176,106,000 the
+  // inc3-only baseline spends without it. The anchoring is therefore not
+  // costing the city anything and the restriction would be complexity bought
+  // for nothing. Recorded on BUG-793 with the same numbers.
+  //
+  // ROUND-16 REJECT (A), THE DOMINANT HALF — THE EXTENDER'S SCOPE IS NEVER
+  // PINNED BY THE RE-PLAN'S DWELL. This read `effectiveGlideDayOf`, which the
+  // "box dwells" ruling made STICK on one glide day for up to
+  // REPLAN_MAX_DWELL_DAYS. Because the extender's section scope IS the glide
+  // window, the extender stopped seeing new sections at all: it was handed the
+  // same four pinned sections for thirty days running, and the re-plan then
+  // removed exactly those four as the box it owns — so the extender was left
+  // with nothing, city-wide, for the whole dwell.
+  //
+  // Measured with a per-pass accumulator (the pass log is a 32-entry RING, so
+  // reading it back at the end under-reports — the round's own correction to
+  // my earlier numbers), scatterFixture/glide/400 ticks:
+  //   baseline 4c6697e : 955 extender transactions
+  //   lane, dwell pinning the scope : 4
+  //
+  // The two stages need DIFFERENT windows, and always did: the re-plan works
+  // ONE box until it converges (that is the whole point of the dwell), while
+  // the extender must keep sweeping the map. They are kept from colliding by
+  // the `boxSectionKeys` filter at the re-plan's own call site — the re-plan's
+  // box is removed from the extender's list every pass — which is the real
+  // guarantee of "the re-plan supersedes the extender inside the red box".
+  // Pinning the shared scope was never what enforced that; it only starved the
+  // extender.
   const win = glideWindowForDay(tick, sectionTilesOf(s), occupiedColumnsOf(s));
   const keys = new Set<number>([
     sectionKeyOf(win.x0, win.y0),
@@ -2460,6 +2572,62 @@ function buildLayoutSectionCtx(
     }
   }
 
+  // DEAD-END-SPUR FIX (FEAT-2326609779 inc4 verifier pass, 2026-09-06) — the
+  // rail/motorway terminus rule: a run may only be committed when its far end
+  // touches another same-tier tile (checked inside `extendExistingRun`
+  // itself, against `existingByTier`/`existingNetworkTilesWide`), or a
+  // station/port tile. Root-caused on this item's BOW thread: the
+  // TRUE-EXTENSION call below (no `homeBox` gate, deliberately, so it can
+  // keep crossing section boundaries per BUG-754) walked a rail run straight
+  // down from the horizontal rail line into open ground with a one-turn
+  // chamfer and committed it even though the far end touched nothing — a
+  // permanent dead-end/parallel-spur stub (measured: box 1,0's (10,6)/(10,5)
+  // and the single-tile (13,6)/(15,6) columns the clump fix produced next
+  // pass). MEASURED: `onCityLattice` (the MINOR-road 8-tile grid the re-plan
+  // reads) is nearly vacuous here for rail/motorway specifically — the
+  // dogfood fixture's own minor road grid sits every 8 tiles, so almost any
+  // rail spur's far end lands adjacent to a minor-road lattice coordinate
+  // regardless of whether it joins anything of ITS OWN tier, which let the
+  // exact dead-end stub this fix targets through when the lattice line was
+  // accepted as a valid rail/motorway terminus. Rail/motorway have no
+  // city-wide lattice concept of their own in this codebase (only minor
+  // roads do), so for these two tiers the only valid termini are the
+  // same-tier network itself and a real station/port tile.
+  const railMotorwayStationTiles = new Set<string>();
+  for (const b of cur.buildings) {
+    if (SPECS[b.spec]?.kind === 'station') railMotorwayStationTiles.add(`${b.x},${b.y}`);
+  }
+  // THROUGH-ROUTE TERMINUS (FEAT-2326609779 inc4 adjudicator pass,
+  // 2026-09-06). The rule as first written accepted ONLY a station tile,
+  // which starved rail/motorway of growth outright: measured on the dogfood
+  // fixture (road spine every 8 tiles on both axes, no station anywhere),
+  // rail sat at its pass-1 count of 8 tiles for all six passes, because the
+  // only rail in the city fills one 7x7 grid cell and every run out of it
+  // terminates on the ROAD GRID, never on another rail tile. The defect this
+  // rule exists to stop is a spur that ends in OPEN GROUND (box 1,0's
+  // (10,5)/(10,6) hanging south off the horizontal rail line with nothing at
+  // its far end); a far end that lands against the general road network is
+  // the opposite of that — it is a through-route that goes somewhere. The
+  // earlier note calling this clause "vacuous" measured the LATTICE
+  // predicate (a coordinate rule, true of open ground on a lattice line);
+  // this is an OCCUPANCY predicate over real standing tiles, which open
+  // ground can never satisfy. `existingNetworkTiles` is the section's
+  // box-plus-halo road-family scan already computed below for BUG-754's
+  // connect-or-don't-lay gate (GR#3: one scan, two readers) — declared
+  // before this closure runs against it, and only ever READ here at
+  // walk time.
+  const isValidRailMotorwayTerminus = (x: number, y: number): boolean =>
+    railMotorwayStationTiles.has(`${x},${y}`) || existingNetworkTilesWide.has(`${x},${y}`);
+  // BOOTSTRAP EXEMPTION (FEAT-2326609779 inc4 adjudicator pass, 2026-09-06):
+  // `bootstrap` is set ONLY on the fresh-stub call below, and only when the
+  // city has no tile of this tier ANYWHERE — the FIRST line of a tier has
+  // nothing of its own to terminate against, so the un-exempted rule made it
+  // structurally impossible (measured: dual/aroad 31/34 tiles vs rail/
+  // motorway 0 from the identical anchor set). See `RunTerminusRule`'s doc
+  // comment in consolidatorLayout.ts for the full measurement.
+  const terminusRuleFor = (t: TierKind, bootstrap = false) =>
+    t === 'rail' || t === 'motorway' ? { tier: t, isValidTerminus: isValidRailMotorwayTerminus, bootstrap } : undefined;
+
   // BUG-754 FIX (task requirement 1, "connect-or-don't-lay" — computed
   // BEFORE candidate generation now, not after, so the connectivity gate
   // below has something to check against): every rail/motorway/road tile —
@@ -2542,7 +2710,7 @@ function buildLayoutSectionCtx(
   const isExtension = {} as Record<TierKind, boolean>;
   const noConnectionTiers: TierKind[] = [];
   TIER_ORDER.forEach((t, i) => {
-    const extension = extendExistingRun(existingByTier[t], extAvailable, extBox, seed + i);
+    const extension = extendExistingRun(existingByTier[t], extAvailable, extBox, seed + i, undefined, terminusRuleFor(t));
     isExtension[t] = extension.length > 0;
     if (extension.length > 0) {
       rawPaths[t] = extension;
@@ -2550,20 +2718,17 @@ function buildLayoutSectionCtx(
     }
     // BUG-754 FIX (task requirements 1/3/4): a FRESH stub (no existing
     // same-tier run to extend) is only ever laid when at least one end
-    // already touches the network. For rail/motorway/dual — the three tiers
-    // the acceptance measures OWN-TIER component counts against — that
-    // network is the tier's OWN existing tiles specifically, once the city
-    // has ANY of them anywhere (requirement 3: "rail extends rail, motorway
-    // extends motorway"); a general "any tier" gate would let a brand-new
-    // rail stub touch nothing but a genesis road and still start a fresh,
-    // separate RAIL component, which is exactly the defect this fix exists
-    // to close. Before the city has ANY tile of that tier yet, there is
-    // nothing of its own to join — the FIRST-EVER stub of a tier may
-    // bootstrap off the general network (any tier, incl. genesis roads),
-    // matching requirement 1's literal wording, after which every
-    // subsequent fresh stub must find its own tier. aroad/minor (not
-    // measured by the component assert, and structurally the densest,
-    // most-interconnected tiers already) keep the general "any tier" gate.
+    // already touches the network. For every tier that already has a tile
+    // ANYWHERE in the city, that network is the tier's OWN existing tiles
+    // specifically (requirement 3: "rail extends rail, motorway extends
+    // motorway"); a general "any tier" gate would let a brand-new rail stub
+    // touch nothing but a genesis road and still start a fresh, separate
+    // RAIL component, which is exactly the defect this fix exists to close.
+    // Before the city has ANY tile of that tier yet, there is nothing of its
+    // own to join — the FIRST-EVER stub of a tier may bootstrap off the
+    // general network (any tier, incl. genesis roads), matching requirement
+    // 1's literal wording, after which every subsequent fresh stub must find
+    // its own tier.
     //
     // MEASURED FIX (same session — a first version generated a BLIND
     // longest-free-run candidate via `candidateTierPath` and then REJECTED
@@ -2578,17 +2743,51 @@ function buildLayoutSectionCtx(
     // for "existing same-tier tiles" — this walks OUT from the network into
     // free space (+ one turn), so any non-empty result is connected BY
     // CONSTRUCTION (GR#3: one directional-walk implementation, not two).
-    // Once rail/motorway/dual has ANY tile of its own anywhere, its ONLY
-    // anchor is its OWN network — the extension attempt above (which reads
+    // Once a tier has ANY tile of its own anywhere, its ONLY anchor is its
+    // OWN network — the extension attempt above (which reads
     // `existingByTier[t]`, the exact same set) already tried and failed
-    // this pass, so there is nothing further to search: rail may only ever
-    // extend rail, never bootstrap a second, disconnected rail component
-    // off a road it happens to be near. aroad/minor, and every tier before
-    // its own bootstrap, may anchor to the general network instead.
-    const ownTierBootstrapped = (t === 'rail' || t === 'motorway' || t === 'dual') && (cityHasTier?.[t] ?? true);
+    // this pass, so there is nothing further to search: a tier may only ever
+    // extend itself, never bootstrap a second, disconnected component off a
+    // road it happens to be near.
+    //
+    // MEASURED FIX 2026-09-06 (FEAT-2326609779 inc4, the E8 aroad/minor
+    // at-grade-crossing red): aroad/minor used to be EXEMPT from this rule
+    // ("not measured by the [inc3] component assert, and structurally the
+    // densest, most-interconnected tiers already"). That was true for inc3,
+    // which never measured aroad/minor connectivity — but inc4's E8 realised-
+    // box metric now asserts the whole road family is ONE component AND caps
+    // at-grade crossings between every tier pair at <= 1. Once the red-box
+    // re-plan lays ITS OWN single aroad spine inside a box, the ordinary
+    // per-section extender (which keeps running on that box's sections once
+    // it releases — ROUND-16 ruling 2, WAIVED for money reasons) kept
+    // bootstrapping FRESH, independent aroad rows off nothing but a nearby
+    // genesis road, one per section, because aroad/minor were never made to
+    // extend their OWN tier. Measured on the dogfood fixture: box 1,0 grew
+    // SIX separate near-full-width aroad rows (y=1,3,5,6,9,15) layered over
+    // the re-plan's one intended spine plus the genesis minor grid, crossing
+    // it at grade 11 times where the ruling caps every tier pair at <= 1. The
+    // fix is the same one already proven for rail/motorway/dual: once the
+    // city has ANY aroad/minor tile anywhere, a fresh stub of that tier may
+    // only extend its OWN existing network, never bootstrap a disconnected
+    // parallel line off "any tier". Minor stays effectively unaffected in
+    // practice (genesis roads already ARE minor-tier almost everywhere, so
+    // an own-tier extension is normally available); aroad is where this
+    // closes the real gap.
+    const ownTierBootstrapped = cityHasTier?.[t] ?? true;
+    // DEAD-END STUB FIX (FEAT-2326609779 inc4 verifier pass, 2026-09-06):
+    // `homeBox` (this section's OWN box, not the wide `extBox`) is passed
+    // here ONLY — the bootstrap/fresh-stub path is the one that anchors on
+    // ANY existing network tile anywhere in the margin, which let a section
+    // bootstrap off a neighbour's already-converged network and lay a whole
+    // run entirely inside that neighbour's box (permanent dead-end stubs at
+    // (10,6)/(10,5) box 1,0 and (77,3) box 63,0, root-caused on this item's
+    // BOW thread). The TRUE-EXTENSION call above (line ~2558, continuing a
+    // tier's own existing run) deliberately does NOT get `homeBox` — it must
+    // keep crossing section boundaries to join two networks (BUG-754/round
+    // 13); gating it the same way was tried and reverted for that reason.
     const connectedFresh = ownTierBootstrapped
       ? []
-      : extendExistingRun(existingNetworkTilesWide, extAvailable, extBox, seed + i);
+      : extendExistingRun(existingNetworkTilesWide, extAvailable, extBox, seed + i, box, terminusRuleFor(t, true));
     if (connectedFresh.length === 0) {
       if (candidateTierPath(freeSet, box, seed + i).length > 0) noConnectionTiers.push(t);
       rawPaths[t] = [];
@@ -2732,6 +2931,737 @@ function reconcileSectionTierClaimOnMoneyShortfall(
   }
 
   ctx.resolved = newResolved;
+}
+
+// ---- FEAT-2326609779 inc4: THE RED BOX RE-PLAN, wired -----------------------
+// LEAD RULING (this session): "the re-plan SUPERSEDES the extender inside the
+// red box; the extender keeps the rest of the map." So on a GLIDE day (the red
+// box is the glide window), the sections the box overlaps are removed from the
+// extender's own key list entirely and handed to this stage instead; the
+// month-12 whole-map pass has no red box and is untouched.
+
+/** The four orthogonal neighbour offsets — one definition for the re-plan executor (GR#3). */
+const ORTHO_NEIGHBOURS: readonly (readonly [number, number])[] = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+/**
+ * ROUND-15 LEAD RULING (2): a replace step must not disconnect any port
+ * mid-pass. Removing `doomed` and laying `replacement` in its place must leave
+ * every one of the plan's ports still reachable through the network that
+ * remains. Because the replacement occupies the SAME tile the demolition
+ * frees, the only way this can fail is if the new tile genuinely cannot carry
+ * the traffic the old one did — which for a 4-connected reachability question
+ * means: the tile is still there, so connectivity is preserved by
+ * construction UNLESS the demolition happens without the lay. This function
+ * exists so that invariant is CHECKED rather than assumed, and so a future
+ * increment that separates the pair in time cannot silently break it: it
+ * verifies every port's inside tile is still adjacent to, or on, a network
+ * tile in the post-change set.
+ */
+function replacementKeepsPortsConnected(
+  plan: BoxPlan,
+  runningOccupied: ReadonlySet<string>,
+  doomed: Building,
+  replacement: ReplanStep,
+): boolean {
+  if (plan.ports.length === 0) return true;
+  const after = new Set(runningOccupied);
+  after.delete(`${doomed.x},${doomed.y}`);
+  after.add(`${replacement.x},${replacement.y}`);
+  return plan.ports.every((port) => {
+    const ik = `${port.inside.x},${port.inside.y}`;
+    if (after.has(ik)) return true;
+    return ORTHO_NEIGHBOURS.some(([dx, dy]) => after.has(`${port.inside.x + dx},${port.inside.y + dy}`));
+  });
+}
+
+/**
+ * Which tier a road/rail spec belongs to, or null for a non-road-family spec.
+ * Built once at module load.
+ *
+ * MEASURED FIX 2026-09-06 (BUG-808, the E2 orphan-fragment red): this used to
+ * be a plain reverse of TIER_SPEC_ID — an EXACT match against the five
+ * canonical tier specs only, so every OTHER road-family spec in the catalogue
+ * (e.g. `rd_avenue`, a genesis-fixture tier-2 avenue) came back `null` and
+ * was silently classified as an ordinary BUILDING by every caller
+ * (`replanContentsOf`, `replanOutsideNetworkOf`, the severance checks below):
+ * invisible to `planStaleGridRemovals`'s `roads` set, so a genesis
+ * `rd_avenue` fragment could never be swept OR joined — exactly BUG-808's
+ * blind spot, root-caused here rather than in the consumer. The test suite's
+ * own `SPEC_TIER_OF`/`BUILT_TIER_SPEC_OF` measured and fixed the identical
+ * gap for its metrics (see feat-inc4-reimagine-engine.test.mjs); this is the
+ * SAME rule applied at the production source (GR#3: derive from the
+ * catalogue, one definition, not a second hand-listed set) — any other
+ * road/motorway/rail-kind spec counts as `minor` for connectivity, so a new
+ * road-family spec is covered the day it is added rather than silently
+ * reading as a phantom building with no way to ever earn road access.
+ */
+// LAZY + MEMOIZED (not an eager module-load IIFE): `SPECS` sits behind a
+// circular import edge that is not yet initialized at the point this module
+// evaluates its own top-level `const`s, so reading `SPECS` here eagerly
+// throws "Cannot access 'SPECS' before initialization". Every real caller
+// runs well after both modules have finished loading, so a first-call-builds
+// cache is safe and pays the O(catalogue) cost exactly once.
+let tierOfSpecCache: Readonly<Record<string, TierKind>> | null = null;
+function tierOfSpecTable(): Readonly<Record<string, TierKind>> {
+  if (tierOfSpecCache) return tierOfSpecCache;
+  const out: Record<string, TierKind> = {};
+  for (const t of TIER_ORDER) out[TIER_SPEC_ID[t]] = t;
+  for (const [specId, sp] of Object.entries(SPECS)) {
+    if (!sp || out[specId] || !['road', 'motorway', 'rail'].includes(sp.kind)) continue;
+    out[specId] = 'minor';
+  }
+  tierOfSpecCache = out;
+  return out;
+}
+const TIER_OF_SPEC: Readonly<Record<string, TierKind>> = new Proxy(
+  {},
+  { get: (_t, prop: string) => tierOfSpecTable()[prop] },
+) as Readonly<Record<string, TierKind>>;
+
+/**
+ * The consolidation ladder in the shape consolidatorReplan.ts consumes.
+ * Every number is READ from the catalogue (`capacityOf`, the spec's own
+ * footprint) — GR#15/GR#3: this invents nothing and duplicates nothing.
+ * The ladder itself is a module-load constant (consolidator.ts caches it), so
+ * this is safe to cache forever too: there is no state to invalidate against.
+ */
+let _replanRungsCache: ReplanLadderRung[] | null = null;
+/**
+ * ROUND-16 FOLLOW-UP RULING (1) — THE RE-PLAN CONSOLIDATES CIVIC ONLY.
+ *
+ * Aaron's sentence is about SERVICES: "rather than say the 12 hospitals it
+ * should be one teaching hospital, its not 40 kindgerden it's a city
+ * kindgerden that does 1000 children". The re-plan's city-wide grouping walked
+ * EVERY rung of the ladder, residential and commercial included, and the
+ * measurement caught it red-handed: on the dogfood city at 900 ticks the red
+ * box's civic spend was GBP 372,696,000 and what it bought was
+ * `{hea_teaching: 2, res_highrise: 1}` — a RESIDENTIAL TOWER, billed as civic
+ * consolidation, while the baseline reached the same 2 teaching hospitals for
+ * GBP 51.6M through the ordinary path.
+ *
+ * Residential / commercial / office / industrial consolidation belongs to the
+ * ordinary consolidator (findOpportunities / BUG-758) exactly as it does on
+ * baseline, and the re-plan must never place one of those successors. The set
+ * below is the SERVICE half of ZoneKind, read off the catalogue's own `kind`
+ * discriminator rather than a hand-maintained list of spec ids (GR#15) — a new
+ * hospital spec is covered the day it is added, and a new residential spec is
+ * excluded the same day.
+ */
+const REPLAN_CIVIC_KINDS: ReadonlySet<string> = new Set([
+  'health',
+  'school',
+  'police',
+  'fire',
+  'civic',
+  'transport',
+  'leisure',
+  'landmark',
+  'power',
+  'water',
+]);
+
+/** Is this spec one the RE-PLAN is allowed to consolidate? (ruling (1)) */
+function isReplanCivicSpec(specId: string): boolean {
+  const sp = SPECS[specId];
+  return sp != null && REPLAN_CIVIC_KINDS.has(sp.kind);
+}
+
+function replanRungs(): ReplanLadderRung[] {
+  if (_replanRungsCache) return _replanRungsCache;
+  const out: ReplanLadderRung[] = [];
+  for (const rung of consolidationLadder()) {
+    const toSpec = SPECS[rung.to];
+    if (!toSpec || !canEnterSim(toSpec)) continue;
+    // RULING (1): civic rungs only — both ends, so a rung can never launder a
+    // residential successor in behind a service predecessor.
+    if (!isReplanCivicSpec(rung.from) || !isReplanCivicSpec(rung.to)) continue;
+    out.push({
+      from: rung.from,
+      to: rung.to,
+      groupSize: rung.groupSize,
+      toCapacity: capacityOf(toSpec),
+      toW: toSpec.w ?? 1,
+      toH: toSpec.h ?? 1,
+    });
+  }
+  _replanRungsCache = out;
+  return out;
+}
+
+/**
+ * LEAD RULING 2026-09-06 — CIVIC GROUPING IS CITY-WIDE. GR#3 DEDUPE (round-17
+ * follow-up (a)): the re-plan no longer re-derives its own city-wide grouping
+ * from `consolidationLadder()` — that duplicated `findCityWideOpportunities`
+ * (consolidator.ts, the SSOT for whole-city grouping since BUG-758), a second
+ * implementation of the exact same "chunk by group size, lowest-id-first"
+ * logic that could silently drift from it (e.g. the capacity-ascending sort
+ * fix in round F1 would never have reached this copy). The re-plan now
+ * CONSUMES that function and filters its results down to the civic-only
+ * ruling (1) via `isReplanCivicSpec` on both ends of the rung, exactly as
+ * `replanRungs()` already does for the `rungs` field below.
+ *
+ * `findCityWideOpportunities` groups ALL of `isCityWideFamily`'s kinds
+ * (health/school, per BUG-758); `isReplanCivicSpec`'s ten-kind set narrows
+ * that further so a future non-civic city-wide family is excluded here the
+ * same day it exists, without touching the shared finder (GR#15).
+ *
+ * Deterministic (GR#21): `findCityWideOpportunities` itself returns rungs in
+ * the ladder's sorted order with members chosen lowest-capacity-then-id
+ * first; this function preserves that order and only filters/converts.
+ */
+function replanCityWideGroups(cur: SimState, box: ReplanBox): CityWideCivicGroup[] {
+  const index = sectionIndexOf(cur);
+  const ladder = consolidationLadder();
+  const opportunities = findCityWideOpportunities(cur, index, ladder);
+  const buildingById = buildingByIdOf(cur.buildings);
+  const inBox = (x: number, y: number): boolean =>
+    x >= box.x0 && x < box.x0 + box.w && y >= box.y0 && y < box.y0 + box.h;
+
+  const out: CityWideCivicGroup[] = [];
+  for (const opp of opportunities) {
+    // Ruling (1): civic rungs only, both ends — never launder a residential/
+    // commercial/industrial successor in behind a service predecessor.
+    if (!isReplanCivicSpec(opp.fromSpec) || !isReplanCivicSpec(opp.toSpec)) continue;
+    const toSpec = SPECS[opp.toSpec];
+    if (!toSpec) continue;
+    const members: ReplanContent[] = [];
+    let touchesBox = false;
+    for (const id of opp.buildingIds) {
+      const b = buildingById.get(id);
+      if (!b) continue;
+      if (inBox(b.x, b.y)) touchesBox = true;
+      const sp = SPECS[b.spec];
+      members.push({
+        id: b.id,
+        spec: b.spec,
+        x: b.x,
+        y: b.y,
+        tier: TIER_OF_SPEC[b.spec] ?? null,
+        residents: sp?.residents ?? 0,
+        jobs: sp?.jobs ?? 0,
+        capacity: sp ? capacityOf(sp) : 0,
+        protectedFromDemolition: false,
+      });
+    }
+    // The re-plan only claims a group the RED BOX actually touches.
+    if (!touchesBox || members.length === 0) continue;
+    out.push({ from: opp.fromSpec, to: opp.toSpec, members, toCapacity: capacityOf(toSpec), toW: toSpec.w ?? 1, toH: toSpec.h ?? 1 });
+  }
+  return out;
+}
+
+/**
+ * LEAD RULING 2026-09-06 — THE CITY-WIDE LATTICE PHASE, computed ONCE per pass
+ * over the whole city and handed to every box the pass plans. It must never be
+ * derived per box: two overlapping box positions that disagreed on phase would
+ * move the lines under the sliding window and repaint forever, which is the
+ * exact failure the absolute lattice was introduced to end.
+ *
+ * The input is the ROAD FAMILY only — every spec that maps to a layout tier —
+ * because the phase is a fact about the existing street grid, not about where
+ * houses happen to sit. Deterministic: `latticePhaseOf` is a fixed-bounds
+ * tally with ties broken by the smallest offset, never by iteration order.
+ */
+function replanLatticePhase(cur: SimState): number {
+  const roads: TileXY[] = [];
+  for (const b of cur.buildings) {
+    if (TIER_OF_SPEC[b.spec]) roads.push({ x: b.x, y: b.y });
+  }
+  return replanLatticePhaseOf(roads);
+}
+
+/**
+ * DIAGNOSTIC EXPORT (inc4). Recomputes, for a given state+tick, EXACTLY the
+ * box and plan the re-plan stage would compute this tick — same box, same
+ * contents, same ports, same groups, same seed. Used by the lane's probes and
+ * by the invariant-forensics tests so a discard can be inspected without
+ * duplicating (and therefore drifting from) the stage's own input derivation
+ * (GR#3). Pure: it never mutates state and never spends money.
+ */
+export function replanPlanForDebug(cur: SimState, tick: number): { box: ReplanBox; plan: BoxPlan } {
+  const win = glideWindowForDay(effectiveGlideDayOf(cur, tick), sectionTilesOf(cur), occupiedColumnsOf(cur));
+  const box: ReplanBox = { x0: win.x0, y0: win.y0, w: win.w, h: win.h };
+  const plan = replanBox({
+    box,
+    contents: replanContentsOf(cur, box),
+    ports: replanFindPorts(box, replanOutsideNetworkOf(cur, box, cur.consolidatorReplanDwellStartTick ?? tick)),
+    rungs: replanRungs(),
+    cityWideGroups: replanCityWideGroups(cur, box),
+    latticePhase: replanLatticePhase(cur),
+    seed: layoutSeedOf(sectionKeyOf(box.x0, box.y0), 0),
+  });
+  return { box, plan };
+}
+
+/** Everything standing INSIDE the box, in the planner's own input shape. Genesis (builtTick < 0) is never demolishable. */
+function replanContentsOf(cur: SimState, box: ReplanBox): ReplanContent[] {
+  const out: ReplanContent[] = [];
+  for (const b of cur.buildings) {
+    if (b.x < box.x0 || b.x >= box.x0 + box.w || b.y < box.y0 || b.y >= box.y0 + box.h) continue;
+    const sp = SPECS[b.spec];
+    out.push({
+      id: b.id,
+      spec: b.spec,
+      x: b.x,
+      y: b.y,
+      tier: TIER_OF_SPEC[b.spec] ?? null,
+      residents: sp?.residents ?? 0,
+      jobs: sp?.jobs ?? 0,
+      capacity: sp ? capacityOf(sp) : 0,
+      // See replanCityWideGroups' own note: consolidating existing stock is
+      // the job, so nothing is protected purely for being genesis.
+      protectedFromDemolition: false,
+      // NO CHURN (2026-09-06 ruling): derived from the building's own
+      // persisted provenance, never a parallel set.
+      layoutOwned: b.placedBy === 'auto' && (b.builtTick ?? 0) >= 0,
+    });
+  }
+  return out.sort((a, b) => a.id - b.id);
+}
+
+/** The network tiles in a one-tile halo OUTSIDE the box — the input `findPorts` turns into the box's PORTS. */
+function replanOutsideNetworkOf(cur: SimState, box: ReplanBox, dwellStartTick: number | null): Map<string, TierKind> {
+  const out = new Map<string, TierKind>();
+  for (const b of cur.buildings) {
+    // ROUND-15 LEAD RULING (1) — THE PLAN IS PINNED FOR THE DWELL. Tiles this
+    // dwell's own re-plan laid are NOT part of the outside world's network:
+    // counting them made the halo scan discover a BRAND NEW port every time
+    // the executor laid a tile near the box edge, which re-derived a
+    // different plan every tick and produced the round's 857
+    // 'replan discarded' rows. Measured directly: zero discards in the first
+    // 40 ticks (before anything is laid), then discards on essentially every
+    // tick afterwards — the plan was failing on its own half-laid output.
+    //
+    // Excluding only THIS dwell's own work (not earlier dwells') is what
+    // makes the plan stable for the dwell while still letting the PREVIOUS
+    // box's finished infrastructure act as a real port to join onto.
+    if (dwellStartTick != null && b.placedBy === 'auto' && (b.builtTick ?? 0) >= dwellStartTick) continue;
+    if (b.x < box.x0 - 1 || b.x > box.x0 + box.w || b.y < box.y0 - 1 || b.y > box.y0 + box.h) continue;
+    if (b.x >= box.x0 && b.x < box.x0 + box.w && b.y >= box.y0 && b.y < box.y0 + box.h) continue; // inside, not a port.
+    const tier = TIER_OF_SPEC[b.spec];
+    if (tier) out.set(`${b.x},${b.y}`, tier);
+  }
+  return out;
+}
+
+/**
+ * Execute a bounded, deterministic prefix of the box plan's step list under
+ * the EXISTING money gates (the pass-wide capex ceiling, the capex funds
+ * floor/reserve, and the upkeep floor) — the SAME quantities the tier
+ * extender is gated by, never a second budget of its own.
+ *
+ * CONSERVATION (the whole point): a civic group is executed ATOMICALLY — the
+ * `place` step and every `demolish` step it blocks either all land in this
+ * tick or none of them do. That is strictly stronger than honouring
+ * `blockedBy` step-by-step and it removes an entire class of half-executed
+ * state: there is never a tick boundary between "the replacement stands" and
+ * "the originals are gone", so residents/jobs/service capacity are conserved
+ * at EVERY tick, not merely at convergence. A group that does not fit the
+ * remaining budget simply WAITS (MET-V872, once per pass) — it never
+ * half-demolishes.
+ *
+ * `lay` steps are individually idempotent (a tile either carries the right
+ * spec or it does not), so those are executed one at a time and stop cleanly
+ * the moment the budget runs out.
+ */
+function executeReplanSteps(
+  attempt: SimState,
+  plan: BoxPlan,
+  tick: number,
+  runningOccupied: Set<string>,
+  budget: {
+    capexRemaining: number;
+    fundsFloor: number;
+    upkeepHeadroom: number;
+    // PORT FIX 2026-09-06 (round 17 pre-land P1): the city-wide net outflow
+    // per tick, needed so the civic branch below can use the SAME
+    // consolidatorFundsFloorFor(netCost, netOutflowPerTick) runway-scaled
+    // floor that BUG-684 (see its doc above consolidatorFundsFloorFor, and
+    // the call site at ~5802) uses for every other consolidation gate,
+    // instead of the flat INSOLVENCY_WARNING_THRESHOLD a small city could be
+    // walked almost all the way down to.
+    netOutflowPerTick: number;
+  },
+  stepBudget: number,
+): {
+  state: SimState;
+  executed: number;
+  buildCost: number;
+  scrapRecovered: number;
+  upkeepDelta: number;
+  added: ConsolidationRecord[];
+  removed: ConsolidationRecord[];
+  waitedOnMoney: boolean;
+  /**
+   * MEASURED FIX 2026-09-06 (the MET-V872 forcing test found the guard was
+   * unreachable): a CIVIC unit — a `place` plus the demolitions it blocks —
+   * could not be afforded and is waiting. Reported separately from
+   * `waitedOnMoney` because the original guard only fired when the whole pass
+   * executed ZERO steps, so a pass that laid a few cheap road tiles and THEN
+   * hit an unaffordable GBP 40,000,000 City Kindergarten stayed completely
+   * silent — exactly the conservation event GR#17 says must never be silent.
+   */
+  waitedOnCivic: boolean;
+  /** ROUND-15 (3) GR#17: lay steps blocked by a non-civic building this pass. */
+  obstructedByBuilding: number;
+  /** ROUND-15 (3) GR#17: replace steps deferred because removing the tile would have orphaned a port. */
+  connectivityDeferred: number;
+  /** LEAD RULING 2026-09-06 GR#17: stale-grid removals refused because the tile is on the city's lattice skeleton. */
+  latticeProtected: number;
+} {
+  let cur = attempt;
+  let executed = 0;
+  let buildCost = 0;
+  let scrapRecovered = 0;
+  let upkeepDelta = 0;
+  let capexRemaining = budget.capexRemaining;
+  let upkeepHeadroom = budget.upkeepHeadroom;
+  const added: ConsolidationRecord[] = [];
+  const removed: ConsolidationRecord[] = [];
+  let waitedOnMoney = false;
+  let waitedOnCivic = false;
+  const byId = new Map(cur.buildings.map((b) => [b.id, b] as const));
+
+  const upkeepOf = (specId: string): number => {
+    const sp = SPECS[specId];
+    return sp ? upkeepChargeableOf({ id: 0, spec: specId, x: 0, y: 0, builtTick: tick }, sp) : 0;
+  };
+
+  /** One atomic unit of work: a lone `lay`, or a `place` plus every `demolish` it blocks. */
+  const unitsOf = (steps: readonly ReplanStep[]): ReplanStep[][] => {
+    const units: ReplanStep[][] = [];
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      // ROUND-15 (2): a demolish step that names a blocker belongs to that
+      // civic unit; a STANDALONE one (the stale-grid removals) is its own
+      // atomic unit. Without this, stale removals were built into the step
+      // list and then silently never executed.
+      if (s.kind === 'demolish') {
+        if (s.blockedBy == null) units.push([s]);
+        continue;
+      }
+      if (s.kind === 'lay') {
+        units.push([s]);
+        continue;
+      }
+      const unit: ReplanStep[] = [s];
+      for (let j = i + 1; j < steps.length; j++) {
+        if (steps[j].kind === 'demolish' && steps[j].blockedBy === i) unit.push(steps[j]);
+      }
+      units.push(unit);
+    }
+    return units;
+  };
+
+  // LEAD RULING 2026-09-06 ("never starve civic"): the step order is
+  // lines-then-civic, and with a small per-tick budget the line steps would
+  // consume every slot forever, so the civic units at the tail were never
+  // reached. Units are therefore taken in TWO passes — line work up to the
+  // budget, then AT LEAST ONE civic unit regardless. A civic unit is atomic
+  // (a place plus every demolition it blocks), so it is counted as ONE
+  // reserved slot rather than by its internal step count; the real bound on
+  // it is the money gate below, which is exactly where an unaffordable
+  // successor is meant to WAIT (MET-V872).
+  // ROUND-15 (3) GR#17: every skipped/deferred step gets a REASON. Silence is
+  // exactly what let the stall run for 20 ticks a box undetected.
+  let obstructedByBuilding = 0;
+  let connectivityDeferred = 0;
+  /** LEAD RULING 2026-09-06: stale-grid removals REFUSED because the tile is on the city's lattice skeleton. */
+  let latticeProtected = 0;
+  // Hoisted: the phase is a whole-city fold, so it is computed ONCE per call,
+  // never per step (the naive per-step call made this O(steps x buildings)).
+  const executorLatticePhase = replanLatticePhase(attempt);
+
+  /** Every building indexed by tile, so the executor can ask what actually stands on a target tile (not merely "is it occupied"). */
+  const occupantByTile = new Map<string, Building>();
+  for (const b of cur.buildings) occupantByTile.set(`${b.x},${b.y}`, b);
+
+  /** The plan's own tier tiles by key, for the dead-end-fragment test below. */
+  const planTierOf = new Map<string, TierKind>();
+  for (const t of TIER_ORDER) for (const p of plan.tierTiles[t]) planTierOf.set(`${p.x},${p.y}`, t);
+
+  /**
+   * What stands on a target tile, classified by the ruling:
+   *  - null           nothing: lay normally.
+   *  - 'satisfied'    a road/rail tile of EQUAL or HIGHER tier: intent met.
+   *  - 'replace'      a road/rail tile of a LOWER tier, or a dead-end
+   *                   fragment of any tier: demolish+lay atomically.
+   *  - 'building'     anything else: an obstacle, never demolished for a road.
+   */
+  const occupantAt = (
+    x: number,
+    y: number,
+  ): { kind: 'satisfied' | 'replace' | 'building'; building: Building } | null => {
+    const b = occupantByTile.get(`${x},${y}`);
+    if (!b) return runningOccupied.has(`${x},${y}`) ? { kind: 'building', building: { id: -1, spec: '', x, y, builtTick: 0 } as Building } : null;
+    const existingTier = TIER_OF_SPEC[b.spec];
+    if (existingTier == null) return { kind: 'building', building: b };
+    const wanted = planTierOf.get(`${x},${y}`);
+    if (wanted == null) return { kind: 'building', building: b };
+    // A dead-end fragment is replaceable regardless of tier — it is exactly
+    // the fragmentation the defrag exists to remove.
+    const isFragment =
+      ORTHO_NEIGHBOURS.filter(([dx, dy]) => {
+        const n = occupantByTile.get(`${x + dx},${y + dy}`);
+        return n != null && TIER_OF_SPEC[n.spec] != null;
+      }).length <= 1;
+    if (!isFragment && TIER_RANK[existingTier] <= TIER_RANK[wanted]) return { kind: 'satisfied', building: b };
+    return { kind: 'replace', building: b };
+  };
+
+  const allUnits = unitsOf(plan.steps);
+  const lineUnits = allUnits.filter((u) => u[0].kind === 'lay');
+  const civicUnits = allUnits.filter((u) => u[0].kind === 'place');
+  // ROUND-15 (2): stale-grid removals run LAST of all — the box must never be
+  // left with the old grid gone and the new plan not yet laid.
+  const staleUnits = allUnits.filter((u) => u.length === 1 && u[0].kind === 'demolish' && u[0].blockedBy == null);
+  const orderedUnits = [...lineUnits, ...civicUnits, ...staleUnits];
+  let civicUnitsAttempted = 0;
+  // ROUND-16 RULING (3), OWED SINCE THE ROUND — NO HALF-DEMOLITION, ROADS
+  // INCLUDED. Ordering the stale-grid removals LAST within a pass was not
+  // enough: the pass is BOUNDED (stepBudget, capex, upkeep), so a removal
+  // could still execute in a pass whose own `lay` steps had not all landed —
+  // the box lost its old grid before the new plan stood, and the interior
+  // fragmented mid-job. That is exactly the "interior part-demolished" the
+  // round's box 1,0 render caught.
+  //
+  // A stale removal is therefore gated on the plan's OWN line work being
+  // COMPLETE: every `lay` step either already satisfied or executed. The
+  // replacement-in-place path (a `lay` that demolishes a lower tier on the
+  // same tile) is untouched and needs no gate — it is atomic by construction,
+  // demolishing and laying inside one transaction, so the tile never spends an
+  // instant empty.
+  const layStepsOutstanding = lineUnits.length;
+
+  for (const unit of orderedUnits) {
+    const isCivic = unit[0].kind === 'place';
+    const isStaleRemoval = unit.length === 1 && unit[0].kind === 'demolish' && unit[0].blockedBy == null;
+    // The budget stops LINE work only; a civic unit always gets its reserved
+    // attempt (one per tick), which is what makes Aaron's "THEN the bigger
+    // consolidated buildings get laid down" actually happen.
+    if (!isCivic && executed >= stepBudget) continue;
+    if (isStaleRemoval && layStepsOutstanding > 0) {
+      // The plan still wants tiles laid in this box. Nothing may be scrapped
+      // until they stand — GR#17: the deferral is counted and reported, never
+      // silent.
+      connectivityDeferred += 1;
+      continue;
+    }
+    if (isStaleRemoval) {
+      // (d)/(2): never remove a tile whose loss would orphan a port. The
+      // planner already applied the retention rules, but the realised box can
+      // have drifted since, so it is re-checked here against live occupancy.
+      const b = unit[0].id != null ? byId.get(unit[0].id) : undefined;
+      if (!b) continue;
+      // LEAD RULING 2026-09-06 — THE LATTICE IS THE CITY'S SKELETON. No
+      // automatic pass may demolish an on-lattice road-family tile. The
+      // planner already applies this (planStaleGridRemovals rule (b2)), but
+      // the plan is PINNED for the dwell while the city keeps changing, so the
+      // executor re-checks against the live phase — the same shared predicate
+      // (GR#3), never a second rule that can drift from it. Refusals are
+      // counted and surface in the pass log (GR#17: never silent).
+      //
+      // This is deliberately narrow: it governs STALE-GRID removals only. A
+      // `lay` step that REPLACES a lower tier is not a demolition of the
+      // skeleton — it is an upgrade of it, and a road-family tile still stands
+      // on the lattice afterwards. Measured over 900 dogfood ticks: 433 of 433
+      // on-lattice removals are exactly that (rd_dual 139, rail 123, rd_aroad
+      // 69, m20 56, road 46), zero holes and zero non-road overbuild.
+      if (onCityLattice(b.x, b.y, executorLatticePhase)) {
+        latticeProtected += 1;
+        continue;
+      }
+      if (!replacementKeepsPortsConnected(plan, runningOccupied, b, { ...unit[0], x: -1, y: -1 })) {
+        connectivityDeferred += 1;
+        continue;
+      }
+    }
+    if (isCivic && civicUnitsAttempted >= 1) continue;
+    if (isCivic) civicUnitsAttempted += 1;
+    // Price the WHOLE unit before touching anything (validate-then-mutate,
+    // AC-17's own idiom throughout this file).
+    let unitCost = 0;
+    let unitScrap = 0;
+    let unitUpkeep = 0;
+    let viable = true;
+    /** ROUND-15: lay steps whose tile already carries an equal/higher tier — done, no work. */
+    const satisfied: ReplanStep[] = [];
+    /** ROUND-15: demolish+lay pairs, committed atomically together below. */
+    const replaceTargets: Array<{ step: ReplanStep; building: Building }> = [];
+    for (const s of unit) {
+      if (s.noop) continue;
+      const sp = SPECS[s.spec];
+      if (!sp) {
+        viable = false;
+        continue;
+      }
+      if (s.kind === 'demolish') {
+        const b = s.id != null ? byId.get(s.id) : undefined;
+        if (!b) continue; // already gone — a no-op, never a failure.
+        unitScrap += Math.round(placementCost(sp) * CONSOLIDATOR_SCRAP_FRACTION);
+        unitUpkeep -= upkeepOf(s.spec);
+      } else {
+        // ROUND-15 REJECT FIX (opus-round15-inc4, the decisive finding):
+        // "a `lay` step whose tile is in runningOccupied sets viable=false and
+        // continues with NO executed increment, NO waited flag, NO skip row."
+        // The absolute lattice deliberately puts rail/dual/aroad on rows the
+        // city's EXISTING road grid already occupies, so those steps were
+        // permanently unbuildable — every box stalled at exec=0 in complete
+        // silence, MET-V874 fired misdescribed as "dwell exhausted", 0 of 8
+        // boxes converged, and the only realised change was minor road
+        // filling box edges. No rail, no motorway, no dual, no A-road was
+        // EVER laid.
+        //
+        // LEAD RULING — DEFRAG MEANS REPLACE. What stands on the target tile
+        // decides the step:
+        const here = occupantAt(s.x, s.y);
+        if (here == null) {
+          unitCost += placementCost(sp);
+          unitUpkeep += upkeepOf(s.spec);
+        } else if (here.kind === 'satisfied') {
+          // An EQUAL or HIGHER tier is already there — the plan's intent is
+          // met. Mark done, do no work, spend nothing.
+          satisfied.push(s);
+        } else if (here.kind === 'replace') {
+          // A LOWER tier (or a dead-end fragment of any tier) — demolish and
+          // lay as ONE atomic pair, priced with the ladder's own refund.
+          const oldSpec = SPECS[here.building.spec];
+          if (!oldSpec) {
+            viable = false;
+            continue;
+          }
+          // (2) A replacement must never disconnect a port mid-pass.
+          if (!replacementKeepsPortsConnected(plan, runningOccupied, here.building, s)) {
+            connectivityDeferred += 1;
+            viable = false;
+            continue;
+          }
+          replaceTargets.push({ step: s, building: here.building });
+          unitScrap += Math.round(placementCost(oldSpec) * CONSOLIDATOR_SCRAP_FRACTION);
+          unitUpkeep -= upkeepOf(here.building.spec);
+          unitCost += placementCost(sp);
+          unitUpkeep += upkeepOf(s.spec);
+        } else {
+          // A BUILDING. Never demolished for a road. If it belongs to a
+          // claimed civic group, that group's own unit removes it (place
+          // before demolish) and this lay proceeds on a later tick; otherwise
+          // the tile is a hard obstacle and the step is recorded, not silent.
+          obstructedByBuilding += 1;
+          viable = false;
+          continue;
+        }
+      }
+    }
+    if (!viable) continue;
+    const netCost = unitCost - unitScrap;
+    // LEAD RULING 2026-09-06: a CIVIC unit is a consolidation, not
+    // infrastructure, so it is gated exactly as BUG-758's own city-wide
+    // consolidation is — against the treasury and the insolvency floor — NOT
+    // against the layout capex ceiling. Measured reason: a City Kindergarten
+    // costs GBP 40,000,000 and the layout ceiling tops out at
+    // min(20M, 2% of funds) x REPLAN_CAPEX_SHARE, i.e. GBP 10M at best, so
+    // under the infrastructure ceiling NO consolidated civic could EVER be
+    // afforded, at any treasury. That is what kept the civic count at zero.
+    // Line work keeps the layout ceiling unchanged.
+    // PORT FIX 2026-09-06 (round 17 pre-land P1): the flat
+    // `funds - netCost < INSOLVENCY_WARNING_THRESHOLD` gate is exactly the
+    // city-size-blind shape BUG-684 replaced everywhere else (see
+    // consolidatorFundsFloorFor's doc a few hundred lines above and its use
+    // at the ordinary consolidator's merge gate, ~line 5802) — a small city
+    // could still be walked almost to zero by a string of "affordable" civic
+    // units. Reuse the SAME runway-scaled floor via budget.netOutflowPerTick.
+    const overBudgetForUnit = isCivic
+      ? cur.funds - netCost < consolidatorFundsFloorFor(netCost, budget.netOutflowPerTick)
+      : unitCost > capexRemaining || cur.funds - netCost < budget.fundsFloor || unitUpkeep > upkeepHeadroom;
+    if (overBudgetForUnit) {
+      // The unit cannot be afforded RIGHT NOW. It waits — nothing is
+      // half-done, and the next tick re-derives the identical plan and tries
+      // the identical unit again.
+      waitedOnMoney = true;
+      if (isCivic) waitedOnCivic = true;
+      // A LINE unit that cannot be afforded stops further LINE work (the
+      // budget is spent in order), but must never abandon the reserved civic
+      // attempt — that would re-open the starvation this reservation exists
+      // to close.
+      if (isCivic) continue;
+      executed = stepBudget;
+      continue;
+    }
+
+    // Commit the unit.
+    let nextId = cur.nextId;
+    const newBuildings = cur.buildings.slice();
+    const doomed = new Set<number>();
+    // ROUND-15: a REPLACE target's old tile is demolished in the SAME atomic
+    // unit as the tile that supersedes it — never a tick apart, so the
+    // network is never momentarily missing a tile a port depends on.
+    const satisfiedKeys = new Set(satisfied.map((x) => `${x.x},${x.y}`));
+    for (const r of replaceTargets) doomed.add(r.building.id);
+    for (const s of unit) {
+      if (s.noop) continue;
+      if (s.kind === 'demolish') {
+        if (s.id != null && byId.has(s.id)) doomed.add(s.id);
+        continue;
+      }
+      // A step whose tile already carried an equal/higher tier is SATISFIED:
+      // it counts as done (so the job converges) but builds nothing.
+      if (satisfiedKeys.has(`${s.x},${s.y}`)) continue;
+      const rec: ConsolidationRecord = { id: nextId, spec: s.spec, x: s.x, y: s.y, builtTick: tick, placedBy: 'auto' };
+      newBuildings.push(recordToBuilding(rec));
+      added.push(rec);
+      runningOccupied.add(`${s.x},${s.y}`);
+      nextId += 1;
+    }
+    const survivors = doomed.size > 0 ? newBuildings.filter((b) => !doomed.has(b.id)) : newBuildings;
+    for (const id of Array.from(doomed).sort((a, b) => a - b)) {
+      const b = byId.get(id);
+      if (!b) continue;
+      removed.push(toConsolidationRecord(b, 'auto'));
+      // A replaced tile is immediately re-occupied by its successor above, so
+      // it must NOT be freed here — doing so would let a later step in the
+      // same pass double-book the tile.
+      if (!replaceTargets.some((r) => r.building.id === id)) runningOccupied.delete(`${b.x},${b.y}`);
+      occupantByTile.delete(`${b.x},${b.y}`);
+      byId.delete(id);
+    }
+    cur = {
+      ...cur,
+      buildings: survivors,
+      nextId,
+      funds: cur.funds - netCost,
+      cumulativeCapexSpent: (cur.cumulativeCapexSpent ?? 0) + unitCost,
+    };
+    for (const b of survivors.slice(survivors.length - added.length)) {
+      byId.set(b.id, b);
+      occupantByTile.set(`${b.x},${b.y}`, b);
+    }
+    capexRemaining -= unitCost;
+    upkeepHeadroom -= unitUpkeep;
+    buildCost += unitCost;
+    scrapRecovered += unitScrap;
+    upkeepDelta += unitUpkeep;
+    executed += unit.length;
+  }
+
+  return {
+    state: cur,
+    executed,
+    buildCost,
+    scrapRecovered,
+    upkeepDelta,
+    added,
+    removed,
+    waitedOnMoney,
+    waitedOnCivic,
+    obstructedByBuilding,
+    connectivityDeferred,
+    latticeProtected,
+  };
 }
 
 /**
@@ -3340,6 +4270,13 @@ function applyConsolidatorPass(
   // consolidate a cluster the daily window cannot reach" guarantee would
   // otherwise silently miss its one guaranteed sweep.
   const tierLayout: ConsolidationTransaction[] = [];
+  // FEAT-2326609779 inc4: this pass's red-box re-plan progress, or null when
+  // the re-plan stage did not run (a month-12 whole-map pass, a box outside
+  // the city, or a discarded plan). Surfaced on the pass log for the
+  // consolidator tab and the debug JSON.
+  let replanReport: NonNullable<ConsolidationPass['replan']> | null = null;
+  /** FEAT-2326609779 inc4: the re-plan's own transactions — see ConsolidationPass.replanLayout for why these are NOT folded into `tierLayout`. */
+  const replanLayout: ConsolidationTransaction[] = [];
   const layoutThrottledOut =
     sectionKeysOverride !== undefined && tick % LAYOUT_THROTTLE_TICKS !== 0;
   const layoutEnabled = (cur.consolidatorLayoutEnabled ?? true) && !layoutThrottledOut;
@@ -3414,7 +4351,10 @@ function applyConsolidatorPass(
         box.y0 + box.h - 1 >= wildernessLo.y
       );
     };
-    const orderedLayoutKeys = sectionKeys.slice().sort((a, b) => a - b).filter(sectionNearCity);
+    // CONVERGENCE 2026-09-06: `let`, not main's `const` — the inc4 re-plan
+    // stage reassigns this to remove the red box's own sections (and, per the
+    // round-16 release rule, sometimes does not).
+    let orderedLayoutKeys = sectionKeys.slice().sort((a, b) => a - b).filter(sectionNearCity);
     // R3-C FIX: ONE real fold (occupiedSet is buildings-identity-cached, so
     // this is a cache HIT if nothing has changed `cur.buildings` yet this
     // tick — the common case), then threaded through every section call
@@ -3428,10 +4368,29 @@ function applyConsolidatorPass(
     // yet? Feeds the same-tier "bootstrap" exception in buildLayoutSectionCtx
     // (a tier's very FIRST-ever stub may join the general network; every
     // stub after that must join its OWN tier specifically).
+    // PORT FIX 2026-09-06 (attack-inc3-round10 regression, "5M city must lay
+    // something in 300 ticks"): this must exclude GENESIS tiles
+    // (builtTick < 0), exactly like `existingByTier`'s own scan a few
+    // hundred lines above (buildLayoutSectionCtx) — the two sets are read
+    // together by the ownTierBootstrapped gate (`cityHasTierThisPass[t]`
+    // decides whether a fresh stub may use the general-network anchor;
+    // `existingByTier[t]` is what the TRUE-EXTENSION call can actually see).
+    // Before this fix they disagreed on genesis tiles: a city whose only
+    // 'road' (= TIER_SPEC_ID.minor) tiles are genesis reported
+    // cityHasTier.minor=true (blocking the general-network bootstrap) while
+    // existingByTier.minor stayed empty (genesis-excluded, so the
+    // true-extension attempt always failed too) — a permanent deadlock,
+    // minor tier could NEVER be laid in any such city. The inc4 fix this
+    // gate exists for (aroad/minor no longer bootstrapping a disconnected
+    // parallel line once the REAL layout stage has laid their own network)
+    // only needs tick>=0 tiles to fire — a genesis-only city has not laid
+    // anything via the layout stage yet, so it correctly stays eligible for
+    // the general-network anchor.
     const cityHasTierThisPass: Record<TierKind, boolean> = {
       rail: false, motorway: false, dual: false, aroad: false, minor: false,
     };
     for (const b of cur.buildings) {
+      if ((b.builtTick ?? 0) < 0) continue;
       for (const t of TIER_ORDER) {
         if (b.spec === TIER_SPEC_ID[t]) cityHasTierThisPass[t] = true;
       }
@@ -3541,7 +4500,22 @@ function applyConsolidatorPass(
       oneFullRailRunUpkeep,
       LAYOUT_UPKEEP_MAX_WORSENING_PER_TICK,
     );
-    const layoutLifetimeUpkeepHeadroomRemaining = Math.max(0, layoutLifetimeUpkeepCeiling - priorCumulativeUpkeepDelta);
+    // ROUND-16 FOLLOW-UP RULING (1)(b) — ONE CITY-WIDE UPKEEP BOUND, TWO
+    // CAPEX LINES. Splitting the upkeep books (finding A's fix) stopped the
+    // re-plan from starving the extender, but it also doubled the city's total
+    // committed upkeep: each stage bounded itself against the same ceiling
+    // independently, so the city could carry 2x what the ceiling was ever
+    // sized for. Upkeep is a property of the CITY, not of whichever stage
+    // happened to lay the tile, so the CEILING is shared and the two stages
+    // are charged jointly against it. The CAPEX lines stay separate — that is
+    // what keeps one stage from spending the other's per-pass allowance, which
+    // was the actual regression.
+    const jointPriorCumulativeUpkeepDelta =
+      priorCumulativeUpkeepDelta + (cur.consolidatorReplanCumulativeUpkeepDelta ?? 0);
+    const layoutLifetimeUpkeepHeadroomRemaining = Math.max(
+      0,
+      layoutLifetimeUpkeepCeiling - jointPriorCumulativeUpkeepDelta,
+    );
     const layoutUpkeepAllowanceThisPass = Math.min(layoutUpkeepAllowanceThisPassRaw, layoutLifetimeUpkeepHeadroomRemaining);
     if (layoutUpkeepAllowanceThisPass < layoutUpkeepAllowanceThisPassRaw && orderedLayoutKeys.length > 0) {
       // GR#17: one named pass-log line when the lifetime ceiling is the
@@ -3694,7 +4668,38 @@ function applyConsolidatorPass(
     }
     const bug788CeilingFloor = bug788CheapestTierMinRunCost <= availableAboveCapexFloor ? bug788CheapestTierMinRunCost : 0;
     const layoutCapexCeilingThisPass = Math.max(standardCapexCeiling, bug788CeilingFloor);
+    // CONVERGENCE 2026-09-06: main's BUG-788 capex FLOOR (the Math.max above)
+    // is kept; the lane's older `= standardCapexCeiling` line is dropped as
+    // superseded. Both sides otherwise agree.
     let layoutCapexSpentThisPass = 0;
+    // ---- ROUND-16 REJECT (A): THE RE-PLAN'S OWN BUDGET LINES ---------------
+    // The re-plan used to spend out of the EXTENDER's counters. Because
+    // `layoutRunningUpkeepDelta` finalises into
+    // `consolidatorLayoutCumulativeUpkeepDelta` — the extender's LIFETIME
+    // ceiling for every section on the map — one red box laying a rail row and
+    // a motorway column exhausted the extender's whole-city lifetime budget
+    // and killed it dead: 'layout paused: lifetime upkeep ceiling' on 32 of 32
+    // passes, scatterFixture extender transactions 124 (baseline) -> 0 (lane).
+    // That is finding (A), and it is a real regression, not a test artefact.
+    //
+    // The re-plan now keeps its OWN books with the SAME SHAPE as the
+    // extender's — a per-pass running delta, a persisted cumulative total, and
+    // a lifetime ceiling computed by the identical formula (GR#3: the ceiling
+    // expression is the same three-term Math.max, read from the same anchors,
+    // so the two stages cannot drift apart in how they are bounded). Nothing
+    // the re-plan does touches `layoutRunningUpkeepDelta` or
+    // `layoutCapexSpentThisPass` any more, and nothing the extender does
+    // touches these.
+    const replanPriorCumulativeUpkeepDelta = cur.consolidatorReplanCumulativeUpkeepDelta ?? 0;
+    // (1)(b): the SAME shared ceiling, charged against the JOINT total — one
+    // city-wide upkeep bound. Both stages draw from one pot; neither can
+    // double the city's committed upkeep by keeping its own books.
+    const replanLifetimeUpkeepHeadroom = Math.max(
+      0,
+      layoutLifetimeUpkeepCeiling - jointPriorCumulativeUpkeepDelta - layoutRunningUpkeepDelta,
+    );
+    let replanRunningUpkeepDelta = 0;
+    let replanCapexSpentThisPass = 0;
     // ROUND-9 FIX (cosmetic, GR#17): this used to push a fresh 'layout
     // paused: capex budget' skip entry for EVERY remaining section once the
     // pass-wide ceiling was exhausted — noisy (a pass log entry per
@@ -3713,6 +4718,296 @@ function applyConsolidatorPass(
       aroad: false,
       minor: false,
     };
+
+    // ---- FEAT-2326609779 inc4: THE RED BOX RE-PLAN ----------------------
+    // LEAD RULING (this session): "the re-plan SUPERSEDES the extender inside
+    // the red box; the extender keeps the rest of the map." The red box IS
+    // the glide window, so this stage only runs on a GLIDE day
+    // (`sectionKeysOverride !== undefined`); the month-12 whole-map pass has
+    // no red box and is left exactly as it was.
+    //
+    // Aaron's order, verbatim: "the red box needs to defag and reimmagine
+    // everything within it and optimise join". The extender
+    // (consolidatorLayout.ts) cannot do that by construction — its output is
+    // a function of what is already standing, so it can only ever decorate
+    // the mess. `planBox` computes what the box SHOULD look like from
+    // scratch and this stage walks the box toward it, a bounded number of
+    // steps per tick, under the SAME money gates the extender uses.
+    if (sectionKeysOverride !== undefined) {
+      const win = glideWindowForDay(effectiveGlideDayOf(cur, tick), sectionTilesOf(cur), occupiedColumnsOf(cur));
+      const replanBoxRect: ReplanBox = { x0: win.x0, y0: win.y0, w: win.w, h: win.h };
+      const planKey = `${replanBoxRect.x0},${replanBoxRect.y0},${replanBoxRect.w},${replanBoxRect.h}`;
+      // ROUND-16 RULING (2): did the re-plan actually DO anything in this box
+      // this pass? If not, the box releases its sections to the extender for
+      // this pass rather than reserving idle ground. Defaults say "did
+      // nothing" so a discarded plan, an out-of-city box, or a throw all take
+      // the release path — the safe direction is always to let the other stage
+      // work, never to leave the map untended.
+      let replanExecutedThisPass = 0;
+      let replanTouchedThisPass = false;
+      let replanReleasedSections = false;
+      // The box only earns a re-plan once it is genuinely part of the city —
+      // the SAME wilderness rule the extender obeys (see
+      // LAYOUT_WILDERNESS_MARGIN_TILES), reused rather than re-derived, so
+      // the re-plan can never pave untouched map either.
+      const boxNearCity =
+        !cityBBoxKnown ||
+        (replanBoxRect.x0 <= wildernessHi.x &&
+          replanBoxRect.x0 + replanBoxRect.w - 1 >= wildernessLo.x &&
+          replanBoxRect.y0 <= wildernessHi.y &&
+          replanBoxRect.y0 + replanBoxRect.h - 1 >= wildernessLo.y);
+      if (boxNearCity) {
+        const plan = replanBox({
+          box: replanBoxRect,
+          contents: replanContentsOf(cur, replanBoxRect),
+          ports: replanFindPorts(
+            replanBoxRect,
+            replanOutsideNetworkOf(cur, replanBoxRect, cur.consolidatorReplanDwellStartTick ?? tick),
+          ),
+          rungs: replanRungs(),
+          cityWideGroups: replanCityWideGroups(cur, replanBoxRect),
+          // LEAD RULING 2026-09-06: ONE city-wide phase for every box this pass.
+          latticePhase: replanLatticePhase(cur),
+          seed: layoutSeedOf(sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0), 0),
+        });
+        if (plan.invariantFailures.length > 0) {
+          // GR#7/GR#17: a plan that fails its own invariants is DISCARDED
+          // loudly and the box is left untouched — never executed. A plan
+          // that (say) orphans a port would cut the outside network off from
+          // everything inside the box.
+          recordError(
+            `Consolidator re-plan produced a plan violating its own invariant at box ${planKey}: ${plan.invariantFailures.join('; ')}`,
+            { type: 'app', code: 'MET-V871', action: `tick=${tick}` },
+          );
+          skipped.push({ sectionKey: sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0), reason: 'replan discarded: invariant failure' });
+          // LEAD RULING "the box dwells": a discarded plan has nothing to
+          // converge to, so the window is released immediately and slides on
+          // next tick rather than dwelling on a box it can never finish.
+          cur = { ...cur, consolidatorReplanDwellStartTick: null };
+          // ROUND-16 (2): a discarded plan executes nothing, so the box must
+          // not hold its sections hostage — the extender works them instead.
+          replanReleasedSections = true;
+        } else {
+          const priorCursor = cur.consolidatorReplanPlanKey === planKey ? (cur.consolidatorReplanStepCursor ?? 0) : 0;
+          // ROUND-16 (A): the re-plan's per-pass upkeep headroom is measured
+          // against ITS OWN running delta and ITS OWN lifetime line — never
+          // the extender's. The floor/anchor terms are shared read-only
+          // quantities (they describe the CITY, not either stage's spend).
+          const upkeepHeadroomForReplan = Math.min(
+            Math.max(0, layoutBaselineNetIncomePerTick - layoutUpkeepEffectiveFloor - replanRunningUpkeepDelta),
+            Math.max(0, replanLifetimeUpkeepHeadroom - replanRunningUpkeepDelta),
+          );
+          if (replanLifetimeUpkeepHeadroom <= 0) {
+            // GR#17: the re-plan's own ceiling, named as its own reason so it
+            // can never again be mistaken for (or silently charged to) the
+            // extender's 'layout paused: lifetime upkeep ceiling'.
+            skipped.push({
+              sectionKey: sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0),
+              reason: 'replan paused: re-plan lifetime upkeep ceiling',
+            });
+          }
+          const exec = executeReplanSteps(
+            cur,
+            plan,
+            tick,
+            layoutRunningOccupied,
+            {
+              // MEASURED RETUNE 2026-09-06 (E5 solvency): the re-plan draws
+              // at most REPLAN_CAPEX_SHARE of the pass's ceiling, leaving the
+              // rest for the extender's own work on the map OUTSIDE the box —
+              // see that constant's doc for the measured spend table.
+              // ROUND-16 (A): the re-plan draws against its OWN capex line —
+              // its share of the pass ceiling, less what IT has already spent
+              // this pass. It no longer consumes (or is starved by) the
+              // extender's `layoutCapexSpentThisPass`.
+              capexRemaining: Math.max(
+                0,
+                REPLAN_CAPEX_SHARE * layoutCapexCeilingThisPass - replanCapexSpentThisPass,
+              ),
+              fundsFloor: layoutCapexFundsFloor,
+              upkeepHeadroom: upkeepHeadroomForReplan,
+              // PORT FIX 2026-09-06: city-wide net outflow, for the civic
+              // branch's consolidatorFundsFloorFor gate (see that budget
+              // field's doc in executeReplanSteps above).
+              netOutflowPerTick: consolidatorNetOutflowPerTick,
+            },
+            REPLAN_STEPS_PER_TICK,
+          );
+          cur = exec.state;
+          // ROUND-16 (A): the re-plan's spend lands on the RE-PLAN's books.
+          replanCapexSpentThisPass += exec.buildCost;
+          replanRunningUpkeepDelta += exec.upkeepDelta;
+          replanExecutedThisPass = exec.executed;
+          replanTouchedThisPass = exec.added.length > 0 || exec.removed.length > 0;
+          // ROUND-15 (3) GR#17: every deferred/skipped step gets a reason in
+          // the pass log. The round's own finding was that a permanently
+          // unbuildable step produced NO row at all, so a box could stall for
+          // 20 ticks in complete silence.
+          if (exec.obstructedByBuilding > 0) {
+            skipped.push({
+              sectionKey: sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0),
+              reason: `replan obstructedByBuilding: ${exec.obstructedByBuilding}`,
+            });
+          }
+          if (exec.latticeProtected > 0) {
+            // LEAD RULING 2026-09-06 GR#17: the skeleton refusal is never
+            // silent — a box that keeps proposing removals the lattice rule
+            // forbids is visible in the pass log rather than looking idle.
+            skipped.push({
+              sectionKey: sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0),
+              reason: `replan latticeProtected (on-lattice tile never demolished): ${exec.latticeProtected}`,
+            });
+          }
+          if (exec.connectivityDeferred > 0) {
+            skipped.push({
+              sectionKey: sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0),
+              reason: `replan connectivityDeferred: ${exec.connectivityDeferred}`,
+            });
+          }
+          if (exec.waitedOnCivic || (exec.waitedOnMoney && exec.executed === 0)) {
+            // GR#17: never silent. A re-plan unit that cannot be afforded
+            // WAITS — it is never half-executed (a place without its
+            // demolitions, or worse, demolitions without their replacement).
+            recordError(
+              `Consolidator re-plan deferred a step at box ${planKey} that would not fit the pass's capex/upkeep budget; the replacement must stand before the originals are removed, so the whole unit waits for a later tick`,
+              { type: 'app', code: 'MET-V872', action: `tick=${tick}` },
+            );
+            skipped.push({ sectionKey: sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0), reason: 'replan waiting: capex/upkeep budget' });
+          }
+          if (exec.added.length > 0 || exec.removed.length > 0) {
+            replanLayout.push({
+              sectionKey: sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0),
+              kind: 'layout',
+              removed: exec.removed,
+              added: exec.added,
+              buildCost: exec.buildCost,
+              scrapRecovered: exec.scrapRecovered,
+              netCost: exec.buildCost - exec.scrapRecovered,
+              capexSpent: exec.buildCost,
+              upkeepDelta: exec.upkeepDelta,
+            });
+          }
+          const cursor = priorCursor + exec.executed;
+          const progress = replanProgressOf(plan, Math.min(cursor, plan.steps.length));
+          replanReport = {
+            planKey,
+            planTiles: progress.planTiles,
+            tilesDone: progress.tilesDone,
+            stepsTotal: progress.stepsTotal,
+            stepsDone: progress.stepsDone,
+            portsTotal: progress.portsTotal,
+            portsVerified: progress.portsVerified,
+            // ROUND-16 FOLLOW-UP RULING (2) — CONVERGENCE IS MEASURED AGAINST
+            // THE PINNED PLAN, never against live contents. The old test was
+            // `replanWorkRemaining(plan) === 0` — "the re-derived step list is
+            // empty" — which makes convergence a property of whatever happens
+            // to be standing, and therefore hostage to any other stage that
+            // touches the box. Measured on the E2 red: the step list decayed
+            // to a floor of 2-3 residual steps and stalled there forever while
+            // the extender kept re-deriving it, so 0 of 155 passes ever
+            // reported converged.
+            //
+            // The job is done when the plan's OWN steps have all been walked:
+            // the cursor has reached the end of the step list this pass
+            // planned. `realWorkRemaining` is still consulted so a plan whose
+            // every step is a no-op (everything already correct) converges
+            // immediately rather than waiting for a cursor to crawl through
+            // steps there is no work in.
+            converged: cursor >= plan.steps.length || replanWorkRemaining(plan) === 0,
+            executedThisPass: exec.executed,
+          };
+          // LEAD RULING 2026-09-06 — THE BOX DWELLS. Aaron: "defrag ... THEN
+          // the bigger consolidated buildings get laid down." The window
+          // stays on this box until the job converges, bounded by
+          // REPLAN_MAX_DWELL_DAYS so it can never pin the scanline forever.
+          const dwellStart = cur.consolidatorReplanDwellStartTick ?? null;
+          const dwellAge = dwellStart == null ? 0 : tick - dwellStart;
+          let nextDwellStart: number | null;
+          let nextResumeDay: number | null = cur.consolidatorReplanDwellResumeDay ?? null;
+          const boxWidth = Math.max(1, replanBoxRect.w);
+          const dayThisBoxUsed = effectiveGlideDayOf(cur, tick);
+          if (replanReport.converged) {
+            nextDwellStart = null; // job done — slide on.
+            // ROUND-15 (5): resume ONE BOX WIDTH on, not at the live tick.
+            nextResumeDay = dayThisBoxUsed + boxWidth;
+          } else if (dwellStart == null) {
+            nextDwellStart = tick; // REAL tick — the cap is measured in ticks.
+          } else if (dwellAge >= REPLAN_MAX_DWELL_DAYS) {
+            // GR#17: never silent, and never forever. A box that burned its
+            // whole dwell without converging is released loudly so the
+            // scanline keeps moving.
+            // ROUND-15 (3): the old message said only "dwell exhausted",
+            // which the round correctly called MISDESCRIBED — the real cause
+            // was permanently unbuildable steps, and the text gave no way to
+            // tell that from a slow-but-progressing box. It now names the
+            // counts.
+            recordError(
+              `Consolidator re-plan dwell budget exhausted at box ${planKey} after ${dwellAge} days with ` +
+                `${replanReport.stepsTotal - replanReport.stepsDone} step(s) still outstanding ` +
+                `(obstructedByBuilding=${exec.obstructedByBuilding}, connectivityDeferred=${exec.connectivityDeferred}, ` +
+                `waitedOnMoney=${exec.waitedOnMoney}, waitedOnCivic=${exec.waitedOnCivic}, executedThisPass=${exec.executed}); ` +
+                `the red box moves on so nothing waits forever`,
+              { type: 'app', code: 'MET-V874', action: `tick=${tick}` },
+            );
+            skipped.push({ sectionKey: sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0), reason: 'replan dwell exhausted' });
+            nextDwellStart = null;
+            nextResumeDay = dayThisBoxUsed + boxWidth;
+          } else {
+            nextDwellStart = dwellStart; // keep dwelling.
+          }
+          cur = {
+            ...cur,
+            consolidatorReplanPlanKey: planKey,
+            consolidatorReplanStepCursor: cursor,
+            consolidatorReplanDwellStartTick: nextDwellStart,
+            consolidatorReplanDwellResumeDay: nextResumeDay,
+            consolidatorReplanPinnedDay: nextDwellStart == null ? null : dayThisBoxUsed,
+          };
+        }
+        // LEAD RULING: the extender does not touch a section the re-plan owns.
+        // ROUND-16 RULING (2): ...but a box whose pinned plan has NO EXECUTABLE
+        // STEP this pass owns nothing worth reserving, so it RELEASES its
+        // sections back to the extender for that pass. Suppressing a stage
+        // that is going to do nothing is pure loss — it was a second, quieter
+        // half of finding (A): even with separate budgets, a converged or
+        // fully-blocked box would have left its four sections idle forever.
+        //
+        // "Executable" is measured on what the pass ACTUALLY did, not on what
+        // the plan wants: zero steps executed and nothing added or removed.
+        if (replanExecutedThisPass === 0 && !replanTouchedThisPass) {
+          replanReleasedSections = true;
+        }
+        const boxSectionKeys = new Set<number>([
+          sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0),
+          sectionKeyOf(replanBoxRect.x0 + replanBoxRect.w - 1, replanBoxRect.y0),
+          sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0 + replanBoxRect.h - 1),
+          sectionKeyOf(replanBoxRect.x0 + replanBoxRect.w - 1, replanBoxRect.y0 + replanBoxRect.h - 1),
+        ]);
+        if (!replanReleasedSections) orderedLayoutKeys = orderedLayoutKeys.filter((k) => !boxSectionKeys.has(k));
+        // ROUND-16 FOLLOW-UP RULING (2) — RELEASE IS FOR SCANNING ONLY. The
+        // release rule above hands the box's SECTIONS back to the extender so
+        // the map keeps being swept, but the extender may never PLACE a tile
+        // inside the red box itself while a plan is pinned there.
+        //
+        // MEASURED (dogfood, 200 ticks, the E2 red): the extender laid 343
+        // tiles INSIDE the pinned box, every one of which changed the box's
+        // contents and re-derived the plan — so `stepsTotal` decayed to a
+        // floor of 2-3 residual steps and STALLED there forever, and not one
+        // box ever reported converged in 200 ticks (0 of 155 passes). The
+        // re-plan was, in effect, racing the extender for the same tiles.
+        //
+        // The hook is the pass's own free-space view: the box's tiles join
+        // `layoutRunningOccupied` AFTER the re-plan has had its turn this
+        // pass, so every later extender candidate search treats them as taken.
+        // The set is rebuilt from scratch each pass (see its construction
+        // above), so nothing leaks between passes and no removal is needed.
+        for (let dy = 0; dy < replanBoxRect.h; dy++) {
+          for (let dx = 0; dx < replanBoxRect.w; dx++) {
+            layoutRunningOccupied.add(`${replanBoxRect.x0 + dx},${replanBoxRect.y0 + dy}`);
+          }
+        }
+      }
+    }
 
     // ROUND-11 RESTRUCTURE (LEAD RULING, "F2 is not deferrable — it IS the
     // acceptance criterion"): TIER_ORDER is now the OUTER loop across every
@@ -3794,6 +5089,9 @@ function applyConsolidatorPass(
     // BUG-788: costPerTileOf/tierMinRunCapexOf are now defined earlier
     // (alongside the ceiling-floor computation above) so both this
     // tile-quota split and that floor share the same single definition.
+    // CONVERGENCE 2026-09-06: the lane's copies of these two helpers are
+    // dropped here — main's BUG-788 hoisted them above, and the comment
+    // directly above is main's own note saying so (GR#3: one definition).
     const blendedCostPerTile = TIER_ORDER.reduce((sum, t) => sum + TIER_UPKEEP_SHARE[t] * costPerTileOf(t), 0);
     const tilesAffordableThisPass =
       blendedCostPerTile > 0 ? Math.floor(layoutCapexCeilingThisPass / blendedCostPerTile) : 0;
@@ -4040,6 +5338,10 @@ function applyConsolidatorPass(
       ...cur,
       consolidatorLayoutBaselineNetIncome: layoutBaselineNetIncomePerTick,
       consolidatorLayoutCumulativeUpkeepDelta: priorCumulativeUpkeepDelta + layoutRunningUpkeepDelta,
+      // ROUND-16 (A): the re-plan's own lifetime line, accumulated the same
+      // way and kept strictly apart from the extender's.
+      consolidatorReplanCumulativeUpkeepDelta:
+        replanPriorCumulativeUpkeepDelta + replanRunningUpkeepDelta,
     };
   }
 
@@ -4817,7 +6119,16 @@ function applyConsolidatorPass(
   // permanently burying the real pass — is fixed at the READ side instead:
   // undoLastConsolidatorPass (below) now searches for the nearest entry that
   // actually HAS transactions, rather than blindly trusting `log[0]`.
-  if (transactions.length === 0 && skipped.length === 0 && tierLayout.length === 0) {
+  // CONVERGENCE 2026-09-06: the lane's condition SUPERSEDES main's — it is
+  // main's own test plus the two inc4 outputs, so a pass that did nothing but
+  // re-plan work still produces a log entry instead of being dropped.
+  if (
+    transactions.length === 0 &&
+    skipped.length === 0 &&
+    tierLayout.length === 0 &&
+    replanLayout.length === 0 &&
+    replanReport === null
+  ) {
     return { state: cur, passLog: null };
   }
   const priorId = (s.consolidatorLog ?? [])[0]?.id ?? 0;
@@ -4829,6 +6140,8 @@ function applyConsolidatorPass(
       transactions,
       skipped,
       ...(tierLayout.length > 0 ? { tierLayout } : {}),
+      ...(replanLayout.length > 0 ? { replanLayout } : {}),
+      ...(replanReport ? { replan: replanReport } : {}),
     },
   };
 }
@@ -5053,6 +6366,9 @@ function undoLastConsolidatorPass(state: SimState): SimState {
     // Remove exactly the entry that was reversed (`undoIndex`), not always
     // index 0 — any skip-only entries logged AHEAD of it (real history,
     // never touched by this undo) are preserved in place.
+    // CONVERGENCE 2026-09-06: main's precise `undoIndex` splice SUPERSEDES the
+    // lane's older `log.slice(1)` — the lane predates the fix that stopped
+    // Undo removing a skip-only entry logged ahead of the reversed pass.
     consolidatorLog: [...log.slice(0, undoIndex), ...log.slice(undoIndex + 1)],
     // F4 FIX: this reversal is now CONSUMED — a second consolidatorUndo
     // press is a no-op until a new pass runs (see the flag's doc comment).
@@ -5212,6 +6528,12 @@ function advance(s: SimState): SimState {
         // increment — a tier-layout-only pass still books its flow-line
         // spend, it simply does not add its own ledger row).
         for (const txn of passLog.tierLayout ?? []) {
+          consolidatorBuildCost += txn.buildCost;
+          consolidatorScrapRecovered += txn.scrapRecovered;
+        }
+        // FEAT-2326609779 inc4: the re-plan's own transactions book through
+        // the identical flow line, for the identical AC-22 reason.
+        for (const txn of passLog.replanLayout ?? []) {
           consolidatorBuildCost += txn.buildCost;
           consolidatorScrapRecovered += txn.scrapRecovered;
         }

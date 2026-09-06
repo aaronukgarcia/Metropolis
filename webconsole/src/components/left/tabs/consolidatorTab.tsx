@@ -384,6 +384,7 @@ export function ConsolidatorTab() {
         {renderOpportunityTable(wholeMapTop, 'No opportunities found anywhere on the map.')}
       </section>
 
+      {renderReplanSection(state)}
       {renderTierAuditSection(state)}
     </div>
   );
@@ -401,6 +402,34 @@ export function ConsolidatorTab() {
  * directly (a plain array, not an O(buildings) computation) — no need for
  * this tab's throttled `frame` snapshot.
  */
+/**
+ * FEAT-2326609779 inc4 (THE RED BOX RE-PLAN): the running job's progress, as
+ * the lead ruling asked for it — "Re-plan: N/M steps, ports K/K". Reads the
+ * newest pass that carried a `replan` block; absent on every pre-inc4 pass
+ * and on any pass where the stage did not run (a month-12 whole-map pass, a
+ * box outside the city, a discarded plan), in which case nothing is rendered
+ * rather than a misleading zero.
+ */
+export function renderReplanSection(state: SimState) {
+  const log = state.consolidatorLog ?? [];
+  const latest = log.find((pass) => pass.replan != null);
+  if (!latest?.replan) return null;
+  const r = latest.replan;
+  return (
+    <section>
+      <h4>Red box re-plan (inc4)</h4>
+      <p className="consolidator-replan">
+        Re-plan: {r.stepsDone}/{r.stepsTotal} steps, ports {r.portsVerified}/{r.portsTotal}
+        {r.converged ? ' — converged' : ''}
+      </p>
+      <p className="consolidator-empty">
+        Box {r.planKey} · {r.tilesDone}/{r.planTiles} plan tiles · {r.executedThisPass} step
+        {r.executedThisPass === 1 ? '' : 's'} this pass (tick {latest.tick}).
+      </p>
+    </section>
+  );
+}
+
 function renderTierAuditSection(state: SimState) {
   const log = state.consolidatorLog ?? [];
   if (log.length === 0) return null;

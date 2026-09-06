@@ -1735,4 +1735,36 @@ export interface ConsolidationPass {
    * pass (AC-13).
    */
   tierLayout?: ConsolidationTransaction[];
+  /**
+   * FEAT-2326609779 inc4 (THE RED BOX RE-PLAN, additive — absent on every
+   * pre-inc4 pass and on any pass where the re-plan stage did nothing):
+   * this pass's re-plan progress for the red box, exactly as
+   * consolidatorReplan.ts's `progressOf` reports it, plus the box position
+   * the job belongs to. Surfaced by the consolidator tab ("Re-plan: N/M
+   * steps, ports K/K") and the debug JSON.
+   */
+  /**
+   * FEAT-2326609779 inc4: the RE-PLAN's own transactions, kept in their own
+   * array rather than folded into `tierLayout`. `tierLayout` carries the inc3
+   * EXTENDER's per-section records, every one of which has a `tierAudit` — a
+   * dozen pre-existing tests (and the consolidator tab) read
+   * `txn.tierAudit.map(...)` off every member unconditionally. A re-plan
+   * transaction has no per-tier audit (it is a whole-box job, not five
+   * per-section tier attempts), so putting it in `tierLayout` would break
+   * that contract. Booked into the SAME 'Consolidation' flow line as every
+   * other transaction kind (AC-22 conservation), just carried separately.
+   */
+  replanLayout?: ConsolidationTransaction[];
+  replan?: {
+    planKey: string;
+    planTiles: number;
+    tilesDone: number;
+    stepsTotal: number;
+    stepsDone: number;
+    portsTotal: number;
+    portsVerified: number;
+    converged: boolean;
+    /** Steps this pass actually executed (0 when the money gates made every next step wait). */
+    executedThisPass: number;
+  };
 }

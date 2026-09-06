@@ -338,6 +338,18 @@ export interface DebugJson {
     consolidatorLayoutBaselineNetIncome: number | null;
     /** BUG-684 FIX (round-6 F1b) — lifetime recurring upkeep the layout stage has committed since the anchor above was set. */
     consolidatorLayoutCumulativeUpkeepDelta: number;
+    /** FEAT-2326609779 inc4 (RED BOX RE-PLAN) — the box position the running re-plan job belongs to ("x0,y0,w,h"), or null when no job is running. */
+    consolidatorReplanPlanKey: string | null;
+    /** FEAT-2326609779 inc4 — re-plan steps executed at that box position. Display/bounding only; see SimState's own doc for why correctness never depends on it. */
+    consolidatorReplanStepCursor: number;
+    /** FEAT-2326609779 inc4 (LEAD RULING "the box dwells") — the tick the red box is pinned to while its re-plan converges, or null when the glide window is free-running. */
+    consolidatorReplanDwellStartTick: number | null;
+    /** FEAT-2326609779 inc4 (ROUND-15) — the glide day the window resumes from after a dwell, one box width on. */
+    consolidatorReplanDwellResumeDay: number | null;
+    /** FEAT-2326609779 inc4 — the glide day the box is pinned to while dwelling (distinct from the dwell's start TICK). */
+    consolidatorReplanPinnedDay: number | null;
+    /** FEAT-2326609779 inc4 (ROUND-16 A) — the RE-PLAN's own lifetime upkeep line, kept strictly separate from the extender's. */
+    consolidatorReplanCumulativeUpkeepDelta: number;
     /** BUG-652 GRANDFATHERING (2026-09-04) — economy schema-version counter; see SimState.economyEpoch's own doc comment. */
     economyEpoch: number;
     /** FEAT-2326609781 (2026-09-04) — Channel Tunnel footprint schema counter; see SimState.tunnelFootprintEpoch's own doc comment. */
@@ -660,6 +672,13 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   // BUG-684 FIX (round-6 F1b, consolidator inc3 layout upkeep budget).
   consolidatorLayoutBaselineNetIncome: 'sim.consolidatorLayoutBaselineNetIncome',
   consolidatorLayoutCumulativeUpkeepDelta: 'sim.consolidatorLayoutCumulativeUpkeepDelta',
+  // FEAT-2326609779 inc4 (RED BOX RE-PLAN).
+  consolidatorReplanPlanKey: 'sim.consolidatorReplanPlanKey',
+  consolidatorReplanStepCursor: 'sim.consolidatorReplanStepCursor',
+  consolidatorReplanDwellStartTick: 'sim.consolidatorReplanDwellStartTick',
+  consolidatorReplanDwellResumeDay: 'sim.consolidatorReplanDwellResumeDay',
+  consolidatorReplanPinnedDay: 'sim.consolidatorReplanPinnedDay',
+  consolidatorReplanCumulativeUpkeepDelta: 'sim.consolidatorReplanCumulativeUpkeepDelta',
   // BUG-652 GRANDFATHERING (2026-09-04).
   economyEpoch: 'sim.economyEpoch',
   // P0 RCA fix (2026-09-04) — per-city lineage identity, see SimState.lineageId's own doc comment.
@@ -1075,6 +1094,14 @@ export function buildDebugJson(
       // like a brand-new city (engine.ts anchors lazily on the next pass).
       consolidatorLayoutBaselineNetIncome: s.consolidatorLayoutBaselineNetIncome ?? null,
       consolidatorLayoutCumulativeUpkeepDelta: s.consolidatorLayoutCumulativeUpkeepDelta ?? 0,
+      // FEAT-2326609779 inc4 (GR#16): absent on every save predating the red
+      // box re-plan, read as "no job running" — never a bare property access.
+      consolidatorReplanPlanKey: s.consolidatorReplanPlanKey ?? null,
+      consolidatorReplanStepCursor: s.consolidatorReplanStepCursor ?? 0,
+      consolidatorReplanDwellStartTick: s.consolidatorReplanDwellStartTick ?? null,
+      consolidatorReplanDwellResumeDay: s.consolidatorReplanDwellResumeDay ?? null,
+      consolidatorReplanPinnedDay: s.consolidatorReplanPinnedDay ?? null,
+      consolidatorReplanCumulativeUpkeepDelta: s.consolidatorReplanCumulativeUpkeepDelta ?? 0,
       // BUG-652 GRANDFATHERING (2026-09-04, GR#16): legacy state predating the
       // field reads epoch 0 — see SimState.economyEpoch's own doc comment.
       economyEpoch: s.economyEpoch ?? 0,

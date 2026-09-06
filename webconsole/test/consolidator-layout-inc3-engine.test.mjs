@@ -155,7 +155,30 @@ describe('FEAT-2326609779 AC-1 — hierarchical placement order + per-tier atomi
     // the mixed outcome this test exists to prove (at least one tier places,
     // at least one fails on money grounds) — a real, non-contrived per-tier
     // economic outcome, not a full wipe-out and not a free ride either.
-    let s = fireFixture({ funds: 10_000_000 });
+    //
+    // INC4 RE-TUNE (FEAT-2326609779 inc4 adjudicator pass, 2026-09-06 — the
+    // BOW thread's six-red adjudication). This pin went red on the inc4 lane
+    // with EVERY tier failing and `sawAnySuccess` false. Two causes, both
+    // measured on this exact fixture with a direct probe:
+    //   1. rail/motorway returned NO candidate at all under the new
+    //      dead-end-spur terminus rule ('tier failed: no space' 44/44) —
+    //      a REAL production regression, fixed in production (the bootstrap +
+    //      collinear-continuation exemption in consolidatorLayout.ts's
+    //      `extendExistingRun`), not retuned away here.
+    //   2. £10,000,000 no longer buys ANYTHING since FEAT-2326609782 priced
+    //      rail at 750,000/tile and m20 at 1,500,000/tile — with the fix in
+    //      place, £10m gives rail/motorway 'capex budget' 10/44 and every
+    //      other tier 'capex budget'/'no space', i.e. a total wipe-out, which
+    //      is precisely the outcome the round-8 comment above says this
+    //      fixture must NOT produce.
+    // Re-measured across £10m/£30m/£100m/£300m/£1bn: £300,000,000 is the
+    // level that restores this test's real subject AND its original stated
+    // intent — rail and motorway each genuinely PLACE (1 section each), while
+    // motorway still fails 'tier failed: capex budget' elsewhere, so the
+    // mixed success/clean-money-failure outcome is real and not contrived.
+    // (£10m/£30m/£100m all place no rail at all; £1bn places everything and
+    // would make the funds-failure half of this test vacuous.)
+    let s = fireFixture({ funds: 300_000_000 });
     s = reducer(s, { type: 'toggleConsolidator' });
     s = advanceToWholeMapBoundary(s);
     const layoutTxns = layoutTxnsOf(s);
@@ -186,7 +209,11 @@ describe('FEAT-2326609779 AC-1 — hierarchical placement order + per-tier atomi
         if (ta.actuallyPlaced) sawAnySuccess = true;
       }
     }
-    assert.ok(sawAnySuccess, 'rail/motorway (free) should still place somewhere');
+    // STALE MESSAGE CORRECTED (inc4 adjudicator pass): rail/motorway have not
+    // been "free" since FEAT-2326609782. The assertion itself is unchanged —
+    // at least one tier must actually place — and at £300m rail and motorway
+    // are among the tiers that do.
+    assert.ok(sawAnySuccess, 'at least one tier (rail/motorway among them at this funds level) should still place somewhere');
     assert.ok(sawAnyFundsFailure, 'at least one costed tier somewhere should have failed on money grounds');
   });
 

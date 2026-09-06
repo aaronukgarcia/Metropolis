@@ -1023,6 +1023,84 @@ export interface SimState {
    *     income — the missing ceiling half of the two-bound contract.
    */
   consolidatorLayoutCumulativeUpkeepDelta?: number;
+
+  /**
+   * FEAT-2326609779 inc4 (THE RED BOX RE-PLAN — Aaron: "the red box needs to
+   * defag and reimmagine everything within it and optimise join"). Which box
+   * POSITION the currently-running re-plan job belongs to, as
+   * `"x0,y0,w,h"` — the glide window's own rectangle. The red box moves one
+   * tile per game day, so this changes constantly by design; the cursor below
+   * resets to 0 whenever it does.
+   *
+   * The job's CORRECTNESS never depends on either field: `planBox` is a pure
+   * function of (box, contents, ports, ladder, seed) and `buildSteps` omits
+   * every step the current contents already satisfy, so the step list SHRINKS
+   * as work lands and the head of it is always the next real thing to do.
+   * That self-cursoring property is what makes a save/load mid-job identical
+   * without persisting the plan itself (which would be a large, redundant,
+   * drift-prone blob). These two fields exist for REPORTING — the
+   * consolidator log, the debug JSON and the consolidator tab's
+   * "Re-plan: N/M steps" line — and for bounding per-tick work. `undefined`
+   * on every save predating inc4, read as "no job running" (engine.ts uses
+   * `?? null` / `?? 0`, never a bare property access — GR#16).
+   */
+  consolidatorReplanPlanKey?: string | null;
+  /** FEAT-2326609779 inc4: how many re-plan steps have been EXECUTED at `consolidatorReplanPlanKey`'s box position. Display/bounding only — see that field's doc for why correctness never depends on it. */
+  consolidatorReplanStepCursor?: number;
+  /**
+   * FEAT-2326609779 inc4, LEAD RULING "THE BOX DWELLS" (2026-09-06): the tick
+   * whose glide window the red box is currently PINNED to, or null/absent when
+   * the window is free-running (the pre-dwell behaviour). While set, the
+   * engine derives the box from THIS tick rather than the live one, so the box
+   * stays put until its re-plan converges — which is the only way the
+   * lines-then-civic step order ever reaches its civic steps (measured: 0
+   * consolidated civics in 900 ticks before this existed). Released on
+   * convergence, on an invariant-failure discard, or after
+   * REPLAN_MAX_DWELL_DAYS (MET-V874), so the scanline can never be pinned
+   * forever. `undefined` on every save predating inc4 — read with `?? null`
+   * (GR#16), never a bare property access.
+   */
+  consolidatorReplanDwellStartTick?: number | null;
+  /**
+   * FEAT-2326609779 inc4, ROUND-15 (5): the glide day the window RESUMES from
+   * once a dwell ends — one box width past the box that just finished, never
+   * the live tick. Without it, a 30-day dwell on a 16-wide box teleported the
+   * window 30 days forward on release, so only 1 column in 31 was ever
+   * re-planned. `undefined`/null means "no dwell has ended yet"; read with
+   * `?? null` (GR#16).
+   */
+  consolidatorReplanDwellResumeDay?: number | null;
+  /**
+   * FEAT-2326609779 inc4, ROUND-16 REJECT (A) — THE RE-PLAN'S OWN LIFETIME
+   * UPKEEP LINE. The re-plan used to add its `upkeepDelta` to the EXTENDER's
+   * `layoutRunningUpkeepDelta`, which finalises into
+   * `consolidatorLayoutCumulativeUpkeepDelta` — the extender's LIFETIME
+   * ceiling for every section on the whole map. One red box laying a rail row
+   * and a motorway column therefore exhausted the extender's lifetime budget
+   * and killed it CITY-WIDE: measured by the round at 'layout paused: lifetime
+   * upkeep ceiling' on 32 of 32 passes, with scatterFixture's extender
+   * transactions falling from 124 (baseline) to 0 (lane).
+   *
+   * The two stages now keep SEPARATE books with the SAME shape: nothing the
+   * re-plan does may move the extender's counters, and vice versa. Cumulative
+   * and persisted, exactly like its extender twin (`+=` at finalize, `-=` on
+   * Undo), so the ceiling is a real bound and not an overwrite.
+   */
+  consolidatorReplanCumulativeUpkeepDelta?: number;
+  /**
+   * FEAT-2326609779 inc4: the GLIDE DAY the red box is pinned to while it
+   * dwells — distinct from `consolidatorReplanDwellStartTick`, which is the
+   * real TICK the dwell began on.
+   *
+   * MY REGRESSION, fixed here (round-15 follow-up): I conflated the two. The
+   * dwell cap is measured in real ticks (`tick - dwellStartTick`), but I set
+   * `dwellStartTick` to the pinned GLIDE DAY, which lags the live tick by
+   * however long previous dwells lasted. `tick - dwellStartTick` therefore
+   * measured elapsed-time-since-that-glide-day, not the age of this dwell, and
+   * sailed past REPLAN_MAX_DWELL_DAYS — the estate's own bound test caught it.
+   * Two fields, two meanings, no arithmetic between them.
+   */
+  consolidatorReplanPinnedDay?: number | null;
 }
 
 /**

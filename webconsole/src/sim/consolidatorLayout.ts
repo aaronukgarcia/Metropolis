@@ -569,20 +569,188 @@ export const TIER_UPKEEP_SHARE: Readonly<Record<TierKind, number>> = {
  * long-enough free run to extend into — the caller then falls back to a
  * fresh `candidateTierPath` exactly as before this fix existed.
  */
+/**
+ * DEAD-END STUB FIX (FEAT-2326609779 inc4 verifier pass, 2026-09-06) —
+ * `homeBox` gates the BOOTSTRAP anchor case only (engine.ts's fresh-stub
+ * call at buildLayoutSectionCtx, which anchors on ANY existing network tile
+ * within the wide `extBox` margin, not just this tier's own tiles). Without
+ * it, a section could bootstrap off a network tile sitting deep in its
+ * LAYOUT_EXTENSION_SEARCH_MARGIN_TILES margin — inside a NEIGHBOURING
+ * section's box that has already converged and released — and lay a whole
+ * MIN_TIER_RUN_TILES+ run entirely inside that neighbour, which never
+ * revisits it: a permanent dead-end stub (measured: box 1,0's (10,6)/(10,5)
+ * rail and box 63,0's (77,3) rail, both minted by a neighbouring section's
+ * bootstrap anchored deep in its margin). `homeBox` is deliberately NOT
+ * threaded into the TRUE-EXTENSION call (engine.ts's other call, continuing
+ * a tier's OWN existing run) — that call legitimately walks OUT of its
+ * anchor's box to join two already-separate networks across a section
+ * boundary (BUG-754 task requirement 2 / round 13), and gating it the same
+ * way regressed that behaviour when tried as a blanket fix (see this
+ * function's git history / the BOW comment trail on FEAT-2326609779).
+ *
+ * When `homeBox` is supplied, a candidate anchor/direction walk is only
+ * accepted when EITHER the anchor tile itself sits inside `homeBox` (a
+ * legitimate "this section already has some of the general network, extend
+ * from it") OR at least `MIN_TIER_RUN_TILES` of the walked run's tiles land
+ * inside `homeBox` (the run is still substantially THIS section's own,
+ * merely poking a short tail into the margin) — anything else is rejected
+ * outright rather than being allowed to win `best`. The same gate is
+ * re-applied to the final (possibly bend-extended) path, since the
+ * right-angle/chamfer bend helpers walk `available` with no box awareness of
+ * their own and could otherwise carry an accepted candidate back out of
+ * `homeBox` again.
+ */
+/**
+ * DEAD-END-SPUR FIX (FEAT-2326609779 inc4 verifier pass, 2026-09-06) —
+ * "a rail or motorway run may only be committed when BOTH ends terminate at
+ * a same-tier tile, a station/port tile, or the city-wide lattice line; a
+ * perpendicular spur off a line that ends in open ground is never laid."
+ * Passed by the caller (engine.ts) ONLY for `tier` 'rail'/'motorway' — every
+ * other tier (dual/aroad/minor) keeps the pre-existing, unconstrained walk
+ * (minor's cul-de-sacs are explicitly allowed). `isValidTerminus` is a
+ * caller-supplied predicate (station tiles + `onCityLattice`) so this module
+ * never needs to import spec/lattice data itself (avoiding a
+ * consolidatorReplan.ts <-> consolidatorLayout.ts import cycle, since
+ * consolidatorReplan.ts already imports FROM this file).
+ */
+export interface RunTerminusRule {
+  readonly tier: TierKind;
+  readonly isValidTerminus: (x: number, y: number) => boolean;
+  /**
+   * BOOTSTRAP + LINE-GROWTH EXEMPTION (FEAT-2326609779 inc4 adjudicator pass,
+   * 2026-09-06 — the six-red adjudication on this item's BOW thread).
+   *
+   * The terminus rule as first written was a CONJUNCTION with no escape: a
+   * rail/motorway run is committed only when its far end is orthogonally
+   * adjacent to an already-standing same-tier tile or a station/port tile.
+   * Measured on the inc3 fixtures (probe, `fireFixture` at £10m, section
+   * 16,0): dual and aroad walk 31- and 34-tile runs out of the very same
+   * anchor set with the very same free-tile board, while rail and motorway
+   * return ZERO — because a run that walks OUT of the network into open
+   * wilderness can never, by construction, have its far end touch anything.
+   * With no rail and no station anywhere in the city, that makes a FIRST
+   * rail/motorway run structurally impossible, and on the dogfood fixture it
+   * froze rail at its pass-1 count (8 -> 8 over six passes) forever: not a
+   * dead-end-stub fix, a total starvation of the tier. Aaron's inc4 ruling
+   * has rail and motorway as CITY-WIDE LINES; a rule that forbids a line
+   * from ever being started or ever being lengthened cannot serve it.
+   *
+   * Two exemptions restore line growth while keeping the defect the rule was
+   * written for (a PERPENDICULAR spur hanging off a line into open ground)
+   * closed:
+   *
+   *  (a) `bootstrap` — set by the caller when the city has NO tile of this
+   *      tier ANYWHERE. The first line of a tier has nothing of its own to
+   *      join by definition; `MIN_TIER_RUN_TILES`, the `homeBox` gate and
+   *      the connectivity anchor still apply, so it is still a real,
+   *      network-anchored line and not a scattered stub.
+   *
+   *  (b) COLLINEAR CONTINUATION (computed inside `extendExistingRun`, needs
+   *      no caller input) — the walk's anchor tile has a same-tier tile
+   *      directly BEHIND it along the walk direction, i.e. the anchor is the
+   *      END of an existing line running the same way and the run makes that
+   *      line LONGER. That is the growth case. A perpendicular spur off the
+   *      middle (or the end) of a line fails it, because the anchor's line
+   *      runs across the walk direction, not along it — which is exactly the
+   *      geometry root-caused on this thread ((10,5)/(10,6) hanging south off
+   *      the horizontal rail line in box 1,0).
+   */
+  readonly bootstrap?: boolean;
+}
+
 export function extendExistingRun(
   existingTier: ReadonlySet<string>,
   available: ReadonlySet<string>,
   box: { x0: number; y0: number; w: number; h: number },
   seed = 0,
+  homeBox?: { x0: number; y0: number; w: number; h: number },
+  terminusRule?: RunTerminusRule,
 ): TileXY[] {
   if (existingTier.size === 0) return [];
+  // DEAD-END-SPUR FIX: only rail/motorway are gated (see doc comment above).
+  const requireTerminus =
+    terminusRule && (terminusRule.tier === 'rail' || terminusRule.tier === 'motorway') && !terminusRule.bootstrap;
+  // BOOTSTRAP + LINE-GROWTH EXEMPTION (b): the anchor is the END of an
+  // existing same-tier line pointing the same way as the walk, so the run
+  // LENGTHENS that line rather than hanging a perpendicular spur off it. See
+  // `RunTerminusRule`'s doc comment for the measurement this restores.
+  const isCollinearContinuation = (anchorX: number, anchorY: number, dx: number, dy: number): boolean =>
+    existingTier.has(`${anchorX - dx},${anchorY - dy}`);
+  const hasValidTerminus = (path: TileXY[]): boolean => {
+    if (!requireTerminus) return true;
+    if (path.length === 0) return false;
+    const inPath = new Set(path.map((p) => `${p.x},${p.y}`));
+    const last = path[path.length - 1];
+    return [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ].some(([dx, dy]) => {
+      const nx = last.x + dx;
+      const ny = last.y + dy;
+      const k = `${nx},${ny}`;
+      if (inPath.has(k)) return false; // the path's own previous tile, not a real terminus
+      if (existingTier.has(k)) return true; // joins another already-standing same-tier tile
+      return !!terminusRule && terminusRule.isValidTerminus(nx, ny); // station/port or city-wide lattice line
+    });
+  };
+  const inHomeBox = (x: number, y: number): boolean =>
+    !homeBox || (x >= homeBox.x0 && x < homeBox.x0 + homeBox.w && y >= homeBox.y0 && y < homeBox.y0 + homeBox.h);
+  const homeBoxTileCount = (path: TileXY[]): number => path.reduce((n, p) => n + (inHomeBox(p.x, p.y) ? 1 : 0), 0);
+  const satisfiesHomeBox = (anchorX: number, anchorY: number, path: TileXY[]): boolean =>
+    !homeBox || inHomeBox(anchorX, anchorY) || homeBoxTileCount(path) >= MIN_TIER_RUN_TILES;
   const DIRS: Array<[number, number]> = [
     [1, 0],
     [-1, 0],
     [0, 1],
     [0, -1],
   ];
+  // RAIL-CLUMP FIX (inc4 round-17 follow-up (b)) — A LINE IS ONE TILE WIDE.
+  // Walking from EVERY existing tile of the tier in every direction, across
+  // repeated passes, could pick a straight run that lands directly parallel
+  // and adjacent to another already-standing same-tier line: pass N extends
+  // rail down column x=10 from the tier's horizontal line at y=0, and pass
+  // N+1 — now that (10,1..6) is itself part of `existingTier` — walks down
+  // from the NEXT horizontal-line tile at (11,0), producing a second column
+  // immediately beside the first (measured: box 1,0's rail rendered as a
+  // 2-wide AREA at x=10-11, not a line — E8's own-tier component/crossing
+  // counts and E2's dead-end assertion both catch this). A tile whose
+  // PERPENDICULAR neighbour (relative to the walk direction) is already an
+  // existing tile of this same tier is adjacent-parallel to a standing line
+  // and is never added to the run — the walk simply stops one tile short,
+  // exactly as it already does at the box edge or a non-free tile.
+  //
+  // FIX (FEAT-2326609779 inc4 verifier pass, 2026-09-06) — a CROSSING is not
+  // a CLUMP. The check above alone flags any perpendicular neighbour that
+  // merely belongs to `existingTier`, including a single tile that is itself
+  // part of a run going the OTHER way (e.g. a short horizontal minor spur off
+  // a residential building sitting one tile beside a north-south walk). That
+  // is a legitimate grade crossing, not a parallel line, but the naive check
+  // stopped the walk dead there anyway — measured as literal HOLES punched in
+  // an otherwise-straight vertical run at every row a perpendicular stub
+  // crossed it (box 1,0's minor column at x=8 broke at y=4 and y=12, the exact
+  // rows the residential access spurs cross it), and the truncated stub ends
+  // either side of the hole are real dead ends (inc4-E2/E8 caught this as a
+  // regression from the clump fix, not fixture drift). A perpendicular
+  // neighbour only counts as "parallel" when IT ALSO continues in the WALK's
+  // own direction — i.e. it has a same-tier tile one step further along
+  // (dx,dy) or back (-dx,-dy) from itself, proving it is part of a line
+  // running alongside the walk, not a lone crossing tile running across it.
+  const perpOf = (dx: number, dy: number): Array<[number, number]> => [
+    [dy, dx],
+    [-dy, -dx],
+  ];
+  const adjacentParallel = (x: number, y: number, dx: number, dy: number): boolean =>
+    perpOf(dx, dy).some(([px, py]) => {
+      const nx = x + px;
+      const ny = y + py;
+      if (!existingTier.has(`${nx},${ny}`)) return false;
+      return existingTier.has(`${nx + dx},${ny + dy}`) || existingTier.has(`${nx - dx},${ny - dy}`);
+    });
   let best: TileXY[] = [];
+  let bestAnchor = { x: 0, y: 0 };
+  let bestCollinear = false;
   for (const key of Array.from(existingTier).sort()) {
     const [xs, ys] = key.split(',');
     const ex = { x: Number(xs), y: Number(ys) };
@@ -595,13 +763,22 @@ export function extendExistingRun(
         cx < box.x0 + box.w &&
         cy >= box.y0 &&
         cy < box.y0 + box.h &&
-        available.has(`${cx},${cy}`)
+        available.has(`${cx},${cy}`) &&
+        !adjacentParallel(cx, cy, dx, dy)
       ) {
         run.push({ x: cx, y: cy });
         cx += dx;
         cy += dy;
       }
-      if (run.length > best.length) best = run;
+      // DEAD-END STUB/SPUR FIX: a candidate that fails the homeBox gate or
+      // (for rail/motorway) the terminus rule is never allowed to win `best`
+      // — see this function's doc comments above.
+      const collinear = isCollinearContinuation(ex.x, ex.y, dx, dy);
+      if (run.length > best.length && satisfiesHomeBox(ex.x, ex.y, run) && (collinear || hasValidTerminus(run))) {
+        best = run;
+        bestAnchor = ex;
+        bestCollinear = collinear;
+      }
     }
   }
   if (best.length === 0) return [];
@@ -623,7 +800,18 @@ export function extendExistingRun(
   const extend = seed % 3 === 1 ? extendWithRightAngleTurn : extendWithChamferedTurn;
   const bent = extend(available, best, seed);
   const finalPath = bent.length > best.length ? bent : best;
-  return finalPath.length >= MIN_TIER_RUN_TILES ? finalPath : [];
+  if (finalPath.length < MIN_TIER_RUN_TILES) return [];
+  // DEAD-END STUB/SPUR FIX: re-check the homeBox gate AND the terminus rule
+  // on the FINAL path — the bend helpers walk `available` with no box or
+  // terminus awareness of their own, so a candidate that passed both gates
+  // as a straight run could otherwise be carried back out of `homeBox`, or
+  // away from a valid terminus, by the added bend.
+  if (!satisfiesHomeBox(bestAnchor.x, bestAnchor.y, finalPath)) return [];
+  // A collinear continuation stays exempt after the bend: the run is still
+  // the same line made longer, and the bend arm is the geometry
+  // `candidateTierPath` already sanctions elsewhere in this file.
+  if (!bestCollinear && !hasValidTerminus(finalPath)) return [];
+  return finalPath;
 }
 
 /**
