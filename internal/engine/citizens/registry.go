@@ -592,29 +592,6 @@ func (c *CitizensAPI) GatherInShardOrder(ids []uint64, correlationID string, fn 
 	}
 }
 
-// GatherCitizensMap is [CitizensAPI.GatherInShardOrder] for a caller that
-// needs random-access lookup by id afterward (BUG-775 round:
-// households.DemandByType combines MULTIPLE members per household, whose
-// ids can land in different shards visited at different times by the
-// sliding window, so it cannot fold a household's profile from inside a
-// single per-id callback -- it must buffer each member's record until the
-// rest of that household's members have also been visited). The returned
-// map holds exactly the ids that resolved to a real citizen (ok == true) --
-// bounded by len(ids), the caller's own necessary working set, never by
-// population size.
-func (c *CitizensAPI) GatherCitizensMap(ids []uint64, correlationID string) map[uint64]Citizen {
-	out := make(map[uint64]Citizen, len(ids))
-	if err := c.checkNotCopied(correlationID, "GatherCitizensMap"); err != nil {
-		return out
-	}
-	c.GatherInShardOrder(ids, correlationID, func(id uint64, cit Citizen, ok bool) {
-		if ok {
-			out[id] = cit
-		}
-	})
-	return out
-}
-
 // loadShardLocked returns the resident shard at index shard, transparently
 // reloading it from c.pages if paging is enabled and the shard has been
 // paged out (cold[shard] == nil), touching its LRU position and running

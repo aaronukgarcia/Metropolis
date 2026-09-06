@@ -44,6 +44,22 @@ type HouseholdsAPI struct {
 
 	mu sync.RWMutex
 
+	// demandMu guards the demand* scratch buffers below: reused ACROSS
+	// DemandByType calls (BUG-775 MET-H307 perf follow-up) so a monthly
+	// demand pass does not rebuild a same-shape member-id slice, member
+	// record slice, and index map from scratch every tick —
+	// slice[:0]/clear(map) keep the underlying storage, so steady-state
+	// calls at a stable population cost close to zero extra allocation
+	// instead of one fresh gather per call. A separate mutex from mu
+	// (rather than piggybacking on it) keeps this purely a read-path
+	// optimisation detail: it never contends with ReportStock/SetCitizens's
+	// write lock, and DemandByType still needs no lock at all when this
+	// buffer is not in play (nil citizens dependency).
+	demandMu            sync.Mutex
+	demandMemberIDs     []uint64
+	demandMemberRecords []citizens.Citizen
+	demandMemberIndex   map[uint64]int
+
 	// self is the SEC-020 copy guard (atomic.Pointer, mirroring
 	// engine.build's BuildAPI.self / engine.world's World.self). It is
 	// stored exactly once, at the end of construction, before the value is
@@ -280,9 +296,38 @@ func (h *HouseholdsAPI) HouseholdProfile(householdID uint64) (HouseholdProfile, 
 	return h.householdProfileFromGathered(householdID, c, nil)
 }
 
+// gatheredMembers is DemandByType's pre-gathered member lookup (BUG-775
+// MET-H307 perf follow-up). It replaces a plain map[uint64]citizens.Citizen:
+// citizens.Citizen is 232 bytes, above the Go runtime's ~128-byte inline
+// threshold, so a map keyed on it stores each value as a heap-boxed
+// indirect cell that gets (re-)allocated on every insert regardless of
+// whether the map itself is reused/cleared across calls (measured: reusing
+// a map[uint64]citizens.Citizen via clear() did NOT reduce alloc_space —
+// pprof still showed ~0.45GB in the insert closure across the profiling
+// run). Storing records in a plain, reused []citizens.Citizen slice (whose
+// backing array IS genuinely reused by append after a [:0] reset) plus a
+// small map[uint64]int index (an int value is far below the inline
+// threshold, so ITS reuse via clear() is real) turns the steady-state cost
+// back into "no new allocation once the buffers are warm".
+type gatheredMembers struct {
+	records []citizens.Citizen
+	index   map[uint64]int
+}
+
+func (g *gatheredMembers) get(id uint64) (citizens.Citizen, bool) {
+	if g == nil {
+		return citizens.Citizen{}, false
+	}
+	i, ok := g.index[id]
+	if !ok {
+		return citizens.Citizen{}, false
+	}
+	return g.records[i], true
+}
+
 // householdProfileFromGathered is HouseholdProfile's shared implementation
 // (BUG-775 round REJECT, opus-round-bug775): DemandByType pre-gathers every
-// member of every requested household via CitizensAPI.GatherCitizensMap
+// member of every requested household via CitizensAPI.GatherInShardOrder
 // (shard-order, budget-bounded) into `gathered` and calls this directly so
 // the per-household fold never re-touches disk; a bare HouseholdProfile
 // call passes gathered == nil and this falls back to a direct per-member
@@ -291,7 +336,7 @@ func (h *HouseholdsAPI) HouseholdProfile(householdID uint64) (HouseholdProfile, 
 // householdID -> ErrUnknownHousehold, a member id that does not resolve
 // (absent from `gathered` when gathered != nil, or CitizenAt ok == false
 // when gathered == nil) -> ErrOrphanedMember.
-func (h *HouseholdsAPI) householdProfileFromGathered(householdID uint64, c *citizens.CitizensAPI, gathered map[uint64]citizens.Citizen) (HouseholdProfile, error) {
+func (h *HouseholdsAPI) householdProfileFromGathered(householdID uint64, c *citizens.CitizensAPI, gathered *gatheredMembers) (HouseholdProfile, error) {
 	if err := h.checkNotCopied("householdProfileFromGathered"); err != nil {
 		return HouseholdProfile{}, err
 	}
@@ -308,7 +353,7 @@ func (h *HouseholdsAPI) householdProfileFromGathered(householdID uint64, c *citi
 		var cit citizens.Citizen
 		var ok bool
 		if gathered != nil {
-			cit, ok = gathered[mid]
+			cit, ok = gathered.get(mid)
 		} else {
 			cit, ok = c.CitizenAt(mid, h.correlationID)
 		}
@@ -420,7 +465,7 @@ func (h *HouseholdsAPI) DemandByType(householdIDs []uint64) (DemandDistribution,
 	// Fix: collect every member id across the requested households (a
 	// household's own Household() lookup is a plain in-memory map read,
 	// never paged, so this collection pass costs nothing on disk), then
-	// read them ALL via CitizensAPI.GatherCitizensMap -- which streams the
+	// read them ALL via CitizensAPI.GatherInShardOrder -- which streams the
 	// read through a shard-order sliding window bounded by the paging
 	// budget internally (the "256-bool shard set" GatherInShardOrder
 	// already tracks), rather than pinning every shard at once. A household
@@ -433,19 +478,47 @@ func (h *HouseholdsAPI) DemandByType(householdIDs []uint64) (DemandDistribution,
 	// c == nil (dependency missing) skips straight to the per-hid loop
 	// below, which surfaces ErrDependencyMissing on its first Household()
 	// call exactly as before this change.
-	var members map[uint64]citizens.Citizen
+	//
+	// BUG-775 MET-H307 perf follow-up: memberIDs/the gatheredMembers
+	// buffers are h's OWN reused scratch storage (demandMemberIDs /
+	// demandMemberRecords / demandMemberIndex), not a fresh slice+map
+	// allocated on every call — see gatheredMembers' doc comment for why a
+	// plain map[uint64]citizens.Citizen did NOT actually get cheaper when
+	// reused (232-byte values force per-insert heap boxing regardless).
+	// demandMu serialises DemandByType callers (AC-14's "safe for
+	// concurrent use" still holds, just no longer lock-free for this one
+	// path) so two overlapping calls can never see a half-built buffer.
+	// gathered is used only for the duration of this call, under the same
+	// lock, so nothing outlives the critical section.
+	var gathered *gatheredMembers
 	if c != nil {
-		var memberIDs []uint64
+		h.demandMu.Lock()
+		defer h.demandMu.Unlock()
+		memberIDs := h.demandMemberIDs[:0]
 		for _, hid := range householdIDs {
 			if hh, ok := c.Household(hid, h.correlationID); ok {
 				memberIDs = append(memberIDs, hh.Members...)
 			}
 		}
-		members = c.GatherCitizensMap(memberIDs, h.correlationID)
+		h.demandMemberIDs = memberIDs
+		if h.demandMemberIndex == nil {
+			h.demandMemberIndex = make(map[uint64]int, len(memberIDs))
+		} else {
+			clear(h.demandMemberIndex)
+		}
+		h.demandMemberRecords = h.demandMemberRecords[:0]
+		c.GatherInShardOrder(memberIDs, h.correlationID, func(id uint64, cit citizens.Citizen, ok bool) {
+			if !ok {
+				return
+			}
+			h.demandMemberRecords = append(h.demandMemberRecords, cit)
+			h.demandMemberIndex[id] = len(h.demandMemberRecords) - 1
+		})
+		gathered = &gatheredMembers{records: h.demandMemberRecords, index: h.demandMemberIndex}
 	}
 	counts := make(map[string]int64, len(h.typologyOrder))
 	for _, hid := range householdIDs {
-		profile, err := h.householdProfileFromGathered(hid, c, members)
+		profile, err := h.householdProfileFromGathered(hid, c, gathered)
 		if err != nil {
 			return DemandDistribution{}, err
 		}
