@@ -23,6 +23,8 @@ import {
   buildingDisplayStates,
   constructionTicks,
   lineUsageOf,
+  lineSegmentsOf,
+  lineSegmentIdByTileOf,
   isLineSpec,
   isRoadSpec,
   isRailSpec,
@@ -591,29 +593,71 @@ export function MapView() {
       ctx.globalAlpha = 1;
     }
 
-    // FEAT-1972079902 rail-inc1: line-saturation overlay. Tints every LINE tile
-    // (road/m20/rail/hs1) by how loaded its line class is. Colour reuses the
-    // BUG-425 surplus-vs-shortfall split: over-capacity → danger red; within
-    // capacity → the "done" green, alpha scaled by saturation so a busy-but-OK
-    // line reads bright green and an idle line reads faint. Pure/deterministic —
-    // derived from lineUsageOf(state), never from Date.now.
+    // FEAT-1972079902 rail-inc1 + FEAT-2326609772 inc3: network-utilisation
+    // overlay. Tints EVERY LINE tile (road/m20/rail/hs1/rd_avenue/junctions/
+    // roundabouts/rd_mwyjunction/rd_railbridge — every isLineSpec tile, the
+    // FULL coverage pre-inc3 had) by how loaded its network is, reusing the
+    // SAME BUG-425 surplus-vs-shortfall colour split the water/power overlays
+    // already use: over-capacity -> danger red; within capacity -> the "done"
+    // green, alpha scaled by saturation so a busy-but-OK stretch reads bright
+    // green and an idle one reads faint. Folded into the EXISTING "Lines"
+    // toggle (Q100162 assumption recorded on FEAT-2326609772: no standalone
+    // toggle, same button group as Water/Power) rather than a new one.
+    //
+    // COVERAGE FIX (round reject #2, 2026-09-06): inc3 originally only
+    // painted tiles inside SEGMENT_LINE_CLASSES (road tiers + rail/hs1),
+    // leaving plain road, rd_avenue, junctions, roundabouts, rd_mwyjunction
+    // and rd_railbridge unpainted (falling through to sat=0 idle-green,
+    // masking a 45x overloaded plain-road city as calm). Every isLineSpec
+    // tile is now tinted: where a segment exists (its own SEGMENT_LINE_CLASSES
+    // run) that segment's saturation/overCapacity is used; every other line
+    // tile — no segment, or a spec outside segment scope — falls back to its
+    // CLASS-level saturation/overCapacity straight off lineUsageOf, which is
+    // exactly the pre-inc3 (pre-segment-decomposition) behaviour this overlay
+    // always had.
+    //
+    // HONESTY NOTE (round reject #3 / Q100163, filed as a separate BOW item):
+    // seg.saturation is apportioned by capacity share, so for every segment
+    // seg.usage/seg.capacity == its class's saturation IDENTICALLY (measured
+    // max delta 5e-5, pure floor-rounding noise) — there is NO per-segment
+    // flow basis yet, so the "own segment" path below is a no-op by
+    // construction: it paints the same colour the class fallback would. This
+    // is NOT a bottleneck-detection feature today. Do not claim otherwise in
+    // comments/tooltips; Q100163 tracks the real per-segment flow basis this
+    // would need before "which stretch is the bottleneck" is actually true.
+    //
+    // READ-ONLY, ZERO NEW COMPUTATION (GR#3): every number painted here comes
+    // straight off lineSegmentsOf(state)/lineSegmentIdByTileOf(state)/
+    // lineUsageOf(state) — pure decomposition already derived in data.ts;
+    // this component does no capacity/usage arithmetic of its own.
+    // Pure/deterministic: no Date.now / Math.random / localStorage (GR#21),
+    // state is never mutated by a toggle.
+    //
+    // BUG-659 viewport-cull constraint (AC-7, non-negotiable): iterates
+    // `visibleBuildings` — the SAME already-culled subset the rest of this
+    // draw pass uses — never a fresh full-city scan.
     if (showLines) {
       const OK = '#3fb950'; // --done (surplus / within capacity)
       const HOT = '#ff7b72'; // --danger (over capacity / shortfall)
-      const satBySpec = new Map<string, { saturation: number; over: boolean }>();
-      for (const lu of lineUsageOf(state)) {
-        satBySpec.set(lu.spec, { saturation: lu.saturation, over: lu.overCapacity });
-      }
-      for (const b of overlaySubsetsOf(state.buildings).lineSpecs) {
+      const segmentIdByTile = lineSegmentIdByTileOf(state);
+      const segmentById = new Map(lineSegmentsOf(state).map((seg) => [seg.segmentId, seg]));
+      const classUsageBySpec = new Map(lineUsageOf(state).map((u) => [u.spec, u]));
+      for (const b of visibleBuildings) {
         const sp = SPECS[b.spec];
-        if (!sp) continue;
-        const info = satBySpec.get(b.spec);
+        if (!sp || !isLineSpec(sp)) continue;
+        const segmentId = segmentIdByTile.get(`${b.x},${b.y}`);
+        const seg = segmentId ? segmentById.get(segmentId) : undefined;
+        // Fallback to the tile's own class usage when it has no segment
+        // (outside SEGMENT_LINE_CLASSES scope, or filtered out upstream) —
+        // restores full pre-inc3 coverage rather than defaulting to idle.
+        const cls = seg ? undefined : classUsageBySpec.get(b.spec);
+        const sat = seg?.saturation ?? cls?.saturation ?? 0;
+        const overCapacity = seg?.overCapacity ?? cls?.overCapacity ?? false;
         const px = geom.ox + b.x * geom.s;
         const py = geom.oy + b.y * geom.s;
         const pw = sp.w * geom.s;
         const ph = sp.h * geom.s;
-        const sat = info?.saturation ?? 0;
-        if (info?.over) {
+        if (overCapacity) {
           ctx.globalAlpha = 0.85;
           ctx.fillStyle = HOT;
         } else {
@@ -1406,7 +1450,7 @@ export function MapView() {
         </button>
         <button
           className={`btn tiny${showLines ? ' active' : ''}`}
-          title="Toggle line-saturation overlay: colours road/rail lines by how loaded they are (green = headroom, red = over capacity)"
+          title="Toggle network-utilisation overlay: colours each road/rail tile by how loaded its network CLASS is (green = headroom, red = over capacity). Per-segment saturation matches the class figure today (Q100163: a per-segment flow basis has not landed yet), so this is class-level loading, not per-stretch bottleneck detection."
           onClick={() => setShowLines((v) => !v)}
         >
           Lines

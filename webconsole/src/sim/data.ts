@@ -3319,7 +3319,28 @@ function fnv1a(str: string): string {
  * 'rail') — never re-derived — so a segment's kind can never disagree with
  * its class's.
  */
-export const lineSegmentsOf: (s: SimState) => LineSegment[] = memoOnState((s) => {
+interface LineSegmentIndex {
+  segments: LineSegment[];
+  tileToSegment: Map<string, string>;
+}
+
+/**
+ * Single-flood SSOT for both segment rows AND the tile->segmentId lookup
+ * (FEAT-2326609772 inc1-3, GR#3 fix post-round-reject). Previously
+ * `lineSegmentsOf` and `lineSegmentIdByTileOf` each ran their OWN independent
+ * 4-adjacency flood over the same bucketing — a duplicated derivation that
+ * had already drifted (the tile-lookup flood carried no capacity<=0 /
+ * missing-class filter, so a filtered-out tile could still resolve to a
+ * segmentId lineSegmentsOf never emitted). This is now the ONLY flood: it
+ * applies the capacity<=0/missing-class filter ONCE while building the
+ * segment rows, and populates tileToSegment from the SAME runs in the SAME
+ * pass — a filtered-out tile is simply never added to tileToSegment (no
+ * separate exclusion rule to keep in sync). `lineSegmentsOf` and
+ * `lineSegmentIdByTileOf` below are thin readers of this one memoised
+ * result. memoOnState like every other derived read-out in this file
+ * (BUG-602 class).
+ */
+export const lineSegmentIndexOf: (s: SimState) => LineSegmentIndex = memoOnState((s) => {
   const classUsage = new Map<string, LineUsage>();
   for (const u of lineUsageOf(s)) classUsage.set(u.spec, u);
 
@@ -3337,7 +3358,8 @@ export const lineSegmentsOf: (s: SimState) => LineSegment[] = memoOnState((s) =>
     m.set(`${b.x},${b.y}`, { x: b.x, y: b.y });
   }
 
-  const out: LineSegment[] = [];
+  const segments: LineSegment[] = [];
+  const tileToSegment = new Map<string, string>();
   // Strict spec-id order for GR#21 hygiene (Map iteration order is insertion
   // order in practice, but nothing downstream should rely on that).
   const specsSorted = [...bySpec.keys()].sort();
@@ -3345,6 +3367,9 @@ export const lineSegmentsOf: (s: SimState) => LineSegment[] = memoOnState((s) =>
     const tileMap = bySpec.get(spec)!;
     const sp = SPECS[spec];
     const cls = classUsage.get(spec);
+    // Capacity<=0 / missing-class filter applied ONCE here — a filtered-out
+    // spec's tiles are simply never visited, so they never enter
+    // tileToSegment either (GR#3: one rule, one place).
     if (!sp || !cls || cls.capacity <= 0) continue;
 
     // Flood-fill 4-adjacent same-spec tiles into contiguous runs — the same
@@ -3398,7 +3423,7 @@ export const lineSegmentsOf: (s: SimState) => LineSegment[] = memoOnState((s) =>
       allocated += usage;
       const saturation = r.capacity > 0 ? Math.min(1, Math.max(0, usage / r.capacity)) : 0;
       const headroom = r.capacity - usage;
-      out.push({
+      segments.push({
         spec,
         kind: cls.kind,
         segmentId: r.segmentId,
@@ -3409,11 +3434,42 @@ export const lineSegmentsOf: (s: SimState) => LineSegment[] = memoOnState((s) =>
         headroom,
         overCapacity: headroom < 0,
       });
+      for (const k of r.runKeys) tileToSegment.set(k, r.segmentId);
     }
   }
-  out.sort((a, b) => (a.segmentId < b.segmentId ? -1 : a.segmentId > b.segmentId ? 1 : 0));
-  return out;
+  segments.sort((a, b) => (a.segmentId < b.segmentId ? -1 : a.segmentId > b.segmentId ? 1 : 0));
+  return { segments, tileToSegment };
 });
+
+/**
+ * Per-segment road/rail usage/capacity/saturation (FEAT-2326609772 inc1+inc2).
+ * One entry per contiguous connected run of same-spec tiles, within
+ * SEGMENT_LINE_CLASSES scope (road tiers inc1, rail/hs1 inc2). Reuses
+ * `lineUsageOf`'s class-level usage as the SSOT and apportions it across a
+ * class's segments by capacity share — the SAME proportional-split idiom
+ * `lineUsageOf` already applies for the hs1/rail commuter split (AC-2).
+ * Integer-exact: Σ segment.usage over one spec's segments === that spec's
+ * LineUsage.usage (floor-per-segment, with the rounding remainder assigned
+ * to the LAST segment in segmentId order — deterministic, mirrors the
+ * hs1/rail "one bucket takes the remainder" rule). `kind` is read straight
+ * off the class's own LineUsage.kind (`data.ts:3223`, isRoad ? 'road' :
+ * 'rail') — never re-derived — so a segment's kind can never disagree with
+ * its class's. Thin reader of `lineSegmentIndexOf` (GR#3: one flood, shared
+ * with `lineSegmentIdByTileOf`).
+ */
+export const lineSegmentsOf: (s: SimState) => LineSegment[] = (s) => lineSegmentIndexOf(s).segments;
+
+/**
+ * FEAT-2326609772 inc3 — tile -> segmentId lookup. `lineSegmentsOf` is keyed
+ * by segmentId (one row per contiguous run), not by tile, so the map overlay
+ * (AC-7) needs a way to resolve "this ON-SCREEN tile" -> "that segment's
+ * saturation/overCapacity" to paint each tile by its OWN segment's colour
+ * rather than its whole class's average. Thin reader of `lineSegmentIndexOf`
+ * (GR#3: one flood, shared with `lineSegmentsOf` — no second grouping rule,
+ * no new capacity/usage arithmetic, read-only).
+ */
+export const lineSegmentIdByTileOf: (s: SimState) => Map<string, string> = (s) =>
+  lineSegmentIndexOf(s).tileToSegment;
 
 /**
  * AC-3 — per-station utilisation (FEAT-2326609772 inc2). "How much is a
