@@ -139,7 +139,28 @@ export const HANDSHAKE_TIMEOUT_CEILING_MS = 30_000;
 export function deriveHandshakeTimeoutMs(buildingCount: number): number {
   const safeCount = Number.isFinite(buildingCount) && buildingCount > 0 ? buildingCount : 0;
   const derived = HANDSHAKE_TIMEOUT_FLOOR_MS + safeCount * HANDSHAKE_TIMEOUT_PER_BUILDING_MS;
-  return Math.min(HANDSHAKE_TIMEOUT_CEILING_MS, derived);
+  // FEAT-2326609790 round follow-up (2026-09-06): rounded to a whole
+  // millisecond. Real ROOT CAUSE, not a map-size test assumption — found
+  // when the "double the land mass" grid resize changed genesis's building
+  // count from 1,855 to 2,591: HANDSHAKE_TIMEOUT_PER_BUILDING_MS=0.4 times
+  // an odd count (2,591) yields a fractional ms (1036.4), so this function
+  // used to hand back a non-integer like 5036.4. That fractional value was
+  // passed straight into `window.setTimeout(cb, 5036.4)` (store.tsx), and
+  // both real browsers and jsdom coerce a timer's delay to an integer per
+  // the WHATWG timers spec BEFORE arming it — so the timer that actually
+  // fires runs at 5036ms, never the 5036.4ms this function claimed. Every
+  // buildingCount up to now happened to be a multiple of 5 (1,855 x 0.4 =
+  // 742.0, exactly), so the float-vs-integer gap was invisible until the
+  // resize produced the first non-multiple-of-5 genesis count — this was a
+  // latent defect in the derivation, not a fluke of one grid size. TRUNCATING
+  // HERE (not at each of the two call sites) makes the function's contract
+  // match what a real timer actually arms, for every input, always:
+  // setTimeout's delay is a WebIDL `long`, so the conversion TRUNCATES (jsdom
+  // measured: 5036.4/5036.8/5036.5 -> 5036, 5037.2 -> 5037). The first cut
+  // used Math.round, which only agrees with the armed timer when the
+  // fraction is < 0.5 (buildingCount mod 5 in {0,1,3}) - the verify round
+  // caught that 40% of counts would have re-opened the exact CI red.
+  return Math.trunc(Math.min(HANDSHAKE_TIMEOUT_CEILING_MS, derived));
 }
 
 /**

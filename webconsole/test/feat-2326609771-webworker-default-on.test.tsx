@@ -137,6 +137,19 @@ describe('FEAT-2326609771: deriveHandshakeTimeoutMs — floor, slope, ceiling', 
     assert.ok(at49k > HANDSHAKE_TIMEOUT_FLOOR_MS, 'a large city must still derive MORE than the bare floor');
   });
 
+  // FEAT-2326609790 verify follow-up (2026-09-06): the derived value must be
+  // exactly what setTimeout ARMS. Its delay is a WebIDL `long`, which
+  // TRUNCATES; a Math.round derivation agrees only when buildingCount mod 5
+  // is in {0,1,3} (fraction < .5) and reds the exact-match spies below the
+  // moment genesis lands on mod 5 in {2,4}. Pin all five residues.
+  test('derived timeout is TRUNCATED to what setTimeout arms, for every buildingCount residue mod 5', () => {
+    for (const n of [2590, 2591, 2592, 2593, 2594]) {
+      const raw = HANDSHAKE_TIMEOUT_FLOOR_MS + n * HANDSHAKE_TIMEOUT_PER_BUILDING_MS;
+      assert.equal(deriveHandshakeTimeoutMs(n), Math.trunc(raw), `buildingCount ${n} (raw ${raw}) must derive the truncated ms, matching the armed timer`);
+      assert.ok(Number.isInteger(deriveHandshakeTimeoutMs(n)), `buildingCount ${n} must derive an integer ms`);
+    }
+  });
+
   test('an astronomically large city is clamped at the ceiling — the timeout itself has BOTH a floor and a ceiling', () => {
     assert.equal(deriveHandshakeTimeoutMs(10_000_000), HANDSHAKE_TIMEOUT_CEILING_MS);
   });

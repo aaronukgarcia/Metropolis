@@ -191,7 +191,25 @@ test('FEAT-2326609763: full employment for a 3M-population city needs materially
   const oldPct = oldTiles / mapTiles;
   const newPct = newTiles / mapTiles;
 
-  assert.ok(oldPct > 0.15, `sanity: the OLD ceiling should need a large fraction of the map (got ${(oldPct * 100).toFixed(1)}%)`);
+  // FEAT-2326609790 (2026-09-05/06, "double the land mass"): this sanity
+  // floor is a FRACTION OF THE MAP, so it moves whenever MAP_W*MAP_H does —
+  // the 624x368 grid (2.01x the original 440x260 area) roughly HALVED
+  // oldPct (18.0% -> 9.0%) even though the ABSOLUTE tile requirement
+  // (oldTiles, ~20,625) never changed. A threshold hardcoded to the old
+  // map's proportions (0.15) is therefore a map-size assumption, not a
+  // property of the towers feature — it would keep drifting toward zero on
+  // every future resize and eventually go permanently vacuous. Re-anchored
+  // to the ORIGINAL 440x260 map area (a fixed historical constant, not the
+  // live MAP_W/MAP_H) so this "the old ceiling was land-constrained on the
+  // map this feature was designed against" fact stays checkable regardless
+  // of how large the CURRENT map is; the "materially less land" and
+  // current-headroom assertions below still use the live MAP_W/MAP_H.
+  const ORIGINAL_MAP_TILES = 440 * 260;
+  const oldPctOfOriginalMap = oldTiles / ORIGINAL_MAP_TILES;
+  assert.ok(
+    oldPctOfOriginalMap > 0.15,
+    `sanity: the OLD ceiling should need a large fraction of the ORIGINAL 440x260 map (got ${(oldPctOfOriginalMap * 100).toFixed(1)}%)`
+  );
   assert.ok(newTiles < oldTiles * 0.5, `new tile requirement (${Math.ceil(newTiles)}) must be materially (>2x) lower than the old requirement (${Math.ceil(oldTiles)})`);
-  assert.ok(newPct < 0.10, `new land budget (${(newPct * 100).toFixed(1)}% of the map) must be a plausible, single-digit-percent fraction`);
+  assert.ok(newPct < 0.10, `new land budget (${(newPct * 100).toFixed(1)}% of the CURRENT ${MAP_W}x${MAP_H} map) must be a plausible, single-digit-percent fraction`);
 });

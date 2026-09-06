@@ -204,11 +204,27 @@ test('SIZE GUARD: ~7k-building city serializes, round-trips, and reports its byt
   const parsed = JSON.parse(text);
   assert.equal(parsed.buildings.list.length, big.buildings.length, 'no building lost at scale');
   // One compact line per building keeps the file linear in the city size, and
-  // a building row is ~100 bytes — 8 MB would mean the compact form regressed
-  // to fully-indented output (~9 lines/building). Consistency checks add ~50 bytes
-  // per building (many checks with terse details), so the bound is now ~5.5 MB.
-  // Structural bound, not a wall-clock one.
-  assert.ok(bytes < 5_500_000, `debug.json at ${big.buildings.length} buildings is ${bytes} bytes — compact form regressed?`);
+  // a building row is ~100 bytes — a fully-indented regression (~9 lines/
+  // building) would blow past this multiple times over. Consistency checks
+  // add ~50 bytes per building (many checks with terse details).
+  //
+  // FEAT-2326609790 (2026-09-05/06, "double the land mass"): this bound used
+  // to be a FIXED 5.5MB, sized for "genesis (~1,810 buildings under the
+  // original 440x260 grid) + 7,000 extra hand-added ~= 8,810 total". The
+  // 624x368 grid's wider m20/rail/hs1 genesis linework raised
+  // initialState().buildings.length to 2,591, so the SAME test now builds
+  // 9,591 total buildings — a bigger, perfectly legitimate city, not a
+  // format regression — and the fixed 5.5MB ceiling (sized for the smaller
+  // old total) went stale. DERIVED instead (GR#15): a per-building byte
+  // ceiling times the ACTUAL building count in THIS run, so the bound
+  // tracks whatever genesis furniture count the current grid produces
+  // rather than a hand-picked total. 700 bytes/building is ~15% headroom
+  // over the measured ~610 bytes/building at the current 624x368 genesis
+  // size (5,852,776 bytes / 9,591 buildings) — still tight enough to catch
+  // a real compact-form regression (~9x more bytes/building) instantly.
+  const BYTES_PER_BUILDING_BOUND = 700;
+  const bound = big.buildings.length * BYTES_PER_BUILDING_BOUND;
+  assert.ok(bytes < bound, `debug.json at ${big.buildings.length} buildings is ${bytes} bytes (${(bytes / big.buildings.length).toFixed(1)} bytes/building) — exceeds the ${BYTES_PER_BUILDING_BOUND} bytes/building bound (${bound} bytes total) — compact form regressed?`);
   console.log(`[size-guard] debug.json at ${big.buildings.length} buildings: ${bytes} bytes (${(bytes / 1024).toFixed(0)} KiB)`);
 });
 

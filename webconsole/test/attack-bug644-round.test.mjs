@@ -37,8 +37,20 @@ test('BUG-644 attack: nextSafeBuildingId is load-bearing — the pre-fix stale n
   // gone by construction) or something else has silently changed the
   // reducer's auto-build id-minting path — either way this test should be
   // re-examined, not deleted.
-  let s = buildScaleFixture({ buildingCount: 2000, targetPopulation: 150_000, settleTicks: 1 });
+  // FEAT-2326609790 (2026-09-05/06, "double the land mass"): the ORIGINAL
+  // 440x260 genesis city had fewer m20/rail/hs1 furniture tiles, so
+  // initialState().nextId sat comfortably below a fixed 2000-building
+  // fixture and the precondition below held by coincidence. The 624x368
+  // grid's wider genesis linework pushed initialState().nextId to 2592 —
+  // ABOVE the old hardcoded 2000 — so the fixed literal went vacuous (the
+  // precondition assert failed before the attack could even fire, a silent
+  // "test never runs its real assertion" failure mode, not a defect in
+  // nextSafeBuildingId itself). Fixed by deriving buildingCount from the
+  // REAL initialState().nextId (GR#15) with headroom, so this attack keeps
+  // firing regardless of how large genesis furniture grows in the future.
   const staleNextId = initialState().nextId;
+  const buildingCount = staleNextId + 500;
+  let s = buildScaleFixture({ buildingCount, targetPopulation: 150_000, settleTicks: 1 });
   const maxExistingId = Math.max(...s.buildings.map((b) => b.id));
   assert.ok(
     staleNextId <= maxExistingId,
