@@ -272,7 +272,34 @@ test('BUG-618: chip shows "Engine: OK" (green) when the tracker is caught up', {
   }
 });
 
-test('BUG-618: chip reflects a REAL backlog fed into engineLagTracker (GR#15 — never a hardcoded number)', { timeout: HARD_DEADLINE_MS }, async () => {
+// BUG-787 (2026-09-05, dated retune note — GR#24/no-checkout-restore
+// discipline, this test is edited in place rather than deleted): this test
+// used to assert the label "Engine: 4 behind" straight off 4 scheduled
+// fires with ZERO completions — i.e. the RAW cumulative backlog count as the
+// display signal. That was the one-way-ratchet class of bug itself: a
+// backlog derived purely from scheduled-vs-completed counters never came
+// down except on settle()/reset(), so Aaron's dogfood city read "Engine: 966
+// behind" forever against a perfectly healthy median tick. The fix replaces
+// the displayed signal with a windowed achieved-vs-demanded RATE (see
+// engineLag.ts's rateClass) — with ZERO completions ever recorded there is
+// no rate data yet, which (matching ratioClass's existing "null reads green,
+// not a false alarm" convention) correctly reads "Engine: OK", not "N
+// behind". This retuned test instead feeds REAL fabricated completion
+// timestamps showing a genuinely slow, SUSTAINED tick rate (not just
+// scheduled fires with no completions) and asserts the new rate-based label
+// and non-green class — the scenario the ratchet was actually meant to
+// detect, expressed honestly.
+//
+// opus-round-bug787 F1 update (2026-09-05): computeAchievedRate's window is
+// now measured relative to the LIVE query time (snapshot()'s own `nowMs`),
+// not self-referentially to the newest stored completion — see engineLag.ts.
+// TopBar's chip queries with a REAL performance.now() reading (nowMs() in
+// TopBar.tsx), so timestamps fed here must be anchored to the REAL clock
+// (like the "stalled" test below already does with
+// `recordFrameGap(4200, performance.now())`) — small fixed numbers like
+// 0/3000/6000 would now fall outside RATE_WINDOW_MS of the real mount-time
+// query and read as no-data (green), which would make this test vacuous.
+test('BUG-618/BUG-787: chip reflects a REAL sustained slow rate fed into engineLagTracker (GR#15 — never a hardcoded number)', { timeout: HARD_DEADLINE_MS }, async () => {
   const dom: any = await installJsdom();
   let root: any = null;
   let act: any = null;
@@ -281,19 +308,27 @@ test('BUG-618: chip reflects a REAL backlog fed into engineLagTracker (GR#15 —
     dom.window.localStorage.removeItem('metropolis.webworker');
     ({ engineLagTracker } = await import('../src/sim/engineLag.ts'));
     engineLagTracker.resetAll();
-    // Feed a real backlog of 4 (scheduled 4, completed 0) BEFORE mount so the
-    // very first render already reflects tracker state, then mount.
-    engineLagTracker.recordTickScheduled();
-    engineLagTracker.recordTickScheduled();
-    engineLagTracker.recordTickScheduled();
-    engineLagTracker.recordTickScheduled();
+    // Demanded rate: 1000ms interval -> 1 t/s. Feed 3 completions spaced
+    // 3000ms apart, anchored to the REAL clock so they land inside
+    // RATE_WINDOW_MS of whatever real nowMs the mounted chip queries with
+    // -> achieved rate ~0.33 t/s, 33% of demanded -> red, well below the
+    // RATE_AMBER_FRACTION (60%) floor.
+    engineLagTracker.setIntervalMs(1000);
+    const base = performance.now();
+    engineLagTracker.recordTickCompleted(base);
+    engineLagTracker.recordTickCompleted(base + 3000);
+    engineLagTracker.recordTickCompleted(base + 6000);
 
     const container = dom.window.document.getElementById('root');
     ({ root, act } = await mountTopBar(container));
 
     const chip = container.querySelector('.engine-lag-chip');
-    assert.match(chip!.textContent || '', /Engine: 4 behind/, 'the label must show the REAL fed backlog count, 4');
-    assert.ok(!chip!.classList.contains('green'), 'a nonzero backlog must not read green');
+    assert.match(
+      chip!.textContent || '',
+      /Engine: 0\.3\/1\.0 t\/s \(33%\)/,
+      'the label must show the REAL fed achieved/demanded rate, not a hardcoded number'
+    );
+    assert.ok(chip!.classList.contains('red'), 'a sustained ~33% achieved rate must not read green');
 
     await act(async () => root.unmount());
     engineLagTracker.resetAll();
@@ -321,7 +356,13 @@ test('BUG-618: chip reflects a REAL backlog fed into engineLagTracker (GR#15 —
   }
 });
 
-test('BUG-618: clicking the chip expands a popover with backlog/tick/interval/stall detail', { timeout: HARD_DEADLINE_MS }, async () => {
+// BUG-787 (2026-09-05, dated retune note): the popover's "Backlog" row was
+// renamed to "Slipped since load" (still the same cumulative
+// scheduled-minus-completed count — see engineLag.ts's `slippedSinceLoad`
+// alias — just honestly labelled as a since-load count rather than a "how
+// behind is the engine right now" figure, which is now the achieved/demanded
+// rate rows added above it). This test is retuned to match the new labels.
+test('BUG-618/BUG-787: clicking the chip expands a popover with rate/tick/interval/stall/slipped detail', { timeout: HARD_DEADLINE_MS }, async () => {
   const dom: any = await installJsdom();
   let root: any = null;
   let act: any = null;
@@ -345,12 +386,14 @@ test('BUG-618: clicking the chip expands a popover with backlog/tick/interval/st
 
     const popover = container.querySelector('.engine-lag-popover');
     assert.ok(popover, 'clicking the chip must open the detail popover');
-    assert.match(popover!.textContent || '', /Backlog/i);
+    assert.match(popover!.textContent || '', /Achieved rate/i);
+    assert.match(popover!.textContent || '', /Demanded rate/i);
     assert.match(popover!.textContent || '', /Last tick/i);
     assert.match(popover!.textContent || '', /250\.0 ms/, 'must show the real fed last-tick duration');
     assert.match(popover!.textContent || '', /Interval/i);
     assert.match(popover!.textContent || '', /1000 ms/, 'must show the real fed interval length');
     assert.match(popover!.textContent || '', /Worst stall/i);
+    assert.match(popover!.textContent || '', /Slipped since load/i, 'BUG-787: the old always-shown "Backlog" figure moves here, honestly relabelled');
 
     // Click again to collapse.
     await act(async () => {

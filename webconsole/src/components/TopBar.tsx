@@ -11,7 +11,7 @@ import { AboutModal } from './About';
 import { FileMenu } from './FileMenu';
 import { ConfigMenu } from './ConfigMenu';
 import { LiveEngineBadge } from './LiveEngineBadge';
-import { engineLagTracker, engineLagClassOf, type EngineLagSnapshot } from '../sim/engineLag';
+import { engineLagTracker, engineLagChipClassOf, engineLagChipLabelOf, type EngineLagSnapshot } from '../sim/engineLag';
 import { webWorkerOffloadEnabled } from '../sim/webWorkerFlag';
 import { getGlobalWorkerQueueTracker } from '../sim/workerQueueDepth';
 import { StaleBuildBanner } from './StaleBuildBanner'; // BUG-564: re-mounted 2026-09-04, see comment at the mount site below
@@ -127,16 +127,22 @@ export function EngineLagChip({ speed }: { speed: number }) {
 
   // F1: paused (speed 0) always reads as honest/green UNLESS a stall is
   // actively being reported — see the component header comment above.
+  //
+  // opus-reround-bug787 (round REJECT #2, "amber dot beside Engine: OK"):
+  // the class and label used to be computed independently inline here — the
+  // label only ever consulted rateClass, so whenever ratioClass (or some
+  // other signal) was what actually drove the dot non-green, the label fell
+  // through to a hardcoded 'Engine: OK' while the dot rendered amber/red.
+  // Fixed structurally, not with another special case: both the dot's class
+  // and the label are now single pure functions in engineLag.ts
+  // (engineLagChipClassOf/engineLagChipLabelOf) that take the exact same
+  // (snapshot, paused) inputs — engineLagChipLabelOf's own final fallback
+  // calls engineLagChipClassOf itself, so the label can never disagree with
+  // the dot by construction. See engineLag.test.mjs for a property-style
+  // test fuzzing many snapshots to prove exactly that invariant.
   const paused = speed === 0;
-  const stalled = snapshot.recentStallMs !== null;
-  const cls = stalled ? 'red' : paused ? 'green' : engineLagClassOf(snapshot);
-  const label = stalled
-    ? `Engine: stalled ${(snapshot.recentStallMs! / 1000).toFixed(1)}s`
-    : paused
-      ? 'Engine: paused'
-      : snapshot.backlog > 0
-        ? `Engine: ${snapshot.backlog} behind`
-        : 'Engine: OK';
+  const cls = engineLagChipClassOf(snapshot, paused);
+  const label = engineLagChipLabelOf(snapshot, paused);
 
   const workerOn = webWorkerOffloadEnabled();
   const workerQueueDepth = workerOn ? getGlobalWorkerQueueTracker().depth() : null;
@@ -156,8 +162,10 @@ export function EngineLagChip({ speed }: { speed: number }) {
       {open && (
         <div className="engine-lag-popover" role="dialog" aria-label="Engine lag detail">
           <dl>
-            <dt>Backlog</dt>
-            <dd>{snapshot.backlog}</dd>
+            <dt>Achieved rate</dt>
+            <dd>{snapshot.achievedRate != null ? `${snapshot.achievedRate.toFixed(1)} t/s` : '—'}</dd>
+            <dt>Demanded rate</dt>
+            <dd>{snapshot.demandedRate != null ? `${snapshot.demandedRate.toFixed(1)} t/s` : '—'}</dd>
             <dt>Last tick</dt>
             <dd>{snapshot.lastTickMs != null ? `${snapshot.lastTickMs.toFixed(1)} ms` : '—'}</dd>
             <dt>Interval</dt>
@@ -166,6 +174,18 @@ export function EngineLagChip({ speed }: { speed: number }) {
             <dd>{snapshot.ratio != null ? `${snapshot.ratio.toFixed(2)}x` : '—'}</dd>
             <dt>Worst stall</dt>
             <dd>{snapshot.worstStallMs > 0 ? `${(snapshot.worstStallMs / 1000).toFixed(1)} s` : 'none'}</dd>
+            {/* BUG-787: the old always-displayed "Backlog" ratchet moves here,
+                honestly labelled as a cumulative count since the last
+                settle()/reset() rather than "how behind is the engine right
+                now" (which is now the achieved/demanded rate above). */}
+            <dt>Slipped since load</dt>
+            <dd>{snapshot.slippedSinceLoad}</dd>
+            {snapshot.deadWorker && (
+              <>
+                <dt>No ticks for</dt>
+                <dd>{snapshot.scheduledSinceLastCompletion} scheduled fires</dd>
+              </>
+            )}
             {workerOn && (
               <>
                 <dt>Worker queue</dt>
