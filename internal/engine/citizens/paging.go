@@ -41,6 +41,16 @@ type PageStore struct {
 	resident map[int]*ColdShard
 	order    []int // LRU order: index 0 = least recently used
 
+	// dirReady (BUG-775) records that dir has already been created by a
+	// prior Store call, so Store's os.MkdirAll -- a real syscall on every
+	// single call, measured at ~36s of a 332s profiled run (~11%) purely
+	// from being re-issued once per shard eviction rather than once ever --
+	// runs at most once per PageStore lifetime. mu-guarded (Store already
+	// holds mu for the write itself); false is the correct zero value, so a
+	// freshly-constructed PageStore behaves exactly as before its first
+	// Store call.
+	dirReady bool
+
 	// self is the SEC-020 copy guard (atomic.Pointer, mirroring
 	// CitizensAPI.self in this package). mu is a sync.Mutex VALUE while
 	// resident (a map) and order (a slice) are reference types a struct
@@ -289,8 +299,11 @@ func (p *PageStore) Store(shard int, s *ColdShard) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := os.MkdirAll(p.dir, 0o755); err != nil {
-		return err
+	if !p.dirReady {
+		if err := os.MkdirAll(p.dir, 0o755); err != nil {
+			return err
+		}
+		p.dirReady = true
 	}
 	if err := os.WriteFile(p.pathFor(shard), buf.Bytes(), 0o644); err != nil {
 		return err

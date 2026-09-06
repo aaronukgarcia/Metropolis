@@ -1,6 +1,8 @@
 package compose
 
 import (
+	"sort"
+
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
@@ -331,14 +333,39 @@ func desiredEmployment(seed, id uint64, age int64, cur citizens.Employment) (cit
 // liveResidentIDs' doc comment for why a migrant/child was previously
 // invisible to this pass regardless of its Employment.State.
 func (st *simState) markEmploymentAndCount(month int64) (employed int, employedPublic int, err error) {
-	for _, id := range st.liveResidentIDs() {
-		cit, ok := st.citizens.CitizenAt(id, st.cid)
-		if !ok {
-			continue // departed — not a corruption, just skip
+	ids := st.liveResidentIDs()
+	// BUG-775 round REJECT (opus-round-bug775, F2 re-measurement): reading
+	// AND writing in a single shard-order pass (rather than a shard-order
+	// gather followed by a SEPARATE id-order apply loop) so a shard is
+	// mutated once while it is still the window's pinned shard, instead of
+	// the write reopening it later via a plain, unbatched shardAt call in
+	// id order (id order bears no relation to det.ShardForEntity, so an
+	// id-ordered write pass re-thrashes exactly the cost the read-side fix
+	// removed -- measured: separate gather+apply passes cost 148s at
+	// 20k/90-tick/budget-32, only ~2.2x better than the pre-fix 332s,
+	// against this single-pass shape's ~40s).
+	//
+	// desiredEmployment's decision depends only on this citizen's own (id,
+	// age, current Employment) — never on any other citizen or on
+	// processing order — and employed/employedPublic are commutative
+	// integer counts, so folding the decision AND the mutation into one
+	// shard-order callback changes NOTHING about the final population state
+	// on the normal (no-error) path. The one place order used to matter is
+	// an early-return on the FIRST ApplyLifeEventCommand failure (GR#21) —
+	// structurally unreachable in production (it fires only for a citizen
+	// id ApplyLifeEventCommand itself cannot resolve, which the gather
+	// above already filtered via ok==false); firstErr below still aborts
+	// FURTHER mutation the instant one occurs and returns exactly the same
+	// wrapped error, it just cannot promise the identical id-ascending
+	// "which ids got mutated before the abort" byte-for-byte should that
+	// unreachable path ever somehow fire.
+	var firstErr error
+	st.citizens.GatherInShardOrder(ids, st.cid, func(id uint64, cit citizens.Citizen, ok bool) {
+		if !ok || firstErr != nil {
+			return // departed, or a prior citizen already aborted this walk
 		}
 		desired, sector := desiredEmployment(st.seed, id, cit.Age(), cit.Employment)
-		cur := cit.Employment.State
-		if desired != cur {
+		if desired != cit.Employment.State {
 			if applyErr := st.citizens.ApplyLifeEventCommand(citizens.LifeEventCommand{
 				CorrelationID: st.cid,
 				Kind:          citizens.LifeEventEmployment,
@@ -346,7 +373,8 @@ func (st *simState) markEmploymentAndCount(month int64) (employed int, employedP
 				Employment:    desired,
 				Sector:        sector,
 			}); applyErr != nil {
-				return employed, employedPublic, errs.Wrap(ErrModuleFailed, st.cid, applyErr, map[string]any{"module": "citizens", "op": "markEmploymentAndCount", "id": id, "month": month})
+				firstErr = errs.Wrap(ErrModuleFailed, st.cid, applyErr, map[string]any{"module": "citizens", "op": "markEmploymentAndCount", "id": id, "month": month})
+				return
 			}
 		}
 		if desired == citizens.EmploymentEmployed {
@@ -355,6 +383,9 @@ func (st *simState) markEmploymentAndCount(month int64) (employed int, employedP
 				employedPublic++
 			}
 		}
+	})
+	if firstErr != nil {
+		return employed, employedPublic, firstErr
 	}
 	return employed, employedPublic, nil
 }
@@ -367,15 +398,14 @@ func (st *simState) markEmploymentAndCount(month int64) (employed int, employedP
 // a tick has already run markEmploymentAndCount for that month).
 func (st *simState) employedResidentCount() int {
 	n := 0
-	for _, id := range st.liveResidentIDs() {
-		cit, ok := st.citizens.CitizenAt(id, st.cid)
-		if !ok {
-			continue
-		}
-		if cit.Employment.State == citizens.EmploymentEmployed {
+	// BUG-775: a pure, order-independent (commutative) integer count -- safe
+	// to fold directly inside the shard-order gather callback, no separate
+	// apply pass needed.
+	st.citizens.GatherInShardOrder(st.liveResidentIDs(), st.cid, func(id uint64, cit citizens.Citizen, ok bool) {
+		if ok && cit.Employment.State == citizens.EmploymentEmployed {
 			n++
 		}
-	}
+	})
 	return n
 }
 
@@ -419,16 +449,24 @@ func (st *simState) monthlyRentForHouseholds(householdIDs []uint64) int64 {
 // BUG-535's "births never happen because Partner stays 0" finding.
 func (st *simState) formResidentHouseholds(month int64) error {
 	ids := st.liveResidentIDs()
+	// BUG-775 round REJECT (opus-round-bug775): gather (which citizens have
+	// Household==0) in shard order via GatherInShardOrder -- each shard
+	// loads at most once, peak residency stays within the paging budget --
+	// then SORT unpaired back into ascending id order before the pairing
+	// pass below, so WHICH TWO citizens get partnered together is byte-
+	// identical to the pre-BUG-775 id-ascending walk (pairing is the one
+	// order-DEPENDENT step here: unlike a simple count, changing which ids
+	// land adjacent in unpaired changes who actually ends up married).
 	unpaired := make([]uint64, 0, len(ids))
-	for _, id := range ids {
-		cit, ok := st.citizens.CitizenAt(id, st.cid)
+	st.citizens.GatherInShardOrder(ids, st.cid, func(id uint64, cit citizens.Citizen, ok bool) {
 		if !ok {
-			continue // departed (death/emigration) — not a corruption, just skip
+			return // departed (death/emigration) — not a corruption, just skip
 		}
 		if cit.Household == 0 {
 			unpaired = append(unpaired, id)
 		}
-	}
+	})
+	sort.Slice(unpaired, func(i, j int) bool { return unpaired[i] < unpaired[j] })
 	for i := 0; i+1 < len(unpaired); i += 2 {
 		if err := st.citizens.ApplyLifeEventCommand(citizens.LifeEventCommand{
 			CorrelationID: st.cid,
@@ -468,19 +506,31 @@ func (st *simState) formResidentHouseholds(month int64) error {
 // Public-sector residents are unaffected by this gate: their wage is paid
 // via PostWages (treasury), a separate leg this ticket does not attack.
 func (st *simState) distributeWagesToResidents(creditPrivateSector bool) error {
-	for _, id := range st.liveResidentIDs() {
-		cit, ok := st.citizens.CitizenAt(id, st.cid)
-		if !ok {
-			continue
+	ids := st.liveResidentIDs()
+	// BUG-775 round REJECT (opus-round-bug775, F2 re-measurement): single
+	// shard-order gather+apply pass, exactly like markEmploymentAndCount's
+	// doc comment above -- this was the single largest contributor in the
+	// profiled paged run (~30% of CitizenAt time), and a SEPARATE id-order
+	// apply pass re-thrashes the write side (measured: 148s vs ~40s at
+	// 20k/90-tick/budget-32). Each citizen's wage credit depends only on
+	// its own (Employment, Wealth), never on another citizen or on
+	// processing order, so folding read+write into one shard-order callback
+	// changes nothing about the final population state on the normal
+	// (no-error) path; see markEmploymentAndCount's doc comment for the one
+	// (structurally unreachable) error-ordering caveat this shares.
+	var firstErr error
+	st.citizens.GatherInShardOrder(ids, st.cid, func(id uint64, cit citizens.Citizen, ok bool) {
+		if !ok || firstErr != nil {
+			return
 		}
 		if cit.Employment.State != citizens.EmploymentEmployed {
-			continue
+			return
 		}
 		if !creditPrivateSector && cit.Employment.Sector != citizens.SectorPublic {
 			// The ledger did not actually pay this citizen's wage this
 			// month (firms' working-capital line rejected the post) —
 			// never credit Wealth for money that was never posted.
-			continue
+			return
 		}
 		newWealth := num.SatAdd(cit.Wealth, monthlyWageNetPerCitizenMicropounds)
 		if err := st.citizens.ApplyLifeEventCommand(citizens.LifeEventCommand{
@@ -489,10 +539,10 @@ func (st *simState) distributeWagesToResidents(creditPrivateSector bool) error {
 			CitizenID:     id,
 			Wealth:        newWealth,
 		}); err != nil {
-			return errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{"module": "citizens", "op": "distributeWagesToResidents"})
+			firstErr = errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{"module": "citizens", "op": "distributeWagesToResidents"})
 		}
-	}
-	return nil
+	})
+	return firstErr
 }
 
 // postConsumptionAndTax is FEAT-1972079927 Q4's monthly household spend and

@@ -273,6 +273,28 @@ func (h *HouseholdsAPI) HouseholdProfile(householdID uint64) (HouseholdProfile, 
 		return HouseholdProfile{}, err
 	}
 	c := h.citizensAPI()
+	// nil gathered map -> householdProfileFromGathered falls back to a
+	// direct c.CitizenAt(mid, ...) per member, exactly this function's
+	// pre-BUG-775 behaviour -- a standalone HouseholdProfile call (no
+	// batch context) has no pre-gathered data to consult.
+	return h.householdProfileFromGathered(householdID, c, nil)
+}
+
+// householdProfileFromGathered is HouseholdProfile's shared implementation
+// (BUG-775 round REJECT, opus-round-bug775): DemandByType pre-gathers every
+// member of every requested household via CitizensAPI.GatherCitizensMap
+// (shard-order, budget-bounded) into `gathered` and calls this directly so
+// the per-household fold never re-touches disk; a bare HouseholdProfile
+// call passes gathered == nil and this falls back to a direct per-member
+// c.CitizenAt call, identical to the pre-BUG-775 code. Error semantics are
+// unchanged either way: c == nil -> ErrDependencyMissing, an unknown
+// householdID -> ErrUnknownHousehold, a member id that does not resolve
+// (absent from `gathered` when gathered != nil, or CitizenAt ok == false
+// when gathered == nil) -> ErrOrphanedMember.
+func (h *HouseholdsAPI) householdProfileFromGathered(householdID uint64, c *citizens.CitizensAPI, gathered map[uint64]citizens.Citizen) (HouseholdProfile, error) {
+	if err := h.checkNotCopied("householdProfileFromGathered"); err != nil {
+		return HouseholdProfile{}, err
+	}
 	if c == nil {
 		return HouseholdProfile{}, errs.New(ErrDependencyMissing, h.correlationID, map[string]any{"dependency": "citizens", "operation": "HouseholdProfile"})
 	}
@@ -283,7 +305,13 @@ func (h *HouseholdsAPI) HouseholdProfile(householdID uint64) (HouseholdProfile, 
 	members := make([]citizens.Citizen, 0, len(hh.Members))
 	var wealth int64
 	for _, mid := range hh.Members {
-		cit, ok := c.CitizenAt(mid, h.correlationID)
+		var cit citizens.Citizen
+		var ok bool
+		if gathered != nil {
+			cit, ok = gathered[mid]
+		} else {
+			cit, ok = c.CitizenAt(mid, h.correlationID)
+		}
 		if !ok {
 			return HouseholdProfile{}, errs.New(ErrOrphanedMember, h.correlationID, map[string]any{
 				"member":    mid,
@@ -380,9 +408,44 @@ func (h *HouseholdsAPI) DemandByType(householdIDs []uint64) (DemandDistribution,
 	if err := h.checkNotCopied("DemandByType"); err != nil {
 		return DemandDistribution{}, err
 	}
+	c := h.citizensAPI()
+	// BUG-775 round REJECT (opus-round-bug775): HouseholdProfile reads
+	// every member of every household one CitizenAt call at a time --
+	// profiled as 34% of a paged run's per-citizen shard-touch cost, the
+	// single largest contributor. The original fix pinned every distinct
+	// shard the flattened member-id set touched for the WHOLE call, which
+	// at a realistic household count pins all 256 shards -- the exact
+	// residency-budget violation the round's attack caught elsewhere.
+	//
+	// Fix: collect every member id across the requested households (a
+	// household's own Household() lookup is a plain in-memory map read,
+	// never paged, so this collection pass costs nothing on disk), then
+	// read them ALL via CitizensAPI.GatherCitizensMap -- which streams the
+	// read through a shard-order sliding window bounded by the paging
+	// budget internally (the "256-bool shard set" GatherInShardOrder
+	// already tracks), rather than pinning every shard at once. A household
+	// can straddle two different shards (its two members need not hash to
+	// the same shard), so the profile computation below is a SEPARATE,
+	// order-independent (map-lookup) fold over the already-gathered
+	// records, once every member is available -- it cannot be done inside
+	// a single per-id callback the way a pure per-citizen count can.
+	//
+	// c == nil (dependency missing) skips straight to the per-hid loop
+	// below, which surfaces ErrDependencyMissing on its first Household()
+	// call exactly as before this change.
+	var members map[uint64]citizens.Citizen
+	if c != nil {
+		var memberIDs []uint64
+		for _, hid := range householdIDs {
+			if hh, ok := c.Household(hid, h.correlationID); ok {
+				memberIDs = append(memberIDs, hh.Members...)
+			}
+		}
+		members = c.GatherCitizensMap(memberIDs, h.correlationID)
+	}
 	counts := make(map[string]int64, len(h.typologyOrder))
 	for _, hid := range householdIDs {
-		profile, err := h.HouseholdProfile(hid)
+		profile, err := h.householdProfileFromGathered(hid, c, members)
 		if err != nil {
 			return DemandDistribution{}, err
 		}

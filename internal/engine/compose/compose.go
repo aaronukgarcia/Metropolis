@@ -2444,6 +2444,17 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "cause": err.Error()})
 			return
 		}
+		// BUG-775 round REJECT (opus-round-bug775): the original outer
+		// PinForBatch here pinned every distinct shard the whole
+		// liveResidentIDs() set touched for the ENTIRE remainder of this
+		// ApplyEffect call -- at a realistic population that pins all 256
+		// shards, well past the configured budget, exactly the defect the
+		// round's TestAttackBug775PinForBatchBlowsResidencyBudget caught.
+		// markEmploymentAndCount and distributeWagesToResidents below now
+		// each stream their own read pass through
+		// CitizensAPI.GatherInShardOrder, which keeps peak residency within
+		// the budget for its own call -- no outer pin spanning both calls
+		// (or the rest of this hook) is needed, or safe, any more.
 		// FEAT-083 de-stub: mark this month's resident employment BEFORE
 		// sizing the wage bill (moneycirc.go's markEmploymentAndCount doc
 		// comment) — the wage bill is employedCount x the real UK gross

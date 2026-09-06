@@ -449,6 +449,172 @@ func (c *CitizensAPI) releaseShard(shard int) {
 	c.evictOverBudgetLocked(-1) // -1: no shard to protect, everything unpinned is fair game
 }
 
+// PinForBatch pins, for the lifetime of the returned unpin function, UP TO
+// maxResidentShards distinct shards det.ShardForEntity resolves ids to,
+// choosing the lowest-numbered such shards (BUG-775 round REJECT,
+// opus-round-bug775): the original implementation pinned EVERY distinct
+// shard an id slice touched, unconditionally -- at a realistic population
+// (2000+ citizens routinely span all/nearly all 256 shards, proved by the
+// round's TestAttackBug775ShardSpanOfAWalk) that pinned the ENTIRE cold
+// store for the whole walk, i.e. disabled paging exactly during the passes
+// it exists to bound (TestAttackBug775PinForBatchBlowsResidencyBudget:
+// residentCount == numColdShards, the unpaged footprint, at budget=32/64).
+// Capping at maxResidentShards makes "actual > budget" structurally
+// unreachable: acquireShard is called at most maxResidentShards times, so
+// residentCount can never exceed it while this pin is held (mirrors
+// evictOverBudgetLocked's own invariant, just enforced by never asking for
+// more pins than the budget rather than by evicting after the fact).
+//
+// PinForBatch alone is NOT the fix for the "one Load per citizen" cost a
+// full-population walk pays at a tight residency -- capped to the budget,
+// it can only ever warm a small head-start window, not the whole walk.
+// [CitizensAPI.GatherInShardOrder] is the real fix for that: it streams the
+// WHOLE id slice through a SLIDING window of at most maxResidentShards
+// pinned shards, visited in ascending shard order, so every shard is loaded
+// at most once for the entire walk while peak residency still never exceeds
+// the budget. compose's per-citizen monthly passes and
+// households.DemandByType now use GatherInShardOrder for their read phase;
+// PinForBatch remains for a caller that genuinely wants a bounded,
+// best-effort prefetch without a full streaming walk (and is exercised
+// directly, at exactly this capped contract, by the round's attack suite).
+//
+// A no-op (zero pagingMu contention, zero acquireShard calls) when paging
+// is disabled (c.pages == nil) or ids is empty.
+//
+// The caller MUST call the returned unpin exactly once (defer it
+// immediately), including on every early-return/error path, so a pin is
+// never leaked -- a leaked pin would permanently exempt that shard from
+// eviction, silently defeating the whole residency budget.
+func (c *CitizensAPI) PinForBatch(ids []uint64) (unpin func()) {
+	if err := c.checkNotCopied("", "PinForBatch"); err != nil {
+		return func() {}
+	}
+	if c.pages == nil || len(ids) == 0 {
+		return func() {}
+	}
+	budget := c.maxResidentShards
+	if budget < 1 {
+		budget = 1
+	}
+	var touched [numColdShards]bool
+	shards := make([]int, 0, min(len(ids), numColdShards, budget))
+	for _, id := range ids {
+		if len(shards) >= budget {
+			break
+		}
+		s := det.ShardForEntity(id)
+		if !touched[s] {
+			touched[s] = true
+			shards = append(shards, s)
+		}
+	}
+	for _, s := range shards {
+		c.acquireShard(s)
+	}
+	return func() {
+		for _, s := range shards {
+			c.releaseShard(s)
+		}
+	}
+}
+
+// GatherInShardOrder streams every id in ids through CitizenAt, visiting
+// shards in ASCENDING shard order and holding a SLIDING WINDOW of at most
+// maxResidentShards pinned shards at any instant -- BUG-775 round REJECT
+// fix (opus-round-bug775): pin a window, deliver every id belonging to the
+// window's newest shard, then release the OLDEST pinned shard before
+// pinning the next one once the window is full. This guarantees (a) peak
+// residency never exceeds the configured budget (each acquireShard is
+// preceded by a releaseShard whenever the window is already at capacity),
+// and (b) every shard the walk touches is loaded from disk AT MOST ONCE for
+// the whole walk (it is visited, front to back, exactly once while it sits
+// in the window), unlike a plain per-citizen shardAt call in id order,
+// which -- since id order bears no relation to
+// det.ShardForEntity -- can evict-and-reload the SAME shard repeatedly
+// across a single walk.
+//
+// fn is invoked once per id, in SHARD order (ids grouped by
+// det.ShardForEntity, shards ascending; ids within one shard's group in the
+// order they appear in the input ids), which is generally NOT ids' own
+// order. A caller whose subsequent side-effecting step is order-sensitive
+// (GR#21 -- e.g. an early-return-on-error loop whose exact stopping point
+// depends on id-ascending order, or a pairing pass where WHICH ids get
+// matched together depends on visitation order) must capture fn's results
+// keyed by id and replay the side effect in the order it actually requires,
+// rather than perform it from inside fn itself. A caller doing a pure,
+// order-independent fold (e.g. a commutative integer count) may fold
+// directly inside fn.
+//
+// A no-op-overhead fast path (paging disabled, or ids empty) just calls fn
+// for every id in ITS OWN original order via a plain CitizenAt loop -- the
+// exact pre-BUG-775, zero-extra-allocation behaviour.
+func (c *CitizensAPI) GatherInShardOrder(ids []uint64, correlationID string, fn func(id uint64, cit Citizen, ok bool)) {
+	if err := c.checkNotCopied(correlationID, "GatherInShardOrder"); err != nil {
+		return
+	}
+	if c.pages == nil || len(ids) == 0 {
+		for _, id := range ids {
+			cit, ok := c.CitizenAt(id, correlationID)
+			fn(id, cit, ok)
+		}
+		return
+	}
+	byShard := make(map[int][]uint64, min(len(ids), numColdShards))
+	shards := make([]int, 0, min(len(ids), numColdShards))
+	for _, id := range ids {
+		s := det.ShardForEntity(id)
+		if _, ok := byShard[s]; !ok {
+			shards = append(shards, s)
+		}
+		byShard[s] = append(byShard[s], id)
+	}
+	sort.Ints(shards)
+
+	budget := c.maxResidentShards
+	if budget < 1 {
+		budget = 1
+	}
+	window := make([]int, 0, budget)
+	for _, s := range shards {
+		if len(window) >= budget {
+			c.releaseShard(window[0])
+			window = window[1:]
+		}
+		c.acquireShard(s)
+		window = append(window, s)
+		for _, id := range byShard[s] {
+			cit, ok := c.CitizenAt(id, correlationID)
+			fn(id, cit, ok)
+		}
+	}
+	for _, s := range window {
+		c.releaseShard(s)
+	}
+}
+
+// GatherCitizensMap is [CitizensAPI.GatherInShardOrder] for a caller that
+// needs random-access lookup by id afterward (BUG-775 round:
+// households.DemandByType combines MULTIPLE members per household, whose
+// ids can land in different shards visited at different times by the
+// sliding window, so it cannot fold a household's profile from inside a
+// single per-id callback -- it must buffer each member's record until the
+// rest of that household's members have also been visited). The returned
+// map holds exactly the ids that resolved to a real citizen (ok == true) --
+// bounded by len(ids), the caller's own necessary working set, never by
+// population size.
+func (c *CitizensAPI) GatherCitizensMap(ids []uint64, correlationID string) map[uint64]Citizen {
+	out := make(map[uint64]Citizen, len(ids))
+	if err := c.checkNotCopied(correlationID, "GatherCitizensMap"); err != nil {
+		return out
+	}
+	c.GatherInShardOrder(ids, correlationID, func(id uint64, cit Citizen, ok bool) {
+		if ok {
+			out[id] = cit
+		}
+	})
+	return out
+}
+
 // loadShardLocked returns the resident shard at index shard, transparently
 // reloading it from c.pages if paging is enabled and the shard has been
 // paged out (cold[shard] == nil), touching its LRU position and running
