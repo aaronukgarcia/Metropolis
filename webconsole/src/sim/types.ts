@@ -198,6 +198,40 @@ export interface MonthlyArrivalsByMode extends ArrivalsByMode {
   tick: number;
 }
 
+/**
+ * BUG-394 (2026-09-05 fix, revised same day per the opus-round-bug394 F4
+ * finding) — the growth-model's per-tick diagnostic terms, so a future
+ * freeze names itself in the debug JSON instead of requiring a repro
+ * script. `attractiveness` is the RAW (uncapped) composite
+ * jobs/wellbeing/coverage/tax/transit/station score (see engine.ts's
+ * `attractivenessOf`) — it can exceed 1 (F2 finding). `marketInflow` is the
+ * population-scaled gross interest BEFORE the attractiveness multiplier and
+ * caps are applied. `inflowRate` (F4: previously a byte-for-byte duplicate
+ * of `attractiveness`, which was a round-reject finding) now carries the
+ * REAL final `grossInflow` — the actual number of movers this tick's growth
+ * block computed BEFORE the effectiveHeadroom cap (moveIns = min(grossInflow,
+ * effectiveHeadroom), see advance()'s growth block). `effectiveHeadroom`/
+ * `capacity` are the same values the growth block itself computed this tick.
+ */
+export interface GrowthDiag {
+  attractiveness: number;
+  marketInflow: number;
+  inflowRate: number;
+  effectiveHeadroom: number;
+  capacity: number;
+  /**
+   * G3 (2026-09-06 re-round finding, semantics corrected 2026-09-06
+   * re-round-3): true iff the FLAT MAX_INFLOW_SHARE_OF_CAPACITY share is
+   * what actually bound this tick's grossInflow — i.e. the progress
+   * guarantee's own floor (minProgress) did NOT need to raise the ceiling
+   * above the flat share, and the pre-cap number exceeded it. False
+   * whenever the guarantee's floor exceeded the flat share (the effective
+   * ceiling that tick was minProgress, not the flat cap), even if
+   * grossInflow was reduced to reach that higher ceiling.
+   */
+  inflowCapped: boolean;
+}
+
 export interface LedgerEntry {
   id: number;
   tick: number;
@@ -605,6 +639,11 @@ export interface SimState {
    * advance() (mirrors `lastDemographics`). Optional for backward tolerance.
    */
   lastArrivalsByMode?: ArrivalsByMode;
+  /**
+   * BUG-394 — the growth model's diagnostic terms from the LAST advance()
+   * (mirrors `lastDemographics`). Optional for backward tolerance.
+   */
+  lastGrowthDiag?: GrowthDiag;
   /**
    * FEAT-1972079923 inc1 (AC-1) — the insolvency band derived from `funds` every
    * tick via fiscal.insolvencyStateForFunds (pure, state-derived, no wall-clock).

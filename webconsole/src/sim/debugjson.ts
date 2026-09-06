@@ -32,6 +32,7 @@ import type {
   DeclineState,
   DemographicFlow,
   FlowItem,
+  GrowthDiag,
   InsolvencyState,
   LedgerEntry,
   LevelUpNotice,
@@ -360,6 +361,12 @@ export interface DebugJson {
     lastTick: DemographicFlow;
     accumThisMonth: DemographicFlow;
     monthlyHistory: MonthlyDemographics[];
+    /**
+     * BUG-394 (2026-09-05 fix) — the growth model's diagnostic terms from the
+     * LAST tick (attractiveness/inflowRate/effectiveHeadroom/capacity), so a
+     * future freeze names itself here instead of requiring a repro script.
+     */
+    growthDiag: GrowthDiag;
   };
   /**
    * FEAT-1972079926 — arrivals-by-mode: the LAST tick's split of moveIns
@@ -618,6 +625,7 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   lastArrivalsByMode: 'arrivalsByMode.lastTick',
   arrivalsByModeAccum: 'arrivalsByMode.accumThisMonth',
   arrivalsByModeHistory: 'arrivalsByMode.monthlyHistory',
+  lastGrowthDiag: 'demographics.growthDiag',
   // FEAT-2326609711 inc1 (AC-1).
   gridImportEnabled: 'sim.gridImportEnabled',
   // FEAT-2326609761 inc1 (AC-1, ASM-1504).
@@ -1093,6 +1101,16 @@ export function buildDebugJson(
       lastTick: s.lastDemographics ?? { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
       accumThisMonth: s.demographicAccum ?? { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
       monthlyHistory: s.demographicHistory ?? [],
+      // BUG-394: legacy/bespoke state predating this field reads as an
+      // honest all-zero diagnostic (mirrors lastDemographics' own default).
+      growthDiag: s.lastGrowthDiag ?? {
+        attractiveness: 0,
+        marketInflow: 0,
+        inflowRate: 0,
+        effectiveHeadroom: 0,
+        capacity: 0,
+        inflowCapped: false,
+      },
     },
     // FEAT-1972079926: arrivals-by-mode split — defaults cover a legacy/bespoke
     // state predating this feature (backward tolerance, mirrors demographics above).

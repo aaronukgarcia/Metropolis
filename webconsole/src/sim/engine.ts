@@ -219,13 +219,120 @@ export const BIRTH_RATE_PER_TICK = 0.0008;
  * increase alone is small and positive — move-flows dominate the trajectory. */
 export const DEATH_RATE_PER_TICK = 0.0005;
 /**
- * Fraction of EFFECTIVE headroom (see `advance()`) that moves in per tick,
- * scaled by the attractiveness factor (tax/transit/demand/station terms —
- * the same shape the old growthFactor used, renamed). Kept numerically equal
- * to the retired POPULATION_GROWTH_RATE (0.15) so the below-capacity growth
- * trajectory stays close to every already-landed scenario test.
+ * BUG-394 (2026-09-05 fix). Gross market interest in moving to the city is
+ * now computed INDEPENDENTLY of housing headroom —
+ * `marketInflow(popBefore) = popBefore * MARKET_INFLOW_RATE_PER_TICK` — and
+ * only THEN capped (by MAX_INFLOW_SHARE_OF_CAPACITY and effectiveHeadroom)
+ * in `advance()`. This replaces the retired `moveIns = min(headroom,
+ * round(headroom * k))` shape, whose multiplier-of-headroom form had a
+ * STABLE fixed point at POSITIVE vacancy whenever k (MOVE_IN_RATE *
+ * attractiveness) was below 1 — the exact mechanism of the
+ * frozen-with-vacant-dwellings bug (see the RCA on BUG-394's BOW item,
+ * 2026-09-05, for the fixed-point algebra). PLACEHOLDER under the
+ * balance-number regime — directional only, pending Aaron's row-by-row
+ * balance pass.
+ *
+ * F1 (2026-09-05 round finding, opus-round-bug394): the FIRST fix of this
+ * formula added a flat `MARKET_INFLOW_FLOOR` households/tick to bootstrap a
+ * brand-new city — but a CONSTANT floor recreates BUG-394's exact defect
+ * shape at a lower population: a fixed inflow gets matched by a
+ * population-PROPORTIONAL moveOutRate at some crossover population, and the
+ * city knife-edges there forever (measured: a jobless 220-population city
+ * sat frozen for 1800+ ticks at 95.6% vacancy). The floor is REMOVED. Growth
+ * from population 0 is now guaranteed instead by the PROGRESS GUARANTEE
+ * below (MIN_PROGRESS_CAPACITY_SHARE) rather than a market-inflow floor.
  */
-export const MOVE_IN_RATE = 1.2;
+export const MARKET_INFLOW_RATE_PER_TICK = 0.02;
+/**
+ * G1 (2026-09-06 re-round finding). The round-2 fix's progress guarantee
+ * had a hard on/off switch at vacancyFraction == MIN_PROGRESS_VACANCY_FRACTION
+ * (0.2) — a CLIFF. Both the zero-jobs city and Aaron's exact reported shape
+ * (dwellings + offices, default taxes, no services) locked at EXACTLY 20.0%
+ * vacancy forever: just above the threshold the guarantee forced progress
+ * down to ~20%, and at/below it the guarantee switched off while the
+ * formula's own (non-guaranteed) natural rate happened to net to ~zero at
+ * that population — a fixed point AT the boundary, the same defect class
+ * BUG-394 exists to eliminate, just relocated to a cliff edge instead of an
+ * arbitrary population.
+ *
+ * Fix: grossInflow is now vacancy-AWARE in its own right — the rate itself
+ * scales up continuously with vacancyFraction via
+ * `(1 + VACANCY_INFLOW_BOOST * vacancyFraction)` — so there is no
+ * discontinuity left for the (now-tapering, see MIN_PROGRESS_VACANCY_FRACTION's
+ * doc comment) guarantee to paper over. PLACEHOLDER, pending Aaron's
+ * row-by-row balance pass.
+ */
+export const VACANCY_INFLOW_BOOST = 3;
+/**
+ * F2 (2026-09-05 round finding). `attractivenessOf()` returns a RAW score
+ * that tax/transit/station multipliers can push above 1 (measured: zero tax
+ * + transit subsidy = 1.16) — uncapped, that fed straight into gross inflow
+ * with only the housing ceiling ever containing it (a 1.16-attractiveness
+ * city grew ~800x/year). `advance()` clamps attractiveness into [0, 1] for
+ * the INFLOW calculation only (growthDiag.attractiveness still reports the
+ * raw, uncapped score for display/diagnosis). PLACEHOLDER, pending Aaron's
+ * balance pass.
+ */
+export const MAX_ATTRACTIVENESS_FOR_INFLOW = 1;
+/**
+ * F2 (2026-09-05 round finding). Per-tick share of housing CAPACITY (not
+ * headroom) used as the FLAT ceiling on gross inflow — 0.5%/tick *
+ * TICKS_PER_MONTH(30) = 15%/month.
+ *
+ * INVARIANT, restated per re-round-3 (2026-09-06): this is NOT an absolute
+ * ceiling on GROSS inflow — G1's progress guarantee (see
+ * MIN_PROGRESS_VACANCY_FRACTION's doc comment) can legitimately raise the
+ * effective per-tick ceiling above this flat share whenever moveOuts
+ * (backfilling departures) alone would exceed it, specifically so the
+ * guarantee is never starved by this cap (G1, P1 — measured gross inflow up
+ * to 19.76% of capacity/month in that regime). What this constant DOES
+ * reliably bound is NET population growth: even at maximal attractiveness,
+ * with the housing ceiling never binding, a city cannot grow by more than
+ * ~15% of its capacity in a month — because the guarantee's excess over the
+ * flat share only ever matches concurrent departures, never adds beyond
+ * them. See F2's test (bug-394-round2-ruling.test.mjs) for the measured
+ * net-vs-gross split. PLACEHOLDER under the balance-number regime, pending
+ * Aaron's row-by-row pass.
+ */
+export const MAX_INFLOW_SHARE_OF_CAPACITY = 0.005;
+/**
+ * F1 (2026-09-05 round finding, strengthened to 1 during the G1 fix on
+ * 2026-09-06 — see MIN_PROGRESS_VACANCY_FRACTION's doc comment for why 0.5
+ * was not enough to reach the G1 test's <5%-vacancy bar). VACANCY PULL: as
+ * a city empties out, departing residents are more likely to stay (fewer
+ * alternatives feel urgent, more room to spread out) — moveOutRate is
+ * damped by `(1 - VACANCY_RETENTION * vacancyFraction)`. At the current
+ * value (1), a fully-vacant city's (vacancyFraction=1) move-out rate is
+ * damped to ZERO and a fully-occupied city's (vacancyFraction=0) is
+ * unchanged — the damping strength scales linearly with vacancy in
+ * between. This removes the KNIFE EDGE where a constant-ish inflow exactly
+ * cancelled a population-proportional outflow at one specific population.
+ * PLACEHOLDER, pending Aaron's row-by-row balance pass.
+ */
+export const VACANCY_RETENTION = 1;
+/**
+ * F1 (2026-09-05 round finding), TAPERED per G1 (2026-09-06 re-round
+ * finding — see VACANCY_INFLOW_BOOST's doc comment for the cliff this
+ * replaces). PROGRESS GUARANTEE: whenever a city has ANY positive
+ * (clamped) attractiveness (> MIN_PROGRESS_ATTRACTIVENESS), gross inflow is
+ * floored at `moveOuts + guaranteeFactor * max(1, round(capacity *
+ * MIN_PROGRESS_CAPACITY_SHARE))` — a city with room and any attractiveness
+ * ALWAYS makes strictly positive net progress, so a jobless/low-
+ * attractiveness city grows SLOWLY instead of ever hitting a frozen fixed
+ * point. `guaranteeFactor` is 1.0 at/above MIN_PROGRESS_VACANCY_FRACTION
+ * (0.2) vacancy, tapers LINEARLY to 0.0 at MIN_PROGRESS_VACANCY_TAPER_FLOOR
+ * (0.01 — tuned down from an initial 0.05 during the G1 fix, so the taper
+ * keeps pushing progress far enough to clear the G1 test's <5%-vacancy bar
+ * before switching off), and is exactly 0 below that — a continuous ramp,
+ * not a switch, so
+ * there is no single population/vacancy value where the guarantee's
+ * presence or absence can itself create a fixed point. PLACEHOLDER, pending
+ * Aaron's row-by-row balance pass.
+ */
+export const MIN_PROGRESS_VACANCY_FRACTION = 0.2;
+export const MIN_PROGRESS_VACANCY_TAPER_FLOOR = 0.01;
+export const MIN_PROGRESS_ATTRACTIVENESS = 0.1;
+export const MIN_PROGRESS_CAPACITY_SHARE = 0.001;
 /** Base fraction of population moving out per tick, before the wellbeing
  * penalty below is applied. Small — most churn at capacity is backfilled. */
 export const MOVE_OUT_BASE_RATE = 0.003;
@@ -381,6 +488,15 @@ export interface ZoneDemand {
 
 const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/**
+ * Fraction of population assumed to be in the workforce — shared by
+ * demandOf()'s jobs-vs-workers residential-demand term and (BUG-394,
+ * 2026-09-05) attractivenessOf()'s jobs-availability term, so the two never
+ * silently drift apart (GR#3 SSOT). PLACEHOLDER under the balance-number
+ * regime, pending Aaron's row-by-row pass.
+ */
+export const WORKFORCE_PARTICIPATION_RATE = 0.55;
+
 export function demandOf(s: SimState): ZoneDemand {
   // BUG-520 (remaining part): an OFFLINE / road-disconnected commercial or
   // industrial building must not accelerate growth demand — countByKindOnline
@@ -389,7 +505,7 @@ export function demandOf(s: SimState): ZoneDemand {
   const t = s.taxRates;
   const avgTax = (t.residential + t.commercial + t.industrial) / 3;
   const jobs = totalJobs(s);
-  const workers = s.population * 0.55;
+  const workers = s.population * WORKFORCE_PARTICIPATION_RATE;
   const base = Math.max(Math.max(jobs, workers), 40);
   const res = ((jobs - workers) / base) * 140 - (avgTax - 10) * 4;
   const popFactor = Math.min(1, s.population / 40);
@@ -402,6 +518,91 @@ export function demandOf(s: SimState): ZoneDemand {
     commercial: Math.round(clampN(com, -100, 100)),
     industrial: Math.round(clampN(ind, -100, 100)),
   };
+}
+
+/**
+ * BUG-394 (2026-09-05 fix, ROUND-REJECTED then RE-FIXED same day per the
+ * opus-round-bug394 F4 finding). The population-growth attractiveness score
+ * used by `advance()`'s growth block. Root cause of the ORIGINAL freeze this
+ * replaces: the retired version multiplied the SAME tax/transit/station
+ * terms by a `demand.residential`-derived factor — but demand.residential is
+ * the ZONING-meter signal (see demandOf above), which the sim actively
+ * drives toward -100 as population grows past job supply. Using it here
+ * meant a growing city suppressed its own attractiveness, converging
+ * attractiveness (and with it move-ins) to near zero well before the
+ * housing stock filled — the "attractiveness == 0" half of the original
+ * two-part freeze (the other half was the headroom-multiplier moveIns shape
+ * fixed in advance(), see MARKET_INFLOW_RATE_PER_TICK's doc comment).
+ *
+ * F4 (round finding): the FIRST replacement folded the jobs term into the
+ * SAME weighted-average civic term as wellbeing/coverage (0.4 of a 0.75
+ * span) — additive, so jobs=0 only shaved the civic term down, nowhere near
+ * enough real damping (measured: a 9.5M jobless city's move-ins fell only
+ * ~8.5%, not a meaningful "no jobs, no reason to move here" signal).
+ * Jobs damping is now MULTIPLICATIVE on the whole score: `A *= 0.5 +
+ * 0.5*jobTerm`, so jobs=0 unconditionally HALVES attractiveness (and with it
+ * gross inflow) regardless of how good wellbeing/coverage/tax/transit are —
+ * a city with dwellings and zero jobs is real, but genuinely half as
+ * attractive as an otherwise-identical city with abundant jobs.
+ *
+ * Returns the RAW (uncapped) score — tax/transit/station multipliers can
+ * push it above 1 (measured: zero tax + transit subsidy = 1.16). This raw
+ * value is what debug.json's growthDiag.attractiveness displays. The
+ * GROWTH-TERM caller (advance()) clamps it into [0, 1] before using it for
+ * inflow — see the F2 finding on MAX_INFLOW_SHARE_OF_CAPACITY's doc comment
+ * for why an uncapped multiplier was itself a P1 (a 1.16-attractiveness city
+ * grew ~800x/year with only the housing ceiling containing it).
+ *
+ * `wbOverall` is passed in rather than recomputed here so `advance()` (which
+ * needs wellbeingOf(s) for the move-out rate too) pays for wellbeingOf(s)
+ * exactly once per tick.
+ */
+export function attractivenessOf(s: SimState, wbOverall: number): number {
+  const t = s.taxRates;
+  const avgTax = (t.residential + t.commercial + t.industrial) / 3;
+  const taxTerm = 1.4 - avgTax / 15;
+  const transitTerm = s.policies.transitSubsidy ? 1.25 : 1;
+
+  const links = stationLinks(s);
+  let stationWeight = 0;
+  for (const b of s.buildings) {
+    if (!links.connectedIds.has(b.id)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'station') stationWeight += sp.id === 'station_ashford' ? 3 : 1;
+  }
+  const stationTerm = 1 + 0.15 * Math.min(stationWeight, 6);
+
+  // Overall wellbeing, 0..1.
+  const wellbeingTerm = clampN(wbOverall, 0, 100) / 100;
+
+  // Average service coverage across every tracked service (GR#3 SSOT —
+  // reuses data.ts's serviceCoverageOf, the same ratios the demand meters
+  // and wellbeingOf's own service parts consume), each row clamped to 0..1
+  // (oversupply beyond "fully covered" doesn't make the city MORE
+  // attractive to move into).
+  const coverageRows = serviceCoverageOf(s);
+  const avgCoverage = coverageRows.length
+    ? coverageRows.reduce((sum, r) => sum + clampN(r.coverage, 0, 1), 0) / coverageRows.length
+    : 1;
+
+  // ⚠ BALANCE-NUMBER PLACEHOLDERS (the 0.5/0.5 weights and the 0.3..1.05
+  // span below) — directional only, pending Aaron's row-by-row pass. The
+  // span is deliberately kept identical to the retired demand-driven term's
+  // [0.3, 1.05] range so the tax/transit/station terms (unchanged) combine
+  // to roughly the same overall magnitude as before jobs damping is applied.
+  const civicTerm = clampN(0.3 + 0.75 * (0.5 * wellbeingTerm + 0.5 * avgCoverage), 0.3, 1.05);
+
+  // F4 (2026-09-05 round finding): job availability — jobs vs workers, 0 (no
+  // jobs at all) .. 1 (jobs at or above 2x the workforce), 0.5 == jobs
+  // roughly match the workforce — now damps the WHOLE score multiplicatively
+  // (jobsMultiplier in [0.5, 1]) instead of being one weighted-average
+  // ingredient of the civic term. jobs=0 always halves attractiveness.
+  const jobs = totalJobs(s);
+  const workers = s.population * WORKFORCE_PARTICIPATION_RATE;
+  const jobTerm = clampN(jobs / Math.max(workers, 1), 0, 2) / 2;
+  const jobsMultiplier = 0.5 + 0.5 * jobTerm;
+
+  return taxTerm * transitTerm * civicTerm * stationTerm * jobsMultiplier;
 }
 
 function starterCity(): SimState['buildings'] {
@@ -531,6 +732,7 @@ function rawState(): SimState {
     demographicAccum: { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
     demographicHistory: [],
     lastDemographics: { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
+    lastGrowthDiag: { attractiveness: 0, marketInflow: 0, inflowRate: 0, effectiveHeadroom: 0, capacity: 0, inflowCapped: false },
     arrivalsByModeAccum: { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 },
     arrivalsByModeHistory: [],
     lastArrivalsByMode: { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 },
@@ -4705,26 +4907,6 @@ function advance(s: SimState): SimState {
   // ceiling's prior semantics exactly (residential kind + isOnline gate) but reads
   // capacityAtTier(sp, b.capacityTier ?? 0) instead of the tier-0 base.
   const capacity = onlineResidentsCapacity(s);
-  const t = s.taxRates;
-  const avgTax = (t.residential + t.commercial + t.industrial) / 3;
-  const demand = demandOf(s);
-  const links = stationLinks(s);
-  let stationWeight = 0;
-  for (const b of s.buildings) {
-    if (!links.connectedIds.has(b.id)) continue;
-    const sp = SPECS[b.spec];
-    if (sp?.kind === 'station') stationWeight += sp.id === 'station_ashford' ? 3 : 1;
-  }
-
-  // FEAT-1972079925 — demographic FLOWS replace the bare converge-to-capacity
-  // rule (BUG-394's frozen-at-capacity city). `attractiveness` reuses the
-  // EXACT shape the retired growthFactor used (tax/transit/demand/station
-  // terms, unchanged) so the below-capacity growth trajectory stays close to
-  // every already-landed scenario test that exercises population growth.
-  const attractiveness =
-    (1.4 - avgTax / 15) * (s.policies.transitSubsidy ? 1.25 : 1) *
-    Math.max(0.3, 0.55 + demand.residential / 200) *
-    (1 + 0.15 * Math.min(stationWeight, 6));
 
   const popBefore = s.population;
   // Wellbeing read on the START-of-tick state (mirrors BUG-419's basis
@@ -4732,42 +4914,166 @@ function advance(s: SimState): SimState {
   // rest of this tick charges against, before the growth update below).
   const wbOverall = wellbeingOf(s).overall;
 
+  // BUG-394 (2026-09-05 fix — see the detailed root-cause + fix note on
+  // attractivenessOf() above): `attractiveness` no longer reads
+  // demand.residential (the ZONING signal the sim drives to -100 as
+  // population grows past job supply — using it here made growth suppress
+  // its own driver). It now reads jobs-vs-workers/wellbeing/service-coverage
+  // instead, keeping the same tax/transit/station terms.
+  const attractiveness = attractivenessOf(s, wbOverall);
+
   let births = 0;
   let deaths = 0;
   let moveIns = 0;
   let moveOuts = 0;
   let population = popBefore;
+  let effectiveHeadroomForDiag = 0;
+  let marketInflowForDiag = 0;
+  let grossInflowForDiag = 0;
+  let inflowCappedForDiag = false;
 
   if (popBefore <= capacity) {
     // ⚠ BALANCE-NUMBER PLACEHOLDERS (BIRTH_RATE_PER_TICK / DEATH_RATE_PER_TICK /
-    // MOVE_IN_RATE / MOVE_OUT_BASE_RATE / WELLBEING_MOVEOUT_FACTOR) — directional
-    // only, pending Aaron's row-by-row balance pass.
+    // MARKET_INFLOW_RATE_PER_TICK / MAX_INFLOW_SHARE_OF_CAPACITY /
+    // VACANCY_RETENTION / MIN_PROGRESS_* / MOVE_OUT_BASE_RATE /
+    // WELLBEING_MOVEOUT_FACTOR) — directional only, pending Aaron's
+    // row-by-row balance pass.
     births = Math.round(popBefore * BIRTH_RATE_PER_TICK);
     deaths = Math.round(popBefore * DEATH_RATE_PER_TICK);
+
+    // Raw (pre-flow) vacancy fraction — used both by the vacancy-pull
+    // move-out damping below and by the progress guarantee further down.
+    const headroom = Math.max(0, capacity - popBefore);
+    const vacancyFraction = capacity > 0 ? headroom / capacity : 0;
+
     // Move-out rate rises as wellbeing falls (state-derived, deterministic —
     // GR#21: no Date/random). At wellbeing 100 the rate is exactly the base.
     // BUG-524 (Q100046 C1) — unemployment reaches move-out THROUGH wbOverall
     // (wellbeingOf's new "Jobs/Employment" part, above) rather than as a
     // second direct term here. See the NO-DOUBLE-COUNT DECISION comment on
     // that part in wellbeingOf for the reasoning.
+    //
+    // F1 (2026-09-05 round finding, VACANCY PULL): as a city empties out,
+    // residents are more likely to stay put — moveOutRate is damped by
+    // (1 - VACANCY_RETENTION * vacancyFraction), killing the KNIFE EDGE
+    // where a roughly-constant inflow exactly cancelled a
+    // population-proportional outflow at one specific population (measured:
+    // a jobless 220-pop city sat frozen 1800+ ticks at 95.6% vacancy under
+    // the pre-round formula).
     const moveOutRate =
-      MOVE_OUT_BASE_RATE * (1 + (WELLBEING_MOVEOUT_FACTOR * (100 - wbOverall)) / 100);
+      MOVE_OUT_BASE_RATE *
+      (1 + (WELLBEING_MOVEOUT_FACTOR * (100 - wbOverall)) / 100) *
+      (1 - VACANCY_RETENTION * vacancyFraction);
     moveOuts = Math.round(popBefore * moveOutRate);
 
-    const headroom = Math.max(0, capacity - popBefore);
-    // Move-ins are bounded by EFFECTIVE headroom: the raw vacancy plus the
-    // space THIS tick's own deaths/move-outs free up. Without the "+deaths+
-    // moveOuts" term a city sitting exactly at capacity would compute
-    // headroom=0 and freeze move-ins at 0 forever — exactly the BUG-394
-    // freeze this feature exists to fix. With it, at-capacity move-ins
-    // backfill departures (churn), while below-capacity headroom still
-    // dominates (fast fill), and the hard capacity ceiling below still caps
-    // the result every tick.
+    // Effective headroom: the raw vacancy plus the space THIS tick's own
+    // deaths/move-outs free up — so a city sitting exactly at capacity still
+    // backfills departures (churn) instead of freezing move-ins at 0.
     const effectiveHeadroom = Math.max(0, headroom + deaths + moveOuts);
-    moveIns = Math.max(
-      0,
-      Math.min(effectiveHeadroom, Math.round(effectiveHeadroom * MOVE_IN_RATE * attractiveness))
-    );
+    effectiveHeadroomForDiag = effectiveHeadroom;
+
+    // BUG-394 THE FIX: vacancy is now a CEILING on move-ins, never a
+    // MULTIPLIER of them. The retired formula was
+    // `moveIns = min(headroom, round(headroom * k))` — whenever the combined
+    // attractiveness factor k was below 1 (the DEFAULT-tax city measured k
+    // ≈ 0.24), that shape has a STABLE fixed point at POSITIVE vacancy: the
+    // multiplier discounts moveIns by a FIXED FRACTION of headroom every
+    // tick, so as headroom shrinks moveIns shrinks in lockstep and never
+    // catches up to deaths+moveOuts — the city locks with homes standing
+    // empty forever (see BUG-394's 2026-09-05 RCA comment for the exact
+    // fixed-point algebra). The fix computes gross market interest
+    // INDEPENDENTLY of headroom (marketInflow, scaled by population and
+    // attractiveness) and only THEN caps it by the space actually available
+    // — so a city with empty homes and positive attractiveness keeps
+    // admitting move-ins at the SAME rate every tick until vacancy runs out,
+    // instead of decaying its own inflow as vacancy shrinks.
+    //
+    // F2 (round finding): attractiveness is clamped into [0,
+    // MAX_ATTRACTIVENESS_FOR_INFLOW] for the inflow calculation ONLY — the
+    // raw (possibly >1) score is what growthDiag.attractiveness reports.
+    //
+    // G1 (2026-09-06 re-round finding — see VACANCY_INFLOW_BOOST's doc
+    // comment): grossInflow is now vacancy-AWARE in its own right — the
+    // rate scales up continuously with vacancyFraction via
+    // `(1 + VACANCY_INFLOW_BOOST * vacancyFraction)` — instead of being a
+    // flat rate that only the (now-removed cliff) progress guarantee used
+    // to compensate for near the 20%-vacancy boundary.
+    const attractivenessForInflow = clampN(attractiveness, 0, MAX_ATTRACTIVENESS_FOR_INFLOW);
+    const marketInflow = popBefore * MARKET_INFLOW_RATE_PER_TICK;
+    marketInflowForDiag = marketInflow;
+    const vacancyBoost = 1 + VACANCY_INFLOW_BOOST * vacancyFraction;
+    let grossInflow = Math.round(marketInflow * attractivenessForInflow * vacancyBoost);
+
+    // F1 (round finding), TAPERED per G1: whenever there is any positive
+    // (clamped) attractiveness, gross inflow is floored so the city ALWAYS
+    // makes strictly positive net progress this tick — a jobless/low-
+    // attractiveness city therefore grows SLOWLY, never freezes at a fixed
+    // point. `guaranteeFactor` ramps LINEARLY from 0 (at/below
+    // MIN_PROGRESS_VACANCY_TAPER_FLOOR vacancy) to 1 (at/above
+    // MIN_PROGRESS_VACANCY_FRACTION vacancy) — a continuous ramp, not the
+    // round-2 on/off switch that created a fixed point exactly at its own
+    // boundary.
+    let minProgress = 0;
+    if (attractivenessForInflow > MIN_PROGRESS_ATTRACTIVENESS) {
+      const guaranteeFactor = clampN(
+        (vacancyFraction - MIN_PROGRESS_VACANCY_TAPER_FLOOR) /
+          (MIN_PROGRESS_VACANCY_FRACTION - MIN_PROGRESS_VACANCY_TAPER_FLOOR),
+        0,
+        1
+      );
+      if (guaranteeFactor > 0) {
+        minProgress = Math.round(
+          moveOuts + guaranteeFactor * Math.max(1, Math.round(capacity * MIN_PROGRESS_CAPACITY_SHARE))
+        );
+        grossInflow = Math.max(grossInflow, minProgress);
+      }
+    }
+
+    // G3 (2026-09-06 re-round finding, REVISED after G1): the round-2 code
+    // applied the progress guarantee's max() AFTER the MAX_INFLOW_SHARE_OF_
+    // CAPACITY cap, so the guarantee could (and in 394/720 measured ticks,
+    // did) push grossInflow back ABOVE the cap by up to 16%. The cap is now
+    // applied LAST — guarantee, THEN cap.
+    //
+    // G1 FOLLOW-UP (discovered while proving G1's own fix): applying the
+    // FLAT capacity-share cap unconditionally after the guarantee recreates
+    // BUG-394's exact defect shape at a THIRD location — a low-wellbeing
+    // city's undamped move-out rate (up to ~0.75%/tick at wb≈15) can itself
+    // exceed the flat 0.5%/tick cap once vacancy is low enough that the
+    // vacancy-retention damping has little left to give (VACANCY_RETENTION's
+    // benefit is proportional to vacancyFraction, so it vanishes as
+    // vacancy→0 BY DESIGN). A flat cap below moveOuts is a hard ceiling that
+    // makes the guarantee's own progress mathematically unreachable — not a
+    // "guarantee vs excess-rate" conflict (which the cap SHOULD win), but
+    // the cap actively preventing the guarantee from ever doing its one job.
+    // The cap therefore never drops below `minProgress` — the SAME "backfill
+    // is always allowed" principle effectiveHeadroom already applies to
+    // deaths/moveOuts above. It still fully bounds the NATURAL/vacancy-
+    // boosted rate term whenever that alone would exceed the flat share
+    // (this is what F2's max-attractiveness/high-wellbeing measurement
+    // exercises — moveOuts there is tiny, so minProgress never raises the
+    // effective cap above the flat share).
+    //
+    // re-round-3 finding (2026-09-06): growthDiag.inflowCapped was
+    // previously set from `preCapGrossInflow > flatCap`, which is true
+    // whenever the PRE-cap number merely exceeded the flat share — even on
+    // ticks where the guarantee's own floor (minProgress) was what actually
+    // set the ceiling (hardCap > flatCap), i.e. the flat cap was NOT the
+    // thing constraining the tick (measured: true on 260/600 such ticks).
+    // The flag now means exactly one thing: "the FLAT share cap is what
+    // bound this tick's grossInflow" — true only when hardCap resolved to
+    // flatCap (minProgress did not need to raise the ceiling) AND the
+    // pre-cap number exceeded it; false whenever the guarantee's floor
+    // exceeded the flat share (hardCap > flatCap), regardless of whether
+    // grossInflow was reduced to reach that (higher) ceiling.
+    const preCapGrossInflow = grossInflow;
+    const flatCap = Math.round(capacity * MAX_INFLOW_SHARE_OF_CAPACITY);
+    const hardCap = Math.max(flatCap, minProgress);
+    grossInflow = Math.min(grossInflow, hardCap);
+    grossInflowForDiag = grossInflow;
+    inflowCappedForDiag = hardCap === flatCap && preCapGrossInflow > flatCap;
+
+    moveIns = Math.max(0, Math.min(effectiveHeadroom, grossInflow));
 
     population = Math.max(0, Math.min(capacity, popBefore + births + moveIns - deaths - moveOuts));
   } else {
@@ -5231,6 +5537,22 @@ function advance(s: SimState): SimState {
     history: [...s.history, { tick, funds, income, expense: expenseFinal, population }].slice(-HISTORY_CAP),
     // FEAT-1972079925: per-tick demographic flows + the monthly aggregate ring.
     lastDemographics: demographics,
+    // BUG-394 — growth-model diagnostics from THIS tick (mirrors lastDemographics)
+    // so a future freeze names itself in the debug JSON.
+    lastGrowthDiag: {
+      attractiveness,
+      marketInflow: marketInflowForDiag,
+      // F4 (round finding): inflowRate previously duplicated `attractiveness`
+      // byte-for-byte. It now carries the REAL grossInflow this tick's
+      // growth block computed (before the effectiveHeadroom cap).
+      inflowRate: grossInflowForDiag,
+      effectiveHeadroom: effectiveHeadroomForDiag,
+      capacity,
+      // G3 (2026-09-06 re-round finding): true when the MAX_INFLOW_SHARE_OF_
+      // CAPACITY cap reduced grossInflow below what the progress guarantee
+      // (or the raw rate) would otherwise have produced this tick.
+      inflowCapped: inflowCappedForDiag,
+    },
     demographicAccum: nextDemographicAccum,
     demographicHistory,
     // FEAT-1972079926: per-tick arrivals-by-mode split + the monthly aggregate ring.
