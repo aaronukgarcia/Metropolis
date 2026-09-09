@@ -554,6 +554,78 @@
       "symbol": "dBA",
       "dimension": "noise",
       "note": "Noise level — airport noiseLevelDBA, mining blight noiseRadius dBA."
+    },
+    {
+      "key": "count.person-trip-day",
+      "name": "person-trips per day",
+      "symbol": "trips/day",
+      "dimension": "count",
+      "definedAt": "data/traffic/scale_ladder.json:45",
+      "note": "FEAT-2326609792 inc0: one-way journeys by one person per simulated day (dailyPersonTrips, tripsByMode, trip_generation.json rates). Ladder values interpolate log-linearly in population (inc1)."
+    },
+    {
+      "key": "count.person-per-km2",
+      "name": "persons per square kilometre",
+      "symbol": "p/km²",
+      "dimension": "count",
+      "definedAt": "data/traffic/scale_ladder.json:40",
+      "note": "FEAT-2326609792 inc0: residential density band key for mode_share_by_density.json (densityPersonsPerKm2)."
+    },
+    {
+      "key": "length.vehicle-km-day",
+      "name": "vehicle-kilometres per day",
+      "symbol": "veh·km/day",
+      "dimension": "length",
+      "definedAt": "data/traffic/scale_ladder.json:80",
+      "note": "FEAT-2326609792 inc0: network vehicle-kilometres travelled per simulated day (networkVehicleKmPerDay); drives fuel, EV kWh and road-wear rows."
+    },
+    {
+      "key": "count.pcu-lane-hour",
+      "name": "passenger-car units per lane per hour",
+      "symbol": "pcu/ln/h",
+      "dimension": "count",
+      "definedAt": "data/traffic/link_capacity.json:6",
+      "note": "FEAT-2326609792 inc0: HCM link-capacity convention keyed to data/roads.json class ids; data/traffic.json capacityPerLanePerHour is the engine.traffic BPR default in the same unit."
+    },
+    {
+      "key": "count.train-hour",
+      "name": "trains per hour",
+      "symbol": "tph",
+      "dimension": "count",
+      "definedAt": "data/traffic/link_capacity.json:7",
+      "note": "FEAT-2326609792 inc0: scheduled trains per hour per direction on a rail/tram/metro/HS class."
+    },
+    {
+      "key": "ratio.esal-100-vehicle-km",
+      "name": "equivalent single-axle loads per 100 vehicle-km",
+      "symbol": "ESAL/100veh·km",
+      "dimension": "ratio",
+      "definedAt": "data/traffic/road_wear.json:7",
+      "note": "FEAT-2326609792 inc0: AASHTO 4th-power axle-load law expressed as an internal wear ratio (car = 1); see traffic-assumptions.md A-12 / ASM-1491 — a ratio, not a calibrated pavement-life figure."
+    },
+    {
+      "key": "count.parking-space",
+      "name": "parking spaces",
+      "symbol": "spaces",
+      "dimension": "count",
+      "definedAt": "data/traffic/parking.json:7",
+      "note": "FEAT-2326609792 inc0: kerb + off-street spaces demanded/supplied (parkingSpacesDemanded)."
+    },
+    {
+      "key": "count.ev-charge-point",
+      "name": "EV charge points",
+      "symbol": "chargers",
+      "dimension": "count",
+      "definedAt": "data/traffic/scale_ladder.json:98",
+      "note": "FEAT-2326609792 inc0: public charge points needed (evChargePointsNeeded); ratio per EV from data/fuel.json era curve."
+    },
+    {
+      "key": "count.incident-1000-pop-day",
+      "name": "emergency incidents per 1,000 population per day",
+      "symbol": "inc/1k/day",
+      "dimension": "count",
+      "definedAt": "data/traffic/emergency_response.json:6",
+      "note": "FEAT-2326609792 inc0: dispatched fire/ambulance/police incidents per 1,000 residents per simulated day."
     }
   ],
   "moduleCount": 172,

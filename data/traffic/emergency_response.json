@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609792",
+    "increment": 0,
+    "comment": "engine.traffic (planned MOD) inc0 table (f): emergency response time targets, speed-vs-v/c degradation factor, and incident rates by service. Feeds inc4 (isochrone coverage) and the wellbeing coupling (inc5).",
+    "unitsConvention": "targetMinutes = minutes from dispatch to arrival; incidentsPer1000PopulationPerDay = dispatched-incident count per 1,000 population per day; speedReductionFactor is a dimensionless multiplier applied to free-flow emergency-vehicle speed as a function of the road's v/c ratio (emergency vehicles are NOT immune to congestion, though they partially bypass it via priority/lane-splitting)."
+  },
+  "services": [
+    {
+      "service": "ambulance",
+      "targetMinutesUrban": 8,
+      "targetMinutesRural": 15,
+      "note": "Category 1/2 life-threatening call response target. UK NHS Ambulance Response Programme: Category 1 mean 7 min / 90th centile 15 min nationally; this schema uses a simplified single urban/rural target pending a future percentile-band increment.",
+      "source": "NHS England Ambulance Response Programme (ARP) standards",
+      "year": 2026,
+      "confidence": "measured",
+      "confidenceNote": "The NHS category targets are a measured, published national standard; the urban/rural SPLIT applied here (8/15) is this schema's own simplification of the finer NHS percentile structure."
+    },
+    {
+      "service": "fire",
+      "targetMinutesUrban": 8,
+      "targetMinutesRural": 15,
+      "note": "UK Fire and Rescue Services do not have one single national statutory response target (each Fire & Rescue Authority sets its own Integrated Risk Management Plan target) -- 8/15 min urban/rural mirrors the commonly-published first-appliance attendance target used by multiple UK FRAs (e.g. London Fire Brigade's first-attendance target) as a mapping sanity-check, not a single official national figure.",
+      "source": "UK Fire & Rescue Service published first-attendance targets (multiple FRA IRMPs), order-of-magnitude cross-check",
+      "year": 2026,
+      "confidence": "derived",
+      "confidenceNote": "No single UK-wide statutory figure exists; this is a derived cross-FRA order-of-magnitude, not one measured national standard."
+    },
+    {
+      "service": "police",
+      "targetMinutesUrban": 8,
+      "targetMinutesRural": 20,
+      "note": "Immediate/Grade 1 response target used by several UK police forces (varies by force); directional placeholder.",
+      "source": "UK police force published Grade 1/immediate response targets, order-of-magnitude cross-check",
+      "year": 2026,
+      "confidence": "derived"
+    }
+  ],
+  "incidentRates": {
+    "ambulance": { "incidentsPer1000PopulationPerDay": 0.55, "source": "derived approximation, cross-checked against NHS England ambulance incident volume statistics (~10,000-11,000 daily incidents per million population order-of-magnitude nationally)", "year": 2026, "confidence": "derived" },
+    "fire":      { "incidentsPer1000PopulationPerDay": 0.15, "source": "derived approximation, cross-checked against Home Office Fire & Rescue incident statistics", "year": 2026, "confidence": "derived" },
+    "police":    { "incidentsPer1000PopulationPerDay": 0.20, "source": "derived approximation, cross-checked against ONS/Home Office recorded-crime and incident-response order-of-magnitude", "year": 2026, "confidence": "derived" },
+    "combinedTotalPer1000PerDay": { "value": 0.90, "note": "Sum of the three services above; this is the figure scale_ladder.json's emergencyIncidentsPerDay is derived from." }
+  },
+  "speedDegradation": {
+    "$comment": "Emergency vehicles partially bypass congestion (priority signals, lane-splitting/hard-shoulder, oncoming-lane use) but are not immune, especially at high v/c and on narrow single-lane classes without an escape lane.",
+    "curve": [
+      { "vOverC": 0.0, "speedFactor": 1.00 },
+      { "vOverC": 0.5, "speedFactor": 0.95 },
+      { "vOverC": 0.75, "speedFactor": 0.85, "note": "matches the existing webconsole 0.75 saturation threshold (FEAT-2326609772/data.ts CONGESTION_CONSTANTS) as the point where emergency response first meaningfully degrades" },
+      { "vOverC": 0.9, "speedFactor": 0.65 },
+      { "vOverC": 1.0, "speedFactor": 0.45 },
+      { "vOverC": 1.25, "speedFactor": 0.25, "note": "gridlock; even priority bypass mostly fails" }
+    ],
+    "narrowClassPenalty": { "roadClassIds": ["alley", "gravel", "residential_street"], "additionalSpeedFactorMultiplier": 0.85, "note": "single-lane/narrow classes offer no bypass lane for priority vehicles to use, applied on top of the vOverC curve", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "interpolationRule": "Piecewise-linear interpolation between the listed vOverC anchor points; clamp to the curve's endpoints outside [0.0, 1.25]."
+  },
+  "provenance": {
+    "source": "NHS England ARP, UK Fire & Rescue Service IRMP first-attendance targets, UK police Grade 1 response targets, Home Office/ONS incident-rate statistics",
+    "year": 2026,
+    "confidence": "derived",
+    "note": "Targets carry measured provenance (published national/force standards); incident rates and the speed-degradation curve are derived approximations pending Aaron's balance pass."
+  }
+}

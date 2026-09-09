@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609792",
+    "increment": 0,
+    "comment": "engine.traffic (planned MOD) inc0 table (i): per-vehicle ESAL (Equivalent Single-Axle Load) factors from the AASHTO 4th-power axle-load law, plus the wear-accrual-to-repair-cost curve and repair trigger thresholds. This file is the sole OWNER of ESAL factors (referenced by scale_ladder.json's roadWearESALPerDay derivation and by vehicle_classes.json rows, never restated elsewhere -- GR#3).",
+    "unitsConvention": "esalFactor is dimensionless (equivalent standard 80kN/18,000lb single-axle-load passes per vehicle-km, AASHTO convention, normalised here so car=1 axle-load-equivalent per 100 vehicle-km -- see esalFactorBasis below for the exact normalisation); conditionIndex is 0(failed)-100(new) matching data/roads.json's implicit maintenance.conditionDecayPerMonth scale (referenced, not restated); repairCostMultiplier is dimensionless, applied to data/roads.json baseCostPounds (referenced, not restated)."
+  },
+  "esalFactorBasis": {
+    "law": "ESAL_ratio = (axleLoad_A / axleLoad_B)^4 (AASHTO Guide for Design of Pavement Structures, 1993, the '4th-power law' -- a doubling of axle load produces roughly a 16x increase in pavement damage per pass).",
+    "normalisation": "This table expresses esalFactor as damage PER VEHICLE-KM relative to a standard car (car = 1 reference axle-load-equivalent unit per 100 vehicle-km, i.e. car's esalFactor below of 0.0003 IS that reference unit scaled to a per-km basis matching scale_ladder.json's per-day rollup -- the absolute normalisation constant is this schema's own choice and is NOT independently meaningful outside this file's internal ratios; only the RATIOS between vehicle classes carry real-world grounding).",
+    "source": "AASHTO Guide for Design of Pavement Structures (1993), Appendix D load-equivalency-factor tables (typical single-unit truck ~2-3 ESAL/pass at legal axle loads, articulated combination trucks with multiple loaded axles commonly 5,000-15,000x a passenger car's per-pass damage depending on axle configuration and loading -- Aaron's brief anchor of '~10,000x' sits within this published range for a fully-loaded articulated HGV vs. a car).",
+    "year": 1993,
+    "confidence": "literature"
+  },
+  "esalFactors": {
+    "car":               { "esalFactorPer100VehicleKm": 0.0003, "ratioToCarPerPass": 1,      "source": "AASHTO 4th-power law, car as the reference unit", "year": 1993, "confidence": "literature" },
+    "motorbike":         { "esalFactorPer100VehicleKm": 0.00005, "ratioToCarPerPass": 0.15,   "source": "derived from AASHTO 4th-power law at motorbike axle load vs car", "year": 2026, "confidence": "derived" },
+    "taxi":               { "esalFactorPer100VehicleKm": 0.0004, "ratioToCarPerPass": 1.3,     "note": "as car, slightly higher due to higher annual mileage/loading, not axle load", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "bus":                { "esalFactorPer100VehicleKm": 1.2,    "ratioToCarPerPass": 4000,    "source": "derived from AASHTO 4th-power law at a loaded double-deck bus axle load vs car", "year": 2026, "confidence": "derived", "confidenceNote": "the 4th-power LAW is literature; the specific bus axle-load figure used is this schema's own derived estimate" },
+    "cargo_van":          { "esalFactorPer100VehicleKm": 0.01,   "ratioToCarPerPass": 33,      "source": "derived from AASHTO 4th-power law at a loaded van axle load vs car", "year": 2026, "confidence": "derived" },
+    "rigid_truck":        { "esalFactorPer100VehicleKm": 2.4,    "ratioToCarPerPass": 8000,    "source": "derived from AASHTO 4th-power law at a loaded rigid-HGV axle load vs car", "year": 2026, "confidence": "derived" },
+    "articulated_truck":  { "esalFactorPer100VehicleKm": 6.0,    "ratioToCarPerPass": 10000,   "note": "matches Aaron's brief anchor '~10,000x a car'", "source": "AASHTO 4th-power law, calibrated to the brief's stated ratio", "year": 2026, "confidence": "derived" }
+  },
+  "railWear": {
+    "$comment": "Rail wear is a materially different mechanism (rolling contact fatigue / rail-head wear, not axle-load pavement flex) and is NOT modelled by the ESAL law. Placeholder flat per-train-km wear rate pending a dedicated rail-maintenance data pass (out of scope for inc0's road-wear table); tracked so engine.traffic does not silently assume rail is wear-free.",
+    "wearUnitsPerTrainKm": { "value": 1.0, "note": "arbitrary internal unit, NOT AASHTO-comparable to esalFactorPer100VehicleKm above", "source": "placeholder, no external anchor", "year": 2026, "confidence": "placeholder" }
+  },
+  "wearToRepairCost": {
+    "conditionDecayPerESAL": { "value": 0.00002, "note": "conditionIndex points lost per cumulative ESAL unit absorbed by a road segment, on top of data/roads.json's existing time-based conditionDecayPerMonth (referenced, not restated) -- USE-driven decay is additive to age-driven decay, per the Blue-style brief ask ('the more a road is used the more repair it needs').", "source": "derived approximation calibrated so a busy A-road (avenue_2_plus_2, ~1800 pcu/h/lane sustained) needs a repair cycle on the order of months-to-a-few-years under continuous heavy use, matching the general shape of UK road-maintenance funding cycles", "year": 2026, "confidence": "derived" },
+    "repairTriggerConditionIndex": { "value": 60, "note": "below this conditionIndex a segment is flagged repair-due; matches the general shape of UK road-condition surveys' 'poor' category threshold (mapping sanity-check only, not a literal DfT road-condition-survey cut-off)", "source": "derived approximation, order-of-magnitude cross-check against UK road-condition survey category bands", "year": 2026, "confidence": "derived" },
+    "repairCostCurve": [
+      { "conditionIndex": 100, "repairCostMultiplier": 0.0 },
+      { "conditionIndex": 80,  "repairCostMultiplier": 0.3 },
+      { "conditionIndex": 60,  "repairCostMultiplier": 1.0, "note": "repair-trigger threshold; cost multiplier applies to data/roads.json baseCostPounds for that class (referenced, not restated)" },
+      { "conditionIndex": 40,  "repairCostMultiplier": 2.2 },
+      { "conditionIndex": 20,  "repairCostMultiplier": 4.5, "note": "approaching full-reconstruction cost territory rather than resurfacing" },
+      { "conditionIndex": 0,   "repairCostMultiplier": 6.0, "note": "failed pavement; full rebuild, matches roughly data/roads.json upgrade.rebuildDisruptionPermille order-of-magnitude (referenced, not restated)" }
+    ],
+    "interpolationRule": "Piecewise-linear interpolation between the listed conditionIndex anchor points.",
+    "source": "Derived approximation; the SHAPE (convex, cost accelerates sharply below the repair-trigger threshold) follows standard pavement-management 'worse-first-costs-more' literature (e.g. World Bank HDM-4 pavement deterioration modelling convention, cited for shape only, not for these specific multiplier values).",
+    "year": 2026,
+    "confidence": "derived"
+  },
+  "provenance": {
+    "source": "AASHTO Guide for Design of Pavement Structures (1993, 4th-power law) for esalFactorBasis; remaining figures derived approximations calibrated to Aaron's brief anchor (articulated HGV ~10,000x a car) and general pavement-management literature shape",
+    "year": 2026,
+    "confidence": "derived",
+    "note": "The 4TH-POWER LAW itself is literature-grounded and load-bearing; the specific per-vehicle-class ratios and the repair-cost curve are directional placeholders pending Aaron's balance pass."
+  }
+}

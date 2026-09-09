@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609792",
+    "increment": 0,
+    "comment": "engine.traffic (planned MOD) inc0 congestion-reduction policy levers modelled on Gibraltar, Singapore and (for bus priority/park-and-ride) general integrated-transit practice. Each lever names its expected DEMAND ELASTICITY effect through the tables this file's siblings define -- a lever here does not itself change engine state (that is inc8's scope); it documents the measured/estimated effect size so inc8 has real numbers to wire against."
+  },
+  "levers": [
+    {
+      "id": "coe_ownership_quota",
+      "name": "Certificate of Entitlement (Singapore-style ownership quota)",
+      "modelledOn": "Singapore",
+      "mechanism": "Caps net new private-vehicle registrations to a quota; price discovered by auction (see taxation.json certificateOfEntitlement).",
+      "expectedEffect": { "carModeShareReductionPercentagePoints": [5, 15], "note": "Singapore's own car mode share (~10-11% nationally per LTA HITS) sits well below comparably-wealthy cities without such a quota; the quota is credited as a primary driver alongside ERP and transit investment (the two are not independently separable from published Singapore data, so this range is a joint-effect order-of-magnitude, not COE's isolated contribution).", "source": "Singapore LTA HITS mode-share time series cross-referenced against COE policy history, order-of-magnitude", "year": 2023, "confidence": "derived" },
+      "sideEffects": ["raises effective cost of car ownership sharply (regressive without mitigation)", "strengthens the case for public transit investment to absorb suppressed car demand"]
+    },
+    {
+      "id": "erp_road_pricing",
+      "name": "Electronic Road Pricing (Singapore-style time-varying gantry charge)",
+      "modelledOn": "Singapore",
+      "mechanism": "Per-crossing charge on congested corridors/zones, varies by time-of-day and measured v/c (see taxation.json electronicRoadPricingSingaporeStyle).",
+      "expectedEffect": { "peakPeriodVolumeReductionPercent": [10, 20], "note": "Singapore ERP's original 1998 introduction and subsequent expansions are documented (LTA) to have reduced peak-period traffic volumes on priced corridors in this broad range; effect is corridor-specific and diminishes over time as network capacity/land-use adjusts.", "source": "Singapore LTA ERP effectiveness studies, order-of-magnitude", "year": 2023, "confidence": "derived" },
+      "sideEffects": ["shifts trips to off-peak or alternate routes rather than eliminating them entirely (partial demand suppression, partial redistribution)"]
+    },
+    {
+      "id": "gibraltar_land_constraint_analogue",
+      "name": "Acute land-scarcity ownership friction (Gibraltar-style)",
+      "modelledOn": "Gibraltar",
+      "mechanism": "Gibraltar has no formal COE-style quota, but its ~6.7km2 territory, single runway crossing the main road (Winston Churchill Avenue closes for every aircraft movement), and near-total absence of parking land create an EFFECTIVE ownership/usage friction through sheer physical scarcity rather than policy instrument. Modelled here as a PARKING-SUPPLY constraint (see parking.json) and a periodic full-corridor-closure event on any road segment crossing an airport runway, rather than a priced lever -- Gibraltar's mechanism is scarcity, not a tunable rate.",
+      "expectedEffect": { "note": "No published city-wide mode-share time series exists for Gibraltar at the resolution the other two territories offer; this lever is included for its STRUCTURAL mechanism (physical scarcity substitutes for a priced lever) rather than a quantified elasticity. Directional only.", "source": "Gibraltar physical-geography and airport-crossing description per Aaron's brief; no formal LTA/DfT-equivalent published elasticity study located", "year": 2026, "confidence": "placeholder" },
+      "sideEffects": ["runway-crossing road closures are a literal periodic capacity-zero event on the crossing segment, not a congestion curve effect -- a distinct mechanic from BPR delay", "acute land scarcity also drives parking.json's off-street parking share and footprint pressure at the highest density bands"]
+    },
+    {
+      "id": "integrated_transit_singapore_style",
+      "name": "Integrated ticketing + transit investment (Singapore/London-style)",
+      "modelledOn": "Singapore, London",
+      "mechanism": "Single fare medium across bus/MRT/LRT with distance-based capped fares, plus sustained rail/BRT network investment ahead of demand.",
+      "expectedEffect": { "publicTransportModeShareGain": [10, 20], "note": "Singapore's public-transport mode share (~45% per LTA HITS) and London's high transit share both correlate with sustained integrated-network investment; this range is an order-of-magnitude cross-city comparison, not a controlled before/after study.", "source": "Singapore LTA HITS, TfL published mode-share statistics, order-of-magnitude", "year": 2023, "confidence": "derived" },
+      "sideEffects": ["requires sustained capex (rail/BRT construction) well ahead of the demand it serves -- a multi-decade lead time in the real world, and no free lunch: capacity built early sits underused"]
+    },
+    {
+      "id": "bus_priority_lanes",
+      "name": "Bus priority / bus-lane variant roads",
+      "modelledOn": "General UK bus-priority practice",
+      "mechanism": "Dedicated bus-lane_variant road class (data/roads.json, referenced) removes buses from mixed-traffic delay.",
+      "expectedEffect": { "busJourneyTimeReductionPercent": [15, 30], "source": "UK DfT bus priority scheme evaluation literature, order-of-magnitude", "year": 2026, "confidence": "derived" },
+      "sideEffects": ["reduces effective general-traffic lane capacity on the same corridor (captured by link_capacity.json's lower capacityPcuPerLanePerHour for bus_lane_variant vs. avenue_2_plus_2)"]
+    },
+    {
+      "id": "park_and_ride",
+      "name": "Park and ride",
+      "modelledOn": "General UK/European P&R practice",
+      "mechanism": "Peripheral parking + fast transit link substitutes the outer, car-dominant leg of a commute for a transit leg, reducing city-centre car penetration.",
+      "expectedEffect": { "centreBoundCarTripReductionPercent": [8, 18], "source": "UK P&R scheme evaluation literature, order-of-magnitude", "year": 2026, "confidence": "derived" },
+      "sideEffects": ["requires peripheral land for the parking supply and a fast (usually rail/BRT) transit spine to the centre"]
+    }
+  ],
+  "provenance": {
+    "source": "Singapore LTA HITS/ERP/COE published statistics, TfL Congestion Charge/mode-share statistics, UK DfT bus-priority and P&R evaluation literature, Aaron's brief for the Gibraltar mechanism",
+    "year": 2026,
+    "confidence": "derived",
+    "note": "Every elasticity range is an order-of-magnitude cross-city comparison, not a controlled causal estimate; treat as directional pending Aaron's balance pass, per inc0's stated regime."
+  }
+}

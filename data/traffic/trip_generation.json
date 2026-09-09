@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609792",
+    "increment": 0,
+    "comment": "engine.traffic (planned MOD) inc0 table (b): trip-generation rates per person and per land-use class, plus freight tonnes/job/day by sector. Demand is generated from PEOPLE (residents + in-city workers), not from buildings -- a building only matters as the land-use class that determines how many of its occupants' trips ATTRACT to it (Aaron's brief: 'traffic is ALL transportation for what is built', but the demand SOURCE is residents plus people who work there).",
+    "unitsConvention": "tripRatePersonPerDay is person-trips/person/day (a one-way journey, matches scale_ladder.json); freightTonnesPerJobPerDay is metric tonnes/job/day, sector-attributed (matches data/freight.json's tonnes/day unit convention, referenced not restated)."
+  },
+  "residentTripRate": {
+    "value": null,
+    "note": "Resident-side all-purpose trip rate is density-varying, not a single constant -- see scale_ladder.json's per-rung tripRatePersonPerDay (table k) and its source anchors (UK DfT NTS0409, Tokyo Person Trip Survey). This block exists to document the SHAPE, not restate the numbers: near-flat 2.3-2.9 trips/person/day band, gently rising through small/medium settlements (more discretionary trip-chaining as services densify) and easing back toward the ~2.4-2.5 Tokyo-anchor figure at megacity scale (time-budget and congestion self-limiting effects, HCM 2010 Ch.16 discussion of trip suppression under sustained high v/c).",
+    "source": "UK DfT National Travel Survey NTS0409 (trip rate by area type); Tokyo Metropolitan Area Person Trip Survey (5th round, MLIT/TMG)",
+    "year": 2026,
+    "confidence": "derived"
+  },
+  "workerTripRate": {
+    "commuteLegsPerWorkerPerDay": { "value": 2.0, "note": "Standard round-trip commute: one outbound + one return leg per working day, per worker physically working in the city (residentWorker or in-commuter). Does not include discretionary trips made ON a workday, which are covered by residentTripRate.", "source": "Structural definition (a commute is a return journey); UK NTS commute-leg convention.", "year": 2026, "confidence": "derived" },
+    "note": "workersInCity (scale_ladder.json per-rung field) x commuteLegsPerWorkerPerDay gives the commute-only trip component; this is a SUBSET of dailyPersonTrips (residents already include their own commute trips in residentTripRate), not an additive total. In-commuters (people who live outside the city but work inside it, MOD-035 external commuting) contribute commuteLegsPerWorkerPerDay trips each but zero residentTripRate trips -- they appear only as commute legs plus whatever discretionary trips they make while in the city (approximated at 0.3 extra legs/day, placeholder, for lunch/shopping-while-at-work)."
+  },
+  "landUseTripRates": {
+    "$comment": "Trip ATTRACTION rates per unit of land-use, for consumers of this table who need to distribute city-wide generated trips across destination buildings (a downstream inc2 concern; provided now so inc0 is complete per the BOW brief's list). Units: trips attracted per day per the stated denominator. Directional placeholders informed by UK TRICS-style trip-generation orders of magnitude (TRICS is a commercial database; these are NOT TRICS-licensed figures, they are independently-derived sanity-checked approximations -- confidence: derived, not measured).",
+    "dwelling_low_density":  { "tripsAttractedPerUnitPerDay": 3.2, "unit": "per dwelling", "source": "derived approximation, UK trip-generation literature order-of-magnitude", "year": 2026, "confidence": "derived" },
+    "dwelling_high_density": { "tripsAttractedPerUnitPerDay": 2.4, "unit": "per dwelling", "source": "derived approximation (denser dwellings show lower per-unit car-trip generation, higher walk/transit share captured elsewhere in mode share, not trip count)", "year": 2026, "confidence": "derived" },
+    "office_job":             { "tripsAttractedPerUnitPerDay": 2.1, "unit": "per job", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "retail_job":              { "tripsAttractedPerUnitPerDay": 4.5, "unit": "per job", "source": "derived approximation (retail attracts customer trips beyond staff commute)", "year": 2026, "confidence": "derived" },
+    "industrial_job":          { "tripsAttractedPerUnitPerDay": 1.6, "unit": "per job", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "school_pupil":            { "tripsAttractedPerUnitPerDay": 1.9, "unit": "per pupil", "source": "derived approximation (drop-off/pick-up plus walk-to-school)", "year": 2026, "confidence": "derived" },
+    "hospital_bed":            { "tripsAttractedPerUnitPerDay": 6.0, "unit": "per bed", "source": "derived approximation (staff shifts + visitors + patient transport)", "year": 2026, "confidence": "derived" },
+    "stadium_seat":            { "tripsAttractedPerUnitPerDay": 0.15, "unit": "per seat, averaged over a full year (event days spike far higher, event-day multiplier is an inc2+ concern)", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "port_job":                { "tripsAttractedPerUnitPerDay": 1.4, "unit": "per job", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "airport_job":             { "tripsAttractedPerUnitPerDay": 1.7, "unit": "per job", "source": "derived approximation; airport PASSENGER trips are a separate, much larger figure already governed by data/airport.json's paxPerRunwayPerDay/paxPerGatePerDay (referenced, not restated) -- this row covers airport STAFF commute only", "year": 2026, "confidence": "derived" }
+  },
+  "freightTonnesPerJobPerDay": {
+    "$comment": "Sector-level freight intensity used by scale_ladder.json's freightTonnesBySector derivation. Sector ids are this table's own taxonomy (a coarser grouping than data/freight.json's 5 production chains), chosen to map cleanly onto data/naming/attract sector concepts without duplicating freight.json's own chain-stage tonnesPerDay figures (GR#3 -- those are PRODUCTION rates for specific chain stages; these are city-wide freight-MOVEMENT intensity per worker in a sector, a different denominator).",
+    "construction":      { "tonnesPerJobPerDay": 0.9,  "source": "derived approximation, informed by data/freight.json construction-chain jobs:output ratios as an order-of-magnitude cross-check, independently re-derived per worker (not copied)", "year": 2026, "confidence": "derived" },
+    "manufacturing":     { "tonnesPerJobPerDay": 0.55, "source": "derived approximation, informed by data/freight.json steelAndMachinery-chain jobs:output ratios as a cross-check", "year": 2026, "confidence": "derived" },
+    "food":              { "tonnesPerJobPerDay": 0.7,  "source": "derived approximation, informed by data/freight.json food-chain jobs:output ratios as a cross-check", "year": 2026, "confidence": "derived" },
+    "logistics_retail":  { "tonnesPerJobPerDay": 1.2,  "source": "derived approximation (distribution-heavy sector, higher tonnes/job than production sectors)", "year": 2026, "confidence": "derived" },
+    "services_office":   { "tonnesPerJobPerDay": 0.02, "source": "derived approximation (parcels/consumables only, negligible bulk freight)", "year": 2026, "confidence": "derived" }
+  },
+  "sectorMixByDensityBand": {
+    "$comment": "City-wide worker sector mix by density band (fractions sum to 1.0 per band), feeding scale_ladder.json's freightTonnesBySector. Reflects standard structural change: primary/construction-heavy at low density, services-dominant at megacity scale (a well-established urbanisation pattern, not a specific cited dataset -- confidence: derived).",
+    "rural":        { "construction":0.20, "manufacturing":0.15, "food":0.15, "logistics_retail":0.15, "services_office":0.35 },
+    "small_town":   { "construction":0.18, "manufacturing":0.16, "food":0.13, "logistics_retail":0.15, "services_office":0.38 },
+    "low_urban":    { "construction":0.15, "manufacturing":0.16, "food":0.11, "logistics_retail":0.16, "services_office":0.42 },
+    "medium_urban": { "construction":0.12, "manufacturing":0.15, "food":0.09, "logistics_retail":0.16, "services_office":0.48 },
+    "dense_urban":  { "construction":0.10, "manufacturing":0.13, "food":0.08, "logistics_retail":0.15, "services_office":0.54 },
+    "high_density": { "construction":0.08, "manufacturing":0.11, "food":0.07, "logistics_retail":0.14, "services_office":0.60 },
+    "metro_core":   { "construction":0.06, "manufacturing":0.08, "food":0.06, "logistics_retail":0.13, "services_office":0.67 },
+    "megacity":     { "construction":0.05, "manufacturing":0.06, "food":0.05, "logistics_retail":0.12, "services_office":0.72 }
+  },
+  "provenance": {
+    "source": "See per-block source fields above; composite of UK DfT NTS, Tokyo Person Trip Survey, and derived structural-economics approximations",
+    "year": 2026,
+    "confidence": "derived",
+    "note": "No figure in this file is a directly measured, single-cited number -- every row is either a documented survey-anchored SHAPE (residentTripRate) or an internally-consistent derived approximation used only to exercise the scale_ladder.json rollup. Flagged for Aaron's balance pass same as every other v1 Metropolis data table."
+  }
+}
