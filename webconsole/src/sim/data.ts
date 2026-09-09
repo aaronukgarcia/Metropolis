@@ -6880,10 +6880,16 @@ export const POLICIES: PolicyDef[] = [
 // familyKeyOf — see the import block at the top of this file). D1: no
 // production call site consumes these exports yet this increment — see
 // docs/planning/acceptance/FEAT-2326609792-inc2.md AC-4's "no consumer yet" contract.
+// BUG-853(1): forecastUnattributedOf re-exported alongside the rest — the
+// honest unattributed-demand accounting (BUG-847's rework) had NO surface
+// outside trafficDemand.ts's own test imports; a GR#17 silent-failure shape
+// one level up from the sector-gap log (BUG-851) since nothing (component or
+// monitor) could ever read how much demand a city's network cannot reach.
 export {
   demandForecastOf,
   forecastLineUsage,
   forecastSegmentUsage,
+  forecastUnattributedOf,
   modeShareOf,
   ladderPointOf,
 } from './trafficDemand.ts';

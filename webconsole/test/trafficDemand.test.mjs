@@ -551,6 +551,98 @@ test('BUG-847/GR#21: nearestSegmentWeights sorts BOTH the source-tile set and ea
 // additive export for this fix.
 // ---------------------------------------------------------------------------
 
+// --- BUG-851: the freight-sector gap log routes through the registry error --
+// --- path (backend.ts's recordError), never a bare console.error (GR#7/    -
+// --- GR#17). KIND_TO_FREIGHT_SECTOR is frozen and attacker-verified TOTAL  -
+// --- over the live catalogue (BUG-850's own test above), so the gap path   -
+// --- is not reachable through real building placement -- a structural      -
+// --- source check (the SAME idiom BUG-850's own "never a bare throw" pin   -
+// --- above already uses for this identical unreachable-today situation).   -
+
+test('BUG-851: logSectorGapOnce routes through backend.ts recordError (GR#7 registry-sourced), never console.error', () => {
+  assert.match(
+    trafficDemandSrc,
+    /import \{ recordError \} from '\.\/backend\.ts';/,
+    'trafficDemand.ts must import recordError from backend.ts (the app-error idiom engine.ts\'s MET-V874 site already uses)',
+  );
+  const fnBody = trafficDemandSrc.slice(
+    trafficDemandSrc.indexOf('function logSectorGapOnce('),
+    trafficDemandSrc.indexOf('// --- trip_generation.json'),
+  );
+  assert.match(
+    fnBody,
+    /recordError\(message, \{ type: 'app', code: ERR_SECTOR_UNMAPPED, action: 'trafficDemand\.demandForecastOf' \}\);/,
+    'logSectorGapOnce must call recordError with the registry code ERR_SECTOR_UNMAPPED (MET-V900), not a bare console.error',
+  );
+  assert.doesNotMatch(fnBody, /console\.error\(/, 'logSectorGapOnce must never CALL console.error (GR#7/GR#17)');
+  // MUTANT (BUG-851's own): reverting logSectorGapOnce's body to
+  // `console.error(...)` reds both the recordError-call match and the
+  // doesNotMatch console.error-call check above.
+});
+
+// --- BUG-853(3): residentOccupancy is clamped to [0,1] -- symmetric with ---
+// --- the worker side, which clamps by construction (filledJobsBySector    -
+// --- caps `filled` at totalCapacity, data.ts ~4483).                      -
+
+test('BUG-853(3): residentOccupancy clamps to 1 -- a single res_hut (capacity from its own catalogue spec) with population 100,000 reports residentsActual <= capacity, never a >12,000x overcrowded figure', () => {
+  // BUG-884 GR#15: the tile's capacity is read from the catalogue spec
+  // itself (SPECS['res_hut'].residents), never a hardcoded literal -- a
+  // future rebalance of res_hut's capacity can't silently desync this pin.
+  const resHutCapacity = SPECS['res_hut'].residents;
+  const s = board([res(1, 0, 0)], 100_000);
+  const tiles = demandForecastOf(s);
+  const resTile = tiles.find((t) => t.spec === 'res_hut');
+  assert.ok(
+    resTile.residentsActual <= resHutCapacity,
+    `residentsActual must never exceed the tile's own capacity (${resHutCapacity}), got ${resTile.residentsActual}`,
+  );
+  assert.equal(resTile.residentsActual, resHutCapacity, 'clamped occupancy (1.0) x capacity = capacity exactly');
+  // MUTANT: dropping the Math.min(1, ...) clamp on residentOccupancy would
+  // report residentsActual = resHutCapacity * (100000/resHutCapacity) =
+  // 100000 for this single tile -- reds the `<= resHutCapacity` assertion
+  // (BUG-853's own measured pre-fix figure).
+});
+
+// --- BUG-853(2): workerOccupancy denominator uses totalJobsBySector(s),  --
+// --- the SAME basis filledJobsBySector's numerator is capped against,   --
+// --- not totalJobs(s) (which counts every job-bearing kind unconditionally,--
+// --- including kinds absent from KIND_TO_WAGE_SECTOR).                   -
+
+test('BUG-853(2): workerOccupancy denominator is totalJobsBySector(s) (same basis as the numerator), not totalJobs(s)', () => {
+  // Every job-bearing kind in the live catalogue IS in KIND_TO_WAGE_SECTOR
+  // today (BUG-652), so totalJobs(s) === sum(totalJobsBySector(s)) for any
+  // real fixture -- this test proves the SOURCE reads totalJobsBySector, not
+  // that the two bases currently diverge numerically (they don't, yet).
+  assert.match(
+    trafficDemandSrc,
+    /const jobsBySector = totalJobsBySector\(s\);/,
+    'workerOccupancy denominator must be built from totalJobsBySector(s), the same capacity basis filledJobsBySector(s) is itself capped against',
+  );
+  assert.doesNotMatch(
+    trafficDemandSrc,
+    /const jobsCapTotal = totalJobs\(s\);/,
+    'must not read the unconditional totalJobs(s) as the occupancy denominator (BUG-853(2): diverges from the numerator basis the day an unmapped job-bearing kind is added)',
+  );
+  // MUTANT: reverting to `totalJobs(s)` reds the doesNotMatch assertion
+  // above; the day a job-bearing kind without a KIND_TO_WAGE_SECTOR entry is
+  // added, that revert would also silently depress workerOccupancy
+  // city-wide with no error anywhere (BUG-853's exact finding).
+  //
+  // BUG-884: this stays a source-text pin, not a behavioural one, by
+  // necessity, not convenience. A behavioural pin needs a fixture where
+  // totalJobs(s) != sum(totalJobsBySector(s)) -- i.e. a job-bearing
+  // `kind` absent from fiscal.ts's KIND_TO_WAGE_SECTOR. Every building
+  // fixture here is placed via a real SPECS[...] entry (`b.spec` indexes
+  // the live catalogue in data.ts), and KIND_TO_WAGE_SECTOR is frozen and
+  // total over every kind the live catalogue uses (BUG-652) -- there is no
+  // kind reachable from this test file that is job-bearing yet unmapped.
+  // Manufacturing one requires either a new catalogue spec (data.ts) or
+  // temporarily un-mapping a kind (fiscal.ts), both production seams this
+  // task is not scoped to touch (FILES YOU OWN: trafficDemand.ts +
+  // its own two test files). Left as a source-text pin; BUG-881/882/883
+  // carry the rest of the BUG-852 backout detail.
+});
+
 test('BUG-866: nearestSegmentWeights drops an off-map SEED key (counted, never entered into visited/attribution) -- same bound as boundedNearestSourceMapOf', () => {
   const onMapSeed = '5,5';
   const offMapSeedX = `${MAP_W + 5},5`; // off-map in x

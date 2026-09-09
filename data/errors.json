@@ -5930,7 +5930,7 @@
     "MET-V925": {
       "severity": "error",
       "module": "ui.webconsole",
-      "message": "emergencyResponse: emergency_response.json speedDegradation.curve is missing or has fewer than 2 valid {vOverC,speedFactor} anchors",
+      "message": "emergencyResponse: emergency_response.json speedDegradation.curve is missing or has fewer than 2 valid (vOverC, speedFactor) anchors",
       "remedy": "fix speedDegradation.curve in data/traffic/emergency_response.json to have >=2 finite, non-negative anchors"
     },
     "MET-V926": {

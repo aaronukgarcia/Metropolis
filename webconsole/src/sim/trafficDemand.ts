@@ -29,13 +29,20 @@ import {
   isOnline,
   capacityAtTier,
   onlineResidentsCapacity,
-  totalJobs,
+  totalJobsBySector,
   filledJobsBySector,
   lineUsageOf,
   lineSegmentIndexOf,
   memoOnState,
   type LineUsage,
 } from './data.ts';
+// BUG-851: the registry error path (GR#7/GR#17) — mirrors engine.ts's own
+// recordError call site (~4950, MET-V874: `recordError(msg, { type: 'app',
+// code, action })`), the SAME idiom this whole codebase uses for a
+// monitoring-shaped (never-thrown) registry-coded log. No circular import:
+// backend.ts only imports commitqueue.ts/types.ts (+ debugjson.ts type-only),
+// never data.ts or trafficDemand.ts.
+import { recordError } from './backend.ts';
 import { scaleLadder } from './scaleLadderData.ts';
 import { ladderAt, type LadderPoint } from './scaleLadder.ts';
 import { MAP_W, MAP_H } from './grid.ts';
@@ -69,18 +76,24 @@ function registryError(code: string, message: string): Error {
   return new Error(`${code}: ${message}`);
 }
 
-// BUG-850: one-shot (per distinct key, per page load) console log for a
-// freight-sector gap discovered inside demandForecastOf's render-path loop
-// — honest-absence (zero freight for that tile) instead of a render-path
-// throw, but still surfaced via the registry code rather than silently
-// swallowed (GR#17: a monitoring/log path, not a thrown error, for a
-// derivation that runs every render).
+// BUG-850/BUG-851: one-shot (per distinct key, per page load) REGISTRY log
+// for a freight-sector gap discovered inside demandForecastOf's render-path
+// loop — honest-absence (zero freight for that tile) rather than a
+// render-path throw, but never a bare console.error either (GR#7 "every
+// error MUST be created from the error registry, no exceptions" / GR#17 a
+// silent-failure shape nothing monitors and no headless/dogfood capture ever
+// sees). Routed through backend.ts's recordError — the SAME app-error idiom
+// engine.ts's own MET-V874 site uses (recordError(msg, { type: 'app', code,
+// action })) — with the one-shot Set dedupe kept so this render-path
+// derivation (called every state, AC-9) cannot spam a distinct record per
+// tile per tick; recordError has its own internal dedupe-by-message-key too,
+// but the Set here guards the (cheap, still non-zero) cost of building the
+// message string and calling into recordError at all on the hot path.
 const loggedSectorGaps = new Set<string>();
 function logSectorGapOnce(key: string, message: string): void {
   if (loggedSectorGaps.has(key)) return;
   loggedSectorGaps.add(key);
-  // eslint-disable-next-line no-console
-  console.error(`${ERR_SECTOR_UNMAPPED}: ${message}`);
+  recordError(message, { type: 'app', code: ERR_SECTOR_UNMAPPED, action: 'trafficDemand.demandForecastOf' });
 }
 
 // --- trip_generation.json / vehicle_classes.json typed views ---------------
@@ -309,20 +322,55 @@ export interface TileDemand {
  * numerator changed, from a vacuous self-ratio to the real filled-jobs
  * figure the fiscal side already computes.
  *
- * Cost: O(tiles), one ladder call + one filledJobsBySector call (already
- * memoOnState, AC-9) — never walks a per-citizen array.
+ * BUG-853(2) rework: the denominator was `totalJobs(s)` — EVERY job-bearing
+ * building, unconditionally — while the numerator (filledJobsBySector(s))
+ * is itself capped by `totalJobsBySector(s)`'s capacity, which SKIPS any
+ * kind absent from fiscal.ts's KIND_TO_WAGE_SECTOR (`if (!sector) continue;`,
+ * data.ts's totalJobsBySector). The two bases agree today only because
+ * BUG-652 made KIND_TO_WAGE_SECTOR total over the live catalogue (135==135,
+ * measured) — the FIRST job-bearing kind added without a wage-sector entry
+ * would silently depress workerOccupancy city-wide (numerator drops that
+ * kind's jobs from the fill calculation, denominator does not), with no
+ * error anywhere. Fixed by using `totalJobsBySector(s)`'s own sum as the
+ * denominator too — the SAME basis both sides, GR#3 one job-capacity figure,
+ * not two: an unmapped kind is now consistently excluded from BOTH sides
+ * rather than only the numerator.
+ *
+ * Cost: O(tiles), one ladder call + one filledJobsBySector/totalJobsBySector
+ * call (both already memoOnState, AC-9) — never walks a per-citizen array.
  */
 export const demandForecastOf: (s: SimState) => TileDemand[] = memoOnState((s) => {
   const point = ladderPointOf(s);
   const tripRate = numericField(point, 'tripRatePersonPerDay');
 
   const residentsCapTotal = onlineResidentsCapacity(s);
-  const jobsCapTotal = totalJobs(s);
-  const residentOccupancy = residentsCapTotal > 0 ? s.population / residentsCapTotal : 0;
+  // BUG-853(2): filledJobsBySector's own capacity basis (totalJobsBySector),
+  // not totalJobs(s) — see the doc comment above.
+  const jobsBySector = totalJobsBySector(s);
+  const jobsCapTotal = jobsBySector.primary + jobsBySector.secondary + jobsBySector.tertiary + jobsBySector.public;
+  // BUG-853(3): residentOccupancy is clamped to [0,1], symmetric with the
+  // worker side (which clamps by construction — filledJobsBySector caps
+  // `filled` at `totalCapacity`, data.ts ~4483). Unclamped, a resident count
+  // far above a tile's building-capacity aggregate (e.g. very early-city
+  // population overshoot against a single starter res_hut before enough
+  // housing has been built) reports a residentsActual figure ABOVE the
+  // tile's own capacity — the field's own doc says "never raw capacity",
+  // and an unbounded multiplier is worse than raw capacity, not better.
+  // Measured (BUG-853 finding): 100,000 population against an 8-capacity
+  // res_hut yielded residentsActual=100,000 for that single tile pre-fix.
+  const residentOccupancy = residentsCapTotal > 0 ? Math.min(1, s.population / residentsCapTotal) : 0;
   // BUG-849 rework: real filled/capacity ratio (see doc comment above), not
   // the old totalJobs(s)/totalJobs(s) vacuous self-ratio.
   const filled = filledJobsBySector(s);
   const filledJobsTotal = filled.primary + filled.secondary + filled.tertiary + filled.public;
+  // BUG-853(4) note (equivalent mutant, cannot be pinned today): removing
+  // this `jobsCapTotal > 0` guard survives the whole suite because no
+  // catalogue spec carries `jobs: 0` — any spec with a `jobs` field always
+  // contributes to totalJobsBySector(s), so 0/0 is unreachable with the live
+  // catalogue. Kept as a defensive guard (division-by-zero is undefined
+  // behaviour the instant a future zero-job spec exists) and documented here
+  // so a future reviewer does not mistake the surviving mutant for a test
+  // gap — see trafficDemand.round.test.mjs's own note on this.
   const workerOccupancy = jobsCapTotal > 0 ? filledJobsTotal / jobsCapTotal : 0;
 
   const blendedCapacity = blendedFreightVehicleCapacity(point);
