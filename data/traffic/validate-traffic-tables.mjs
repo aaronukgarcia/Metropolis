@@ -234,6 +234,22 @@ function main() {
     }
   }
 
+  // FEAT-2326609797 inc4 rework (BUG-869): every service in emergency_response.json services[]
+  // must carry a positive, finite turnoutMinutes (the dispatch-to-mobile activation leg) --
+  // deleting the field, or leaving it non-numeric/non-positive, must RED this check (this is the
+  // field loadTurnoutMinutesFrom in emergencyResponse.ts reads fail-closed at module load).
+  const emergencyResponse = loadJson('data/traffic/emergency_response.json');
+  if (!Array.isArray(emergencyResponse.services)) {
+    warn('emergency_response.json services[] is missing or not an array');
+  } else {
+    for (const row of emergencyResponse.services) {
+      const v = row.turnoutMinutes;
+      if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+        warn(`emergency_response.json services['${row.service}'].turnoutMinutes must be a positive finite number, got ${JSON.stringify(v)}`);
+      }
+    }
+  }
+
   // AC-6: vehicle_classes.json refinesModeId resolves against data/modes.json mode ids (or null)
   const modeIds = new Set(modes.modes.map((m) => m.id));
   for (const v of vehicleClasses.roadVehicles) {

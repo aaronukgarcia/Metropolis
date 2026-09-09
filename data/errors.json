@@ -152,7 +152,10 @@
       "V906-V911": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V912-V919": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 8-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V881-V881": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V882-V882": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V882-V882": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V924-V929": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V886-V887": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V921-V923": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 3-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5917,6 +5920,66 @@
       "module": "ui.webconsole",
       "message": "trafficAssignment: data/traffic.json is missing a positive numeric metresPerMile field",
       "remedy": "add a positive numeric metresPerMile field to data/traffic.json (GR#15, BUG-864)"
+    },
+    "MET-V924": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "emergencyResponse: emergency_response.json services[] has no entry for service %s",
+      "remedy": "add the missing service entry to data/traffic/emergency_response.json services[]"
+    },
+    "MET-V925": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "emergencyResponse: emergency_response.json speedDegradation.curve is missing or has fewer than 2 valid {vOverC,speedFactor} anchors",
+      "remedy": "fix speedDegradation.curve in data/traffic/emergency_response.json to have >=2 finite, non-negative anchors"
+    },
+    "MET-V926": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "RESERVED, currently unused (BUG-872, FEAT-2326609797 inc4 rework): emergencyResponse.ts no longer reads/validates speedDegradation.narrowClassPenalty (the multiplier was structurally dead code -- no currently-segmentable road class was ever narrow). Kept reserved for a future narrow-class-penalty reintroduction rather than deleted.",
+      "remedy": "n/a -- not currently thrown; a future reintroduction of the narrow-class penalty should reuse this code"
+    },
+    "MET-V927": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "emergencyResponse: emergency_response.json services[] is missing a positive numeric turnoutMinutes field for one or more services (BUG-869 rework -- was EmergencyBaseAccessMinutesMissing/data/traffic.json baseAccessMinutes)",
+      "remedy": "add a positive numeric turnoutMinutes field to every service row in data/traffic/emergency_response.json services[]"
+    },
+    "MET-V928": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "emergencyResponse: hearseIsochroneOf's structural absence guard tripped unexpectedly (MOD-083/death_cemetery/death_crematorium are no longer placeholders but no hearse routing exists)",
+      "remedy": "implement the real hearse isochrone/station-discovery path (MOD-083) before this guard is reachable"
+    },
+    "MET-V886": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "emergencyResponse: data/traffic.json is missing a positive numeric maxAttributionRadiusTiles field",
+      "remedy": "add a positive numeric maxAttributionRadiusTiles field to data/traffic.json"
+    },
+    "MET-V887": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "emergencyResponse: the current scale-ladder point is missing a string densityBand non-numeric field",
+      "remedy": "check data/traffic/scale_ladder.json rungs for a densityBand leaf on every rung"
+    },
+    "MET-V921": {
+      "severity": "fatal",
+      "module": "ui.webconsole",
+      "message": "wellbeing.json mental block is missing or malformed: %s",
+      "remedy": "Re-run node webconsole/scripts/sync-traffic-data.mjs and verify data/wellbeing.json's mental block"
+    },
+    "MET-V922": {
+      "severity": "fatal",
+      "module": "ui.webconsole",
+      "message": "wellbeing.json mental commute anchor %s is not a finite number",
+      "remedy": "Fix the commuteThresholdMinutes/commuteStressAtThreshold/commuteStressAt100Minutes fields in data/wellbeing.json"
+    },
+    "MET-V923": {
+      "severity": "fatal",
+      "module": "ui.webconsole",
+      "message": "wellbeing.json mental.%s is missing or not a finite [0,1] fraction",
+      "remedy": "Add gridlockWeightFraction/emergencyResponseWeight to data/wellbeing.json mental block"
     }
   }
 }

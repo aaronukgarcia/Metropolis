@@ -210,7 +210,11 @@ function occupancyForMode(modeId: string): number {
  * below is present for completeness/future extension but not exercised at
  * runtime; see the report's "where the doc is wrong" section).
  */
-const ROAD_CLASS_ID_OF_TIER: Readonly<Record<number, string>> = Object.freeze({
+// Additively exported (BUG-872, FEAT-2326609797 inc4 rework): emergencyResponse.ts's
+// narrow-class-penalty lookup needed the SAME tier->class mapping this module already owns --
+// GR#3 forbade the near-verbatim local copy that inc4's first build carried, so this table and
+// its lookup function are exported here rather than having a second copy silently diverge.
+export const ROAD_CLASS_ID_OF_TIER: Readonly<Record<number, string>> = Object.freeze({
   1: 'residential_street',
   2: 'avenue_2_plus_2',
   3: 'two_lane',
@@ -218,7 +222,7 @@ const ROAD_CLASS_ID_OF_TIER: Readonly<Record<number, string>> = Object.freeze({
   5: 'motorway',
 });
 
-function roadClassIdOfSegment(seg: LineSegment): string {
+export function roadClassIdOfSegment(seg: LineSegment): string {
   const sp = SPECS[seg.spec];
   const tier = sp?.roadTier;
   const roadClassId = tier != null ? ROAD_CLASS_ID_OF_TIER[tier] : undefined;
@@ -676,6 +680,16 @@ const assignmentOf: (s: SimState) => AssignmentResult = memoOnState((s) => {
 export const assignedFlowOf: (s: SimState) => Map<string, number> = (s) => assignmentOf(s).assignedFlow;
 export const unroutedDemandOf: (s: SimState) => UnroutedDemand[] = (s) => assignmentOf(s).unrouted;
 
+// FEAT-2326609798 inc5 (AC-2, ASM-1520) — additive exports of assignmentOf's
+// already-computed per-tile path data (`:606-607` above), same shape as the
+// weightedPercentile precedent (BUG-857): GR#3 forbids the downstream inc5
+// consumer module (gridlock-share derivation) re-deriving what assignmentOf
+// already computed. Not re-exported as a new interface — the existing
+// internal Map shapes are exposed as-is; no change to assignmentOf's own
+// return value.
+export const tilePathsOf: (s: SimState) => Map<string, string[]> = (s) => assignmentOf(s).tilePaths;
+export const tileVehicleTripsOf: (s: SimState) => Map<string, number> = (s) => assignmentOf(s).tileVehicleTrips;
+
 // --- AC-4: segmentDelayOf ----------------------------------------------------
 
 export interface SegmentDelay {
@@ -760,7 +774,13 @@ export interface CommuteTimeDistribution {
  * AC-5's doc worked example: 9 equal-weight tiles at minutes 1..9 give
  * p90 ~= 8.2), and for unequal weights the heavy tile dominates, per AC-5.
  */
-function weightedPercentile(values: number[], weights: number[], p: number): number {
+/** FEAT-2326609797 inc4 (BUG-857 precedent): exported additively so
+ * emergencyResponse.ts's emergencyCoverageOf can reuse the SAME weighted-
+ * percentile formula this module's own commuteTimeDistributionOf (AC-5)
+ * already uses for p50/p90, instead of a second, independently-maintained
+ * copy (GR#3). This is the ONE additive export inc4's brief allows on this
+ * module; behaviour is unchanged for every existing caller. */
+export function weightedPercentile(values: number[], weights: number[], p: number): number {
   const n = values.length;
   if (n === 0) return 0;
   if (n === 1) return values[0];

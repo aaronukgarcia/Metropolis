@@ -34,6 +34,7 @@ import {
   footprintOf,
   occupiedColumnsOf,
 } from '../sim/data';
+import { responseMinutesOf, emergencyTargetMinutesOf } from '../sim/emergencyResponse';
 import { computePath, type Tile } from '../sim/roadTracker';
 import { viewportTileRect, visibleBuildingsOf } from '../render/viewportCull';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
@@ -672,6 +673,37 @@ export function MapView() {
         ctx.fillRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
       }
       ctx.globalAlpha = 1;
+
+      // FEAT-2326609797 inc4 (AC-6): minimal ambulance response-time tint,
+      // folded into this SAME "Lines" toggle block (Q100162 precedent, no
+      // new button). D1: one service (ambulance) this increment; a
+      // selector is inc10's job. Derive-during-render from the memoised
+      // exports — no new state, no engine change. A tile absent from
+      // responseMinutesOf (AC-3 honest absence — unreachable, or zero
+      // online ambulance stations) renders with NO tint, never a
+      // fabricated worst-case red.
+      const RESP_OK = '#3fb950'; // --done
+      const RESP_HOT = '#ff7b72'; // --danger
+      const responseMinutes = responseMinutesOf(state, 'ambulance');
+      if (responseMinutes.size > 0) {
+        const target = emergencyTargetMinutesOf(state, 'ambulance');
+        for (const b of visibleBuildings) {
+          const sp = SPECS[b.spec];
+          if (!sp) continue;
+          const minutes = responseMinutes.get(`${b.x},${b.y}`);
+          if (minutes === undefined) continue;
+          const px = geom.ox + b.x * geom.s;
+          const py = geom.oy + b.y * geom.s;
+          const pw = sp.w * geom.s;
+          const ph = sp.h * geom.s;
+          const overTarget = minutes > target;
+          const severity = target > 0 ? Math.min(minutes / target, 2) / 2 : 0;
+          ctx.fillStyle = overTarget ? RESP_HOT : RESP_OK;
+          ctx.globalAlpha = overTarget ? 0.3 + 0.3 * Math.min(severity, 1) : 0.2;
+          ctx.fillRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
+        }
+        ctx.globalAlpha = 1;
+      }
     }
 
     // station connectivity dots (BUG-659: off-screen stations don't need a dot).

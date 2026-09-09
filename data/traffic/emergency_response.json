@@ -11,30 +11,45 @@
       "service": "ambulance",
       "targetMinutesUrban": 8,
       "targetMinutesRural": 15,
+      "turnoutMinutes": 1.5,
       "note": "Category 1/2 life-threatening call response target. UK NHS Ambulance Response Programme: Category 1 mean 7 min / 90th centile 15 min nationally; this schema uses a simplified single urban/rural target pending a future percentile-band increment.",
       "source": "NHS England Ambulance Response Programme (ARP) standards",
       "year": 2026,
       "confidence": "measured",
-      "confidenceNote": "The NHS category targets are a measured, published national standard; the urban/rural SPLIT applied here (8/15) is this schema's own simplification of the finer NHS percentile structure."
+      "confidenceNote": "The NHS category targets are a measured, published national standard; the urban/rural SPLIT applied here (8/15) is this schema's own simplification of the finer NHS percentile structure.",
+      "turnoutSource": "NHS England ARP call-handling/activation guidance: crew mobilisation (dispatch-to-wheels-rolling) target for Category 1 is typically under 2 minutes -- this schema takes 1.5 min as a mid-range derived figure.",
+      "turnoutYear": 2026,
+      "turnoutConfidence": "derived",
+      "turnoutConfidenceNote": "Derived from the published ARP activation-time guidance band, not a single official statutory turnout figure."
     },
     {
       "service": "fire",
       "targetMinutesUrban": 8,
       "targetMinutesRural": 15,
+      "turnoutMinutes": 1.0,
       "note": "UK Fire and Rescue Services do not have one single national statutory response target (each Fire & Rescue Authority sets its own Integrated Risk Management Plan target) -- 8/15 min urban/rural mirrors the commonly-published first-appliance attendance target used by multiple UK FRAs (e.g. London Fire Brigade's first-attendance target) as a mapping sanity-check, not a single official national figure.",
       "source": "UK Fire & Rescue Service published first-attendance targets (multiple FRA IRMPs), order-of-magnitude cross-check",
       "year": 2026,
       "confidence": "derived",
-      "confidenceNote": "No single UK-wide statutory figure exists; this is a derived cross-FRA order-of-magnitude, not one measured national standard."
+      "confidenceNote": "No single UK-wide statutory figure exists; this is a derived cross-FRA order-of-magnitude, not one measured national standard.",
+      "turnoutSource": "UK fire and rescue turnout-time norms (whole-time crews): commonly cited ~60-90 second turnout from alarm to wheels-rolling -- this schema takes 1.0 min as the derived mid-point.",
+      "turnoutYear": 2026,
+      "turnoutConfidence": "derived",
+      "turnoutConfidenceNote": "Derived from commonly-published UK FRA turnout-time norms for whole-time crews, not one official national statutory figure (retained/on-call crews turn out slower, out of scope for this schema)."
     },
     {
       "service": "police",
       "targetMinutesUrban": 8,
       "targetMinutesRural": 20,
+      "turnoutMinutes": 2.0,
       "note": "Immediate/Grade 1 response target used by several UK police forces (varies by force); directional placeholder.",
       "source": "UK police force published Grade 1/immediate response targets, order-of-magnitude cross-check",
       "year": 2026,
-      "confidence": "derived"
+      "confidence": "derived",
+      "turnoutSource": "UK police Grade 1/immediate-response dispatch-to-mobile activation norms, order-of-magnitude cross-check against multiple force performance reports -- this schema takes 2.0 min as a derived mid-range figure (patrol officers are typically already mobile, but call-handling/dispatch relay adds this leg).",
+      "turnoutYear": 2026,
+      "turnoutConfidence": "derived",
+      "turnoutConfidenceNote": "Derived order-of-magnitude, not one measured national standard."
     }
   ],
   "incidentRates": {
