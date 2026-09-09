@@ -1,0 +1,317 @@
+{
+  "meta": {
+    "description": "FEAT-2326609792 inc1 golden vectors — cross-language regression for the scale-ladder loader + log-linear interpolator. Consumed identically by internal/engine/traffic/scaleladder_test.go and webconsole/test/scaleLadder.test.ts.",
+    "toleranceRule": "rung-exact queries (kind=exact) compare with tolerance 0 (exact float64 equality); interpolated queries (kind=interpolated) compare with a relative epsilon of 1e-12: |got-want| <= 1e-12 * max(1, |want|).",
+    "roundCountRule": "roundCount(x) = floor(x + 0.5) for non-negative x — the ONE shared rounding rule for integer-valued fields (AC-7); Go's RoundCount and TypeScript's roundCount must agree byte-for-byte on expectedRoundedPeopleCount.",
+    "mutantNote": "population=3000 sits between rungs 1000 and 5000 on the log scale but NOT on the linear scale (linear midpoint would be 3000, coincidentally equal here on the raw number, so the field VALUES are what red a linear-in-population mutant: a mutant that computes w=(p-p_i)/(p_{i+1}-p_i) instead of the log-linear formula produces different field values, caught by the exact expectedFields comparison)."
+  },
+  "ladder": {
+    "version": 1,
+    "meta": {
+      "rungPopulations": [
+        100,
+        1000,
+        5000,
+        10000
+      ]
+    },
+    "rungs": [
+      {
+        "population": 100,
+        "density": 10,
+        "modeShare": {
+          "car": 0.5,
+          "bus": 0.1
+        },
+        "counts": {
+          "peopleCount": 50
+        },
+        "weights": [
+          1,
+          2,
+          3
+        ],
+        "tags": [
+          "a",
+          "b"
+        ],
+        "source": "manual"
+      },
+      {
+        "population": 1000,
+        "density": 20,
+        "modeShare": {
+          "car": 0.45,
+          "bus": 0.15
+        },
+        "counts": {
+          "peopleCount": 500
+        },
+        "weights": [
+          2,
+          3,
+          4
+        ],
+        "tags": [
+          "c",
+          "d"
+        ],
+        "source": "manual2"
+      },
+      {
+        "population": 5000,
+        "density": 40,
+        "modeShare": {
+          "car": 0.4,
+          "bus": 0.2
+        },
+        "counts": {
+          "peopleCount": 2500
+        },
+        "weights": [
+          3,
+          4,
+          5
+        ],
+        "tags": [
+          "e"
+        ],
+        "source": "manual3"
+      },
+      {
+        "population": 10000,
+        "density": 50,
+        "modeShare": {
+          "car": 0.35,
+          "bus": 0.25
+        },
+        "counts": {
+          "peopleCount": 5000
+        },
+        "weights": [
+          4,
+          5,
+          6
+        ],
+        "tags": [
+          "f"
+        ],
+        "source": "manual4"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "population": 100,
+      "kind": "exact",
+      "expectedFields": {
+        "density": 10,
+        "modeShare.bus": 0.1,
+        "modeShare.car": 0.5,
+        "counts.peopleCount": 50,
+        "weights.0": 1,
+        "weights.1": 2,
+        "weights.2": 3
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "a",
+          "b"
+        ],
+        "source": "manual"
+      }
+    },
+    {
+      "population": 1000,
+      "kind": "exact",
+      "expectedFields": {
+        "density": 20,
+        "modeShare.bus": 0.15,
+        "modeShare.car": 0.45,
+        "counts.peopleCount": 500,
+        "weights.0": 2,
+        "weights.1": 3,
+        "weights.2": 4
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "c",
+          "d"
+        ],
+        "source": "manual2"
+      }
+    },
+    {
+      "population": 5000,
+      "kind": "exact",
+      "expectedFields": {
+        "density": 40,
+        "modeShare.bus": 0.2,
+        "modeShare.car": 0.4,
+        "counts.peopleCount": 2500,
+        "weights.0": 3,
+        "weights.1": 4,
+        "weights.2": 5
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "e"
+        ],
+        "source": "manual3"
+      }
+    },
+    {
+      "population": 10000,
+      "kind": "exact",
+      "expectedFields": {
+        "density": 50,
+        "modeShare.bus": 0.25,
+        "modeShare.car": 0.35,
+        "counts.peopleCount": 5000,
+        "weights.0": 4,
+        "weights.1": 5,
+        "weights.2": 6
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "f"
+        ],
+        "source": "manual4"
+      }
+    },
+    {
+      "population": 3000,
+      "kind": "interpolated",
+      "expectedFields": {
+        "density": 33.65212388971969,
+        "modeShare.bus": 0.18413030972429922,
+        "modeShare.car": 0.4158696902757008,
+        "counts.peopleCount": 1865.212388971969,
+        "weights.0": 2.6826061944859845,
+        "weights.1": 3.6826061944859845,
+        "weights.2": 4.6826061944859845
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "c",
+          "d"
+        ],
+        "source": "manual2"
+      },
+      "expectedRoundedPeopleCount": 1865
+    },
+    {
+      "population": 550,
+      "kind": "interpolated",
+      "expectedFields": {
+        "density": 17.403626894942438,
+        "modeShare.bus": 0.13701813447471217,
+        "modeShare.car": 0.4629818655252878,
+        "counts.peopleCount": 383.16321027240963,
+        "weights.0": 1.7403626894942437,
+        "weights.1": 2.7403626894942437,
+        "weights.2": 3.7403626894942437
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "a",
+          "b"
+        ],
+        "source": "manual"
+      },
+      "expectedRoundedPeopleCount": 383
+    },
+    {
+      "population": 2000,
+      "kind": "interpolated",
+      "expectedFields": {
+        "density": 28.613531161467854,
+        "modeShare.bus": 0.17153382790366964,
+        "modeShare.car": 0.42846617209633037,
+        "counts.peopleCount": 1361.3531161467856,
+        "weights.0": 2.430676558073393,
+        "weights.1": 3.430676558073393,
+        "weights.2": 4.430676558073393
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "c",
+          "d"
+        ],
+        "source": "manual2"
+      },
+      "expectedRoundedPeopleCount": 1361
+    },
+    {
+      "population": 7500,
+      "kind": "interpolated",
+      "expectedFields": {
+        "density": 45.84962500721155,
+        "modeShare.bus": 0.22924812503605776,
+        "modeShare.car": 0.37075187496394224,
+        "counts.peopleCount": 3962.4062518028877,
+        "weights.0": 3.584962500721155,
+        "weights.1": 4.584962500721155,
+        "weights.2": 5.584962500721155
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "e"
+        ],
+        "source": "manual3"
+      },
+      "expectedRoundedPeopleCount": 3962
+    },
+    {
+      "population": 101,
+      "kind": "interpolated",
+      "expectedFields": {
+        "density": 10.043213737826425,
+        "modeShare.bus": 0.10021606868913213,
+        "modeShare.car": 0.4997839313108679,
+        "counts.peopleCount": 51.94461820218912,
+        "weights.0": 1.0043213737826424,
+        "weights.1": 2.0043213737826426,
+        "weights.2": 3.0043213737826426
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "a",
+          "b"
+        ],
+        "source": "manual"
+      },
+      "expectedRoundedPeopleCount": 52
+    },
+    {
+      "population": 9999,
+      "kind": "interpolated",
+      "expectedFields": {
+        "density": 49.998557232819536,
+        "modeShare.bus": 0.2499927861640977,
+        "modeShare.car": 0.3500072138359023,
+        "counts.peopleCount": 4999.639308204884,
+        "weights.0": 3.9998557232819536,
+        "weights.1": 4.999855723281954,
+        "weights.2": 5.999855723281954
+      },
+      "expectedNonNumeric": {
+        "tags": [
+          "e"
+        ],
+        "source": "manual3"
+      },
+      "expectedRoundedPeopleCount": 5000
+    },
+    {
+      "population": 50,
+      "kind": "error",
+      "expectError": true
+    },
+    {
+      "population": 20000,
+      "kind": "error",
+      "expectError": true
+    }
+  ]
+}

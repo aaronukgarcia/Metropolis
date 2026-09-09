@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609792",
+    "increment": 0,
+    "comment": "engine.traffic (planned MOD) inc0 table (h): parking demand per trip end by land use, kerb vs off-street split, turnover. data/roads.json already carries a boolean 'parking' flag per road class (kerb parking permitted y/n) -- referenced, not restated; this file adds the DEMAND side.",
+    "unitsConvention": "spacesPerTripEnd = parking spaces demanded per non-home trip end (dimensionless ratio); turnoverPerDay = average number of distinct vehicles using one space per day; footprintM2 cross-references vehicle_classes.json parkingFootprintM2 (not restated)."
+  },
+  "demandByLandUse": {
+    "dwelling_low_density":  { "spacesPerDwelling": 1.5, "note": "off-street driveway/garage the norm at low density", "source": "UK planning standard order-of-magnitude (residential parking standards vary by local authority; 1.5-2.0 spaces/dwelling is a common suburban norm)", "year": 2026, "confidence": "derived" },
+    "dwelling_high_density":  { "spacesPerDwelling": 0.6, "note": "reduced parking standard typical of dense/transit-served development", "source": "UK planning standard order-of-magnitude (many UK city-centre residential parking standards cap at <1 space/unit)", "year": 2026, "confidence": "derived" },
+    "office_job":              { "spacesPerJob": 0.25, "source": "derived approximation (city-centre office parking ratios commonly well below 1:1 in UK planning practice)", "year": 2026, "confidence": "derived" },
+    "retail_job":              { "spacesPerTripEnd": 0.35, "note": "customer parking, not staff", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "industrial_job":          { "spacesPerJob": 0.5, "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "hospital_bed":            { "spacesPerBed": 0.8, "source": "derived approximation (staff + visitor parking)", "year": 2026, "confidence": "derived" },
+    "school_pupil":            { "spacesPerPupil": 0.05, "note": "staff parking only; pupil drop-off is kerbside, not parked", "source": "derived approximation", "year": 2026, "confidence": "derived" }
+  },
+  "kerbVsOffStreet": {
+    "$comment": "Split of a class's total parking DEMAND (from demandByLandUse) between on-street/kerb spaces and off-street (surface lot / multi-storey) supply, by density band -- higher density pushes parking off-street due to kerb space scarcity and land-value pressure toward structured parking.",
+    "byDensityBand": {
+      "rural":        { "kerbShare": 0.75, "offStreetShare": 0.25 },
+      "small_town":   { "kerbShare": 0.65, "offStreetShare": 0.35 },
+      "low_urban":    { "kerbShare": 0.55, "offStreetShare": 0.45 },
+      "medium_urban": { "kerbShare": 0.40, "offStreetShare": 0.60 },
+      "dense_urban":  { "kerbShare": 0.28, "offStreetShare": 0.72 },
+      "high_density": { "kerbShare": 0.18, "offStreetShare": 0.82 },
+      "metro_core":   { "kerbShare": 0.10, "offStreetShare": 0.90 },
+      "megacity":     { "kerbShare": 0.05, "offStreetShare": 0.95 }
+    },
+    "source": "derived approximation, informed by observed kerb-space scarcity/structured-parking prevalence gradient in dense cities (Tokyo/Singapore/central London order-of-magnitude pattern)",
+    "year": 2026,
+    "confidence": "derived"
+  },
+  "turnover": {
+    "onStreetShortStay":  { "turnoverPerDaySpacesUsed": 6.0, "note": "kerbside shopping/short-stay bay", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "onStreetResidential": { "turnoverPerDaySpacesUsed": 1.1, "note": "resident permit bay, near-fixed occupant", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "offStreetCommuter":   { "turnoverPerDaySpacesUsed": 1.3, "note": "office/industrial commuter lot, ~one user/day plus rare second use", "source": "derived approximation", "year": 2026, "confidence": "derived" },
+    "offStreetRetail":     { "turnoverPerDaySpacesUsed": 8.0, "note": "shopping centre multi-storey, high daily turnover", "source": "derived approximation", "year": 2026, "confidence": "derived" }
+  },
+  "provenance": {
+    "source": "UK local-authority residential/commercial parking standard orders of magnitude, own derived approximations for turnover and kerb/off-street split",
+    "year": 2026,
+    "confidence": "derived",
+    "note": "No published single UK national parking-standard table exists (standards are locally set); every figure here is a directional cross-authority order-of-magnitude, pending Aaron's balance pass."
+  }
+}

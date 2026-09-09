@@ -1,0 +1,14 @@
+{
+  "baseCommuteHours": 5.0,
+  "baseAccessMinutes": 15.0,
+  "baseCommuteMinutes": 30.0,
+  "baseActiveTravelShare": 0.1,
+  "bprAlpha": 0.15,
+  "bprBeta": 4.0,
+  "capacityPerLanePerHour": 1200.0,
+  "webconsoleMetresPerTile": 50.0,
+  "maxAttributionRadiusTiles": 250,
+  "_disclosure": "GR#15: V/C volume-delay curve parameters (BPR alpha/beta) and lane capacities are data-driven here. bprAlpha/bprBeta must be finite and strictly positive -- LoadConfig rejects zero, negative, or NaN values fail-closed (MOD-023 r2 destructive verdict).",
+  "_webconsoleMetresPerTileSource": "Lead amendment (Bev, 2026-09-09, FEAT-2326609796 inc3 BOW comment): the WEBCONSOLE grid tile is 50 m, per webconsole/src/sim/debugjson.ts:1249 (grid.tileMetres:50) and data.ts:1759-1760 (road costs 'rebased onto this game's 50m tile'). This is DISTINCT from the ENGINE cell (data/georef.json cellSizeM: 10, the OS Terrain 50 raster) -- do not conflate the two; the Go engine.traffic BPR maths uses cellSizeM, never this field.",
+  "_maxAttributionRadiusTilesSource": "BUG-847 rework (2026-09-09): caps webconsole/src/sim/trafficDemand.ts's nearestSegmentWeights multi-source BFS radius so cost is bounded by the MAP (grid.ts MAP_W=624 x MAP_H=368, max possible Manhattan diameter 992 tiles) and this figure, never by the city's own occupied bounding-box diameter -- the BUG-847 finding measured 5.12M BFS ops from ONE 400-tile-distant outpost building because the old radius WAS the bbox diameter. 250 tiles = 12.5km at webconsoleMetresPerTile's 50m/tile, a generous upper bound on any plausible road/rail catchment for this game's city scale (the OS Terrain 50 Folkestone start tile is a fraction of that); tiles further than this from every segment of a class report as UNATTRIBUTED demand (forecastUnattributedOf) rather than being silently dropped or paying the old unbounded flood cost."
+}

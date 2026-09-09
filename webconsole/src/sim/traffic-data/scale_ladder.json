@@ -1,0 +1,1281 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609792",
+    "increment": 0,
+    "comment": "engine.traffic (planned MOD) inc0 static traffic tables — RESEARCH + STATIC TABLES ONLY, no engine code. See docs/planning/traffic-assumptions.md for full methodology and docs/planning/acceptance/FEAT-2326609792-inc0.md for acceptance criteria.",
+    "unitsConvention": "population=persons; density=persons/km2; trips=person-trips/day (a one-way journey by one person); vehicle-km=km travelled by one vehicle in one day; tonnes=metric tonnes/day (matches data/freight.json unitConvention); litres=litres/day; kWh=kilowatt-hours/day; ESAL=equivalent single-axle-load units (AASHTO 4th-power law, car=1 reference axle load per pass NORMALISED here as a small fraction — see road_wear.json for the canonical per-vehicle ESAL factor table, this is the only file that OWNS ESAL factors, all others reference).",
+    "rungPopulations": [
+      100,
+      1000,
+      5000,
+      10000,
+      50000,
+      100000,
+      250000,
+      600000,
+      1000000,
+      1200000,
+      2000000,
+      5000000,
+      10000000,
+      20000000,
+      40000000,
+      60000000,
+      80000000,
+      98000000
+    ],
+    "rungPopulationsNote": "Contract for the inc1 loader/interpolator (Bev, 2026-09-09): the expected rung count and exact population sequence a consumer validates rungs[].population against. Every numeric leaf on a rung, at any nesting depth including array elements, is finite and non-negative and is the interpolation target (log-linear in population per traffic-assumptions.md A-6); every non-numeric leaf (densityBand, provenance) carries through verbatim from the lower bracketing rung rather than being interpolated. BUG-823 rule: every field under a rung's provenance subtree (including year) is a STRING by rule, never a numeric leaf — provenance is entirely non-numeric so it is never mistaken for an interpolation target (a numeric year would otherwise interpolate to a fractional year, e.g. 2026.4).",
+    "comment2": "THE scale-ladder LUT (table k). One row per population rung, ascending. Runtime consumers interpolate log-linearly between rows (see traffic-assumptions.md A-6); never extrapolate beyond the last rung (98,000,000)."
+  },
+  "provenance": {
+    "source": "Composite derivation: UK DfT National Travel Survey (NTS0409 trip rates, NTS0905 car occupancy), Tokyo Metropolitan Area Person Trip Survey (5th round, MLIT/TMG) for the >=20M density/mode-share anchor, Singapore LTA Household Interview Travel Survey (HITS) 2023 for the upper-mid density band, AASHTO Guide for Design of Pavement Structures 1993 (4th-power axle-load law) for road wear, Home Office / NHS incident-rate orders of magnitude for emergency demand. Every per-rung number below is DERIVED (computed from the anchor tables in mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json, not independently sourced) — confidence: derived.",
+    "year": 2026,
+    "confidence": "derived",
+    "note": "This file is a computed rollup; do not hand-edit rows without regenerating from the source tables it depends on. See traffic-assumptions.md A-1..A-14 for the full derivation chain."
+  },
+  "rungs": [
+    {
+      "population": 100,
+      "densityPersonsPerKm2": 700,
+      "densityBand": "rural~small_town",
+      "tripRatePersonPerDay": 2.35,
+      "workersInCityShare": 0.42,
+      "workersInCity": 42,
+      "dailyPersonTrips": 235,
+      "modeShare": {
+        "walk": 0.154,
+        "bicycle": 0.037,
+        "car": 0.604,
+        "motorbike": 0.02,
+        "taxi": 0.02,
+        "bus": 0.131,
+        "tram": 0,
+        "metro": 0,
+        "heavy_rail": 0.034,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 36,
+        "bicycle": 9,
+        "car": 142,
+        "motorbike": 5,
+        "taxi": 5,
+        "bus": 31,
+        "tram": 0,
+        "metro": 0,
+        "heavy_rail": 8,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 3,
+        "single_deck": 14,
+        "double_deck": 11,
+        "articulated": 3
+      },
+      "avgTripLengthKm": 2,
+      "peakHourFactor": 0.11,
+      "networkVehicleKmPerDay": 206,
+      "freightTonnesPerDay": 23,
+      "freightTonnesBySector": {
+        "construction": 8,
+        "manufacturing": 3,
+        "food": 4,
+        "logistics_retail": 8,
+        "services_office": 0
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 7,
+        "rigid_truck": 9,
+        "articulated_truck": 7,
+        "freight_train": 0
+      },
+      "parkingSpacesDemanded": 52,
+      "fuelLitresDemandedPerDay": 54,
+      "evKWhDemandedPerDay": 1,
+      "evChargePointsNeeded": 0,
+      "emergencyIncidentsPerDay": 0,
+      "roadWearESALPerDay": 66,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 1000,
+      "densityPersonsPerKm2": 900,
+      "densityBand": "rural~small_town",
+      "tripRatePersonPerDay": 2.45,
+      "workersInCityShare": 0.437,
+      "workersInCity": 437,
+      "dailyPersonTrips": 2450,
+      "modeShare": {
+        "walk": 0.158,
+        "bicycle": 0.039,
+        "car": 0.588,
+        "motorbike": 0.02,
+        "taxi": 0.02,
+        "bus": 0.137,
+        "tram": 0,
+        "metro": 0,
+        "heavy_rail": 0.038,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 387,
+        "bicycle": 96,
+        "car": 1441,
+        "motorbike": 49,
+        "taxi": 49,
+        "bus": 336,
+        "tram": 0,
+        "metro": 0,
+        "heavy_rail": 93,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 34,
+        "single_deck": 151,
+        "double_deck": 118,
+        "articulated": 34
+      },
+      "avgTripLengthKm": 2,
+      "peakHourFactor": 0.11,
+      "networkVehicleKmPerDay": 2088,
+      "freightTonnesPerDay": 242,
+      "freightTonnesBySector": {
+        "construction": 79,
+        "manufacturing": 36,
+        "food": 46,
+        "logistics_retail": 79,
+        "services_office": 3
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 71,
+        "rigid_truck": 95,
+        "articulated_truck": 71,
+        "freight_train": 5
+      },
+      "parkingSpacesDemanded": 524,
+      "fuelLitresDemandedPerDay": 554,
+      "evKWhDemandedPerDay": 7,
+      "evChargePointsNeeded": 1,
+      "emergencyIncidentsPerDay": 1,
+      "roadWearESALPerDay": 687,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 5000,
+      "densityPersonsPerKm2": 1300,
+      "densityBand": "small_town~low_urban",
+      "tripRatePersonPerDay": 2.55,
+      "workersInCityShare": 0.4484,
+      "workersInCity": 2242,
+      "dailyPersonTrips": 12750,
+      "modeShare": {
+        "walk": 0.166,
+        "bicycle": 0.043,
+        "car": 0.553,
+        "motorbike": 0.02,
+        "taxi": 0.023,
+        "bus": 0.146,
+        "tram": 0.006,
+        "metro": 0.006,
+        "heavy_rail": 0.037,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 2117,
+        "bicycle": 548,
+        "car": 7051,
+        "motorbike": 255,
+        "taxi": 293,
+        "bus": 1861,
+        "tram": 77,
+        "metro": 77,
+        "heavy_rail": 472,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 186,
+        "single_deck": 837,
+        "double_deck": 651,
+        "articulated": 186
+      },
+      "avgTripLengthKm": 2.01,
+      "peakHourFactor": 0.11,
+      "networkVehicleKmPerDay": 10444,
+      "freightTonnesPerDay": 1185,
+      "freightTonnesBySector": {
+        "construction": 363,
+        "manufacturing": 197,
+        "food": 204,
+        "logistics_retail": 404,
+        "services_office": 17
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 348,
+        "rigid_truck": 466,
+        "articulated_truck": 347,
+        "freight_train": 24
+      },
+      "parkingSpacesDemanded": 2589,
+      "fuelLitresDemandedPerDay": 2720,
+      "evKWhDemandedPerDay": 35,
+      "evChargePointsNeeded": 4,
+      "emergencyIncidentsPerDay": 5,
+      "roadWearESALPerDay": 3376,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 10000,
+      "densityPersonsPerKm2": 1700,
+      "densityBand": "small_town~low_urban",
+      "tripRatePersonPerDay": 2.62,
+      "workersInCityShare": 0.4534,
+      "workersInCity": 4534,
+      "dailyPersonTrips": 26200,
+      "modeShare": {
+        "walk": 0.174,
+        "bicycle": 0.047,
+        "car": 0.517,
+        "motorbike": 0.02,
+        "taxi": 0.027,
+        "bus": 0.154,
+        "tram": 0.014,
+        "metro": 0.014,
+        "heavy_rail": 0.033,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 4559,
+        "bicycle": 1231,
+        "car": 13545,
+        "motorbike": 524,
+        "taxi": 707,
+        "bus": 4035,
+        "tram": 367,
+        "metro": 367,
+        "heavy_rail": 865,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 404,
+        "single_deck": 1816,
+        "double_deck": 1412,
+        "articulated": 404
+      },
+      "avgTripLengthKm": 2.02,
+      "peakHourFactor": 0.11,
+      "networkVehicleKmPerDay": 20614,
+      "freightTonnesPerDay": 2397,
+      "freightTonnesBySector": {
+        "construction": 735,
+        "manufacturing": 399,
+        "food": 413,
+        "logistics_retail": 816,
+        "services_office": 34
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 704,
+        "rigid_truck": 942,
+        "articulated_truck": 703,
+        "freight_train": 48
+      },
+      "parkingSpacesDemanded": 5023,
+      "fuelLitresDemandedPerDay": 5449,
+      "evKWhDemandedPerDay": 68,
+      "evChargePointsNeeded": 7,
+      "emergencyIncidentsPerDay": 9,
+      "roadWearESALPerDay": 6860,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 50000,
+      "densityPersonsPerKm2": 2300,
+      "densityBand": "low_urban~medium_urban",
+      "tripRatePersonPerDay": 2.72,
+      "workersInCityShare": 0.46504,
+      "workersInCity": 23252,
+      "dailyPersonTrips": 136000,
+      "modeShare": {
+        "walk": 0.184,
+        "bicycle": 0.052,
+        "car": 0.468,
+        "motorbike": 0.02,
+        "taxi": 0.03,
+        "bus": 0.162,
+        "tram": 0.022,
+        "metro": 0.028,
+        "heavy_rail": 0.034,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 25024,
+        "bicycle": 7072,
+        "car": 63648,
+        "motorbike": 2720,
+        "taxi": 4080,
+        "bus": 22032,
+        "tram": 2992,
+        "metro": 3808,
+        "heavy_rail": 4624,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 2203,
+        "single_deck": 9914,
+        "double_deck": 7711,
+        "articulated": 2203
+      },
+      "avgTripLengthKm": 2.1,
+      "peakHourFactor": 0.11,
+      "networkVehicleKmPerDay": 103554,
+      "freightTonnesPerDay": 11635,
+      "freightTonnesBySector": {
+        "construction": 3139,
+        "manufacturing": 2046,
+        "food": 1790,
+        "logistics_retail": 4464,
+        "services_office": 195
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 3417,
+        "rigid_truck": 4574,
+        "articulated_truck": 3410,
+        "freight_train": 235
+      },
+      "parkingSpacesDemanded": 23925,
+      "fuelLitresDemandedPerDay": 26569,
+      "evKWhDemandedPerDay": 334,
+      "evChargePointsNeeded": 34,
+      "emergencyIncidentsPerDay": 45,
+      "roadWearESALPerDay": 33587,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 100000,
+      "densityPersonsPerKm2": 2900,
+      "densityBand": "low_urban~medium_urban",
+      "tripRatePersonPerDay": 2.8,
+      "workersInCityShare": 0.47007,
+      "workersInCity": 47007,
+      "dailyPersonTrips": 280000,
+      "modeShare": {
+        "walk": 0.192,
+        "bicycle": 0.056,
+        "car": 0.424,
+        "motorbike": 0.02,
+        "taxi": 0.03,
+        "bus": 0.166,
+        "tram": 0.026,
+        "metro": 0.044,
+        "heavy_rail": 0.042,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 53760,
+        "bicycle": 15680,
+        "car": 118720,
+        "motorbike": 5600,
+        "taxi": 8400,
+        "bus": 46480,
+        "tram": 7280,
+        "metro": 12320,
+        "heavy_rail": 11760,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 4648,
+        "single_deck": 20916,
+        "double_deck": 16268,
+        "articulated": 4648
+      },
+      "avgTripLengthKm": 2.2,
+      "peakHourFactor": 0.11,
+      "networkVehicleKmPerDay": 206842,
+      "freightTonnesPerDay": 23522,
+      "freightTonnesBySector": {
+        "construction": 6346,
+        "manufacturing": 4137,
+        "food": 3620,
+        "logistics_retail": 9025,
+        "services_office": 395
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 6906,
+        "rigid_truck": 9245,
+        "articulated_truck": 6893,
+        "freight_train": 478
+      },
+      "parkingSpacesDemanded": 45163,
+      "fuelLitresDemandedPerDay": 53422,
+      "evKWhDemandedPerDay": 661,
+      "evChargePointsNeeded": 64,
+      "emergencyIncidentsPerDay": 90,
+      "roadWearESALPerDay": 68277,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 250000,
+      "densityPersonsPerKm2": 3500,
+      "densityBand": "low_urban~medium_urban",
+      "tripRatePersonPerDay": 2.86,
+      "workersInCityShare": 0.476716,
+      "workersInCity": 119179,
+      "dailyPersonTrips": 715000,
+      "modeShare": {
+        "walk": 0.2,
+        "bicycle": 0.06,
+        "car": 0.38,
+        "motorbike": 0.02,
+        "taxi": 0.03,
+        "bus": 0.17,
+        "tram": 0.03,
+        "metro": 0.06,
+        "heavy_rail": 0.05,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 143000,
+        "bicycle": 42900,
+        "car": 271700,
+        "motorbike": 14300,
+        "taxi": 21450,
+        "bus": 121550,
+        "tram": 21450,
+        "metro": 42900,
+        "heavy_rail": 35750,
+        "hs_rail": 0,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 12155,
+        "single_deck": 54698,
+        "double_deck": 42543,
+        "articulated": 12155
+      },
+      "avgTripLengthKm": 2.48,
+      "peakHourFactor": 0.1099,
+      "networkVehicleKmPerDay": 548378,
+      "freightTonnesPerDay": 59637,
+      "freightTonnesBySector": {
+        "construction": 16089,
+        "manufacturing": 10488,
+        "food": 9177,
+        "logistics_retail": 22882,
+        "services_office": 1001
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 17501,
+        "rigid_truck": 23429,
+        "articulated_truck": 17465,
+        "freight_train": 1242
+      },
+      "parkingSpacesDemanded": 104653,
+      "fuelLitresDemandedPerDay": 136681,
+      "evKWhDemandedPerDay": 1731,
+      "evChargePointsNeeded": 149,
+      "emergencyIncidentsPerDay": 225,
+      "roadWearESALPerDay": 174938,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 600000,
+      "densityPersonsPerKm2": 4200,
+      "densityBand": "medium_urban~dense_urban",
+      "tripRatePersonPerDay": 2.88,
+      "workersInCityShare": 0.48306167,
+      "workersInCity": 289837,
+      "dailyPersonTrips": 1728000,
+      "modeShare": {
+        "walk": 0.2035,
+        "bicycle": 0.0635,
+        "car": 0.34675,
+        "motorbike": 0.01825,
+        "taxi": 0.03175,
+        "bus": 0.1665,
+        "tram": 0.03,
+        "metro": 0.0775,
+        "heavy_rail": 0.0605,
+        "hs_rail": 0.00175,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 351648,
+        "bicycle": 109728,
+        "car": 599184,
+        "motorbike": 31536,
+        "taxi": 54864,
+        "bus": 287712,
+        "tram": 51840,
+        "metro": 133920,
+        "heavy_rail": 104544,
+        "hs_rail": 3024,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 28771,
+        "single_deck": 129470,
+        "double_deck": 100699,
+        "articulated": 28771
+      },
+      "avgTripLengthKm": 3.09,
+      "peakHourFactor": 0.1098,
+      "networkVehicleKmPerDay": 1541359,
+      "freightTonnesPerDay": 131905,
+      "freightTonnesBySector": {
+        "construction": 31302,
+        "manufacturing": 23912,
+        "food": 18260,
+        "logistics_retail": 55649,
+        "services_office": 2782
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 38659,
+        "rigid_truck": 51767,
+        "articulated_truck": 38577,
+        "freight_train": 2902
+      },
+      "parkingSpacesDemanded": 234393,
+      "fuelLitresDemandedPerDay": 322790,
+      "evKWhDemandedPerDay": 4810,
+      "evChargePointsNeeded": 332,
+      "emergencyIncidentsPerDay": 540,
+      "roadWearESALPerDay": 396576,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 1000000,
+      "densityPersonsPerKm2": 4800,
+      "densityBand": "medium_urban~dense_urban",
+      "tripRatePersonPerDay": 2.86,
+      "workersInCityShare": 0.486764,
+      "workersInCity": 486764,
+      "dailyPersonTrips": 2860000,
+      "modeShare": {
+        "walk": 0.2065,
+        "bicycle": 0.0665,
+        "car": 0.31825,
+        "motorbike": 0.01675,
+        "taxi": 0.03325,
+        "bus": 0.1635,
+        "tram": 0.03,
+        "metro": 0.0925,
+        "heavy_rail": 0.0695,
+        "hs_rail": 0.00325,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 590590,
+        "bicycle": 190190,
+        "car": 910195,
+        "motorbike": 47905,
+        "taxi": 95095,
+        "bus": 467610,
+        "tram": 85800,
+        "metro": 264550,
+        "heavy_rail": 198770,
+        "hs_rail": 9295,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 46761,
+        "single_deck": 210425,
+        "double_deck": 163664,
+        "articulated": 46761
+      },
+      "avgTripLengthKm": 3.7,
+      "peakHourFactor": 0.1096,
+      "networkVehicleKmPerDay": 2868577,
+      "freightTonnesPerDay": 221526,
+      "freightTonnesBySector": {
+        "construction": 52571,
+        "manufacturing": 40158,
+        "food": 30666,
+        "logistics_retail": 93459,
+        "services_office": 4673
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 64833,
+        "rigid_truck": 86838,
+        "articulated_truck": 64686,
+        "freight_train": 5169
+      },
+      "parkingSpacesDemanded": 361048,
+      "fuelLitresDemandedPerDay": 559275,
+      "evKWhDemandedPerDay": 8883,
+      "evChargePointsNeeded": 509,
+      "emergencyIncidentsPerDay": 900,
+      "roadWearESALPerDay": 676010,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 1200000,
+      "densityPersonsPerKm2": 5000,
+      "densityBand": "medium_urban~dense_urban",
+      "tripRatePersonPerDay": 2.85,
+      "workersInCityShare": 0.48808583,
+      "workersInCity": 585703,
+      "dailyPersonTrips": 3420000,
+      "modeShare": {
+        "walk": 0.2075,
+        "bicycle": 0.0675,
+        "car": 0.30875,
+        "motorbike": 0.01625,
+        "taxi": 0.03375,
+        "bus": 0.1625,
+        "tram": 0.03,
+        "metro": 0.0975,
+        "heavy_rail": 0.0725,
+        "hs_rail": 0.00375,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 709650,
+        "bicycle": 230850,
+        "car": 1055925,
+        "motorbike": 55575,
+        "taxi": 115425,
+        "bus": 555750,
+        "tram": 102600,
+        "metro": 333450,
+        "heavy_rail": 247950,
+        "hs_rail": 12825,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 55575,
+        "single_deck": 250088,
+        "double_deck": 194513,
+        "articulated": 55575
+      },
+      "avgTripLengthKm": 3.98,
+      "peakHourFactor": 0.1095,
+      "networkVehicleKmPerDay": 3605091,
+      "freightTonnesPerDay": 266553,
+      "freightTonnesBySector": {
+        "construction": 63256,
+        "manufacturing": 48320,
+        "food": 36899,
+        "logistics_retail": 112455,
+        "services_office": 5623
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 77955,
+        "rigid_truck": 104428,
+        "articulated_truck": 77773,
+        "freight_train": 6397
+      },
+      "parkingSpacesDemanded": 420868,
+      "fuelLitresDemandedPerDay": 682384,
+      "evKWhDemandedPerDay": 11133,
+      "evChargePointsNeeded": 593,
+      "emergencyIncidentsPerDay": 1080,
+      "roadWearESALPerDay": 818737,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 2000000,
+      "densityPersonsPerKm2": 5600,
+      "densityBand": "dense_urban~high_density",
+      "tripRatePersonPerDay": 2.82,
+      "workersInCityShare": 0.491789,
+      "workersInCity": 983578,
+      "dailyPersonTrips": 5640000,
+      "modeShare": {
+        "walk": 0.2095,
+        "bicycle": 0.07,
+        "car": 0.28225,
+        "motorbike": 0.01475,
+        "taxi": 0.03475,
+        "bus": 0.159,
+        "tram": 0.02975,
+        "metro": 0.1125,
+        "heavy_rail": 0.082,
+        "hs_rail": 0.0055,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 1181580,
+        "bicycle": 394800,
+        "car": 1591890,
+        "motorbike": 83190,
+        "taxi": 195990,
+        "bus": 896760,
+        "tram": 167790,
+        "metro": 634500,
+        "heavy_rail": 462480,
+        "hs_rail": 31020,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 89676,
+        "single_deck": 403542,
+        "double_deck": 313866,
+        "articulated": 89676
+      },
+      "avgTripLengthKm": 4.92,
+      "peakHourFactor": 0.1092,
+      "networkVehicleKmPerDay": 6870757,
+      "freightTonnesPerDay": 401595,
+      "freightTonnesBySector": {
+        "construction": 88522,
+        "manufacturing": 70326,
+        "food": 55080,
+        "logistics_retail": 177044,
+        "services_office": 10623
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 117113,
+        "rigid_truck": 156966,
+        "articulated_truck": 116807,
+        "freight_train": 10709
+      },
+      "parkingSpacesDemanded": 643564,
+      "fuelLitresDemandedPerDay": 1115191,
+      "evKWhDemandedPerDay": 20963,
+      "evChargePointsNeeded": 903,
+      "emergencyIncidentsPerDay": 1800,
+      "roadWearESALPerDay": 1279577,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 5000000,
+      "densityPersonsPerKm2": 6500,
+      "densityBand": "dense_urban~high_density",
+      "tripRatePersonPerDay": 2.78,
+      "workersInCityShare": 0.4984308,
+      "workersInCity": 2492154,
+      "dailyPersonTrips": 13900000,
+      "modeShare": {
+        "walk": 0.205,
+        "bicycle": 0.07,
+        "car": 0.2575,
+        "motorbike": 0.0125,
+        "taxi": 0.0325,
+        "bus": 0.15,
+        "tram": 0.0275,
+        "metro": 0.135,
+        "heavy_rail": 0.1,
+        "hs_rail": 0.01,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 2849500,
+        "bicycle": 973000,
+        "car": 3579250,
+        "motorbike": 173750,
+        "taxi": 451750,
+        "bus": 2085000,
+        "tram": 382250,
+        "metro": 1876500,
+        "heavy_rail": 1390000,
+        "hs_rail": 139000,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 208500,
+        "single_deck": 938250,
+        "double_deck": 729750,
+        "articulated": 208500
+      },
+      "avgTripLengthKm": 6.87,
+      "peakHourFactor": 0.1081,
+      "networkVehicleKmPerDay": 21830843,
+      "freightTonnesPerDay": 1017546,
+      "freightTonnesBySector": {
+        "construction": 224294,
+        "manufacturing": 178189,
+        "food": 139561,
+        "logistics_retail": 448588,
+        "services_office": 26915
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 293538,
+        "rigid_truck": 394226,
+        "articulated_truck": 292472,
+        "freight_train": 37310
+      },
+      "parkingSpacesDemanded": 1470927,
+      "fuelLitresDemandedPerDay": 3112252,
+      "evKWhDemandedPerDay": 67156,
+      "evChargePointsNeeded": 2064,
+      "emergencyIncidentsPerDay": 4500,
+      "roadWearESALPerDay": 3355619,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 10000000,
+      "densityPersonsPerKm2": 7300,
+      "densityBand": "dense_urban~high_density",
+      "tripRatePersonPerDay": 2.72,
+      "workersInCityShare": 0.5034554,
+      "workersInCity": 5034554,
+      "dailyPersonTrips": 27200000,
+      "modeShare": {
+        "walk": 0.201,
+        "bicycle": 0.07,
+        "car": 0.2355,
+        "motorbike": 0.0105,
+        "taxi": 0.0305,
+        "bus": 0.142,
+        "tram": 0.0255,
+        "metro": 0.155,
+        "heavy_rail": 0.116,
+        "hs_rail": 0.014,
+        "ferry": 0
+      },
+      "tripsByMode": {
+        "walk": 5467200,
+        "bicycle": 1904000,
+        "car": 6405600,
+        "motorbike": 285600,
+        "taxi": 829600,
+        "bus": 3862400,
+        "tram": 693600,
+        "metro": 4216000,
+        "heavy_rail": 3155200,
+        "hs_rail": 380800,
+        "ferry": 0
+      },
+      "busSubtypeTrips": {
+        "minibus": 386240,
+        "single_deck": 1738080,
+        "double_deck": 1351840,
+        "articulated": 386240
+      },
+      "avgTripLengthKm": 7.79,
+      "peakHourFactor": 0.1062,
+      "networkVehicleKmPerDay": 44792691,
+      "freightTonnesPerDay": 2055608,
+      "freightTonnesBySector": {
+        "construction": 453110,
+        "manufacturing": 359971,
+        "food": 281935,
+        "logistics_retail": 906220,
+        "services_office": 54373
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 582226,
+        "rigid_truck": 784655,
+        "articulated_truck": 579094,
+        "freight_train": 109632
+      },
+      "parkingSpacesDemanded": 2672016,
+      "fuelLitresDemandedPerDay": 6309560,
+      "evKWhDemandedPerDay": 138910,
+      "evChargePointsNeeded": 3747,
+      "emergencyIncidentsPerDay": 9000,
+      "roadWearESALPerDay": 6732186,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 20000000,
+      "densityPersonsPerKm2": 8100,
+      "densityBand": "high_density~metro_core",
+      "tripRatePersonPerDay": 2.66,
+      "workersInCityShare": 0.5084799,
+      "workersInCity": 10169598,
+      "dailyPersonTrips": 53200000,
+      "modeShare": {
+        "walk": 0.192,
+        "bicycle": 0.066,
+        "car": 0.2,
+        "motorbike": 0.01,
+        "taxi": 0.03,
+        "bus": 0.128,
+        "tram": 0.023,
+        "metro": 0.184,
+        "heavy_rail": 0.144,
+        "hs_rail": 0.021,
+        "ferry": 0.002
+      },
+      "tripsByMode": {
+        "walk": 10214400,
+        "bicycle": 3511200,
+        "car": 10640000,
+        "motorbike": 532000,
+        "taxi": 1596000,
+        "bus": 6809600,
+        "tram": 1223600,
+        "metro": 9788800,
+        "heavy_rail": 7660800,
+        "hs_rail": 1117200,
+        "ferry": 106400
+      },
+      "busSubtypeTrips": {
+        "minibus": 680960,
+        "single_deck": 3064320,
+        "double_deck": 2383360,
+        "articulated": 680960
+      },
+      "avgTripLengthKm": 7.99,
+      "peakHourFactor": 0.1025,
+      "networkVehicleKmPerDay": 79217077,
+      "freightTonnesPerDay": 3676310,
+      "freightTonnesBySector": {
+        "construction": 732211,
+        "manufacturing": 615261,
+        "food": 498310,
+        "logistics_retail": 1708492,
+        "services_office": 122035
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 1002757,
+        "rigid_truck": 1361285,
+        "articulated_truck": 993654,
+        "freight_train": 318614
+      },
+      "parkingSpacesDemanded": 4527011,
+      "fuelLitresDemandedPerDay": 10914156,
+      "evKWhDemandedPerDay": 240655,
+      "evChargePointsNeeded": 6317,
+      "emergencyIncidentsPerDay": 18000,
+      "roadWearESALPerDay": 11715432,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 40000000,
+      "densityPersonsPerKm2": 9000,
+      "densityBand": "high_density~metro_core",
+      "tripRatePersonPerDay": 2.6,
+      "workersInCityShare": 0.5135044,
+      "workersInCity": 20540176,
+      "dailyPersonTrips": 104000000,
+      "modeShare": {
+        "walk": 0.18,
+        "bicycle": 0.06,
+        "car": 0.155,
+        "motorbike": 0.01,
+        "taxi": 0.03,
+        "bus": 0.11,
+        "tram": 0.02,
+        "metro": 0.22,
+        "heavy_rail": 0.18,
+        "hs_rail": 0.03,
+        "ferry": 0.005
+      },
+      "tripsByMode": {
+        "walk": 18720000,
+        "bicycle": 6240000,
+        "car": 16120000,
+        "motorbike": 1040000,
+        "taxi": 3120000,
+        "bus": 11440000,
+        "tram": 2080000,
+        "metro": 22880000,
+        "heavy_rail": 18720000,
+        "hs_rail": 3120000,
+        "ferry": 520000
+      },
+      "busSubtypeTrips": {
+        "minibus": 1144000,
+        "single_deck": 5148000,
+        "double_deck": 4004000,
+        "articulated": 1144000
+      },
+      "avgTripLengthKm": 8,
+      "peakHourFactor": 0.095,
+      "networkVehicleKmPerDay": 128286052,
+      "freightTonnesPerDay": 7425274,
+      "freightTonnesBySector": {
+        "construction": 1478893,
+        "manufacturing": 1242681,
+        "food": 1006469,
+        "logistics_retail": 3450750,
+        "services_office": 246482
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 1869755,
+        "rigid_truck": 2579752,
+        "articulated_truck": 1837225,
+        "freight_train": 1138542
+      },
+      "parkingSpacesDemanded": 7051321,
+      "fuelLitresDemandedPerDay": 18906875,
+      "evKWhDemandedPerDay": 375511,
+      "evChargePointsNeeded": 9733,
+      "emergencyIncidentsPerDay": 36000,
+      "roadWearESALPerDay": 21396227,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 60000000,
+      "densityPersonsPerKm2": 9600,
+      "densityBand": "metro_core~megacity",
+      "tripRatePersonPerDay": 2.56,
+      "workersInCityShare": 0.51644355,
+      "workersInCity": 30986613,
+      "dailyPersonTrips": 153600000,
+      "modeShare": {
+        "walk": 0.168,
+        "bicycle": 0.056,
+        "car": 0.129,
+        "motorbike": 0.008,
+        "taxi": 0.028,
+        "bus": 0.1,
+        "tram": 0.018,
+        "metro": 0.24,
+        "heavy_rail": 0.204,
+        "hs_rail": 0.038,
+        "ferry": 0.011
+      },
+      "tripsByMode": {
+        "walk": 25804800,
+        "bicycle": 8601600,
+        "car": 19814400,
+        "motorbike": 1228800,
+        "taxi": 4300800,
+        "bus": 15360000,
+        "tram": 2764800,
+        "metro": 36864000,
+        "heavy_rail": 31334400,
+        "hs_rail": 5836800,
+        "ferry": 1689600
+      },
+      "busSubtypeTrips": {
+        "minibus": 1536000,
+        "single_deck": 6912000,
+        "double_deck": 5376000,
+        "articulated": 1536000
+      },
+      "avgTripLengthKm": 8,
+      "peakHourFactor": 0.095,
+      "networkVehicleKmPerDay": 161916752,
+      "freightTonnesPerDay": 9587258,
+      "freightTonnesBySector": {
+        "construction": 1673277,
+        "manufacturing": 1363411,
+        "food": 1301438,
+        "logistics_retail": 4833912,
+        "services_office": 415221
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 2213287,
+        "rigid_truck": 3111750,
+        "articulated_truck": 2153024,
+        "freight_train": 2109197
+      },
+      "parkingSpacesDemanded": 8815269,
+      "fuelLitresDemandedPerDay": 22877266,
+      "evKWhDemandedPerDay": 465361,
+      "evChargePointsNeeded": 12100,
+      "emergencyIncidentsPerDay": 54000,
+      "roadWearESALPerDay": 25994960,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 80000000,
+      "densityPersonsPerKm2": 10200,
+      "densityBand": "metro_core~megacity",
+      "tripRatePersonPerDay": 2.52,
+      "workersInCityShare": 0.51852891,
+      "workersInCity": 41482313,
+      "dailyPersonTrips": 201600000,
+      "modeShare": {
+        "walk": 0.156,
+        "bicycle": 0.052,
+        "car": 0.103,
+        "motorbike": 0.006,
+        "taxi": 0.026,
+        "bus": 0.09,
+        "tram": 0.016,
+        "metro": 0.26,
+        "heavy_rail": 0.228,
+        "hs_rail": 0.046,
+        "ferry": 0.017
+      },
+      "tripsByMode": {
+        "walk": 31449600,
+        "bicycle": 10483200,
+        "car": 20764800,
+        "motorbike": 1209600,
+        "taxi": 5241600,
+        "bus": 18144000,
+        "tram": 3225600,
+        "metro": 52416000,
+        "heavy_rail": 45964800,
+        "hs_rail": 9273600,
+        "ferry": 3427200
+      },
+      "busSubtypeTrips": {
+        "minibus": 1814400,
+        "single_deck": 8164800,
+        "double_deck": 6350400,
+        "articulated": 1814400
+      },
+      "avgTripLengthKm": 8,
+      "peakHourFactor": 0.095,
+      "networkVehicleKmPerDay": 175662120,
+      "freightTonnesPerDay": 12834628,
+      "freightTonnesBySector": {
+        "construction": 2240045,
+        "manufacturing": 1825222,
+        "food": 1742257,
+        "logistics_retail": 6471241,
+        "services_office": 555863
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 2694050,
+        "rigid_truck": 3872391,
+        "articulated_truck": 2588928,
+        "freight_train": 3679260
+      },
+      "parkingSpacesDemanded": 9423827,
+      "fuelLitresDemandedPerDay": 26552616,
+      "evKWhDemandedPerDay": 498004,
+      "evChargePointsNeeded": 12828,
+      "emergencyIncidentsPerDay": 72000,
+      "roadWearESALPerDay": 31449188,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    },
+    {
+      "population": 98000000,
+      "densityPersonsPerKm2": 10800,
+      "densityBand": "megacity",
+      "tripRatePersonPerDay": 2.48,
+      "workersInCityShare": 0.52,
+      "workersInCity": 50960000,
+      "dailyPersonTrips": 243040000,
+      "modeShare": {
+        "walk": 0.15,
+        "bicycle": 0.05,
+        "car": 0.09,
+        "motorbike": 0.005,
+        "taxi": 0.025,
+        "bus": 0.085,
+        "tram": 0.015,
+        "metro": 0.27,
+        "heavy_rail": 0.24,
+        "hs_rail": 0.05,
+        "ferry": 0.02
+      },
+      "tripsByMode": {
+        "walk": 36456000,
+        "bicycle": 12152000,
+        "car": 21873600,
+        "motorbike": 1215200,
+        "taxi": 6076000,
+        "bus": 20658400,
+        "tram": 3645600,
+        "metro": 65620800,
+        "heavy_rail": 58329600,
+        "hs_rail": 12152000,
+        "ferry": 4860800
+      },
+      "busSubtypeTrips": {
+        "minibus": 2065840,
+        "single_deck": 9296280,
+        "double_deck": 7230440,
+        "articulated": 2065840
+      },
+      "avgTripLengthKm": 8,
+      "peakHourFactor": 0.095,
+      "networkVehicleKmPerDay": 190030544,
+      "freightTonnesPerDay": 13830544,
+      "freightTonnesBySector": {
+        "construction": 2293200,
+        "manufacturing": 1681680,
+        "food": 1783600,
+        "logistics_retail": 7338240,
+        "services_office": 733824
+      },
+      "freightTonnesByVehicleClass": {
+        "cargo_van": 2642293,
+        "rigid_truck": 3888359,
+        "articulated_truck": 2505304,
+        "freight_train": 4794589
+      },
+      "parkingSpacesDemanded": 10099889,
+      "fuelLitresDemandedPerDay": 26953715,
+      "evKWhDemandedPerDay": 527668,
+      "evChargePointsNeeded": 13671,
+      "emergencyIncidentsPerDay": 88200,
+      "roadWearESALPerDay": 31896575,
+      "provenance": {
+        "source": "Derived rollup of mode_share_by_density.json / trip_generation.json / vehicle_classes.json / road_wear.json — see docs/planning/traffic-assumptions.md A-1..A-14",
+        "year": "2026",
+        "confidence": "derived"
+      }
+    }
+  ]
+}

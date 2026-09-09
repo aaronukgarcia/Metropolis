@@ -277,12 +277,16 @@ describe('scaleLadder AC-9 structural cost guarantee', () => {
 });
 
 describe('scaleLadder AC-10 no consumer yet', () => {
-  it('TestAC10_NoConsumerInSrc: nothing under src/ except scaleLadder.ts/scaleLadderData.ts calls ladderAt (mutant: a stray wiring call added before inc2)', () => {
+  it('TestAC10_NoConsumerInSrc: nothing under src/ except scaleLadder.ts/scaleLadderData.ts and the sanctioned traffic consumers (inc2 trafficDemand.ts, inc3 trafficAssignment.ts) calls ladderAt (mutant: a stray wiring call elsewhere)', () => {
     const srcDir = path.join(__dirname, '..', 'src', 'sim');
     const entries = readdirSync(srcDir).filter((f: string) => f.endsWith('.ts'));
     const callRe = /\bladderAt\(/;
     for (const name of entries) {
-      if (name === 'scaleLadder.ts' || name === 'scaleLadderData.ts') continue;
+      // BUG-860 (2026-09-09): inc2 (trafficDemand.ts) is the ladder's
+      // sanctioned first consumer and inc3 (trafficAssignment.ts) its second;
+      // this guard is about STRAY wiring, not the increments the epic planned.
+      const sanctioned = new Set(['scaleLadder.ts', 'scaleLadderData.ts', 'trafficDemand.ts', 'trafficAssignment.ts']);
+      if (sanctioned.has(name)) continue;
       const content = readFileSync(path.join(srcDir, name), 'utf8');
       assert.ok(!callRe.test(content), `${name} calls ladderAt -- AC-10 forbids a consumer before inc2`);
     }

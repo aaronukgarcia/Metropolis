@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609792",
+    "increment": 0,
+    "comment": "engine.traffic (planned MOD) inc0 table (j): fuel duty (referenced from data/fuel.json, not restated), Vehicle Excise Duty (VED) bands by CO2, congestion-charge/ERP zone defaults, and the COE (Certificate of Entitlement) ownership-quota lever. data/tax_instruments.json's six-instrument set (VAT/import-duties/corporation-tax/PAYE/council-tax/business-rates) has NO VED or road-user-charging instrument today -- this file proposes the DATA for one; wiring it as a seventh engine.tax instrument is an engine change out of inc0's data-only scope (flagged as ASM, see traffic-assumptions.md and the BOW assumption list).",
+    "unitsConvention": "VED bands in GBP/year (converted to micro-pounds per data/tax_instruments.json's convention, 1 GBP = 1,000,000 micro-pounds, referenced not restated as a NEW unit); congestion charge in GBP/entry or GBP/day; COE price in GBP (one-off, Singapore-style)."
+  },
+  "fuelDuty": {
+    "refersTo": "data/fuel.json duty.ratePencePerLitre", "note": "referenced, not restated -- this file does not carry its own fuel-duty rate; it exists here only to document that fuel duty is the ROAD-USE tax component this table's demand figures (fuelLitresDemandedPerDay in scale_ladder.json) feed revenue calculations from."
+  },
+  "vehicleExciseDuty": {
+    "$comment": "UK VED (road tax) schedule: FIRST-YEAR ('showroom') rate bands by CO2 for cars registered on or after 1 April 2017, 2024-25 DfT published table (BUG-822 fix -- previously mixed first-year and pre-2017 standard-rate figures under one field). The bands below are the complete, non-overlapping, gap-free g/km ladder for THIS ONE schedule -- every co2Band from 0 up covers 0-255+ with no missing range. standardRateFlatGBPPerYear (outside the bands array) is the SEPARATE flat annual rate that applies from the second year of registration onwards for a petrol/diesel car under the same post-2017 schedule -- it is not CO2-banded and must not be confused with a first-year band figure. A future engine increment would need a per-vehicle CO2 rating (not yet modelled) to apply these bands; until then this table's fleetAverageByVehicleClass is usable as a fleet-average road-tax figure per vehicle class.",
+    "bands": [
+      { "co2Band": "0 g/km",       "firstYearRateGBP": 0,    "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "1-50 g/km",    "firstYearRateGBP": 10,   "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "51-75 g/km",   "firstYearRateGBP": 30,   "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "76-90 g/km",   "firstYearRateGBP": 135,  "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "91-100 g/km",  "firstYearRateGBP": 175,  "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "101-110 g/km", "firstYearRateGBP": 195,  "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "111-130 g/km", "firstYearRateGBP": 220,  "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "131-150 g/km", "firstYearRateGBP": 270,  "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "151-170 g/km", "firstYearRateGBP": 680,  "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "171-190 g/km", "firstYearRateGBP": 1095, "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "191-225 g/km", "firstYearRateGBP": 1650, "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "226-255 g/km", "firstYearRateGBP": 2340, "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+      { "co2Band": "over 255 g/km", "firstYearRateGBP": 2745, "source": "UK VED first-year rates, cars registered on/after 1 April 2017, 2024-25 DfT published table (highest band)", "year": 2024, "confidence": "measured" }
+    ],
+    "standardRateFlatGBPPerYear": { "value": 190, "note": "Flat rate applying from the SECOND year of registration onwards for a petrol/diesel car under the post-2017 schedule -- NOT CO2-banded, and a separate field from the first-year bands array above (BUG-822: previously the 255+ band's figure was actually a pre-2017 standard-rate value mixed in with first-year figures).", "source": "UK VED standard rate, cars registered on/after 1 April 2017, 2024-25 DfT published table", "year": 2024, "confidence": "measured" },
+    "fleetAverageByVehicleClass": {
+      "$comment": "Directional per-vehicle-class fleet-average VED, used until a real per-vehicle CO2 rating exists in the engine. Derived by mapping vehicle_classes.json's road vehicle classes onto typical real-world fleet CO2 profiles.",
+      "car":               { "gbpPerYear": 190, "source": "derived approximation (UK average car fleet CO2 sits mid-table across the bands above)", "year": 2026, "confidence": "derived" },
+      "motorbike":         { "gbpPerYear": 25,  "note": "motorbikes use a separate UK VED schedule by engine size, not CO2; this is a coarse average", "source": "derived approximation, UK motorbike VED schedule order-of-magnitude", "year": 2026, "confidence": "derived" },
+      "taxi":               { "gbpPerYear": 190, "source": "as car (private hire vehicles use the standard car VED schedule)", "year": 2026, "confidence": "derived" },
+      "cargo_van":          { "gbpPerYear": 345, "source": "derived approximation, UK Light Goods Vehicle VED band order-of-magnitude", "year": 2026, "confidence": "derived" },
+      "rigid_truck":        { "gbpPerYear": 650, "source": "derived approximation, UK HGV Road User Levy + VED order-of-magnitude", "year": 2026, "confidence": "derived" },
+      "articulated_truck":  { "gbpPerYear": 1200,"source": "derived approximation, UK HGV Road User Levy + VED order-of-magnitude (heaviest artic band)", "year": 2026, "confidence": "derived" }
+    }
+  },
+  "roadPricing": {
+    "congestionChargeDefault": { "gbpPerDayPerVehicle": 15.0, "note": "London-style flat daily congestion-charge-zone anchor, mapping sanity-check only", "source": "Transport for London Congestion Charge published rate (2024/25 order-of-magnitude)", "year": 2024, "confidence": "measured", "confidenceNote": "the LONDON rate is measured/published; applying it as this schema's own default is a derived choice" },
+    "electronicRoadPricingSingaporeStyle": {
+      "note": "Singapore-style ERP: per-gantry-crossing charge, varies by time-of-day and measured v/c to actively manage demand (distinct from London's flat all-day zone charge).",
+      "peakGbpPerCrossing": 3.5,
+      "offPeakGbpPerCrossing": 0.0,
+      "source": "Singapore LTA Electronic Road Pricing published rate structure (SGD-denominated originally; GBP figure here is an order-of-magnitude currency-mapping sanity-check, not a live FX conversion)",
+      "year": 2024,
+      "confidence": "derived",
+      "confidenceNote": "the MECHANISM (per-crossing, time-varying) is measured/documented Singapore policy; the specific GBP rate applied here is a derived mapping"
+    }
+  },
+  "certificateOfEntitlement": {
+    "$comment": "Singapore-style COE: a time-limited (10-year) quota-based right to own a vehicle, auctioned; caps fleet growth directly rather than taxing use. Gibraltar's own vehicle-ownership pressure comes from acute land scarcity rather than an auctioned quota, but shares the 'ownership itself is the constrained resource' mechanic Aaron's brief cites both territories for.",
+    "quotaMechanism": "A city-wide (or zone-wide) cap on NEW vehicle registrations per period; price discovered by auction/bid, not fixed.",
+    "illustrativePriceGBP": { "value": 45000, "note": "Singapore COE prices have historically ranged roughly SGD 30,000-150,000+ depending on vehicle category and market conditions; this is an illustrative order-of-magnitude GBP mapping, not a live or averaged conversion of any specific period's auction result.", "source": "Singapore LTA COE quota premium published results, order-of-magnitude mapping sanity-check", "year": 2024, "confidence": "derived" },
+    "quotaGrowthRatePerYear": { "value": 0.005, "note": "Singapore's own vehicle-population growth cap has historically been set near zero to slightly negative in recent years; 0.5%/year is this schema's own illustrative default lever, adjustable by policy (see policy_levers.json).", "source": "derived approximation, informed by Singapore LTA vehicle quota policy direction", "year": 2026, "confidence": "derived" }
+  },
+  "provenance": {
+    "source": "UK VED published bands (measured), TfL Congestion Charge published rate (measured), Singapore LTA ERP/COE published policy structure (measured mechanism, derived GBP mapping)",
+    "year": 2026,
+    "confidence": "derived",
+    "note": "VED band RATES and the TfL congestion charge RATE are measured/published UK figures; every Singapore-territory GBP figure is an illustrative order-of-magnitude mapping, not a currency-converted live figure. This whole file is a DATA PROPOSAL for a not-yet-existing engine.tax instrument -- see the ASM entries filed against it."
+  }
+}

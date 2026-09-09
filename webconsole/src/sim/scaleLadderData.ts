@@ -11,7 +11,7 @@
 // importing it here, at module-load time, is itself the "validate at
 // import time, never a silent partial load" behaviour AC-4 asks for; no
 // engine/UI code calls scaleLadderOf/ladderAt through it in inc1.
-import rawScaleLadder from '../../../data/traffic/scale_ladder.json' with { type: 'json' };
+import rawScaleLadder from './traffic-data/scale_ladder.json' with { type: 'json' };
 import { loadScaleLadder, type ScaleLadder } from './scaleLadder.ts';
 
 /** The real scale ladder, validated once at module-load time (AC-4). Throws

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609792",
+    "increment": 0,
+    "comment": "engine.traffic (planned MOD) inc0 table (d)+(e): link capacity per road/rail/tube class in pcu/h/lane and trains/h, plus the BPR-style congestion curve. Road link capacities key to data/roads.json's 11 class ids by reference (roadClassId field); this file adds ONLY the new figure roads.json does not carry -- capacityPcuPerLanePerHour -- it does not restate lanes/speedLimit/baseCostPounds (GR#3). The BPR alpha/beta/capacityPerLanePerHour DEFAULTS already live in data/traffic.json -- referenced by field name only, not restated (BUG-824); this file adds PER-CLASS overrides only, since traffic.json's single default is network-wide and (e) explicitly calls for per-class variation.",
+    "unitsConvention": "capacityPcuPerLanePerHour = passenger-car-unit throughput per lane per hour (HCM 2010/2016 convention); trainsPerHourMax = maximum scheduled trains/hour on the class; passengersPerTrain cross-references vehicle_classes.json fixedTrack rows (not restated)."
+  },
+  "roadClasses": [
+    { "roadClassId": "alley",               "capacityPcuPerLanePerHour": 400,  "note": "residential/service-only, HCM local-street order-of-magnitude", "source": "HCM 2010/2016 local-street order-of-magnitude, interpolated below the residential_street brief anchor", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "gravel",               "capacityPcuPerLanePerHour": 500, "source": "HCM 2010/2016 unpaved/low-grade local-street order-of-magnitude, interpolated between alley and residential_street", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "residential_street",   "capacityPcuPerLanePerHour": 600,  "note": "brief anchor (residential 600 pcu/h/lane)", "source": "Aaron's brief anchor (FEAT-2326609792 inc0 description, 'residential 600'), not independently re-measured", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "two_lane",             "capacityPcuPerLanePerHour": 900,  "note": "brief anchor (minor 900)", "source": "Aaron's brief anchor (FEAT-2326609792 inc0 description, 'minor 900'), not independently re-measured", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "one_way_pairs",        "capacityPcuPerLanePerHour": 950, "source": "HCM 2010/2016 order-of-magnitude, interpolated between two_lane and avenue_2_plus_2 by functional tier", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "avenue_2_plus_2",      "capacityPcuPerLanePerHour": 1800, "note": "brief anchor (A-road 1,800)", "source": "Aaron's brief anchor (FEAT-2326609792 inc0 description, 'A-road 1,800'), not independently re-measured", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "bus_lane_variant",     "capacityPcuPerLanePerHour": 1700, "note": "one lane reserved for buses (PCU-light, high person-throughput not captured in this vehicle-PCU figure -- see rewards.json integration scoring)", "source": "HCM 2010/2016 order-of-magnitude, interpolated near avenue_2_plus_2 by lane count", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "tram_track_variant",   "capacityPcuPerLanePerHour": 1600, "note": "one lane shares with tram right-of-way", "source": "HCM 2010/2016 order-of-magnitude, interpolated between avenue_2_plus_2 and dual_carriageway by shared right-of-way tier", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "dual_carriageway",     "capacityPcuPerLanePerHour": 2100, "note": "brief anchor (dual 2,100/lane)", "source": "Aaron's brief anchor (FEAT-2326609792 inc0 description, 'dual 2,100/lane'), not independently re-measured", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "urban_expressway",     "capacityPcuPerLanePerHour": 2200, "source": "HCM 2010/2016 order-of-magnitude, interpolated between dual_carriageway and motorway by functional tier", "year": 2026, "confidence": "derived" },
+    { "roadClassId": "motorway",             "capacityPcuPerLanePerHour": 2300, "note": "brief anchor (motorway 2,300/lane)", "source": "Aaron's brief anchor (FEAT-2326609792 inc0 description, 'motorway 2,300/lane'), not independently re-measured", "year": 2026, "confidence": "derived" }
+  ],
+  "roadClassSource": { "source": "HCM 2010/2016 (Highway Capacity Manual, TRB) base-capacity orders of magnitude for the class ladder shape, calibrated to the exact anchor figures Aaron's brief specifies for residential/minor/A-road/dual/motorway; the 6 remaining classes interpolated between those anchors by lane count and functional tier.", "year": 2026, "confidence": "derived", "note": "The five brief-specified anchors (residential 600, minor 900, A-road 1800, dual 2100, motorway 2300) are treated as confidence: derived (Aaron-specified, not independently re-measured); the six interpolated classes are confidence: derived (interpolation)." },
+  "bprCurve": {
+    "defaultAlpha": { "refersTo": "data/traffic.json bprAlpha", "note": "referenced, not restated" },
+    "defaultBeta": { "refersTo": "data/traffic.json bprBeta", "note": "referenced, not restated" },
+    "defaultCapacityPerLanePerHour": { "refersTo": "data/traffic.json capacityPerLanePerHour", "note": "referenced, not restated -- this file's roadClasses[].capacityPcuPerLanePerHour is the PER-CLASS refinement of that single network-wide default" },
+    "formula": "t = t0 * (1 + alpha * (v/c)^beta), where v = per-lane volume (pcu/h), c = capacityPcuPerLanePerHour for the segment's road class (this file), t0 = free-flow travel time on the segment (from data/roads.json speedLimit and segment length).",
+    "perClassOverrides": {
+      "$comment": "Classes whose real-world volume-delay behaviour deviates from the network default alpha/beta (BPR's original 0.15/4.0 was calibrated on US arterial/freeway data; dense urban low-speed classes show steeper, earlier-onset delay -- HCM 2010 Ch.18 urban street methodology). Directional placeholder overrides pending Aaron's balance pass.",
+      "alley":             { "alpha": 0.20, "beta": 5.0, "source": "derived approximation (steeper delay onset on a single-lane local street)", "year": 2026, "confidence": "derived" },
+      "residential_street":{ "alpha": 0.18, "beta": 4.5, "source": "derived approximation", "year": 2026, "confidence": "derived" },
+      "motorway":          { "alpha": 0.12, "beta": 4.0, "source": "derived approximation (motorways sustain higher v/c before breakdown, per HCM freeway methodology, before hard breakdown)", "year": 2026, "confidence": "derived" }
+    }
+  },
+  "railClasses": [
+    { "id": "rail",   "trainsPerHourMax": 20, "trainsPerHourRange": [12, 24], "passengersPerTrainRef": "vehicle_classes.json fixedTrack heavy_rail", "note": "brief anchor (rail 12-24 tph)" },
+    { "id": "hs1",    "trainsPerHourMax": 18, "passengersPerTrainRef": "vehicle_classes.json fixedTrack hs_rail", "note": "brief anchor (HS1 up to 18 tph)" },
+    { "id": "tram",   "trainsPerHourMax": 40, "note": "street-running headway-limited, not a full rail block-signalling system", "source": "derived approximation" },
+    { "id": "metro",  "trainsPerHourMax": 34, "trainsPerHourRange": [30, 36], "passengersPerTrainRef": "vehicle_classes.json fixedTrack metro", "note": "brief anchor (tube 30-36 tph)" }
+  ],
+  "railClassSource": { "source": "Brief-specified anchors (rail 12-24tph, HS1 up to 18tph, tube 30-36tph) cross-checked against real-world UK signalling headway orders of magnitude (Network Rail/TfL published capacity figures, mapping sanity-check only).", "year": 2026, "confidence": "derived" },
+  "provenance": {
+    "source": "See per-block source fields above",
+    "year": 2026,
+    "confidence": "derived",
+    "note": "Every roadClassId and railClass id used here must resolve against data/roads.json's classes[].id (roads) and this file's own railClasses[].id (rail/tram/metro) -- see FEAT-2326609792-inc0.md AC for the cross-reference check."
+  }
+}

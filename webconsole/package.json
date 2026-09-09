@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "gen-version": "node scripts/gen-version.mjs",
-    "predev": "node scripts/gen-version.mjs",
+    "sync-traffic-data": "node scripts/sync-traffic-data.mjs",
+    "predev": "node scripts/gen-version.mjs && node scripts/sync-traffic-data.mjs",
     "dev": "vite",
     "dev:full": "node ../tools/debugsink/dev-with-sink.mjs",
-    "prebuild": "node scripts/gen-version.mjs",
+    "prebuild": "node scripts/gen-version.mjs && node scripts/sync-traffic-data.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "dogfood:build": "npm run build",

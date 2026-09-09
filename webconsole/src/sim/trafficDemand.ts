@@ -43,14 +43,14 @@ import { MAP_W, MAP_H } from './grid.ts';
 // rates are read from trip_generation.json at load time — never hand-typed
 // literals — mirroring scaleLadderData.ts's static-import shape (the doc's
 // explicit instruction, §2/AC-1).
-import rawTripGeneration from '../../../data/traffic/trip_generation.json' with { type: 'json' };
-import rawVehicleClasses from '../../../data/traffic/vehicle_classes.json' with { type: 'json' };
+import rawTripGeneration from './traffic-data/trip_generation.json' with { type: 'json' };
+import rawVehicleClasses from './traffic-data/vehicle_classes.json' with { type: 'json' };
 // BUG-847 rework: data/traffic.json's maxAttributionRadiusTiles bounds the
 // nearestSegmentWeights BFS radius (GR#15, no literal in TS) — see that
 // file's _maxAttributionRadiusTilesSource disclosure. NOTE: this is the
 // engine defaults file at data/traffic.json, NOT the data/traffic/ inc0
 // research-table directory imported above.
-import rawTrafficConfig from '../../../data/traffic.json' with { type: 'json' };
+import rawTrafficConfig from './traffic-data/traffic.json' with { type: 'json' };
 
 // --- Registry error codes (GR#7) -------------------------------------------
 // Minted via `node tools/plan/add-error.js add MET-Vnnn --mkey ui.webconsole
