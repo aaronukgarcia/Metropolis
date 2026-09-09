@@ -148,7 +148,9 @@
       "V897-V899": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 3-wide block found after scanning existing codes and reservations on layer \"V\")",
       "G5432-G5432": "reserved for engine.traffic (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"G\")",
       "V880-V880": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V900-V903": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V900-V903": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V906-V911": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V912-V919": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 8-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5835,6 +5837,66 @@
       "module": "ui.webconsole",
       "message": "scale ladder rung {index} key set does not match rung 0's key set (numeric or non-numeric)",
       "remedy": "fix the authored rung to carry the identical key set as rung 0, then reload"
+    },
+    "MET-V900": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficDemand: building kind %s (spec %s) has no freight-sector mapping in KIND_TO_FREIGHT_SECTOR",
+      "remedy": "add the kind to KIND_TO_FREIGHT_SECTOR in trafficDemand.ts, mapping it to a trip_generation.json freightTonnesPerJobPerDay sector id"
+    },
+    "MET-V901": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficDemand: vehicle_classes.json roadVehicles is missing required freight class %s or its capacityTonnes field",
+      "remedy": "add the missing road vehicle entry (cargo_van/rigid_truck/articulated_truck) with a numeric capacityTonnes to data/traffic/vehicle_classes.json"
+    },
+    "MET-V902": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficDemand: scale ladder point at population %s is missing required numeric field %s",
+      "remedy": "check data/traffic/scale_ladder.json rung schema for the expected field name"
+    },
+    "MET-V903": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficDemand: data/traffic.json missing a positive numeric maxAttributionRadiusTiles (BUG-847, GR#15)",
+      "remedy": "add a positive numeric maxAttributionRadiusTiles field to data/traffic.json"
+    },
+    "MET-V906": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficAssignment: road tier %s (spec %s) has no entry in ROAD_CLASS_ID_OF_TIER",
+      "remedy": "add the missing tier to ROAD_CLASS_ID_OF_TIER in trafficAssignment.ts, mapping it to a data/roads.json classes[].id"
+    },
+    "MET-V907": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficAssignment: data/roads.json classes has no entry for road class %s",
+      "remedy": "add the missing class row to data/roads.json classes, or fix ROAD_CLASS_ID_OF_TIER's mapping"
+    },
+    "MET-V908": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficAssignment: data/traffic/link_capacity.json roadClasses has no entry for road class %s",
+      "remedy": "add the missing roadClassId row to data/traffic/link_capacity.json roadClasses"
+    },
+    "MET-V909": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficAssignment: data/traffic.json is missing a numeric webconsoleMetresPerTile field",
+      "remedy": "add webconsoleMetresPerTile (metres) to data/traffic.json with a source note"
+    },
+    "MET-V910": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficAssignment: BPR parameter %s for road class %s is not finite and strictly positive",
+      "remedy": "fix the alpha/beta value in data/traffic.json or data/traffic/link_capacity.json's perClassOverrides"
+    },
+    "MET-V912": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficDemand: population %s is not a finite non-negative number, forecast is honest-absence (null)",
+      "remedy": "check the SimState population field for a non-finite or negative value upstream"
     }
   }
 }

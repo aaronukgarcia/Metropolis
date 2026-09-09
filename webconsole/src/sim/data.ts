@@ -6868,6 +6868,26 @@ export const POLICIES: PolicyDef[] = [
   { id: 'austerity', label: 'Austerity Budget', description: '-10% all outflows, -12 approval' },
 ];
 
+// FEAT-2326609795 inc2 (AC-8): re-export the demand-forecast surface so
+// vite's production build graph actually reaches trafficDemand.ts ->
+// scaleLadderData.ts's static `import ... with { type: 'json' }` of
+// data/traffic/scale_ladder.json (the BUG-835 REQUIRED gate for this
+// increment — inc1 built the loader but nothing imported it outside tests
+// until now). Call-time (cyclic-safe) re-export: trafficDemand.ts's own
+// imports from THIS file (SPECS/isOnline/capacityAtTier/etc.) are consumed
+// inside function bodies, never at module-eval time, so this is the SAME
+// pattern data.ts already uses for engine.ts/consolidator.ts (specUnlocked,
+// familyKeyOf — see the import block at the top of this file). D1: no
+// production call site consumes these exports yet this increment — see
+// docs/planning/acceptance/FEAT-2326609792-inc2.md AC-4's "no consumer yet" contract.
+export {
+  demandForecastOf,
+  forecastLineUsage,
+  forecastSegmentUsage,
+  modeShareOf,
+  ladderPointOf,
+} from './trafficDemand.ts';
+
 export const UNIT_REGISTRY = [
   { unit: 'pound (£)', dimension: 'currency', note: 'All fiscal flows; integers only in the engine' },
   { unit: 'person', dimension: 'population', note: 'Persistent individual citizens' },
