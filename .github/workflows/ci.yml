@@ -75,7 +75,13 @@ jobs:
       # unverified on the actual runner until the first real CI run — see
       # docs/planning/dev-team-process.md Tester-baseline line).
       - name: go test ./... -race
-        run: go test ./... -race -count=1 -timeout 20m
+        # BUG-859 (2026-09-09): 20m -> 30m. On the last green run compose took
+        # 1199.5s and citizens 1113s under -race - 0.5s under the alarm - and
+        # compose then timed out twice on a push that never touched it. The
+        # proper fix is splitting those suites (tracked separately); this keeps
+        # main's Go job honest in the meantime. Job-level timeout-minutes is
+        # unset (Actions default 360), so the -timeout is the binding limit.
+        run: go test ./... -race -count=1 -timeout 30m
 
       - name: gofmt check
         shell: pwsh
