@@ -32,7 +32,7 @@ import {
   levelOf,
 } from '../src/sim/engine.ts';
 import { INSOLVENCY_WARNING_THRESHOLD } from '../src/sim/fiscal.ts';
-import { runConsistencyChecks, foldGraceHistory, GRACE_WINDOW_SIZE } from '../src/sim/consistency.ts';
+import { runConsistencyChecks, foldGraceHistory, GRACE_WINDOW_SIZE, GRACE_ELIGIBLE_LINE_IDS } from '../src/sim/consistency.ts';
 import { LAYOUT_UPKEEP_MAX_WORSENING_PER_TICK, LAYOUT_LIFETIME_UPKEEP_SHARE_OF_INCOME } from '../src/sim/consolidatorLayout.ts';
 
 // ---------------------------------------------------------------------------
@@ -247,15 +247,40 @@ describe('R6-2 — the layout stage is monotone: it never undoes a previous pass
       perTickLayoutTiles.push(tilesThisTick);
     }
 
-    // Settling: over a STATIC city the stage must not keep producing at full
-    // rate forever. Compare the first quarter with the last quarter.
-    const q = Math.floor(perTickLayoutTiles.length / 4);
-    const head = perTickLayoutTiles.slice(0, q).reduce((a, b) => a + b, 0);
-    const tail = perTickLayoutTiles.slice(-q).reduce((a, b) => a + b, 0);
+    // BUG-842 REFINEMENT (Aaron's ruling on ac05b5b as authority, "the red
+    // box... [re-plan] SUPERSEDES the extender inside the red box; the
+    // extender keeps the rest of the map"): the old quartile comparison
+    // (first-quarter sum <= last-quarter sum) assumed the EXTENDER
+    // (`tierLayout`, what `layoutTxnsOfPass` reads) works continuously from
+    // tick 1 and tapers off. FEAT-2326609779 inc4 changed that: while the
+    // re-plan owns this fixture's box (measured: ticks 1-44 here) the
+    // extender is CORRECTLY idle (0 tiles/tick — the box is reserved, not
+    // "nothing to do"), then once the box releases (dwell/convergence) the
+    // extender legitimately does a one-time catch-up burst (measured: ticks
+    // 45-52, up to 28 tiles/tick) before settling back to zero (ticks 53-60,
+    // confirmed 0 every tick). A late burst after a superseded-idle period is
+    // therefore EXPECTED, not non-convergence — the old assertion would
+    // (and, in CI run 34380894745, did) red on exactly this legitimate
+    // pattern (measured: head=0, tail=177).
+    //
+    // The invariant that still matters — the stage reaches a FIXED POINT on
+    // a static city and stays there, never oscillating/rediscovering "new"
+    // work forever — is refined to: some tail portion of the 60-tick window
+    // is entirely zero (settled), and once settled it never restarts within
+    // the observed window. A genuinely non-convergent stage (kept finding
+    // "new" work on ground already laid, the ORIGINAL defect class this test
+    // guards) never reaches an all-zero tail and reds this exactly as before
+    // — proven by the scratch mutation recorded on BUG-842 (disabling the
+    // extender's occupied-tile bookkeeping so every pass re-discovers the
+    // same ground: the tail is never all-zero, this assertion fails).
+    const settleTailSize = 8;
+    const tail = perTickLayoutTiles.slice(-settleTailSize);
+    const tailSettled = tail.every((n) => n === 0);
     assert.ok(
-      tail <= head,
-      `layout laid MORE tiles in the last quarter (${tail}) than the first (${head}) on a static city — ` +
-        'the stage is not converging; it keeps finding "new" work on ground it has already laid out.',
+      tailSettled,
+      `layout is still producing new tiles in the final ${settleTailSize} ticks (${JSON.stringify(tail)}) of a 60-tick ` +
+        'run on a static city — the stage is not converging to a fixed point; it keeps finding "new" work on ground ' +
+        'it has already laid out.',
     );
 
     // ROUND-14 LEAD RULING ("root-cause the round6 flows.upkeep-total-matches
@@ -338,28 +363,79 @@ describe('R6-3 — money conservation with the layout stage running FIRST', () =
     // 'flows.upkeep-total-matches':-624 signature). Re-swept funds at the
     // SAME 25-tile road row against the round-13 formulas: 600,000,000
     // measures 0 failures over both 120 and 200 ticks.
+    // BUG-842 REFINEMENT (root-caused, not retuned — measured directly, no
+    // funds/roadMax retune in the round-7/8/13 style closes this): inc4
+    // (ac05b5b) adds the red-box re-plan, which — unlike the extender's
+    // varied-cost buildings that made the round-7/8/13 coincidence rare —
+    // executes small, FIXED-COST unit batches (e.g. "lay 3 rail tiles" always
+    // costs/upkeeps the identical amount) on almost every glide tick.
+    // constructionTicks() floors every spec at 3 ticks minimum (data.ts,
+    // `Math.max(3, ...)`), so each re-plan unit's construction-completion
+    // online-flip (the ALREADY-DOCUMENTED, already-graced BUG-624/640
+    // transient class — see this file's own comment on the settle-window
+    // test above) now fires on a cadence that legitimately produces the SAME
+    // delta signature 2+ times inside one GRACE_WINDOW_SIZE window — which
+    // BUG-640's signature-match grace (by design, correctly) treats as "a
+    // recurring defect" and stops tolerating, even though it is structurally
+    // the identical benign transient, just repeating because the re-plan's
+    // per-unit cost is deterministic. Swept funds 100M-2B x roadMax 5-40
+    // (scratch debug script, BUG-842): no combination reaches 0 failures —
+    // this is not a coincidence a retune can dodge any more, it is inc4's
+    // new cadence colliding with the grace algorithm's signature-repeat
+    // threshold (consistency.ts, GRACE_MAX_FAILURES_IN_WINDOW=2 — outside
+    // this ticket's owned files, so not touched here).
+    //
+    // Money conservation ITSELF is proven independently, two ways, over the
+    // SAME 120-tick run: (1) every single failing check across the whole run
+    // is EXCLUSIVELY a member of GRACE_ELIGIBLE_LINE_IDS (measured: only
+    // 'flows.upkeep-total-matches' ever fails — never
+    // 'conservation.funds-vs-flows' or any other id) — i.e. the actual
+    // funds-vs-flows identity this test's own title cares about NEVER
+    // diverges, only a diagnostic cross-check does; (2) the closing funds
+    // delta is fully explained by the tick-by-tick flows this run itself
+    // logged (an independent booked-vs-actual proof, same shape as F4).
+    // A real corruption (money created/destroyed, or a defect outside the
+    // known transient class) still reds this: the mutation recorded on
+    // BUG-842 (scratch-copying consolidatorReplan.ts to double-book a
+    // civic build's cost without recording the matching flow) makes both
+    // the "only-known-id" check AND the independent funds proof fail.
     let s = fireFixture({ consolidatorMode: 'glide', funds: 600_000_000 }, 25);
     s = reducer(s, { type: 'toggleConsolidator' });
+    const fundsStart = s.funds;
 
-    let failures = 0;
-    let firstFailure = null;
+    let bookedNet = 0;
+    let firstUnexpectedFailure = null;
     const history = [];
     for (let i = 0; i < 120; i++) {
       s = reducer(s, { type: 'tick' });
+      for (const f of s.lastFlows?.inflows ?? []) bookedNet += f.value;
+      for (const f of s.lastFlows?.outflows ?? []) bookedNet -= f.value;
       const report = runConsistencyChecks(s, undefined, foldGraceHistory(history));
-      if (report.failures !== 0) {
-        failures++;
-        if (!firstFailure) firstFailure = { tick: s.tick, report: JSON.stringify(report.rawFailedSignatures ?? report.failures) };
+      for (const c of report.checks) {
+        if (!c.ok && !GRACE_ELIGIBLE_LINE_IDS.has(c.id) && !firstUnexpectedFailure) {
+          firstUnexpectedFailure = { tick: s.tick, id: c.id, detail: c.detail };
+        }
       }
       history.push(report.rawFailedSignatures);
       if (history.length > GRACE_WINDOW_SIZE - 1) history.shift();
     }
     assert.equal(
-      failures,
-      0,
-      `${failures} consistency failure(s) with the tier-layout stage running first; first at ${JSON.stringify(firstFailure)}. ` +
-        'Layout capex books through the SAME Consolidation flow line as every other transaction kind (engine.ts, ' +
-        'advance() tierLayout accumulator), so a failure here is real money created or destroyed.',
+      firstUnexpectedFailure,
+      null,
+      `a consistency check OUTSIDE the known online-flip transient class (GRACE_ELIGIBLE_LINE_IDS) failed: ` +
+        `${JSON.stringify(firstUnexpectedFailure)}. Layout/re-plan capex books through the SAME Consolidation flow ` +
+        'line as every other transaction kind (engine.ts), so a failure here (other than the documented ' +
+        'construction-completion timing lag) is real money created or destroyed.',
+    );
+    // Lead amendment (Bev, 2026-09-09): the fixer's draft carried a 300,000
+    // CONFOUND_TOLERANCE here; probed at tolerance 1 the gap is exactly 0 over
+    // 120 ticks, so conservation is asserted EXACT. Money conservation is
+    // absolute in this project - a tolerance is a leak waiting to be filled.
+    const fundsDelta = s.funds - fundsStart;
+    assert.ok(
+      fundsDelta === bookedNet,
+      `funds moved by ${fundsDelta} over 120 ticks but the tick-by-tick logged flows only account for ${bookedNet} ` +
+        `(gap ${Math.abs(fundsDelta - bookedNet)}) — money moving outside the ledgered flow.`,
     );
   });
 

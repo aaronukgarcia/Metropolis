@@ -250,6 +250,19 @@ test('F3: a corrupted consolidatorSectionMetres (bypassing the reducer clamp, ex
             bookedNet += txn.scrapRecovered - txn.buildCost;
             for (const rec of txn.added ?? []) addedAssets.push({ tick: entry.tick, spec: rec.spec });
           }
+          // BUG-842 FIX: `entry.replanLayout` (FEAT-2326609779 inc4, ac05b5b)
+          // is a THIRD sibling array on the pass log — the red-box re-plan's
+          // own transactions — booking through the identical 'Consolidation'
+          // flow line as `transactions`/`tierLayout` (engine.ts ~6534-6539,
+          // AC-22). This test predates inc4 and was blind to it exactly the
+          // way it used to be blind to `tierLayout` before inc3's own F4 fix
+          // (see that historical comment below) — the SAME class of gap,
+          // now against the re-plan's array instead. The money was never
+          // unledgered; the test's own sum was incomplete.
+          for (const txn of entry.replanLayout ?? []) {
+            bookedNet += txn.scrapRecovered - txn.buildCost;
+            for (const rec of txn.added ?? []) addedAssets.push({ tick: entry.tick, spec: rec.spec });
+          }
         }
       }
       if (log.length > 0) maxIdSeen = Math.max(maxIdSeen, ...log.map((e) => e.id));
@@ -315,13 +328,35 @@ test('F3: a corrupted consolidatorSectionMetres (bypassing the reducer clamp, ex
         'ledgered flow',
     );
   }
+  // BUG-842 REFINEMENT (evidence-based, not a weakening): FEAT-2326609779
+  // inc4 (ac05b5b) added the red-box re-plan, which unconditionally attempts
+  // a plan every glide day (its own gate is `!cityBBoxKnown || ...` — with
+  // ZERO buildings, as this fixture has, `cityBBoxKnown` is false so the gate
+  // is ALWAYS open) and mints a `consolidatorLog` row for that attempt even
+  // when the plan is empty/discarded — a pure bookkeeping-cadence change, not
+  // a functional one. Measured directly (scratch debug script, 40 ticks):
+  // `poisoned.consolidatorLog.length` is now 32 (was 0 pre-inc4), but EVERY
+  // ONE of those 32 entries carries zero `transactions`/`tierLayout`/
+  // `replanLayout` — i.e. the FINDING itself ("glide permanently finds
+  // nothing / moves no money once consolidatorSectionMetres is poisoned")
+  // still holds exactly as before (confirmed independently by the money-
+  // conservation assertion just above, which is now GREEN with the
+  // `replanLayout` accounting fix); only the row-count implementation detail
+  // this assertion happened to pin has changed. Refined to assert the real
+  // invariant (no consolidation WORK, log noise aside) instead of the
+  // incidental row count, so a REAL regression (the poisoned run actually
+  // placing/demolishing something) still reds this.
+  const poisonedRealWorkEntries = (poisoned.consolidatorLog ?? []).filter(
+    (e) => (e.transactions?.length ?? 0) > 0 || (e.tierLayout?.length ?? 0) > 0 || (e.replanLayout?.length ?? 0) > 0,
+  );
   assert.equal(
-    (poisoned.consolidatorLog ?? []).length,
+    poisonedRealWorkEntries.length,
     0,
     'FINDING: glide permanently finds nothing once consolidatorSectionMetres is poisoned (NaN-propagates through ' +
       'sectionTilesOf -> glideGridOf, Math.max(1, NaN) === NaN in JS) — no error/registry-code surfaced anywhere ' +
       '(GR#16/GR#17 gap); recommend the same NaN/string backfill guard cumulativeCapexSpent already has ' +
-      "(engine.ts, the 'not a number' comment near line 6041) be applied to consolidatorSectionMetres on hydrate",
+      "(engine.ts, the 'not a number' comment near line 6041) be applied to consolidatorSectionMetres on hydrate. " +
+      `${poisonedRealWorkEntries.length} of ${(poisoned.consolidatorLog ?? []).length} log rows carried real work.`,
   );
 });
 
@@ -381,6 +416,20 @@ test("F4: MONEY CONSERVATION — over 45 days of glide mode, the funds delta bey
           for (const rec of txn.added ?? []) addedAssets.push({ tick: entry.tick, spec: rec.spec });
         }
         for (const txn of entry.tierLayout ?? []) {
+          expectedNet += txn.scrapRecovered - txn.buildCost;
+          totalTransactionsSeen++;
+          for (const rec of txn.added ?? []) addedAssets.push({ tick: entry.tick, spec: rec.spec });
+        }
+        // BUG-842 FIX: `entry.replanLayout` (FEAT-2326609779 inc4, ac05b5b) is
+        // a THIRD sibling array alongside `transactions`/`tierLayout` on the
+        // same pass log entry, booking through the identical 'Consolidation'
+        // flow line (engine.ts ~6534-6539, AC-22) — this test was blind to it
+        // exactly the way it used to be blind to `tierLayout` (see the
+        // ROUND-5 comment above: "an independent destructive round
+        // adjudicated [tierLayout] as the entire explanation for what looked
+        // like a conservation gap"). History repeats with inc4's new array;
+        // summed here for the identical reason.
+        for (const txn of entry.replanLayout ?? []) {
           expectedNet += txn.scrapRecovered - txn.buildCost;
           totalTransactionsSeen++;
           for (const rec of txn.added ?? []) addedAssets.push({ tick: entry.tick, spec: rec.spec });
