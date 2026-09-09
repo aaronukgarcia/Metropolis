@@ -150,7 +150,9 @@
       "V880-V880": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V900-V903": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V906-V911": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V912-V919": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 8-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V912-V919": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 8-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V881-V881": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V882-V882": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5892,11 +5894,29 @@
       "message": "trafficAssignment: BPR parameter %s for road class %s is not finite and strictly positive",
       "remedy": "fix the alpha/beta value in data/traffic.json or data/traffic/link_capacity.json's perClassOverrides"
     },
+    "MET-V911": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficAssignment: peak-hour factor missing/invalid: %s",
+      "remedy": "ensure the current scale-ladder rung's peakHourFactor field is numeric and finite"
+    },
     "MET-V912": {
       "severity": "error",
       "module": "ui.webconsole",
       "message": "trafficDemand: population %s is not a finite non-negative number, forecast is honest-absence (null)",
       "remedy": "check the SimState population field for a non-finite or negative value upstream"
+    },
+    "MET-V881": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficAssignment: data/traffic.json is missing a positive numeric maxAttributionRadiusTiles field",
+      "remedy": "add a positive numeric maxAttributionRadiusTiles field to data/traffic.json (GR#15, BUG-864)"
+    },
+    "MET-V882": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trafficAssignment: data/traffic.json is missing a positive numeric metresPerMile field",
+      "remedy": "add a positive numeric metresPerMile field to data/traffic.json (GR#15, BUG-864)"
     }
   }
 }

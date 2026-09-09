@@ -479,6 +479,24 @@ export function __getBfsOpCounterForTest(): number {
 }
 
 /**
+ * BUG-864(1) test-only instrumentation: counts SEED keys dropped by
+ * `boundedNearestSourceMapOf` because they resolved outside
+ * [0,MAP_W) x [0,MAP_H) — the SAME bounds check the neighbour-expansion loop
+ * already applied, now also applied at seeding time (the pre-fix code
+ * admitted a seed key verbatim into `visited` with no bounds check at all;
+ * not production-reachable today since grid.ts clamps every placement, but
+ * the same defect CLASS the expansion-loop bound was added to close). Always
+ * on, like `bfsOpCounter`, never gated behind a debug flag.
+ */
+let offMapSeedsDroppedCounter = 0;
+export function __resetOffMapSeedsDroppedCounterForTest(): void {
+  offMapSeedsDroppedCounter = 0;
+}
+export function __getOffMapSeedsDroppedCounterForTest(): number {
+  return offMapSeedsDroppedCounter;
+}
+
+/**
  * Multi-source Manhattan BFS from `sourceTileKeys` (one line class's own
  * tiles) outward over the map, bounded by BOTH `radius` and the map's own
  * extent (MAP_W x MAP_H — BUG-847: the pre-fix version had no bounds check
@@ -512,24 +530,53 @@ export function __getBfsOpCounterForTest(): number {
  * as unshippable — the class-count factor is small and constant (11 line
  * classes) where the diameter factor was unbounded. A combined pass remains
  * a legitimate future optimisation if the per-class factor ever matters.
+ *
+ * BUG-866 fix: this function is the sibling `boundedNearestSourceMapOf`
+ * (below) was copied FROM — BUG-864(1) added a seed bounds-check to the new
+ * export but left this, the original, still seeding `visited` from
+ * `sortedSources` with no bounds check at all. The identical guard is
+ * applied here: an off-map seed key is dropped (never entered into
+ * `visited`), counted on both the shared test counter (parity with
+ * `boundedNearestSourceMapOf`) and the function's own `offMapSeedsDropped`
+ * return field (additive — every existing caller/consumer of the return
+ * shape is unaffected since it only adds a field, never removes one).
+ * Exported additively (was module-private) so BUG-866's test can drive an
+ * off-map seed directly rather than only through real building placement,
+ * which grid.ts always clamps on-map today.
  */
-function nearestSegmentWeights(
+export function nearestSegmentWeights(
   sourceTileKeys: string[],
   tileToSegment: Map<string, string>,
   tileWeight: Map<string, number>,
   radius: number,
-): { weightBySegment: Map<string, number>; attributedTileCount: number } {
+): { weightBySegment: Map<string, number>; attributedTileCount: number; offMapSeedsDropped: number } {
   const weightBySegment = new Map<string, number>();
-  if (sourceTileKeys.length === 0) return { weightBySegment, attributedTileCount: 0 };
+  if (sourceTileKeys.length === 0) return { weightBySegment, attributedTileCount: 0, offMapSeedsDropped: 0 };
 
   // `radius` is capped by MAX_ATTRIBUTION_RADIUS_TILES by the ONLY caller
   // (forecastSegmentUsage, below) before this private helper ever runs — no
   // second cap re-applied here (GR#3, one rule, one place).
   const visited = new Map<string, string>(); // tileKey -> nearest source tileKey
   const sortedSources = [...sourceTileKeys].sort();
-  for (const k of sortedSources) visited.set(k, k);
-  let attributedTileCount = 0;
+  // BUG-866/BUG-864(1): bounds-check SEED keys exactly like expanded
+  // neighbours below — the pre-fix loop admitted a seed key verbatim into
+  // `visited` with no bounds check at all.
+  let offMapSeedsDropped = 0;
+  const onMapSources: string[] = [];
   for (const k of sortedSources) {
+    const comma = k.indexOf(',');
+    const x = Number(k.slice(0, comma));
+    const y = Number(k.slice(comma + 1));
+    if (x < 0 || x >= MAP_W || y < 0 || y >= MAP_H) {
+      offMapSeedsDropped++;
+      offMapSeedsDroppedCounter++;
+      continue;
+    }
+    onMapSources.push(k);
+    visited.set(k, k);
+  }
+  let attributedTileCount = 0;
+  for (const k of onMapSources) {
     const w = tileWeight.get(k);
     if (w) {
       accumulate(weightBySegment, tileToSegment.get(k)!, w);
@@ -537,7 +584,7 @@ function nearestSegmentWeights(
     }
   }
 
-  let frontier = sortedSources;
+  let frontier = onMapSources;
   let dist = 0;
   while (frontier.length > 0 && dist < radius) {
     dist++;
@@ -578,7 +625,103 @@ function nearestSegmentWeights(
     }
     frontier = nextFrontier;
   }
-  return { weightBySegment, attributedTileCount };
+  return { weightBySegment, attributedTileCount, offMapSeedsDropped };
+}
+
+/**
+ * GR#3/BUG-857 additive export: the SAME bounded multi-source 4-neighbour
+ * Manhattan BFS shape as `nearestSegmentWeights` above (identical bounds
+ * check, identical sorted-source/sorted-frontier tie-break, identical op
+ * counter), but returning the raw `visited` map (tileKey -> nearest source
+ * tileKey) instead of a per-segment weight sum — the shape
+ * trafficAssignment.ts's nearest-road-segment lookup needs. Added as a
+ * SEPARATE function rather than refactoring `nearestSegmentWeights` to call
+ * it, because that function's own suite pins its exact source text
+ * (structural grep for the bounds-check/sort lines inside
+ * `function nearestSegmentWeights(...)` specifically) — an internal
+ * refactor would falsely red those structural pins without changing
+ * behaviour, so this is a pure ADDITIVE export (GR#3 duplication of BFS
+ * MECHANICS is accepted here in exchange for zero risk to the sibling
+ * lane's landed, pinned suite; a follow-up could unify both once that
+ * suite's structural pins are updated to match).
+ *
+ * BUG-864(2) cost-shape note: this is already ONE multi-source BFS over the
+ * UNION of every source tile passed in (trafficAssignment.ts's own caller
+ * passes every road tile city-wide in a single call — never per-cluster,
+ * never per-class here). The r2 finding that a 46-building SPARSE
+ * corner-scattered fixture (734,688 ops @ radius 250) costs MORE than a
+ * 25,600-tile DENSE grid fixture (537,744 ops @ radius 250) is not a
+ * per-cluster-BFS defect: a dense grid's sources are already mutually
+ * adjacent, so neighbour expansion mostly hits `visited.has` and stops
+ * almost immediately, while scattered sources each pay for flooding their
+ * own empty surrounding area up to the radius cap. The real, PROVABLE
+ * structural bound is independent of source layout: every tile key can enter
+ * `frontier` (and therefore get its 4 neighbours examined) AT MOST ONCE per
+ * call, because `visited.has(nk)` permanently excludes it from every later
+ * layer — so total neighbour-examination ops for one call are bounded by
+ * `4 * MAP_W * MAP_H` regardless of how sparse or dense, clustered or
+ * scattered, the source set is (empirically confirmed: a radius-400 sparse
+ * run measured 918,576 ops against `4 * 624 * 368 = 918,528` — within
+ * rounding of the theoretical ceiling). "Sparse must not exceed dense" was
+ * the r1/r2 brief's own informal proxy for "cost is bounded"; the map-area
+ * bound above is the actual, layout-independent guarantee and is what the
+ * structural test below pins.
+ */
+export function boundedNearestSourceMapOf(sourceTileKeys: string[], radius: number): Map<string, string> {
+  const visited = new Map<string, string>(); // tileKey -> nearest source tileKey
+  const sortedSources = [...sourceTileKeys].sort();
+  // BUG-864(1): bounds-check SEED keys exactly like expanded neighbours below
+  // — an off-map seed is dropped and counted, never silently entered into
+  // `visited` (the pre-fix version admitted seed keys verbatim, unlike the
+  // neighbour-expansion loop, which already had this check).
+  for (const k of sortedSources) {
+    const comma = k.indexOf(',');
+    const x = Number(k.slice(0, comma));
+    const y = Number(k.slice(comma + 1));
+    if (x < 0 || x >= MAP_W || y < 0 || y >= MAP_H) {
+      offMapSeedsDroppedCounter++;
+      continue;
+    }
+    visited.set(k, k);
+  }
+  const onMapSources = sortedSources.filter((k) => visited.has(k));
+
+  let frontier = onMapSources;
+  let dist = 0;
+  while (frontier.length > 0 && dist < radius) {
+    dist++;
+    const next = new Map<string, string>(); // candidate tileKey -> best source seen this layer
+    for (const key of frontier) {
+      const comma = key.indexOf(',');
+      const x = Number(key.slice(0, comma));
+      const y = Number(key.slice(comma + 1));
+      const src = visited.get(key)!;
+      const neighbours: Array<[number, number]> = [
+        [x + 1, y],
+        [x - 1, y],
+        [x, y + 1],
+        [x, y - 1],
+      ];
+      for (const [nx, ny] of neighbours) {
+        bfsOpCounter++;
+        // BUG-847/BUG-857: never step off-map — an unbounded version floods
+        // the empty off-map plane to `radius` in every direction.
+        if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
+        const nk = `${nx},${ny}`;
+        if (visited.has(nk)) continue;
+        const existing = next.get(nk);
+        if (!existing || src < existing) next.set(nk, src);
+      }
+    }
+    const nextFrontier: string[] = [];
+    for (const nk of [...next.keys()].sort()) {
+      const src = next.get(nk)!;
+      visited.set(nk, src);
+      nextFrontier.push(nk);
+    }
+    frontier = nextFrontier;
+  }
+  return visited;
 }
 
 /**

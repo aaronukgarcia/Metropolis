@@ -29,7 +29,7 @@
       "$comment": "Classes whose real-world volume-delay behaviour deviates from the network default alpha/beta (BPR's original 0.15/4.0 was calibrated on US arterial/freeway data; dense urban low-speed classes show steeper, earlier-onset delay -- HCM 2010 Ch.18 urban street methodology). Directional placeholder overrides pending Aaron's balance pass.",
       "alley":             { "alpha": 0.20, "beta": 5.0, "source": "derived approximation (steeper delay onset on a single-lane local street)", "year": 2026, "confidence": "derived" },
       "residential_street":{ "alpha": 0.18, "beta": 4.5, "source": "derived approximation", "year": 2026, "confidence": "derived" },
-      "motorway":          { "alpha": 0.12, "beta": 4.0, "source": "derived approximation (motorways sustain higher v/c before breakdown, per HCM freeway methodology, before hard breakdown)", "year": 2026, "confidence": "derived" }
+      "motorway":          { "alpha": 0.12, "source": "derived approximation (motorways sustain higher v/c before breakdown, per HCM freeway methodology, before hard breakdown); beta omitted -- identical to data/traffic.json's network-default bprBeta 4.0, restating it violated this block's own referenced-not-restated discipline (BUG-843)", "year": 2026, "confidence": "derived" }
     }
   },
   "railClasses": [

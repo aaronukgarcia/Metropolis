@@ -20,11 +20,15 @@ import {
   modeShareOf,
   ladderPointOf,
   KIND_TO_FREIGHT_SECTOR,
+  nearestSegmentWeights,
   __resetBfsOpCounterForTest,
   __getBfsOpCounterForTest,
+  __resetOffMapSeedsDroppedCounterForTest,
+  __getOffMapSeedsDroppedCounterForTest,
 } from '../src/sim/trafficDemand.ts';
 import { SPECS, lineSegmentIdByTileOf, filledJobsBySector } from '../src/sim/data.ts';
 import { initialState } from '../src/sim/engine.ts';
+import { MAP_W, MAP_H } from '../src/sim/grid.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -533,4 +537,49 @@ test('BUG-847/GR#21: nearestSegmentWeights sorts BOTH the source-tile set and ea
   // Map/array iteration order -- which on THIS module happens to already be
   // sorted (demandForecastOf's own output is pre-sorted by (x,y,spec)) so a
   // value/shuffle test alone cannot catch it; this structural check can.
+});
+
+// ---------------------------------------------------------------------------
+// BUG-866 — nearestSegmentWeights (the primitive boundedNearestSourceMapOf
+// was copied FROM) seeds `visited` from sortedSources with NO bounds check,
+// unlike its sibling: BUG-864(1) added the seed guard only to the new export.
+// Fixed identically here (off-map seeds dropped, counted, reported via the
+// additive `offMapSeedsDropped` return field). nearestSegmentWeights is not
+// reachable off-map through real building placement (grid.ts always clamps
+// on-map), so this pin drives the primitive directly with a synthetic
+// off-map seed key -- the same reason nearestSegmentWeights was made an
+// additive export for this fix.
+// ---------------------------------------------------------------------------
+
+test('BUG-866: nearestSegmentWeights drops an off-map SEED key (counted, never entered into visited/attribution) -- same bound as boundedNearestSourceMapOf', () => {
+  const onMapSeed = '5,5';
+  const offMapSeedX = `${MAP_W + 5},5`; // off-map in x
+  const offMapSeedY = `5,${MAP_H + 5}`; // off-map in y
+  const offMapSeedNeg = '-3,5'; // off-map (negative)
+
+  const tileToSegment = new Map([[onMapSeed, 'seg-a']]);
+  const tileWeight = new Map([[onMapSeed, 10]]);
+
+  __resetOffMapSeedsDroppedCounterForTest();
+  const result = nearestSegmentWeights(
+    [onMapSeed, offMapSeedX, offMapSeedY, offMapSeedNeg],
+    tileToSegment,
+    tileWeight,
+    5,
+  );
+  const droppedShared = __getOffMapSeedsDroppedCounterForTest();
+
+  assert.equal(result.offMapSeedsDropped, 3, `exactly the 3 off-map seeds must be counted as dropped on the return shape, got ${result.offMapSeedsDropped}`);
+  assert.equal(droppedShared, 3, `the shared BUG-864-style test counter must also see the 3 drops (parity with boundedNearestSourceMapOf), got ${droppedShared}`);
+  assert.equal(result.attributedTileCount, 1, 'only the on-map seed contributes attribution');
+  assert.equal(result.weightBySegment.get('seg-a'), 10, 'the on-map seed\'s weight must still be attributed correctly, unaffected by the dropped off-map seeds');
+
+  // MUTANT (BUG-866's own -- reverting the seed loop to the pre-fix
+  // `for (const k of sortedSources) visited.set(k, k);` with no bounds
+  // check): all 3 off-map seeds would be admitted into `visited` verbatim,
+  // `offMapSeedsDropped` would read 0 instead of 3, and (since none of them
+  // carry a tileWeight entry) `attributedTileCount` would happen to still
+  // read 1 by coincidence on THIS fixture -- which is exactly why the
+  // `offMapSeedsDropped` assertion, not the attribution-count assertion
+  // alone, is the one that reliably catches the regression.
 });

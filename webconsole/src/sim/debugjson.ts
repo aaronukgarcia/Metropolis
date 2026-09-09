@@ -21,6 +21,15 @@
 // the type is widened. A future tab that adds sim state cannot silently skip
 // debug.json.
 
+// FEAT-2326609796 inc3 (lead amendment, GR#3/GR#15): the webconsole grid tile
+// size read from data/traffic.json's webconsoleMetresPerTile field, never a
+// hand-typed literal — this is the WEBCONSOLE grid tile (50 m), distinct from
+// the ENGINE cell (data/georef.json cellSizeM 10); see that field's own
+// source note.
+import rawTrafficConfigForGrid from './traffic-data/traffic.json' with { type: 'json' };
+const WEBCONSOLE_TILE_METRES: number = (rawTrafficConfigForGrid as { webconsoleMetresPerTile: number })
+  .webconsoleMetresPerTile;
+
 import type {
   ArrivalsByMode,
   BailoutOrigin,
@@ -1246,7 +1255,7 @@ export function buildDebugJson(
       view: ui.map.view,
       showWater: ui.map.showWater,
       clipboard: s.clipboard,
-      grid: { w: MAP_W, h: MAP_H, tileMetres: 50 },
+      grid: { w: MAP_W, h: MAP_H, tileMetres: WEBCONSOLE_TILE_METRES },
     },
     buildings: { count: s.buildings.length, byKind, list },
     errors: ui.errors,
