@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "meta": { "rungPopulations": [100, 1000, 5000, 10000] },
+  "rungs": [
+    { "population": 100, "density": 10, "modeShare": { "car": 0.5, "bus": 0.1 }, "counts": { "peopleCount": 50 }, "weights": [1,2,3], "tags": ["a","b"], "source": "manual" },
+    { "population": 1000, "density": 20, "modeShare": { "car": 0.45, "bus": 0.15 }, "counts": { "peopleCount": 500 }, "weights": [2,3,4], "tags": ["c","d"], "source": "manual2" },
+    { "population": 5000, "density": 40, "modeShare": { "car": 0.4, "bus": 0.2 }, "counts": { "peopleCount": 2500 }, "weights": [3,4,5], "tags": ["e"], "source": "manual3" },
+    { "population": 10000, "density": 50, "modeShare": { "car": 0.35, "bus": 0.25 }, "counts": { "peopleCount": 5000 }, "weights": [4,5,6], "tags": ["f"], "source": "manual4" }
+  ]
+}

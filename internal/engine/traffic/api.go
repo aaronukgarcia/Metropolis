@@ -93,6 +93,7 @@ type TrafficAPI struct {
 	links         map[uint64]*Link
 	roads         *roads.RoadsAPI
 	cfg           Config
+	ladder        *ScaleLadder // FEAT-2326609792 inc1: population scale ladder (scaleladder.go)
 	correlationID string
 }
 

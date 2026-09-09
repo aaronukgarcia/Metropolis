@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "meta": { "rungPopulations": [100, 1000, 5000] },
+  "rungs": [
+    { "population": 100, "density": 10 },
+    { "population": 1000, "density": 20 }
+  ]
+}

@@ -143,7 +143,12 @@
       "V884-V885": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-06 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\"; re-keyed from V882-V884 same-session after a parallel-lane collision with the BUG-791 lane's V880-V883 claim from the same HEAD)",
       "V888-V890": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-06 by Aaron Garcia -- BUG-273: lowest free 3-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V891-V891": "reserved for ui.webconsole (FEAT-2326609777 round follow-up, 2026-09-06, manually claimed -- V880-V889 already carries at least one uncommitted parallel-lane claim from another worktree at this same HEAD (BUG-791's V880-V883, not yet visible in this worktree's copy of this file) and the coordinating round separately flagged that BUG-684 may have claimed V890 in a sibling worktree not yet merged here -- picked V891 with a one-code safety margin above both rather than trust claim-range's stale-view lowest-free scan across a known active collision zone; the next lane to touch this file should re-verify V886-V890 are genuinely free before reusing them)",
-      "V895-V896": "reserved for ui.webconsole (manually claimed 2026-09-06 for BUG-684 -- the brief pre-assigned V886-V889 to a sibling lane not yet visible in origin/main's reservations (same collision class as the V880-V883/V865-V866 incidents recorded above); picked past that anticipated block, not just past this worktree's own view of origin, to avoid a second unmerged-claim collision)"
+      "V895-V896": "reserved for ui.webconsole (manually claimed 2026-09-06 for BUG-684 -- the brief pre-assigned V886-V889 to a sibling lane not yet visible in origin/main's reservations (same collision class as the V880-V883/V865-V866 incidents recorded above); picked past that anticipated block, not just past this worktree's own view of origin, to avoid a second unmerged-claim collision)",
+      "G5424-G5431": "reserved for engine.traffic (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 8-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "V897-V899": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 3-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "G5432-G5432": "reserved for engine.traffic (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "V880-V880": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V900-V903": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5752,6 +5757,84 @@
       "module": "ui.webconsole",
       "message": "Consolidator re-plan dwell budget exhausted on a box that never converged",
       "remedy": "The red box moves on so nothing waits forever; inspect the box's remaining steps in the consolidator log - a box that repeatedly exhausts its dwell is under-funded or its plan is unreachable"
+    },
+    "MET-G5424": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "scale ladder file not found ({path})",
+      "remedy": "author data/traffic/scale_ladder.json (inc0) before loading the scale ladder"
+    },
+    "MET-G5425": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "scale ladder file could not be parsed ({path}: {reason})",
+      "remedy": "check the file is valid JSON matching the documented rung schema"
+    },
+    "MET-G5426": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "scale ladder has {count} rung(s), fewer than the minimum of 2",
+      "remedy": "the data file must declare at least 2 rungs to interpolate between"
+    },
+    "MET-G5427": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "scale ladder rungs are not strictly ascending by population at index {index} ({prev} >= {next})",
+      "remedy": "sort rungs.[].population strictly ascending with no duplicates"
+    },
+    "MET-G5428": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "scale ladder declares {declared} rung population(s) in meta.rungPopulations but has {actual} rung(s), or the populations do not match",
+      "remedy": "keep rungs[].population and meta.rungPopulations in exact agreement (GR#15)"
+    },
+    "MET-G5429": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "scale ladder rung population {population} has a non-finite or negative numeric leaf {key}={value}",
+      "remedy": "every numeric leaf must be finite and non-negative"
+    },
+    "MET-G5430": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "population {population} is outside the scale ladder range [{min}, {max}]; interpolation never extrapolates",
+      "remedy": "query a population within the loaded ladder's first and last rung, inclusive"
+    },
+    "MET-G5431": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "scale ladder file exceeds the {maxBytes} byte cap ({actual} bytes)",
+      "remedy": "the scale ladder data file must stay under the secure-by-default size cap; split or trim the file"
+    },
+    "MET-V897": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "scale ladder could not be loaded or parsed ({reason})",
+      "remedy": "ensure the imported scale ladder JSON is present and well-formed before import-time validation runs"
+    },
+    "MET-V898": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "scale ladder data failed validation ({reason})",
+      "remedy": "fix the data file: at least 2 rungs, strictly ascending unique populations matching meta.rungPopulations, all numeric leaves finite and non-negative"
+    },
+    "MET-V899": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "population {population} is outside the scale ladder range [{min}, {max}]",
+      "remedy": "query a population within the loaded ladder's first and last rung, inclusive; interpolation never extrapolates"
+    },
+    "MET-G5432": {
+      "severity": "fatal",
+      "module": "engine.traffic",
+      "message": "scale ladder rung {index} key set does not match rung 0's key set (numeric or non-numeric)",
+      "remedy": "fix the authored rung to carry the identical key set as rung 0, then reload"
+    },
+    "MET-V880": {
+      "severity": "fatal",
+      "module": "ui.webconsole",
+      "message": "scale ladder rung {index} key set does not match rung 0's key set (numeric or non-numeric)",
+      "remedy": "fix the authored rung to carry the identical key set as rung 0, then reload"
     }
   }
 }

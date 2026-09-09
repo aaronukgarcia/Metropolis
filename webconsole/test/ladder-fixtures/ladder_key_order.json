@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "meta": { "rungPopulations": [100, 1000] },
+  "rungs": [
+    { "population": 100, "zulu": 3, "mike": 2, "alpha": 1, "nested": { "zebra": 30, "apple": 10 } },
+    { "population": 1000, "zulu": 6, "mike": 5, "alpha": 4, "nested": { "zebra": 60, "apple": 40 } }
+  ]
+}

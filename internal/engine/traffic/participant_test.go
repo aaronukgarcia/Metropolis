@@ -51,6 +51,7 @@ func TestTrafficAPIFieldsAllClassified(t *testing.T) {
 		"roads":         "injected dependency (engine.roads), re-wired by the composition root via SetRoads on load",
 		"cfg":           "immutable config, loaded from data/traffic.json (a save must not pin old rules — FEAT-1972079897)",
 		"correlationID": "per-instance error correlation, not simulation state",
+		"ladder":        "immutable config, loaded from data/traffic/scale_ladder.json (a save must not pin old rules — FEAT-1972079897, BUG-830)",
 	}
 	// Covered: serialized via a per-item record (demands -> traffic.demand,
 	// nodes -> traffic.node, links -> traffic.link). There is no meta record:
