@@ -619,3 +619,51 @@ List-price order-of-magnitude, `uksouth`, GBP, **to be verified against the actu
 ---
 
 *Bev, 2026-09-03. Docs-only. Every measurement here was taken from the tree at `88f9bce`; every estimate is labelled as one.*
+
+---
+
+## 13. Addendum — "own registry could be parquet files?" (Aaron, 2026-09-05)
+
+Answers a narrower question than §4: not *where* snapshot bytes live (Azure Blob, settled), but *what format* the per-shard part files (§4.4 rule 1, `part-000..255.bin`) should be written in. Grounded directly in the two files that shape this: `internal/engine/citizens/coldshard.go` and `internal/persist/{diskstore.go,journal.go}`.
+
+### 13.1 What the code actually looks like today
+
+- **`ColdShard`** (`coldshard.go:53-120`) is already a true SoA layout across 256 shards: 30 separate typed columns (`ids []uint64`, `birthDelta []int16`, `employment []uint8` packing state+sector, `wealth []int64`, 8 personality + 5 satisfaction `int8` axes, etc.), every column the same length, indexed by row. Measured cost: **~75 B/citizen** in columns, ~113 B/citizen with the BUG-666 row index (`bytesPerCitizen`, `coldshard.go:400-459`) — the row index is a derived, non-serialized structure and stays out of any wire format.
+- **The wire format is a stated placeholder.** `paging.go:17-20` says outright: *"binary cold-shard serialization is int.serializer's reserved BinarySerializer (Out of scope), so this package ships a placeholder gob codec… that the real serializer will replace."* `coldShardWire` (`paging.go:71-108`) is a field-for-field exported mirror of `ColdShard`'s columns; `PageStore.Store` (`paging.go:196-211`) gob-encodes one shard per disk page file. This is the exact seam parquet would slot into — the wire struct's fields already ARE the parquet column list.
+- **`persist.Store`** (`store.go`, `diskstore.go:288-327`) treats a snapshot as one opaque `[]byte` — `PutSnapshot(ctx, city, snapshot) (SnapshotID, error)`, written via `atomicWrite`'s temp-then-rename (`diskstore.go:160-203`) under `snapshots/<seq>.bin`. **The journal is a separate, distinct format** (`journal.go:9-41`): self-describing length+payload+CRC32 frames, append-only, torn-tail-tolerant — nothing here changes.
+- **RNG is stateless**, confirmed by `lifewrite.go:29-38`: every draw is `det.NewStream(seed, id, month, purpose)`, a counter-based stream keyed by inputs already in the record. Nothing RNG-shaped needs to survive serialization — the earlier Vestige note ("RNG stateless → serialization is data-only") holds exactly here: a parquet file only ever needs to carry the columns above, never any generator state.
+- **100M is the stated target**: `TestColdStore100MProjection` asserts the 256-shard cold store lands in **6–10 GB** at 100M citizens (~390k rows/shard) — the scale this format choice has to hold up at (FEAT "prove 100m individual citizens on the cloud Go engine").
+
+### 13.2 What parquet buys
+
+1. **Columnar compression on columns that are already brutally compressible.** `birthDelta` (int16, epoch-relative — most citizens cluster in a few decades), `employment` (uint8, a handful of packed enum values), `homeCells`/`workplaces`/`schools` (uint32, spatially clustered ids), `stages`/`healthBands`/`sexes` (tiny enums) are exactly the low-cardinality, dictionary/RLE-friendly shapes parquet is built for. Gob (§13.1) writes every field's raw bytes with no column-aware compression at all; general-purpose gzip over the gob blob (already planned, §4.4 rule 5) recovers some of this but mixes columns together, which hurts a codec working column-by-column.
+2. **Predicate pushdown for read paths that do not need every column.** A future consolidator/analytics job (`FEAT-2326609761`, referenced in §4.4) that wants "citizens by district" or "employed vs not" today has no way to avoid decoding all 30 columns — gob fully materializes a shard before you can touch any field. Parquet's row-group/column-chunk layout lets such a reader fetch only the 2-3 columns it needs, which is a real bandwidth saving against Blob storage specifically (fewer bytes transferred, not just fewer bytes decoded).
+3. **A lingua-franca format Azure tooling reads for free.** DuckDB, Synapse serverless SQL, and Fabric all read parquet natively with zero exporter code. Once dogfood-city snapshots are parquet, "how does wealth distribute by district" becomes a `SELECT` against blob storage, not a bespoke Go tool.
+
+### 13.3 What it costs
+
+- **No random-row update — parquet is immutable-batch.** A file is written once, read many times; there is no equivalent of `removeAt`'s swap-delete (`coldshard.go:192-265`) against an existing parquet file. This is why parquet fits the **snapshot tier only**, never the live journal — §13.1's journal format (length+CRC frames, appended per command) stays exactly as it is; nothing here touches `journal.go`.
+- **Go library choice.** Two real options: `parquet-go/parquet-go` (pure Go, no cgo, generics-based struct tags — `coldShardWire`'s existing exported-field shape maps onto it almost directly) versus `apache/arrow/go` + its parquet submodule (heavier, brings the full Arrow in-memory columnar model, historically cgo-dependent though the pure-Go build has matured). **Recommend `parquet-go/parquet-go`**: no cgo simplifies the existing cross-platform (Windows dev + Linux CI/container) build, and the project needs parquet-as-a-file-format, not Arrow's in-memory compute layer.
+- **Memory pressure writing 100M rows.** A shard at 100M/256 ≈ 390k rows is fine to buffer whole, but the naive approach — build a full Arrow/parquet table in memory, then serialize — doubles the resident cost right when memory is already the binding constraint (doc.go's 32 GiB floor, §4.2). `parquet-go`'s `GenericWriter` supports incremental row-group writes straight from Go slices, so a shard's existing columns (`s.ids`, `s.birthDelta`, …) can stream into row groups without a second full-shard copy.
+
+### 13.4 The concrete shape
+
+Extends §4.4's layout, replacing `part-NNN.bin` (gob) with one parquet file per cold shard per snapshot epoch — the same "chunk at a boundary the engine already has" rule (§4.4 rule 1), now literal:
+
+```
+<tenant>/<city>/snapshot/<tick>/citizens/shard-000.parquet ... shard-255.parquet
+```
+
+One row group per shard (≤390k rows at 100M — comfortably inside typical row-group sizing guidance) is the natural mapping; `coldShardWire`'s 30 exported columns become 30 parquet columns unchanged. **Restore = a column scan straight into the SoA arrays** — `wireToColdShard` (`paging.go:136-156`) already assigns decoded columns directly into `ColdShard`'s fields with no per-row transform, so parquet's column-major decode is at least as direct as gob's, and for any reader that does not need every column (a view, a query, a partial restore) it is **strictly less I/O** than gob's all-or-nothing decode — potentially faster in the cases that matter, never slower for the full-restore case.
+
+**Structural gap to flag now:** `persist.Store.PutSnapshot` (`store.go`) is single-payload — `(city, []byte) -> SnapshotID`. 256 parquet files is not one `[]byte`. A spike must settle this before any code lands: either (a) extend `Store` with a multi-part snapshot API (blob-per-shard, a manifest tying them together — consistent with §4.4's already-planned `manifest.json`/`part-NNN` shape, so this may already be the intended direction), or (b) pack all 256 parquet files into one archive blob for `PutSnapshot`, which keeps the interface untouched today but gives up per-shard selective reads until the interface grows.
+
+### 13.5 Verdict
+
+**Recommend parquet-for-snapshots as a Phase-5+ increment** (after inc4's cloud core is proven, per §7's plan) **with a small spike first**: implement the `ColdShard` <-> parquet columnar round-trip for one shard, measure actual compression ratio against the real dogfood save, and settle the `Store` interface question (§13.4). **The journal is untouched** — it stays the framed binary format in `journal.go`, append-only, and nothing in this section proposes changing it. This is additive to §4's recommendation (Azure Blob, chunked at shard boundaries), not a replacement of it: parquet is a format decision inside a location decision already made.
+
+### 13.6 Open questions for Aaron
+
+- **Retention** — §11 Q100149 already rules 30-days-then-thin-to-yearly for the journal/snapshot cadence generally. Does parquet's likely better compression change that ruling (keep more history for the same spend), or does it stand as-is?
+- **Is analytics-on-live-dogfood-cities actually wanted?** §13.2 point 3 (DuckDB/Synapse/Fabric reading snapshots directly) is only a real win if someone will actually run those queries. If the answer is "no, nobody's asking," the compression win (§13.2 point 1) still justifies the format on its own, but the spike's scope shrinks.
+- **GR#25 conformance** — if the spike lands a new dependency edge (`int.persist` -> a parquet codec), that edge needs registering in `code.json` per the graph-driven specification rule before any acceptance-criteria prose is written against it.
