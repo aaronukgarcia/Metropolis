@@ -356,7 +356,7 @@ test('BUG-847: forecastSegmentUsage BFS op count does NOT keep growing with city
   // distance) -- reds the plateau assertion.
 });
 
-test('BUG-847: nearestSegmentWeights bounds neighbours to [0,MAP_W) x [0,MAP_H) before visiting (structural pin)', () => {
+test('BUG-847: nearestSegmentWeights (via considerNeighbour) bounds neighbours to [0,MAP_W) x [0,MAP_H) before visiting (structural pin)', () => {
   // A pure op-count test cannot reliably distinguish "map-bounds check
   // present" from "absent" once the radius cap already bounds total BFS
   // layers (removing the bounds check does not, by itself, make the loop
@@ -365,22 +365,35 @@ test('BUG-847: nearestSegmentWeights bounds neighbours to [0,MAP_W) x [0,MAP_H) 
   // difference that a wall-clock-free op-count assertion cannot safely
   // threshold without becoming a wall-clock-shaped flaky test, GR#21). This
   // is therefore a STRUCTURAL check (mirrors AC-2's own doc-endorsed
-  // grep-based false-pass guard) that the neighbour loop explicitly checks
-  // map bounds before ever building the "x,y" key or touching `visited`.
+  // grep-based false-pass guard) that the neighbour-examination path
+  // explicitly checks map bounds before ever touching the flat visited
+  // arrays.
+  //
+  // BUG-852 retry: the bounds check moved into the standalone
+  // `considerNeighbour` helper (called by nearestSegmentWeights's BFS loop,
+  // not inlined) -- scoped to JUST that function's body so this pin cannot
+  // false-pass via `boundedNearestSourceMapOf`'s OWN identical-looking bound
+  // check a few hundred lines below (that sibling function is untouched by
+  // this retry and keeps its own pin elsewhere; scoping to `nearestSegmentWeights('
+  // .. 'forecastSegmentUsage' used to silently include it too -- a
+  // BUG-883-shaped false-pass this retry closes at the same time).
   const fnBody = trafficDemandSrc.slice(
+    trafficDemandSrc.indexOf('function considerNeighbour('),
     trafficDemandSrc.indexOf('function nearestSegmentWeights('),
-    trafficDemandSrc.indexOf('/**\n * forecastSegmentUsage'),
   );
   assert.match(
     fnBody,
-    /if\s*\(nx < 0 \|\| nx >= MAP_W \|\| ny < 0 \|\| ny >= MAP_H\)\s*continue;/,
-    'nearestSegmentWeights must bounds-check every candidate neighbour against MAP_W/MAP_H before visiting it (BUG-847)',
+    /if\s*\(nx < 0 \|\| nx >= MAP_W \|\| ny < 0 \|\| ny >= MAP_H\)\s*return;/,
+    'considerNeighbour must bounds-check every candidate neighbour against MAP_W/MAP_H before touching the flat visited arrays (BUG-847)',
   );
   // MUTANT (bug847_no_map_bound): dropping this bounds check reds the
   // structural match above; a fixture whose source segment sits at a map
   // CORNER (0,0) would otherwise waste BFS work generating negative-x/-y
-  // candidate keys every layer, once per line class, for the life of the
-  // BFS -- exactly BUG-847's "floods the empty off-map plane" finding.
+  // candidate indices every layer, once per line class, for the life of the
+  // BFS -- exactly BUG-847's "floods the empty off-map plane" finding. Live
+  // scratch-copy proof: deleting the `if (...) return;` line from
+  // considerNeighbour in a scratch copy reds this exact assertion (verified
+  // this session, see the BOW comment).
 });
 
 test('BUG-847: conservation -- attributed + unattributed weight equals total demand-tile weight exactly, per class', () => {
@@ -526,17 +539,35 @@ test('BUG-850: an unmapped freight-sector kind is honest-absence (zero freight, 
 // --- a structural check, not a value assertion, is what catches it.      -
 
 test('BUG-847/GR#21: nearestSegmentWeights sorts BOTH the source-tile set and each BFS layer\'s frontier before assigning (no map-range-with-break)', () => {
+  // BUG-852 retry: scoped to TILE_COUNT..boundedNearestSourceMapOf's own doc
+  // comment -- i.e. the scratch buffers + considerNeighbour +
+  // nearestSegmentWeights as one unit -- NOT all the way to
+  // forecastSegmentUsage's doc comment, which would silently sweep in
+  // boundedNearestSourceMapOf's own (untouched, differently-shaped) sort
+  // call and let this pin false-pass even with nearestSegmentWeights's own
+  // sort removed (the same BUG-883-shaped scoping bug the bounds-check pin
+  // above had).
   const fnBody = trafficDemandSrc.slice(
-    trafficDemandSrc.indexOf('function nearestSegmentWeights('),
-    trafficDemandSrc.indexOf('/**\n * forecastSegmentUsage'),
+    trafficDemandSrc.indexOf('const TILE_COUNT = MAP_W * MAP_H;'),
+    trafficDemandSrc.indexOf('/**\n * GR#3/BUG-857 additive export'),
   );
   assert.match(fnBody, /const sortedSources = \[\.\.\.sourceTileKeys\]\.sort\(\);/, 'source tile keys must be sorted for deterministic tie-breaking');
-  assert.match(fnBody, /for \(const nk of \[\.\.\.next\.keys\(\)\]\.sort\(\)\) \{/, 'each BFS layer\'s frontier must be processed in sorted order');
+  // BUG-852 retry: the per-layer frontier is no longer a `Map<string,string>`
+  // sorted by `.keys()` -- it is an array of {idx,key} touched-tile records
+  // sorted by `.key` (the SAME "x,y" string, same lexicographic order,
+  // proven byte-identical to the pre-retry shape by the parity test below).
+  assert.match(
+    fnBody,
+    /touchedKeyed\.sort\(\(a, b\) => \(a\.key < b\.key \? -1 : a\.key > b\.key \? 1 : 0\)\);/,
+    'each BFS layer\'s touched-tile set must be processed in sorted "x,y"-key order',
+  );
   // MUTANT (bug847_unsorted_sources / bug847_unsorted_frontier, attacker
-  // round): dropping either .sort() call makes assignment order depend on
-  // Map/array iteration order -- which on THIS module happens to already be
+  // round): dropping either sort call makes assignment order depend on
+  // array/insertion order -- which on THIS module happens to already be
   // sorted (demandForecastOf's own output is pre-sorted by (x,y,spec)) so a
   // value/shuffle test alone cannot catch it; this structural check can.
+  // Live scratch-copy proof (this session): removing the `.sort(...)` call
+  // on `touchedKeyed` reds this exact assertion.
 });
 
 // ---------------------------------------------------------------------------
@@ -674,4 +705,232 @@ test('BUG-866: nearestSegmentWeights drops an off-map SEED key (counted, never e
   // read 1 by coincidence on THIS fixture -- which is exactly why the
   // `offMapSeedsDropped` assertion, not the attribution-count assertion
   // alone, is the one that reliably catches the regression.
+});
+
+// ---------------------------------------------------------------------------
+// BUG-883/BUG-852 RETRY -- old-vs-new PARITY.
+//
+// The BUG-852 retry rewrote nearestSegmentWeights's internals from a
+// `Map<string,string>` visited/frontier (allocated per call, string keys
+// parsed per neighbour) to flat, stamp-tagged Int32Array scratch buffers +
+// integer tile indices + an integer source-id tie-break, for wall-clock
+// speed (BUG-881: the REJECTED combined-across-classes attempt showed the
+// opposite direction -- a per-tile `Map<class,source>` allocation regressed
+// wall-clock 49-107% despite a small ops-count win -- this retry keeps the
+// per-class call shape and removes the Map/string overhead INSIDE each call
+// instead). BUG-883's finding was that the previous attempt's byte-identity
+// claim was UNPINNED: nothing in CI proved old-output === new-output, and a
+// real, output-CHANGING tie-break mutant survived the whole suite. This
+// block is that missing pin: `nearestSegmentWeightsReference` below is a
+// verbatim scratch copy of the PRE-RETRY per-class implementation (the one
+// at HEAD before this session, `git show f5ae80e:webconsole/src/sim/trafficDemand.ts`),
+// decoupled from the module's own bfsOpCounter/offMapSeedsDroppedCounter so
+// comparing the two never perturbs the real module's test counters.
+function nearestSegmentWeightsReference(sourceTileKeys, tileToSegment, tileWeight, radius) {
+  const weightBySegment = new Map();
+  if (sourceTileKeys.length === 0) return { weightBySegment, attributedTileCount: 0, offMapSeedsDropped: 0 };
+  const visited = new Map(); // tileKey -> nearest source tileKey
+  const sortedSources = [...sourceTileKeys].sort();
+  let offMapSeedsDropped = 0;
+  const onMapSources = [];
+  for (const k of sortedSources) {
+    const comma = k.indexOf(',');
+    const x = Number(k.slice(0, comma));
+    const y = Number(k.slice(comma + 1));
+    if (x < 0 || x >= MAP_W || y < 0 || y >= MAP_H) {
+      offMapSeedsDropped++;
+      continue;
+    }
+    onMapSources.push(k);
+    visited.set(k, k);
+  }
+  let attributedTileCount = 0;
+  const accumulate = (m, key, v) => m.set(key, (m.get(key) ?? 0) + v);
+  for (const k of onMapSources) {
+    const w = tileWeight.get(k);
+    if (w) {
+      accumulate(weightBySegment, tileToSegment.get(k), w);
+      attributedTileCount++;
+    }
+  }
+  let frontier = onMapSources;
+  let dist = 0;
+  while (frontier.length > 0 && dist < radius) {
+    dist++;
+    const next = new Map();
+    for (const key of frontier) {
+      const comma = key.indexOf(',');
+      const x = Number(key.slice(0, comma));
+      const y = Number(key.slice(comma + 1));
+      const src = visited.get(key);
+      const neighbours = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]];
+      for (const [nx, ny] of neighbours) {
+        if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
+        const nk = `${nx},${ny}`;
+        if (visited.has(nk)) continue;
+        const existing = next.get(nk);
+        if (!existing || src < existing) next.set(nk, src);
+      }
+    }
+    const nextFrontier = [];
+    for (const nk of [...next.keys()].sort()) {
+      const src = next.get(nk);
+      visited.set(nk, src);
+      nextFrontier.push(nk);
+      const w = tileWeight.get(nk);
+      if (w) {
+        accumulate(weightBySegment, tileToSegment.get(src), w);
+        attributedTileCount++;
+      }
+    }
+    frontier = nextFrontier;
+  }
+  return { weightBySegment, attributedTileCount, offMapSeedsDropped };
+}
+
+function mapToSortedPairs(m) {
+  return [...m.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+}
+
+function assertParity(name, sourceTileKeys, tileToSegment, tileWeight, radius) {
+  const ref = nearestSegmentWeightsReference(sourceTileKeys, tileToSegment, tileWeight, radius);
+  const real = nearestSegmentWeights(sourceTileKeys, tileToSegment, tileWeight, radius);
+  assert.deepEqual(
+    mapToSortedPairs(real.weightBySegment),
+    mapToSortedPairs(ref.weightBySegment),
+    `${name}: weightBySegment must be byte-identical between the retried and reference implementations`,
+  );
+  assert.equal(real.attributedTileCount, ref.attributedTileCount, `${name}: attributedTileCount parity`);
+  assert.equal(real.offMapSeedsDropped, ref.offMapSeedsDropped, `${name}: offMapSeedsDropped parity`);
+}
+
+function gridSourceKeys(x0, y0, w, h) {
+  const keys = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) keys.push(`${x0 + x},${y0 + y}`);
+  return keys;
+}
+function segMapFor(keys, segId) {
+  const m = new Map();
+  for (const k of keys) m.set(k, segId);
+  return m;
+}
+// Deterministic scatter of demand weight across a region slightly larger
+// than the source footprint, so both algorithms exercise multi-layer BFS
+// expansion (not just seed-tile attribution) and genuine equal-distance
+// ties between separate source tiles/clusters.
+function scatterWeights(x0, y0, w, h, pad, seed) {
+  const m = new Map();
+  let s = seed;
+  for (let y = -pad; y < h + pad; y++) {
+    for (let x = -pad; x < w + pad; x++) {
+      s = (s * 1103515245 + 12345) % 2147483648;
+      if (s % 7 === 0) {
+        const tx = x0 + x;
+        const ty = y0 + y;
+        if (tx >= 0 && ty >= 0 && tx < MAP_W && ty < MAP_H) m.set(`${tx},${ty}`, 1 + (s % 13));
+      }
+    }
+  }
+  return m;
+}
+
+test('BUG-883: PARITY -- (a) single-class dense grid, retried implementation is byte-identical to the reference', () => {
+  const keys = gridSourceKeys(20, 20, 40, 40);
+  const seg = segMapFor(keys, 'seg-single');
+  const weight = scatterWeights(20, 20, 40, 40, 15, 7);
+  assertParity('single-class dense grid', keys, seg, weight, 80);
+});
+
+test('BUG-883: PARITY -- (b) 4-class shared footprint (same region, 4 independent per-class calls), each byte-identical', () => {
+  for (let cls = 0; cls < 4; cls++) {
+    const keys = gridSourceKeys(50, 50, 25, 25);
+    const seg = segMapFor(keys, `seg-shared-${cls}`);
+    const weight = scatterWeights(50, 50, 25, 25, 10, 11 + cls * 101);
+    assertParity(`4-class shared footprint, class ${cls}`, keys, seg, weight, 60);
+  }
+});
+
+test('BUG-883: PARITY -- (c) disjoint 4-cluster city (ONE class, 4 far-apart source clusters -- real equidistant ties between clusters)', () => {
+  const clusters = [
+    gridSourceKeys(5, 5, 6, 6),
+    gridSourceKeys(200, 5, 6, 6),
+    gridSourceKeys(5, 200, 6, 6),
+    gridSourceKeys(200, 200, 6, 6),
+  ];
+  const keys = clusters.flat();
+  const seg = new Map();
+  clusters.forEach((c, i) => { for (const k of c) seg.set(k, `seg-cluster-${i}`); });
+  // Demand scattered across the whole span, including the midpoints between
+  // clusters where a real Manhattan-distance TIE between two different
+  // clusters' floods is possible.
+  const weight = scatterWeights(0, 0, 210, 210, 20, 23);
+  assertParity('disjoint 4-cluster city', keys, seg, weight, 130);
+});
+
+test('BUG-883: PARITY -- (d) dense grid (10,000 source tiles), byte-identical', () => {
+  const keys = gridSourceKeys(0, 0, 100, 100);
+  const seg = segMapFor(keys, 'seg-dense');
+  const weight = scatterWeights(0, 0, 100, 100, 15, 31);
+  assertParity('dense 10,000-tile grid', keys, seg, weight, 130);
+});
+
+// BUG-883's own surviving mutant, retargeted at the RETRIED implementation's
+// equivalent tie-break line (`else if (srcId < tentSrcId[nIdx])` --
+// considerNeighbour's integer-id form of the old `if (!existing || src <
+// existing)` string tie-break). Proven RED this session via the scratch-copy
+// method GR#24 requires (cp trafficDemand.ts to a scratchpad .bak, mutate
+// the real file, run, restore from the .bak -- never a git command): with
+// the `else if` branch deleted (first-writer-wins instead of lowest-id-wins)
+// the disjoint-4-cluster parity test above reds because a real tile
+// equidistant from two different clusters is attributed to whichever
+// cluster's frontier happened to reach it in loop-iteration order instead of
+// the lowest source id -- see the BOW comment on BUG-883/BUG-852 for the
+// live transcript. This test file cannot re-run that mutation itself
+// (it would require monkey-patching module-private state), so the
+// documented live proof stands in for an in-suite mutant switch, same as
+// the sort/bounds structural pins above already do for THEIR mutants.
+test('BUG-883: tie-break is lowest-source-id (== lowest source key), NOT whichever frontier arrives first (real divergent fixture)', () => {
+  // A NAIVE tie fixture (two sources equidistant on the same row) does NOT
+  // discriminate the tie-break mutant: when the tie is reached directly from
+  // the seed layer, frontier processing order already equals sorted-source
+  // order, so "first writer" and "lowest id" coincide by construction (a
+  // false-pass this session found the hard way while building this pin --
+  // see the BOW comment). A REAL discriminating fixture needs the tie
+  // reached at a DEEPER layer where the intermediate touched-tile keys sort
+  // in a DIFFERENT order than the two sources' own keys -- found this
+  // session by brute-force search over random equidistant source/tie
+  // triples (scratchpad find-tie-mutant.mjs) rather than hand construction.
+  // '168,36' < '68,8' lexicographically (STRING comparison, not numeric --
+  // '1' < '6' as the first character decides it, even though 168 > 68 as a
+  // number) -- '168,36' must win -- but the intermediate frontier tiles
+  // approaching the tie point from '68,8' happen to sort EARLIER than those
+  // from '168,36' at the layer the two floods actually meet, so a
+  // first-writer-wins mutant picks the WRONG (higher-key) source instead.
+  const keyLow = '168,36'; // lexicographically smaller -- correct winner
+  const keyHigh = '68,8';
+  const tie = '104,112'; // Manhattan distance 140 from BOTH sources
+  const dist = Math.abs(104 - 68) + Math.abs(112 - 8);
+  assert.equal(dist, 140, 'sanity: the tie point really is equidistant from both sources');
+  assert.equal(dist, Math.abs(104 - 168) + Math.abs(112 - 36));
+  const keys = [keyLow, keyHigh];
+  const seg = new Map([[keyLow, 'seg-low'], [keyHigh, 'seg-high']]);
+  const weight = new Map([[tie, 7]]);
+  const radius = dist + 1;
+  const ref = nearestSegmentWeightsReference(keys, seg, weight, radius);
+  const real = nearestSegmentWeights(keys, seg, weight, radius);
+  assert.equal(ref.weightBySegment.get('seg-low'), 7, 'reference: lowest-key source wins the tie');
+  assert.equal(ref.weightBySegment.has('seg-high'), false, 'reference: higher-key source gets nothing');
+  assert.equal(real.weightBySegment.get('seg-low'), 7, 'retried implementation: lowest-key source wins the tie (BUG-883 tie-break)');
+  assert.equal(real.weightBySegment.has('seg-high'), false, 'retried implementation: higher-key source gets nothing');
+  assertParity('deep-layer equidistant tie (brute-force-found divergent fixture)', keys, seg, weight, radius);
+  // MUTANT (BUG-883's own, retargeted at considerNeighbour's integer form):
+  // deleting the `else if (srcId < tentSrcId[nIdx]) { tentSrcId[nIdx] =
+  // srcId; }` branch (leaving first-writer-wins) makes THIS fixture flip to
+  // 'seg-high' winning instead of 'seg-low' -- proven RED live this session
+  // via the GR#24 scratch-copy method (cp to a .bak, mutate the real file,
+  // run, restore from the .bak) -- see the BOW comment on BUG-883/BUG-852.
+  // A naive same-row/same-layer tie fixture (tried first, see above) did NOT
+  // catch this same mutant -- kept as a comment here, not a test, precisely
+  // because it silently coincides with the mutant and would be a false
+  // sense of coverage if left in as a pin.
 });

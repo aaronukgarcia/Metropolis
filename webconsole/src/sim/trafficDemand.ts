@@ -544,6 +544,65 @@ export function __getOffMapSeedsDroppedCounterForTest(): number {
   return offMapSeedsDroppedCounter;
 }
 
+// BUG-852 retry (BUG-881/882/883 detail): reusable, module-level, sized-once
+// (MAP_W x MAP_H) scratch buffers for nearestSegmentWeights's flat-array BFS
+// core. `finalStamp`/`finalSrcId` hold the per-tile FINALISED nearest-source
+// id for the CURRENT call only, `tentStamp`/`tentSrcId` hold the per-tile
+// TENTATIVE candidate for the CURRENT layer only — both use the "compare
+// against a monotonically increasing stamp counter" idiom instead of ever
+// `.fill()`-resetting an O(map) array, so a slot reads as unset unless its
+// stamp matches the live call's/layer's stamp value. This means cost is
+// proportional to tiles ACTUALLY touched (map area really reached by the
+// BFS), never the whole map, on every fixture shape — including the ones
+// BUG-881 measured this class of fix regressing on (a small single-class
+// city touches almost nothing; a full-map city touches close to
+// MAP_W*MAP_H, same as before). No per-tile object/Map is allocated inside
+// the hot loop — that allocation (`Map<class,source>` per tile, BUG-881's
+// root cause) is the thing this retry removes.
+const TILE_COUNT = MAP_W * MAP_H;
+const finalStamp = new Int32Array(TILE_COUNT);
+const finalSrcId = new Int32Array(TILE_COUNT);
+const tentStamp = new Int32Array(TILE_COUNT);
+const tentSrcId = new Int32Array(TILE_COUNT);
+let bfsStampCounter = 0;
+
+/**
+ * BUG-852 retry: examines one candidate neighbour tile (`nx`,`ny`) reached
+ * from a frontier tile carrying source id `srcId`. Bounds-checked exactly
+ * like the pre-retry Map-based loop (BUG-847's structural pin, updated —
+ * see trafficDemand.test.mjs), then resolved via the stamp-tagged flat
+ * arrays instead of `Map<string,string>`: an already-FINALISED tile (this
+ * call) is skipped, otherwise the lowest source `id` wins for this layer
+ * (`srcId < tentSrcId[nIdx]`) — INTEGER comparison, not a string compare,
+ * but exactly equivalent to the old `src < existing` STRING compare because
+ * `id` is assigned in sorted-source-key order (see the caller): comparing
+ * two ids compares their sorted RANK, which is monotonic with comparing the
+ * source keys themselves (BUG-883's tie-break, pinned in the test file).
+ */
+function considerNeighbour(
+  nx: number,
+  ny: number,
+  srcId: number,
+  callStamp: number,
+  layerStamp: number,
+  touched: number[],
+): void {
+  bfsOpCounter++;
+  // BUG-847: never step off-map — the pre-fix version had no such check and
+  // flooded the empty off-map plane to `radius` in every direction, once
+  // per line class.
+  if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) return;
+  const nIdx = ny * MAP_W + nx;
+  if (finalStamp[nIdx] === callStamp) return; // already finalised (seed or an earlier layer)
+  if (tentStamp[nIdx] !== layerStamp) {
+    tentStamp[nIdx] = layerStamp;
+    tentSrcId[nIdx] = srcId;
+    touched.push(nIdx);
+  } else if (srcId < tentSrcId[nIdx]) {
+    tentSrcId[nIdx] = srcId;
+  }
+}
+
 /**
  * Multi-source Manhattan BFS from `sourceTileKeys` (one line class's own
  * tiles) outward over the map, bounded by BOTH `radius` and the map's own
@@ -567,30 +626,31 @@ export function __getOffMapSeedsDroppedCounterForTest(): number {
  * radius exceeding the map's own extent. Combined: worst case is
  * O(min(radius, MAP_W+MAP_H)^2 + segments), never O(bbox diameter^2).
  *
- * Design note (per the rework brief): kept as ONE BFS PER LINE CLASS rather
- * than a single combined BFS over all classes with per-class nearest,
- * because (a) each class's own segment tiles are a DIFFERENT source set, so
- * a combined BFS would need a per-tile array of "nearest source per class"
- * anyway — same total work, more state; (b) the radius cap already bounds
- * per-class cost to the map size regardless of class count, so the
- * per-class approach's total cost (O(classes x mapTiles) worst case) does
- * NOT grow with city bbox diameter, which is what BUG-847 actually measured
- * as unshippable — the class-count factor is small and constant (11 line
- * classes) where the diameter factor was unbounded. A combined pass remains
- * a legitimate future optimisation if the per-class factor ever matters.
+ * Design note (unchanged from the rework, kept per the BUG-852 retry brief):
+ * still ONE BFS PER LINE CLASS rather than a single combined BFS over all
+ * classes' seeds — BUG-881 measured that shape (a `Map<class,source>`
+ * allocated per tile, plus a `.sort()` of that per-tile map's keys FOUR
+ * TIMES per frontier tile per layer) regressing wall-clock by up to 2.06x
+ * despite a small ops-count win, because the per-tile allocation/sort
+ * overhead dominates the "walk the map once per class" saving it was meant
+ * to buy. This retry instead removes the overhead INSIDE each per-class
+ * walk: no `Map<string,string>` for `visited`/the per-layer frontier (BOTH
+ * were real allocations+string-hashing on every call), no string
+ * parse/build for internal candidates (integer tile index arithmetic
+ * throughout — `y*MAP_W+x` / `idx%MAP_W` / `(idx/MAP_W)|0` — replaces
+ * `` `${nx},${ny}` `` + `.indexOf(',')` + `.slice()` + `Number()` per
+ * neighbour), and no per-neighbour `.sort()` of anything (the ONLY sorts
+ * left are the ONE sourceTileKeys sort per call and the ONE per-layer
+ * touched-tile sort, both preserved from the original so floating-point
+ * summation order — and therefore the byte-identical output BUG-883 found
+ * unpinned — stays IDENTICAL to the pre-retry per-class implementation; see
+ * trafficDemand.test.mjs's parity test).
  *
- * BUG-866 fix: this function is the sibling `boundedNearestSourceMapOf`
- * (below) was copied FROM — BUG-864(1) added a seed bounds-check to the new
- * export but left this, the original, still seeding `visited` from
- * `sortedSources` with no bounds check at all. The identical guard is
- * applied here: an off-map seed key is dropped (never entered into
- * `visited`), counted on both the shared test counter (parity with
+ * BUG-866 fix (kept from the rework, unaffected by this retry): an off-map
+ * seed key is dropped (never entered into the finalised-tile arrays),
+ * counted on both the shared test counter (parity with
  * `boundedNearestSourceMapOf`) and the function's own `offMapSeedsDropped`
- * return field (additive — every existing caller/consumer of the return
- * shape is unaffected since it only adds a field, never removes one).
- * Exported additively (was module-private) so BUG-866's test can drive an
- * off-map seed directly rather than only through real building placement,
- * which grid.ts always clamps on-map today.
+ * return field.
  */
 export function nearestSegmentWeights(
   sourceTileKeys: string[],
@@ -604,13 +664,16 @@ export function nearestSegmentWeights(
   // `radius` is capped by MAX_ATTRIBUTION_RADIUS_TILES by the ONLY caller
   // (forecastSegmentUsage, below) before this private helper ever runs — no
   // second cap re-applied here (GR#3, one rule, one place).
-  const visited = new Map<string, string>(); // tileKey -> nearest source tileKey
+  const callStamp = ++bfsStampCounter;
   const sortedSources = [...sourceTileKeys].sort();
-  // BUG-866/BUG-864(1): bounds-check SEED keys exactly like expanded
-  // neighbours below — the pre-fix loop admitted a seed key verbatim into
-  // `visited` with no bounds check at all.
+  // BUG-866/BUG-864(1)/BUG-882: bounds-check SEED keys exactly like expanded
+  // neighbours below — an off-map seed key is dropped (never finalised) and
+  // counted, never admitted verbatim. `id` is this on-map source's index in
+  // SORTED-KEY order — see `considerNeighbour`'s doc comment for why integer
+  // `id` comparison is exactly equivalent to the original string tie-break.
   let offMapSeedsDropped = 0;
-  const onMapSources: string[] = [];
+  const idToKey: string[] = [];
+  const seedIdx: number[] = [];
   for (const k of sortedSources) {
     const comma = k.indexOf(',');
     const x = Number(k.slice(0, comma));
@@ -620,54 +683,64 @@ export function nearestSegmentWeights(
       offMapSeedsDroppedCounter++;
       continue;
     }
-    onMapSources.push(k);
-    visited.set(k, k);
+    const tIdx = y * MAP_W + x;
+    const id = idToKey.length;
+    idToKey.push(k);
+    if (finalStamp[tIdx] !== callStamp) {
+      finalStamp[tIdx] = callStamp;
+      finalSrcId[tIdx] = id;
+      seedIdx.push(tIdx);
+    }
   }
+
   let attributedTileCount = 0;
-  for (const k of onMapSources) {
-    const w = tileWeight.get(k);
+  // Seed attribution in SORTED-KEY order — identical to the pre-retry
+  // `for (const k of onMapSources)` loop (onMapSources preserved
+  // sortedSources' order), so floating-point summation order is unchanged.
+  for (const tIdx of seedIdx) {
+    const key = idToKey[finalSrcId[tIdx]];
+    const w = tileWeight.get(key);
     if (w) {
-      accumulate(weightBySegment, tileToSegment.get(k)!, w);
+      accumulate(weightBySegment, tileToSegment.get(key)!, w);
       attributedTileCount++;
     }
   }
 
-  let frontier = onMapSources;
+  let frontier = seedIdx;
   let dist = 0;
   while (frontier.length > 0 && dist < radius) {
     dist++;
-    const next = new Map<string, string>(); // candidate tileKey -> best source seen this layer
-    for (const key of frontier) {
-      const comma = key.indexOf(',');
-      const x = Number(key.slice(0, comma));
-      const y = Number(key.slice(comma + 1));
-      const src = visited.get(key)!;
-      const neighbours: Array<[number, number]> = [
-        [x + 1, y],
-        [x - 1, y],
-        [x, y + 1],
-        [x, y - 1],
-      ];
-      for (const [nx, ny] of neighbours) {
-        bfsOpCounter++;
-        // BUG-847: never step off-map — the pre-fix version had no such
-        // check and flooded the empty off-map plane to `radius` in every
-        // direction, once per line class.
-        if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
-        const nk = `${nx},${ny}`;
-        if (visited.has(nk)) continue;
-        const existing = next.get(nk);
-        if (!existing || src < existing) next.set(nk, src);
-      }
+    const layerStamp = ++bfsStampCounter;
+    const touched: number[] = [];
+    for (const tIdx of frontier) {
+      const x = tIdx % MAP_W;
+      const y = (tIdx / MAP_W) | 0;
+      const srcId = finalSrcId[tIdx];
+      considerNeighbour(x + 1, y, srcId, callStamp, layerStamp, touched);
+      considerNeighbour(x - 1, y, srcId, callStamp, layerStamp, touched);
+      considerNeighbour(x, y + 1, srcId, callStamp, layerStamp, touched);
+      considerNeighbour(x, y - 1, srcId, callStamp, layerStamp, touched);
     }
-    const nextFrontier: string[] = [];
-    for (const nk of [...next.keys()].sort()) {
-      const src = next.get(nk)!;
-      visited.set(nk, src);
-      nextFrontier.push(nk);
-      const w = tileWeight.get(nk);
+    // Finalise this layer in SORTED "x,y" key order — exactly the order the
+    // pre-retry `for (const nk of [...next.keys()].sort())` loop used,
+    // preserved byte-for-byte (including floating-point summation order)
+    // even though `touched` holds tile INDICES, not string keys, throughout
+    // the hot loop above.
+    const touchedKeyed = touched.map((idx) => {
+      const tx = idx % MAP_W;
+      const ty = (idx / MAP_W) | 0;
+      return { idx, key: `${tx},${ty}` };
+    });
+    touchedKeyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    const nextFrontier: number[] = [];
+    for (const { idx, key } of touchedKeyed) {
+      const id = tentSrcId[idx];
+      finalStamp[idx] = callStamp;
+      finalSrcId[idx] = id;
+      nextFrontier.push(idx);
+      const w = tileWeight.get(key);
       if (w) {
-        accumulate(weightBySegment, tileToSegment.get(src)!, w);
+        accumulate(weightBySegment, tileToSegment.get(idToKey[id])!, w);
         attributedTileCount++;
       }
     }
