@@ -24,7 +24,6 @@ import {
   placementCost,
   upkeepChargeableOf,
   serviceCoverageOf,
-  earlyGameFactor,
   brownoutOf,
   isBrownoutActive,
   BROWNOUT_WELLBEING_K,
@@ -88,8 +87,14 @@ import {
   stampTunnelFootprintGrandfather,
   TUNNEL_FOOTPRINT_GRANDFATHER_EPOCH,
   occupiedColumnsOf,
+  wellbeingPartOf,
 } from './data.ts';
 import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
+// BUG-880 fix — re-export the single shared coverage->wellbeing-part
+// transform (defined in data.ts to avoid a new import cycle) so callers can
+// consume it as `engine.ts`'s wellbeing-part idiom, matching every other
+// symbol in this list (see data.ts's wellbeingPartOf doc comment).
+export { wellbeingPartOf };
 // R3-D FIX (round-3 finding, LOW — "make the nextId self-heal loud"): a
 // DELIBERATE, NARROW exception to this file's own convention of zero
 // side-effects in the reducer (no console.* calls anywhere else in
@@ -115,6 +120,20 @@ import type {
   BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
+// FEAT-2326609798 inc5 r2 (BUG-877) — the heavy traffic derivations
+// (commuteTimeDistributionOf/gridlockedSegmentsOf/emergencyCoverageOf) now
+// run ONLY inside trafficWellbeing.ts's computeTrafficSnapshot, gated by the
+// cadence check in advance() below — engine.ts no longer calls
+// gridlockedSegmentsOf directly.
+import {
+  commuteWellbeingPartOf,
+  gridlockWellbeingPartOf,
+  emergencyWellbeingPartOf,
+  computeTrafficSnapshot,
+  compositeWithTrafficPenalty,
+  TRAFFIC_RECOMPUTE_TICKS,
+  isTrafficCadenceTickWithConfig,
+} from './trafficWellbeing.ts';
 import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL, INSOLVENCY_WARNING_THRESHOLD, POLICY_COST_CAP_FRACTION, transitSubsidyCostPerTick, transitFareRevenuePerTick, TRANSIT_FARE_RATE_PER_RIDER, TRANSIT_FARE_REVENUE_LABEL, freightTaxPerTick, taxIncomeAtRate, POLICY_CAP_REFERENCE_TAX_RATE, OFFICE_TAX_YIELD_FACTOR, INSTITUTIONAL_KINDS, INSTITUTIONAL_TAX_LABEL, INSTITUTIONAL_TAX_YIELD_FACTOR } from './fiscal.ts';
 // FEAT-2326609761 (CONSOLIDATOR mutation lane) — read-only discovery/opportunity
 // functions from the PARALLEL read-only lane's module. Safe one-directional
@@ -7313,6 +7332,39 @@ function advance(s: SimState): SimState {
     congestionUsages
   );
 
+  // FEAT-2326609798 inc5 r2 (BUG-877 cadence fix, Lead amendment 1 after r1
+  // REJECT row 7607) — the r1 build called gridlockedSegmentsOf (a full
+  // traffic assignment) on a freshly-spread state EVERY TICK, on top of the
+  // three wellbeing parts ALSO re-deriving commuteTimeDistributionOf/
+  // gridlockedSegmentsOf/emergencyCoverageOf per tick: measured 7.6ms ->
+  // 728ms (96x) at 20,000 buildings and turned crime-mechanic.test.mjs's 3s
+  // PASS into a 240s TIMEOUT (BUG-877). Fix: ALL of that work — the gridlock
+  // tick-counter advance AND the three traffic wellbeing inputs — now runs
+  // ONLY inside computeTrafficSnapshot, called on a data-sourced CADENCE
+  // (trafficRecomputeTicks, data/traffic.json, TRAFFIC_RECOMPUTE_TICKS) or
+  // when s.trafficSnapshot is absent (fresh state / old save, requirement
+  // (c)). On every OTHER tick, gridlockTicksBySegment/trafficSnapshot simply
+  // carry the PREVIOUS tick's values forward untouched — zero assignment
+  // work, structurally provable via trafficAssignment.ts's exported ops
+  // counters (BUG-877 test (a)/(e)).
+  // BUG-889(q) fix (r3): the modulo check itself now lives in ONE place,
+  // trafficWellbeing.ts's isTrafficCadenceTickWithConfig, called here with the
+  // real sourced TRAFFIC_RECOMPUTE_TICKS -- a test can drive the SAME exported
+  // predicate with a scratch cadence to prove this call site cannot silently
+  // regress to a hardcoded literal.
+  const isTrafficCadenceTick = isTrafficCadenceTickWithConfig(tick, !!s.trafficSnapshot, TRAFFIC_RECOMPUTE_TICKS);
+  let gridlockTicksBySegment = s.gridlockTicksBySegment ?? {};
+  let trafficSnapshot = s.trafficSnapshot;
+  if (isTrafficCadenceTick) {
+    const result = computeTrafficSnapshot(
+      { ...s, buildings: scaledBuildings, population },
+      tick,
+      sanitizeCongestionTicksBySpec(s.gridlockTicksBySegment)
+    );
+    gridlockTicksBySegment = result.gridlockTicksBySegment;
+    trafficSnapshot = result.snapshot;
+  }
+
   const exposedInsolvencyState: InsolvencyState =
     declineState !== null
       ? 'decline'
@@ -7460,6 +7512,14 @@ function advance(s: SimState): SimState {
     // FEAT-congestion-teeth-2026-09-02 (AC-1): this tick's advanced per-line
     // sustained-congestion counters, read by the NEXT tick's wellbeing/income.
     congestionTicksBySpec,
+    // FEAT-2326609798 inc5 r2 (BUG-877): per-segment gridlock counters,
+    // refreshed only on a traffic-cadence tick (see isTrafficCadenceTick
+    // above), otherwise carried forward unchanged.
+    gridlockTicksBySegment,
+    // FEAT-2326609798 inc5 r2 (BUG-877): the cadence-refreshed traffic
+    // wellbeing snapshot the three traffic wellbeing parts read EXCLUSIVELY
+    // (trafficWellbeing.ts) — never recomputed off-cadence.
+    trafficSnapshot,
   };
 
   // FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1) — detect any
@@ -10909,8 +10969,9 @@ const buildServiceWellbeingParts: (s: SimState) => { label: string; value: numbe
   // Early-game blend toward a 55 baseline while pop < 50 — same ramp as the
   // demand meters' earlyGameFactor so the two systems damp identically.
   // ⚠ BALANCE-NUMBER PLACEHOLDER (55 baseline, pop/50 ramp) — Aaron's pass.
-  const f = earlyGameFactor(pop);
-  const blend = (computed: number) => Math.round(computed * f + 55 * (1 - f));
+  // BUG-880 fix: `part` now delegates to the SINGLE shared wellbeingPartOf
+  // (data.ts) instead of a locally-duplicated blend/part pair — see that
+  // function's doc comment for the "why data.ts, not here" cycle note.
 
   // BUG-392: every service part consumes the SAME per-service coverage ratios
   // as the demand meters (data.ts serviceCoverageOf — single source of truth,
@@ -10922,7 +10983,7 @@ const buildServiceWellbeingParts: (s: SimState) => { label: string; value: numbe
   const ratio = (id: string): number => Math.min(1, covById.get(id) ?? 1);
   // ⚠ BALANCE-NUMBER PLACEHOLDER: linear coverage→score map, 0–100 clamp
   // (the old +20% over-provision bonus is dropped), pending Aaron's pass.
-  const part = (coverage: number) => blend(Math.round(clampN(coverage * 100, 0, 100)));
+  const part = (coverage: number) => wellbeingPartOf(coverage, pop);
 
   // ⚠ BALANCE-NUMBER PLACEHOLDERS: parks formula and the equal (1/3) education
   // stage weights below, pending Aaron's pass.
@@ -11024,6 +11085,22 @@ const buildServiceWellbeingParts: (s: SimState) => { label: string; value: numbe
     // ⚠ BALANCE-NUMBER PLACEHOLDER: reuses the shared coverage→part map.
     { label: 'Refuse', value: part(collectionCoverageOf(s)) },
     { label: 'Traffic/Commute', value: congestion },
+    // FEAT-2326609798 inc5 r2 (Lead amendments 1/2, after r1 REJECT
+    // BUG-877/879) — three NEW PENALTY terms alongside (never replacing) the
+    // class-level 'Traffic/Commute' part above: real routed commute time,
+    // trip-weighted gridlock exposure, and honest-null-as-worst-case
+    // emergency coverage. Each renders here via the SAME shared
+    // wellbeingPartOf (BUG-880, data.ts) every other row above uses, reading
+    // ONLY the cadence-refreshed s.trafficSnapshot (BUG-877 — no traffic
+    // assignment on a non-cadence tick). These three labels
+    // (trafficWellbeing.ts's TRAFFIC_PENALTY_PART_LABELS) are EXCLUDED from
+    // the parts mean by compositeWithTrafficPenalty below and instead
+    // SUBTRACTED as a weighted penalty after the mean (BUG-879 — an
+    // equal-weight average could only ever RAISE wellbeing when a penalty
+    // term was appended, which is exactly what the r1 REJECT caught).
+    { label: 'Commute time', value: commuteWellbeingPartOf(s) },
+    { label: 'Gridlock', value: gridlockWellbeingPartOf(s) },
+    { label: 'Emergency response', value: emergencyWellbeingPartOf(s) },
   ];
   return parts;
 });
@@ -11033,10 +11110,13 @@ const buildServiceWellbeingParts: (s: SimState) => { label: string; value: numbe
  * reads to fold a "how are citizens feeling about city services" signal into
  * Approval without recursing (see buildServiceWellbeingParts's doc comment).
  * ⚠ BALANCE-NUMBER PLACEHOLDER: equal part weights, pending Aaron's pass.
+ * FEAT-2326609798 inc5 r2 (BUG-879): the three traffic-penalty parts are
+ * excluded from the mean and subtracted as a weighted penalty afterward —
+ * see compositeWithTrafficPenalty (trafficWellbeing.ts).
  */
 export function wellbeingPreApprovalOf(s: SimState): number {
   const parts = buildServiceWellbeingParts(s);
-  return Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
+  return compositeWithTrafficPenalty(parts, s);
 }
 
 /**
@@ -11071,11 +11151,13 @@ const buildWellbeingCoreParts: (s: SimState) => { label: string; value: number }
  * The sole consumer is crimeRateOf() (data.ts), which needs a wellbeing
  * signal that provably never depends on crime itself (see that function's
  * doc comment). ⚠ BALANCE-NUMBER PLACEHOLDER: equal part weights, same as
- * wellbeingOf(), pending Aaron's pass.
+ * wellbeingOf(), pending Aaron's pass. FEAT-2326609798 inc5 r2 (BUG-879):
+ * the three traffic-penalty parts are excluded from the mean and subtracted
+ * afterward, same rule as wellbeingPreApprovalOf/wellbeingOf.
  */
 export function wellbeingCoreOf(s: SimState): number {
   const parts = buildWellbeingCoreParts(s);
-  return Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
+  return compositeWithTrafficPenalty(parts, s);
 }
 
 // BUG-602: memoised — advance() consumes this at least twice per tick
@@ -11087,14 +11169,13 @@ export const wellbeingOf: (s: SimState) => {
 } = memoOnState((s) => {
   const coreParts = buildWellbeingCoreParts(s);
 
-  // Same blend/part shaping as buildWellbeingCoreParts uses internally
-  // (duplicated here deliberately — see that function's doc comment for why
-  // the Crime part cannot be folded into the shared list without reordering
-  // the crime<->wellbeing call graph into a cycle).
+  // BUG-890 fix (r3): Crime's coverage->part transform now calls the SAME
+  // shared wellbeingPartOf (data.ts, BUG-880's single source) every other row
+  // uses, instead of a third locally-duplicated blend/part pair — Crime still
+  // has to sit OUTSIDE buildServiceWellbeingParts (see that function's doc
+  // comment for why: the crime<->wellbeing call graph would otherwise cycle),
+  // but the coverage->score FORMULA itself is no longer re-typed a third time.
   const pop = s.population;
-  const f = earlyGameFactor(pop);
-  const blend = (computed: number) => Math.round(computed * f + 55 * (1 - f));
-  const part = (coverage: number) => blend(Math.round(clampN(coverage * 100, 0, 100)));
 
   // FEAT-crime-mechanic-2026-09-02 (AC-8): Crime as its own wellbeing part,
   // separate from Safety/police — a city can have full police coverage and
@@ -11102,11 +11183,14 @@ export const wellbeingOf: (s: SimState) => {
   // low police (a well-integrated community). Invert: high crime (100) ->
   // coverage 0 -> part ~0; low crime (0) -> coverage 1 -> part ~100.
   const crime = crimeRateOf(s);
-  const crimePart = part(clampN(1 - crime / 100, 0, 1));
+  const crimePart = wellbeingPartOf(clampN(1 - crime / 100, 0, 1), pop);
 
   const parts = [...coreParts, { label: 'Crime', value: crimePart }];
   // ⚠ BALANCE-NUMBER PLACEHOLDER: equal part weights, pending Aaron's pass.
-  const overall = Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
+  // FEAT-2326609798 inc5 r2 (BUG-879): the three traffic-penalty parts are
+  // excluded from this mean and subtracted afterward as a weighted penalty —
+  // see compositeWithTrafficPenalty's doc comment (trafficWellbeing.ts).
+  const overall = compositeWithTrafficPenalty(parts, s);
   return { overall, parts };
 });
 
@@ -11116,14 +11200,13 @@ export const wellbeingOf: (s: SimState) => {
  * Used to verify that the brownout multiplier actually reduces the part.
  */
 export function utilitiesWellbeingUnpenalized(s: SimState): number {
+  // BUG-890 fix (r3): delegates to the shared wellbeingPartOf (data.ts,
+  // BUG-880) instead of a fourth locally-duplicated blend/part pair.
   const pop = s.population;
-  const f = earlyGameFactor(pop);
-  const blend = (computed: number) => Math.round(computed * f + 55 * (1 - f));
   const covById = new Map(serviceCoverageOf(s).map((r) => [r.id, r.coverage]));
   const ratio = (id: string): number => Math.min(1, covById.get(id) ?? 1);
-  const part = (coverage: number) => blend(Math.round(clampN(coverage * 100, 0, 100)));
   const utilities = Math.min(ratio('power'), ratio('cleanwater'));
-  return part(utilities);
+  return wellbeingPartOf(utilities, pop);
 }
 
 /**

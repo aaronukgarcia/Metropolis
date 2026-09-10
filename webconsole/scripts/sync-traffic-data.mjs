@@ -33,8 +33,12 @@ export function mirrorPairs() {
   // Engine-side tables the traffic modules also consume (explicit, not readdir:
   // data/ holds ~60 tables and only these two are traffic inputs). roads.json
   // is inc3's (trafficAssignment.ts) - the BUG-860 round caught it about to
-  // re-introduce the out-of-root import class.
-  for (const extra of ['traffic.json', 'roads.json']) {
+  // re-introduce the out-of-root import class. wellbeing.json is inc5's
+  // (trafficWellbeing.ts, FEAT-2326609798, ASM-1519) - the webconsole did not
+  // read data/wellbeing.json at all before this increment (it had its own
+  // inline PLACEHOLDER TS constants); the commute stress anchors now come
+  // from the SAME SSOT table the Go engine already uses (GR#3).
+  for (const extra of ['traffic.json', 'roads.json', 'wellbeing.json']) {
     pairs.push({ src: join(repoRoot, 'data', extra), dst: join(dstDir, extra), name: extra });
   }
   return pairs;

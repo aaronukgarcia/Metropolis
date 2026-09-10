@@ -100,6 +100,26 @@ type MentalFile struct {
 	RentBurdenThreshold       float64 `json:"rentBurdenThreshold"`
 	UnemploymentWeight        float64 `json:"unemploymentWeight"`
 	UnemploymentCapMonths     float64 `json:"unemploymentCapMonths"`
+	// GridlockWeight / EmergencyResponseWeight / TrafficCommutePenaltyWeight
+	// (FEAT-2326609798, BUG-894) are webconsole-only penalty weights (the
+	// realistic-traffic wellbeing coupling, TypeScript side) declared here
+	// SOLELY so DisallowUnknownFields (BUG-281 r2) does not reject the
+	// shared data/wellbeing.json file — this Go package's own arithmetic
+	// never reads them (see drivers.go: "every weight arrives from
+	// data/wellbeing.json"  is scoped to the fields this package's drivers
+	// actually consume). TrafficCommutePenaltyWeight is the webconsole's OWN
+	// commute-penalty weight, deliberately SEPARATE from CommuteWeight
+	// (this package's real mental-wellbeing driver weight, untouched) —
+	// BUG-894 closed a double-purposed-field regression where the
+	// webconsole reused CommuteWeight at a different scale, so a balance
+	// pass on one silently retuned the other.
+	GridlockWeight              float64 `json:"gridlockWeight"`
+	EmergencyResponseWeight     float64 `json:"emergencyResponseWeight"`
+	TrafficCommutePenaltyWeight float64 `json:"trafficCommutePenaltyWeight"`
+	// CommuteMinutesClampMax (BUG-895) — webconsole-only cap on
+	// medianCommuteMinutes before it reaches debug.json; same
+	// declared-but-unconsumed-here rationale as the three weights above.
+	CommuteMinutesClampMax float64 `json:"commuteMinutesClampMax"`
 }
 
 // ModifierFile is the four §18 downstream-effect coefficient surface
@@ -243,6 +263,31 @@ func (w *WellbeingFile) Validate() error {
 	}
 	if !isFinite(w.Mental.UnemploymentCapMonths) || w.Mental.UnemploymentCapMonths <= 0 {
 		return &data.FieldError{Field: "mental.unemploymentCapMonths", Rule: "must be finite and strictly positive"}
+	}
+	// BUG-894/BUG-895: the four webconsole-only fields above are declared
+	// but unconsumed here (see MentalFile's own doc comment) -- still
+	// validated with the SAME sane-coefficient rule as every other field
+	// on this file, so a hand-edit cannot smuggle a non-finite/negative
+	// value through this package's loader even though the value itself is
+	// never read by Go arithmetic.
+	if err := requireCoefficient("mental.gridlockWeight", w.Mental.GridlockWeight); err != nil {
+		return err
+	}
+	if err := requireCoefficient("mental.emergencyResponseWeight", w.Mental.EmergencyResponseWeight); err != nil {
+		return err
+	}
+	if err := requireCoefficient("mental.trafficCommutePenaltyWeight", w.Mental.TrafficCommutePenaltyWeight); err != nil {
+		return err
+	}
+	// CommuteMinutesClampMax is OPTIONAL on the Go side (BUG-910 symmetry with
+	// the three weights above, whose zero value also passes): it is only
+	// consumed by the webconsole, whose own loader fails closed when it is
+	// absent. Every wellbeing.json fixture that predates FEAT-2326609798 (e.g.
+	// engine/social's caseload fixture) omits it, so a hard "strictly
+	// positive" rule here rejected unrelated packages. Validated ONLY when
+	// present: a value that IS written must be finite and strictly positive.
+	if w.Mental.CommuteMinutesClampMax != 0 && (!isFinite(w.Mental.CommuteMinutesClampMax) || w.Mental.CommuteMinutesClampMax < 0) {
+		return &data.FieldError{Field: "mental.commuteMinutesClampMax", Rule: "when present, must be finite and strictly positive"}
 	}
 	return nil
 }

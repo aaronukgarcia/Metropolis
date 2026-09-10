@@ -884,6 +884,43 @@ export interface SimState {
    */
   congestionTicksBySpec?: Record<string, number>;
   /**
+   * FEAT-2326609798 inc5 (AC-2, ASM-1517) — per line-segment id, consecutive
+   * ticks that segment's v/c has been >= CONGESTION_PENALTY_THRESHOLD, capped
+   * at CONGESTION_SUSTAINED_TICKS (data.ts CONGESTION_CONSTANTS) — the SAME
+   * counter shape as `congestionTicksBySpec` above, one grain finer (segment
+   * instead of line-class). engine.ts's advance() is the SOLE writer,
+   * computed from THIS tick's own trafficAssignment.ts segmentDelayOf(next)
+   * via gridlockedSegmentsOf, mirroring congestionTicksBySpec's exact
+   * same-tick-write/next-tick-read lag rule — read back ONLY by the NEXT
+   * tick's trafficWellbeing.ts gridlockWellbeingPartOf(s), never same-tick.
+   * Optional for backward tolerance: a legacy save without this field is
+   * treated as `{}` (no segment has ever been gridlocked — an old save loads
+   * with a fresh, penalty-free gridlock history, exactly like
+   * congestionTicksBySpec's own backward-compat rule).
+   */
+  gridlockTicksBySegment?: Record<string, number>;
+  /**
+   * FEAT-2326609798 inc5 r2 (BUG-877 cadence fix, Lead amendment 1 after r1
+   * REJECT row 7607) — the three traffic wellbeing inputs (commute median
+   * minutes, trip-weighted gridlock share, ambulance coverageShare),
+   * refreshed by engine.ts's advance() only on a data-sourced cadence
+   * (trafficRecomputeTicks, data/traffic.json) or when this field is absent
+   * (fresh state / old save — computed on the very first advance()). The
+   * three trafficWellbeing.ts parts read ONLY this snapshot — never the raw
+   * traffic-assignment derivations directly — so no per-tick traffic
+   * assignment runs (a full assignment measured 7.6ms -> 728ms, 96x, at
+   * 20,000 buildings, BUG-877). Optional for backward tolerance: a legacy
+   * save without this field is treated as absent (traffic wellbeing parts
+   * neutral until the next advance() computes one), exactly like
+   * gridlockTicksBySegment's own backward-compat rule above.
+   */
+  trafficSnapshot?: {
+    tick: number;
+    medianCommuteMinutes: number;
+    gridlockShare: number;
+    coverageShare: number | null;
+  };
+  /**
    * FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1) — ids of
    * data.ts MILESTONES already paid out, so a one-time cash reward + notice
    * fires EXACTLY ONCE per milestone no matter how many times its predicate

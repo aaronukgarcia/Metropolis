@@ -44,6 +44,13 @@ func testCfg() WellbeingFile {
 			RentBurdenThreshold:       0.35,
 			UnemploymentWeight:        10,
 			UnemploymentCapMonths:     60,
+			// BUG-894/BUG-895: webconsole-only fields, declared-but-unconsumed
+			// here (see MentalFile's own doc comment) — still given valid
+			// values so this fixture passes Validate().
+			GridlockWeight:              10,
+			EmergencyResponseWeight:     10,
+			TrafficCommutePenaltyWeight: 10,
+			CommuteMinutesClampMax:      1440,
 		},
 		Modifiers: ModifierFile{
 			MortalitySlope: 0.01, ProductivitySlope: 0.01,

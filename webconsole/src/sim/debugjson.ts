@@ -89,6 +89,7 @@ import {
 import type { PipeTierAgg } from './data.ts';
 import type { ConsolidationPass } from './consolidator.ts';
 import { sanitizeCrimeRate, sanitizeCongestionTicksBySpec, sanitizeClaimedMilestones } from './data.ts';
+import { sanitizeTrafficSnapshot } from './trafficWellbeing.ts';
 import {
   HISTORY_CAP,
   LEDGER_CAP,
@@ -329,6 +330,10 @@ export interface DebugJson {
     crimeRatePreviousMonth: number;
     /** FEAT-congestion-teeth-2026-09-02 (AC-1) — per road-line-spec sustained-congestion tick counters. */
     congestionTicksBySpec: Record<string, number>;
+    /** FEAT-2326609798 inc5 r2 (BUG-877 cadence fix) — traffic wellbeing snapshot, or null if never computed. */
+    trafficSnapshot: { tick: number; medianCommuteMinutes: number; gridlockShare: number; coverageShare: number | null } | null;
+    /** FEAT-2326609798 inc5 (AC-2) — per line-segment sustained-gridlock tick counters. */
+    gridlockTicksBySegment: Record<string, number>;
     /** FEAT-milestone-cash-rewards-2026-09-02 (Q100047b) — ids of data.ts MILESTONES already paid out. */
     claimedMilestones: string[];
     /** FEAT-milestone-cash-rewards-2026-09-02 — milestone rewards claimed but not yet paid (drains next tick). */
@@ -668,6 +673,10 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   crimeRatePreviousMonth: 'sim.crimeRatePreviousMonth',
   // FEAT-congestion-teeth-2026-09-02 (AC-1).
   congestionTicksBySpec: 'sim.congestionTicksBySpec',
+  // FEAT-2326609798 inc5 (AC-2).
+  gridlockTicksBySegment: 'sim.gridlockTicksBySegment',
+  // FEAT-2326609798 inc5 r2 (BUG-877 cadence fix).
+  trafficSnapshot: 'sim.trafficSnapshot',
   // FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1).
   claimedMilestones: 'sim.claimedMilestones',
   pendingMilestoneRewards: 'sim.pendingMilestoneRewards',
@@ -1081,6 +1090,16 @@ export function buildDebugJson(
       // above — sanitizeCongestionTicksBySpec covers backward tolerance AND a corrupt
       // save's non-object/negative/fractional entries.
       congestionTicksBySpec: sanitizeCongestionTicksBySpec(s.congestionTicksBySpec),
+      // FEAT-2326609798 inc5 (GR#16): same sanitizer, reused as-is — it is
+      // generic over any Record<string, number>-shaped counter map, not
+      // spec-id-specific (see trafficWellbeing.ts / engine.ts's own comment).
+      gridlockTicksBySegment: sanitizeCongestionTicksBySpec(s.gridlockTicksBySegment),
+      // FEAT-2326609798 inc5 r2 (GR#16, BUG-877): sanitizeTrafficSnapshot
+      // coerces an untrusted/legacy value to a well-formed snapshot or
+      // `undefined` (absent) -- never a raw cast. `?? null` here is a
+      // JSON-shape choice (debug.json has no `undefined`), not a config
+      // default.
+      trafficSnapshot: sanitizeTrafficSnapshot(s.trafficSnapshot) ?? null,
       // FEAT-milestone-cash-rewards-2026-09-02 (GR#16): same shape as
       // crimeRatePreviousMonth/congestionTicksBySpec above — sanitizeClaimedMilestones
       // covers backward tolerance (legacy state -> []) AND a corrupt save's

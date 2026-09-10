@@ -4649,6 +4649,26 @@ export const demandIndexOf = (coverage: number): number =>
 export const earlyGameFactor = (pop: number): number => Math.min(1, pop / 50);
 
 /**
+ * BUG-880 fix (FEAT-2326609798 inc5 r2) — the SINGLE shared coverage->
+ * wellbeing-part transform: early-game blend toward the 55 baseline via
+ * earlyGameFactor above, then a 0-100 clamp. Extracted from engine.ts's
+ * buildServiceWellbeingParts local closure (byte-identical formula, same
+ * `part`/`blend` shape every service-coverage row already used) so
+ * trafficWellbeing.ts and its test consume this EXACT function instead of a
+ * duplicate that could silently desync from a future balance pass (BUG-880
+ * finding 5 — the part()/blend() formula had existed in three separate
+ * places). Exported from data.ts (not engine.ts) to avoid adding a NEW
+ * import cycle beyond the existing engine.ts<->data.ts pair. `coverage` is
+ * [0,1], 1 = best. ⚠ BALANCE-NUMBER PLACEHOLDER: linear map + 55 baseline
+ * ramp, pending Aaron's pass (unchanged behaviour from before this export).
+ */
+export function wellbeingPartOf(coverage: number, population: number): number {
+  const f = earlyGameFactor(population);
+  const computed = Math.round(Math.max(0, Math.min(100, coverage * 100)));
+  return Math.round(computed * f + 55 * (1 - f));
+}
+
+/**
  * FEAT-crime-mechanic-2026-09-02 (Q100046 D2-now + Q100069 rec-on-all) —
  * PLACEHOLDER balance constants, grouped in one named object per the spec so
  * Aaron's future balance-pass row replaces all seven in a single commit.

@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SPECS, crimeRateOf, sanitizeCrimeRate } from '../src/sim/data.ts';
 import { initialState, wellbeingOf, wellbeingCoreOf, reducer, TICKS_PER_MONTH } from '../src/sim/engine.ts';
+import { compositeWithTrafficPenalty } from '../src/sim/trafficWellbeing.ts';
 
 /** A city: initial state + population + extra buildings (same helper shape
  *  as test/wellbeing-scale.test.mjs — coordinates don't affect the coverage
@@ -270,11 +271,20 @@ test('AC-8: crime part is wired into wellbeing.parts[] (mutant: part omitted fro
   // recomputes to match — proves overall is a genuine function of the part
   // list including Crime, not a value that happened to be computed before
   // Crime was appended.
+  // FEAT-2326609798 inc5 r2 (BUG-879): `overall` EXCLUDES the three traffic-
+  // penalty parts ('Commute time'/'Gridlock'/'Emergency response') from the
+  // mean and subtracts a separate weighted penalty afterward
+  // (compositeWithTrafficPenalty, trafficWellbeing.ts) — reuse that SAME
+  // exported function here (not a re-typed copy) so this recomputation stays
+  // a faithful manual re-derivation of `overall` rather than a stale plain
+  // average. Both fixtures share the SAME (genesis) trafficSnapshot, so the
+  // penalty term is identical for both -- using highCrimeState here is
+  // equivalent to lowCrimeState for that purpose.
   const otherParts = wbLow.parts.filter((p) => p.label !== 'Crime');
-  const recombinedHigh = [...otherParts, crimePartHigh].reduce((a, p) => a + p.value, 0) / (otherParts.length + 1);
+  const recombinedHigh = compositeWithTrafficPenalty([...otherParts, crimePartHigh], highCrimeState);
   assert.ok(
-    Math.round(recombinedHigh) < wbLow.overall,
-    `substituting the high-crime Crime-part value into the low-crime part list must lower overall: recombined=${Math.round(recombinedHigh)}, lowCrime overall=${wbLow.overall}`
+    recombinedHigh < wbLow.overall,
+    `substituting the high-crime Crime-part value into the low-crime part list must lower overall: recombined=${recombinedHigh}, lowCrime overall=${wbLow.overall}`
   );
 });
 

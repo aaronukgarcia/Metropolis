@@ -155,7 +155,8 @@
       "V882-V882": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V924-V929": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V886-V887": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V921-V923": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 3-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V921-V923": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 3-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V883-V883": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5978,8 +5979,14 @@
     "MET-V923": {
       "severity": "fatal",
       "module": "ui.webconsole",
-      "message": "wellbeing.json mental.%s is missing or not a finite [0,1] fraction",
-      "remedy": "Add gridlockWeightFraction/emergencyResponseWeight to data/wellbeing.json mental block"
+      "message": "wellbeing.json mental.%s is missing or not a finite non-negative penalty weight",
+      "remedy": "Add gridlockWeight/emergencyResponseWeight (renamed from gridlockWeightFraction, FEAT-2326609798 inc5 r2) to data/wellbeing.json mental block"
+    },
+    "MET-V883": {
+      "severity": "fatal",
+      "module": "ui.webconsole",
+      "message": "traffic.json trafficRecomputeTicks is missing or not a positive integer",
+      "remedy": "Add a positive integer trafficRecomputeTicks field to data/traffic.json (FEAT-2326609798 inc5 r2, BUG-877)"
     }
   }
 }
