@@ -25,10 +25,24 @@ import {
   __getBfsOpCounterForTest,
   __resetOffMapSeedsDroppedCounterForTest,
   __getOffMapSeedsDroppedCounterForTest,
+  __setBfsStampCounterForTest,
 } from '../src/sim/trafficDemand.ts';
 import { SPECS, lineSegmentIdByTileOf, filledJobsBySector } from '../src/sim/data.ts';
 import { initialState } from '../src/sim/engine.ts';
 import { MAP_W, MAP_H } from '../src/sim/grid.ts';
+
+// BUG-903 (opus-round-bug896 finding): NEVER "clean up" the shared BFS stamp
+// state by setting the counter back to 0 on its own -- with the scratch
+// arrays left holding old small stamps, the next call's freshly-minted
+// callStamp 1 aliases them and tiles read as already-visited (measured:
+// {P:206}/103 instead of the fresh-process {P:334,Q:324}/329). The only
+// state-clean reset is the guard itself: push the counter past the ceiling
+// and make one tiny radius-0 call, which fills both arrays and restarts the
+// counter at 0 -- exactly what a fresh process looks like.
+function resetBfsScratchViaGuard() {
+  __setBfsStampCounterForTest(2_000_000_001); // > BFS_STAMP_COUNTER_SAFE_CEILING (2e9, module-private)
+  nearestSegmentWeights(['5,300'], new Map([['5,300', 'Z']]), new Map(), 0);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -726,6 +740,23 @@ test('BUG-866: nearestSegmentWeights drops an off-map SEED key (counted, never e
 // at HEAD before this session, `git show f5ae80e:webconsole/src/sim/trafficDemand.ts`),
 // decoupled from the module's own bfsOpCounter/offMapSeedsDroppedCounter so
 // comparing the two never perturbs the real module's test counters.
+//
+// BUG-897 CARVE-OUT (claim/pin gap, not a production defect): the
+// byte-identity claim above holds for every input EXCEPT one shape --
+// DUPLICATE source tile keys. The reference pushes every on-map source
+// (duplicates included) into `onMapSources` and attributes each occurrence
+// separately, double-counting a repeated seed's own demand weight; the
+// retry's `finalStamp`-gated seed loop finalises a tile index once per
+// call, so a repeated key is attributed exactly once. The retry's behaviour
+// is the MORE correct one (a real duplicate key should not double-count),
+// so this is not a regression -- but it IS a real, intentional divergence
+// from the "byte-identical" claim, and it must be pinned so a future change
+// cannot silently flip it back. Unreachable from the only production caller
+// today: `forecastSegmentUsage` builds `sourceTileKeys` from
+// `segIndex.tileToSegment`'s keys, which are unique by construction (a Map
+// cannot hold a duplicate key). See the dedicated pin below
+// (`BUG-897: DUPLICATE seed keys`) for the measured divergence and the
+// assertion that the retry's semantics do not silently change.
 function nearestSegmentWeightsReference(sourceTileKeys, tileToSegment, tileWeight, radius) {
   const weightBySegment = new Map();
   if (sourceTileKeys.length === 0) return { weightBySegment, attributedTileCount: 0, offMapSeedsDropped: 0 };
@@ -933,4 +964,121 @@ test('BUG-883: tie-break is lowest-source-id (== lowest source key), NOT whichev
   // catch this same mutant -- kept as a comment here, not a test, precisely
   // because it silently coincides with the mutant and would be a false
   // sense of coverage if left in as a pin.
+});
+
+// ---------------------------------------------------------------------------
+// BUG-897: DUPLICATE seed keys -- pin the CARVE-OUT documented above
+// nearestSegmentWeightsReference's definition. The retry attributes a
+// repeated source key's demand weight ONCE (finalStamp-gated); the reference
+// attributes it once PER OCCURRENCE (double-counts). This is intentional and
+// more correct, but was previously an unpinned divergence from the
+// "byte-identical" claim -- this test asserts the retry's actual behaviour
+// so it cannot silently change back to double-counting (or to some other
+// value) without the pin going red.
+test('BUG-897: DUPLICATE source keys -- retry attributes the repeated seed ONCE, reference attributes it per-occurrence (documented divergence, not a regression)', () => {
+  const keys = ['10,10', '10,10', '50,50'];
+  const seg = new Map([['10,10', 'A'], ['50,50', 'B']]);
+  const weight = new Map([['10,10', 100], ['11,10', 3]]);
+  const radius = 2;
+  const ref = nearestSegmentWeightsReference(keys, seg, weight, radius);
+  const real = nearestSegmentWeights(keys, seg, weight, radius);
+  // Reference double-counts the duplicated '10,10' seed's own weight (100
+  // twice) plus the single-touched neighbour '11,10' (3): 100+100+3 = 203.
+  assert.equal(ref.weightBySegment.get('A'), 203, 'reference double-counts the duplicated seed (measured/documented behaviour)');
+  assert.equal(ref.attributedTileCount, 3, 'reference: 3 attributions (two for the duplicated seed, one neighbour)');
+  // Retry finalises the tile index for '10,10' once, so the duplicate key
+  // contributes its weight exactly once: 100+3 = 103.
+  assert.equal(real.weightBySegment.get('A'), 103, 'retry attributes the duplicated seed once (BUG-897 documented divergence)');
+  assert.equal(real.attributedTileCount, 2, 'retry: 2 attributions (one for the de-duplicated seed, one neighbour)');
+  // Explicitly assert the two implementations DIVERGE here (the inverse of
+  // assertParity above) so a future change that makes them agree again on
+  // this shape is a visible, deliberate decision, not an accident.
+  assert.notEqual(
+    real.weightBySegment.get('A'),
+    ref.weightBySegment.get('A'),
+    'BUG-897: this input shape is EXPECTED to diverge from the reference -- if this ever passes as equal, the carve-out comment and this test must be updated together',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// BUG-896: bfsStampCounter wrap guard.
+//
+// nearestSegmentWeights's module-level `bfsStampCounter` is a plain JS
+// number, incremented once per call plus once per BFS layer, and compared
+// against values stored in Int32Array scratch buffers (`finalStamp`/
+// `tentStamp`). Once the counter exceeds 2^31-1 the value WRITTEN into the
+// Int32Array wraps to a negative int32 (two's-complement truncation) while
+// the JS-number comparand does not, so `finalStamp[nIdx] === callStamp`
+// becomes permanently false and every tile mis-attributes -- see the BOW
+// item for the live repro. The fix wipes both scratch arrays and restarts
+// the counter at 0 once it crosses a safe ceiling well below the actual
+// int32 boundary. `__setBfsStampCounterForTest` (test-only, mirrors
+// `__resetBfsOpCounterForTest` and `__resetOffMapSeedsDroppedCounterForTest`
+// above) lets this be pinned directly instead of calling the function ~2
+// billion times.
+test('BUG-896: counter near the wrap boundary still matches the counter-at-zero result (byte-identical)', () => {
+  const keys = ['100,100', '140,100'];
+  const seg = new Map([['100,100', 'A'], ['140,100', 'B']]);
+  // 60 weighted tiles scattered on row 101 between the two sources.
+  const weight = new Map();
+  for (let x = 100; x < 160; x++) weight.set(`${x},101`, 1 + (x % 5));
+  const radius = 25;
+
+  resetBfsScratchViaGuard();
+  const atZero = nearestSegmentWeights(keys, seg, weight, radius);
+
+  __setBfsStampCounterForTest(2147483630); // BUG-896's repro value -- just short of Int32 wrap
+  const nearWrap = nearestSegmentWeights(keys, seg, weight, radius);
+
+  assert.deepEqual(
+    mapToSortedPairs(nearWrap.weightBySegment),
+    mapToSortedPairs(atZero.weightBySegment),
+    'weightBySegment must be byte-identical whether the counter starts at 0 or just short of the Int32 wrap boundary',
+  );
+  assert.equal(nearWrap.attributedTileCount, atZero.attributedTileCount, 'attributedTileCount parity across the wrap boundary');
+  assert.equal(nearWrap.attributedTileCount, 60, 'sanity: all 60 weighted tiles on row 101 are attributed at radius 25');
+
+  // MUTANT: deleting the guard (`if (bfsStampCounter > BFS_STAMP_COUNTER_SAFE_CEILING) { ... }`)
+  // in nearestSegmentWeights was proven RED live this session via the GR#24
+  // scratch-copy method (cp trafficDemand.ts to a scratchpad .bak, delete
+  // the guard block, run `node tools/test/scoped.mjs
+  // webconsole/test/trafficDemand.test.mjs`, restore from the .bak
+  // immediately after): with the guard removed and the counter pre-set to
+  // 2147483630, `finalStamp`/`tentStamp` writes wrap negative on the very
+  // first stamp minted (2147483631 -> -2147483665 as an int32), so
+  // `finalStamp[nIdx] === callStamp` is never true and every tile
+  // re-finalises. THIS test's fixture reproduced that exact effect: this
+  // test's own byte-identity assertion above went from PASS to
+  // weightBySegment {A:100,B:201} (expected {A:61,B:119}) -- the same
+  // failure SHAPE (inflated, non-matching weights) as the BOW item's own
+  // repro numbers ({A:30,B:71} vs its expected {A:21,B:39}), on this test's
+  // own fixture rather than the BOW item's exact one.
+  resetBfsScratchViaGuard();
+});
+
+test('BUG-896: determinism -- the SAME input called 3 times straddling the counter reset gives identical output every time', () => {
+  const keys = ['30,30', '70,30'];
+  const seg = new Map([['30,30', 'A'], ['70,30', 'B']]);
+  const weight = new Map();
+  for (let x = 30; x < 80; x++) weight.set(`${x},31`, 1 + (x % 4));
+  const radius = 20;
+
+  resetBfsScratchViaGuard();
+  const call1 = nearestSegmentWeights(keys, seg, weight, radius);
+
+  // Push the counter to just past the safe ceiling so THIS call's own guard
+  // fires mid-sequence (not just at a fixture-chosen starting point).
+  __setBfsStampCounterForTest(2_000_000_001);
+  const call2 = nearestSegmentWeights(keys, seg, weight, radius);
+
+  // Call again immediately after -- counter is now small again (reset by
+  // call2's own guard), so this call takes the normal, no-reset path.
+  const call3 = nearestSegmentWeights(keys, seg, weight, radius);
+
+  assert.deepEqual(mapToSortedPairs(call2.weightBySegment), mapToSortedPairs(call1.weightBySegment), 'call2 (straddling the reset) matches call1');
+  assert.deepEqual(mapToSortedPairs(call3.weightBySegment), mapToSortedPairs(call1.weightBySegment), 'call3 (immediately after the reset) matches call1');
+  assert.equal(call2.attributedTileCount, call1.attributedTileCount);
+  assert.equal(call3.attributedTileCount, call1.attributedTileCount);
+
+  resetBfsScratchViaGuard();
 });

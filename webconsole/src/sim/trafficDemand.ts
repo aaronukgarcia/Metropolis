@@ -566,6 +566,37 @@ const tentStamp = new Int32Array(TILE_COUNT);
 const tentSrcId = new Int32Array(TILE_COUNT);
 let bfsStampCounter = 0;
 
+// BUG-896: `bfsStampCounter` is compared against the Int32Array-stored stamp
+// values (`finalStamp`/`tentStamp`) via plain JS `===`/`!==`. A JS number
+// keeps counting past 2^31-1, but the moment a stamp is WRITTEN into the
+// Int32Array it wraps to a NEGATIVE int32 (two's-complement truncation) while
+// the JS-number comparand (`callStamp`/`layerStamp`) does not — so
+// `finalStamp[nIdx] === callStamp` becomes permanently false, every tile
+// re-finalises on every call, and `nearestSegmentWeights` silently returns
+// WRONG (inflated/duplicated) weights with no error, no assertion, no
+// indicator. This is a determinism hazard: output would depend on how many
+// times this module has been called in the current process, so a hard-reset
+// genesis replay (FEAT-1972079897) could diverge from the original run.
+// Fix: before minting a new stamp, if the counter is above this safe ceiling
+// (comfortably below 2^31-1 = 2,147,483,647, leaving headroom for the
+// `+1+radius` stamps a single call can mint), wipe both scratch arrays back
+// to all-zero and restart the counter at 0 — identical to process startup,
+// so every future call is correct again. 2_000_000_000 chosen so the reset
+// never fires mid-call (MAX_ATTRIBUTION_RADIUS_TILES bounds stamps-per-call
+// far below the ~147M headroom remaining at the ceiling).
+const BFS_STAMP_COUNTER_SAFE_CEILING = 2_000_000_000;
+
+/**
+ * Test-only hook (mirrors `__resetBfsOpCounterForTest` /
+ * `__resetOffMapSeedsDroppedCounterForTest` above): lets a test set
+ * `bfsStampCounter` directly so the wrap-guard boundary in
+ * `nearestSegmentWeights` can be pinned without actually calling the
+ * function ~2 billion times. NEVER call this from production code.
+ */
+export function __setBfsStampCounterForTest(n: number): void {
+  bfsStampCounter = n;
+}
+
 /**
  * BUG-852 retry: examines one candidate neighbour tile (`nx`,`ny`) reached
  * from a frontier tile carrying source id `srcId`. Bounds-checked exactly
@@ -664,6 +695,16 @@ export function nearestSegmentWeights(
   // `radius` is capped by MAX_ATTRIBUTION_RADIUS_TILES by the ONLY caller
   // (forecastSegmentUsage, below) before this private helper ever runs — no
   // second cap re-applied here (GR#3, one rule, one place).
+
+  // BUG-896: guard the stamp counter BEFORE minting this call's stamp — see
+  // BFS_STAMP_COUNTER_SAFE_CEILING's doc comment above. Both scratch arrays
+  // are wiped to all-zero (identical to a fresh process) and the counter
+  // restarts at 0, so this call and every call after it is correct.
+  if (bfsStampCounter > BFS_STAMP_COUNTER_SAFE_CEILING) {
+    finalStamp.fill(0);
+    tentStamp.fill(0);
+    bfsStampCounter = 0;
+  }
   const callStamp = ++bfsStampCounter;
   const sortedSources = [...sourceTileKeys].sort();
   // BUG-866/BUG-864(1)/BUG-882: bounds-check SEED keys exactly like expanded
