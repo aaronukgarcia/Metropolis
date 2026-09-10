@@ -189,7 +189,10 @@ const BUS_OCCUPANCY_PERSONS: number =
  * vehicle-trips via its own occupancy figure. */
 const ROAD_PERSON_MODE_IDS: readonly string[] = ['car', 'motorbike', 'taxi', 'bus'];
 
-function occupancyForMode(modeId: string): number {
+// Exported additively (FEAT-2326609799 inc6, GR#3 — parkingFuel.ts's AC-4
+// vehicle-km derivation needs the SAME occupancy-per-mode conversion
+// assignedFlowOf already performs above, not a second copy).
+export function occupancyForMode(modeId: string): number {
   if (modeId === 'bus') return BUS_OCCUPANCY_PERSONS;
   return roadOccupancyById.get(modeId) ?? 0;
 }

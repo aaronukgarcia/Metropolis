@@ -38,7 +38,12 @@ export function mirrorPairs() {
   // read data/wellbeing.json at all before this increment (it had its own
   // inline PLACEHOLDER TS constants); the commute stress anchors now come
   // from the SAME SSOT table the Go engine already uses (GR#3).
-  for (const extra of ['traffic.json', 'roads.json', 'wellbeing.json']) {
+  // fuel.json added FEAT-2326609799 inc6 (Prerequisite note, acceptance doc
+  // "Surface"): parkingFuel.ts's AC-5 reads data/fuel.json's eras[] EV-share
+  // curve, so it needs the same in-tree-mirror treatment as traffic.json/
+  // roads.json above (BUG-860 class - a bare '../../../data/fuel.json'
+  // import would break under the shadow-copy harnesses).
+  for (const extra of ['traffic.json', 'roads.json', 'wellbeing.json', 'fuel.json']) {
     pairs.push({ src: join(repoRoot, 'data', extra), dst: join(dstDir, extra), name: extra });
   }
   return pairs;

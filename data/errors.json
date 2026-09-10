@@ -156,7 +156,9 @@
       "V924-V929": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 6-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V886-V887": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V921-V923": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 3-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V883-V883": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V930-V934": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 5-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V940-V949": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V950-V959": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5979,14 +5981,38 @@
     "MET-V923": {
       "severity": "fatal",
       "module": "ui.webconsole",
-      "message": "wellbeing.json mental.%s is missing or not a finite non-negative penalty weight",
-      "remedy": "Add gridlockWeight/emergencyResponseWeight (renamed from gridlockWeightFraction, FEAT-2326609798 inc5 r2) to data/wellbeing.json mental block"
+      "message": "wellbeing.json mental.%s is missing or not a finite [0,1] fraction",
+      "remedy": "Add gridlockWeightFraction/emergencyResponseWeight to data/wellbeing.json mental block"
     },
-    "MET-V883": {
-      "severity": "fatal",
+    "MET-V930": {
+      "severity": "error",
       "module": "ui.webconsole",
-      "message": "traffic.json trafficRecomputeTicks is missing or not a positive integer",
-      "remedy": "Add a positive integer trafficRecomputeTicks field to data/traffic.json (FEAT-2326609798 inc5 r2, BUG-877)"
+      "message": "data/traffic/parking.json kerbVsOffStreet.kerbSpaceLengthMetres must be a positive finite number",
+      "remedy": "Add or fix the kerbSpaceLengthMetres field in data/traffic/parking.json kerbVsOffStreet, then re-run the sync script"
+    },
+    "MET-V931": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "data/fuel.json is missing the early era or one of its EV share fields",
+      "remedy": "Add an eras entry with era set to early and numeric carEVShare, vanEVShare and truckEVShare fields to data/fuel.json"
+    },
+    "MET-V932": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "the current scale ladder point is missing a string densityBand field or the value has no matching kerb vs off street split",
+      "remedy": "Add a densityBand non numeric field to the scale ladder rung, or add the missing band to parking.json kerbVsOffStreet.byDensityBand"
+    },
+    "MET-V933": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "data/traffic.json is missing a positive numeric webconsoleMetresPerTile field",
+      "remedy": "Add or fix the webconsoleMetresPerTile field in data/traffic.json"
+    },
+    "MET-V934": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "data/traffic/vehicle_classes.json roadVehicles has no entry for the requested vehicle class",
+      "remedy": "Add the missing vehicle class entry to data/traffic/vehicle_classes.json roadVehicles"
     }
   }
 }

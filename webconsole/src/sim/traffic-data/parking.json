@@ -17,6 +17,11 @@
   },
   "kerbVsOffStreet": {
     "$comment": "Split of a class's total parking DEMAND (from demandByLandUse) between on-street/kerb spaces and off-street (surface lot / multi-storey) supply, by density band -- higher density pushes parking off-street due to kerb space scarcity and land-value pressure toward structured parking.",
+    "kerbSpaceLengthMetres": 5.5,
+    "kerbSpaceLengthMetresNote": "ASM-1524 (FEAT-2326609799 inc6, GR#15): frontage metres consumed by one parallel-parked kerb bay, used to convert an adjacent parking-eligible road tile's frontage into a kerb space count (spaces = adjacent-tile-count x webconsoleMetresPerTile / this field). UK parallel-bay design length order-of-magnitude.",
+    "kerbSpaceLengthMetresSource": "UK parallel-parking bay design guidance order-of-magnitude (typical on-street parallel bay ~5.0-6.0m including manoeuvring allowance)",
+    "kerbSpaceLengthMetresYear": 2026,
+    "kerbSpaceLengthMetresConfidence": "derived",
     "byDensityBand": {
       "rural":        { "kerbShare": 0.75, "offStreetShare": 0.25 },
       "small_town":   { "kerbShare": 0.65, "offStreetShare": 0.35 },

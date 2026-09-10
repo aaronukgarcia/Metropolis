@@ -233,7 +233,11 @@ export const ladderPointOf: (s: SimState) => LadderPoint = memoOnState((s) => {
   return ladderAt(scaleLadder, population);
 });
 
-function numericField(point: LadderPoint, key: string): number {
+// Exported additively (FEAT-2326609799 inc6, GR#3 — parkingFuel.ts's AC-3/
+// AC-4/AC-5/AC-6 read several more ladder leaves, e.g. avgTripLengthKm,
+// parkingSpacesDemanded, evChargePointsNeeded, and needs the SAME typed
+// accessor this module already uses rather than a second copy).
+export function numericField(point: LadderPoint, key: string): number {
   const f = point.fields.find((x) => x.key === key);
   if (!f) {
     throw registryError(
@@ -244,7 +248,7 @@ function numericField(point: LadderPoint, key: string): number {
   return f.value;
 }
 
-function numericFieldOrZero(point: LadderPoint, key: string): number {
+export function numericFieldOrZero(point: LadderPoint, key: string): number {
   const f = point.fields.find((x) => x.key === key);
   return f ? f.value : 0;
 }
