@@ -35,6 +35,10 @@ import {
   occupiedColumnsOf,
 } from '../sim/data';
 import { responseMinutesOf, emergencyTargetMinutesOf } from '../sim/emergencyResponse';
+import { demandForecastOf, policyModeShareAdjustmentOf } from '../sim/trafficDemand';
+import { conditionIndexOf } from '../sim/trafficAssignment';
+import { parkingShortfallOf, evChargePointShortfallOf } from '../sim/parkingFuel';
+import { demandTintOf, modeShareTintOf, congestionTintOf, parkingTintOf, fuelEvTintOf, wearTintOf } from '../sim/trafficOverlays';
 import { computePath, type Tile } from '../sim/roadTracker';
 import { viewportTileRect, visibleBuildingsOf } from '../render/viewportCull';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
@@ -150,6 +154,17 @@ export function MapView() {
   // FEAT-1972079902 rail-inc1: line-saturation overlay toggle. UI-only, default
   // OFF — component-local like showWater/showPower, never in SimState/journal.
   const [showLines, setShowLines] = useState(false);
+  // FEAT-2326609805 inc10 (AC-1/AC-11): five independent overlay toggles,
+  // folded into the "Lines" group. Component-local useState, exactly like
+  // showWater/showPower/showLines above — NEVER dispatched to SimState/the
+  // journal (AC-11's own mutant: a toggle that reaches SimState is caught
+  // the moment it changes the reducer's state object identity).
+  const [showDemand, setShowDemand] = useState(false);
+  const [showModeShare, setShowModeShare] = useState(false);
+  const [showCongestion, setShowCongestion] = useState(false);
+  const [showParking, setShowParking] = useState(false);
+  const [showFuelEv, setShowFuelEv] = useState(false);
+  const [showWear, setShowWear] = useState(false);
   // FEAT-1972079861: Help overlay toggle. UI-only, component-local state.
   const [helpOpen, setHelpOpen] = useState(false);
   // BUG-652 follow-up, ROUND r3+r4 (2026-09-04): component-local ONLY — never
@@ -706,6 +721,162 @@ export function MapView() {
       }
     }
 
+    // FEAT-2326609805 inc10 (AC-1/AC-11): five NEW read-only overlay tints,
+    // each independently toggled, each still gated behind the SAME showLines
+    // conditional per D3/the doc's own AC-1 text ("New overlay tints render
+    // ONLY when showLines === true"). Every tint decision (band edges,
+    // alphas, colours) comes from the pure trafficOverlays.ts helpers —
+    // this block does ZERO arithmetic of its own beyond picking pixel
+    // rects, mirroring the showLines/ambulance blocks above (GR#3).
+    //
+    // r2 (BUG-952/BUG-953 fix, round-1 REJECT row 7633): r1 called
+    // demandForecastOf/segmentDelayOf/parkingShortfallOf/
+    // evChargePointShortfallOf LIVE inside this draw pass. memoOnState keys
+    // on the SimState OBJECT, and a new tick is a new object, so every one
+    // of those re-ran its FULL derivation every tick regardless of cadence —
+    // segmentDelayOf alone measured 118ms on a 6,400-building grid (it
+    // forces trafficAssignment.ts's Dijkstra pass via assignedFlowOf).
+    // Congestion now reads state.trafficSnapshot.vOverCBySegment (the
+    // cadence-cached per-segment v/c BUG-952's fix added to TrafficSnapshot)
+    // instead of calling that Dijkstra-forcing function live here. demandForecastOf/
+    // parkingShortfallOf/evChargePointShortfallOf/policyModeShareAdjustmentOf
+    // do NOT import trafficAssignment.ts's Dijkstra/assignment exports at
+    // all (parkingFuel.ts's own header comment states this explicitly), so
+    // they stay live reads — their memoOnState cost is a cheap O(tiles)
+    // pass, not a Dijkstra re-run.
+    //
+    // BUG-953 fix: every loop below now culls to the SAME viewportRect the
+    // main building-fill loop above already computed (the BUG-659 idiom),
+    // and the tile->building lookup is built from `visibleBuildings` (already
+    // bounded to screen size) instead of the full `state.buildings` array —
+    // no more per-frame full-city Map (BUG-815).
+    // BUG-953 fix (r2): a SINGLE filter pass over demandForecastOf(state)
+    // (itself memoOnState-cached — not rebuilt per frame) produces the
+    // culled tile list every demand-keyed overlay loop below iterates —
+    // never the raw un-culled array. tileInViewport reuses the SAME
+    // viewportRect the main building-fill loop above already computed
+    // (the BUG-659 idiom).
+    const needsDemandTileLookup = showLines && (showDemand || showModeShare || showParking || showFuelEv);
+    const buildingByTile = needsDemandTileLookup ? new Map(visibleBuildings.map((b) => [`${b.x},${b.y}`, b])) : null;
+    const tileInViewport = (x: number, y: number, w: number, h: number): boolean =>
+      !(x + w <= viewportRect.minX || x >= viewportRect.maxX || y + h <= viewportRect.minY || y >= viewportRect.maxY);
+    const visibleDemandTiles = needsDemandTileLookup
+      ? demandForecastOf(state).filter((t) => {
+          const sp = SPECS[buildingByTile!.get(`${t.x},${t.y}`)?.spec ?? ''];
+          return tileInViewport(t.x, t.y, sp?.w ?? 1, sp?.h ?? 1);
+        })
+      : [];
+    if (showLines && (showDemand || showModeShare)) {
+      const shares = showModeShare ? policyModeShareAdjustmentOf(state) : null;
+      for (const t of visibleDemandTiles) {
+        const sp = SPECS[buildingByTile!.get(`${t.x},${t.y}`)?.spec ?? ''];
+        const tw = sp?.w ?? 1;
+        const th = sp?.h ?? 1;
+        const w = tw * geom.s;
+        const h = th * geom.s;
+        const px = geom.ox + t.x * geom.s;
+        const py = geom.oy + t.y * geom.s;
+        if (showDemand) {
+          const tint = demandTintOf(t.personTrips);
+          if (tint) {
+            ctx.globalAlpha = tint.alpha;
+            ctx.fillStyle = tint.color;
+            ctx.fillRect(px + 0.5, py + 0.5, Math.max(w - 1, 1.5), Math.max(h - 1, 1.5));
+          }
+        }
+        if (showModeShare && shares) {
+          const tint = modeShareTintOf(shares, t.personTrips);
+          if (tint) {
+            ctx.globalAlpha = tint.alpha;
+            ctx.fillStyle = tint.color;
+            ctx.fillRect(px + 0.5, py + 0.5, Math.max(w - 1, 1.5), Math.max(h - 1, 1.5));
+          }
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+    if (showLines && showCongestion) {
+      const vOverCBySegment = state.trafficSnapshot?.vOverCBySegment;
+      const segmentIdByTile = lineSegmentIdByTileOf(state);
+      for (const b of visibleBuildings) {
+        const sp = SPECS[b.spec];
+        if (!sp || !isLineSpec(sp)) continue;
+        const segmentId = segmentIdByTile.get(`${b.x},${b.y}`);
+        const vOverC = segmentId && vOverCBySegment ? vOverCBySegment[segmentId] : undefined;
+        const tint = congestionTintOf(vOverC);
+        if (!tint) continue;
+        const px = geom.ox + b.x * geom.s;
+        const py = geom.oy + b.y * geom.s;
+        ctx.globalAlpha = tint.alpha;
+        ctx.fillStyle = tint.color;
+        ctx.fillRect(px + 0.5, py + 0.5, Math.max(sp.w * geom.s - 1, 1.5), Math.max(sp.h * geom.s - 1, 1.5));
+      }
+      ctx.globalAlpha = 1;
+    }
+    if (showLines && showParking) {
+      const shortfall = parkingShortfallOf(state).perTile;
+      for (const t of visibleDemandTiles) {
+        const tint = parkingTintOf(shortfall.get(`${t.x},${t.y}`) ?? 0);
+        if (!tint) continue;
+        const sp = SPECS[buildingByTile!.get(`${t.x},${t.y}`)?.spec ?? ''];
+        const tw = sp?.w ?? 1;
+        const th = sp?.h ?? 1;
+        const px = geom.ox + t.x * geom.s;
+        const py = geom.oy + t.y * geom.s;
+        ctx.globalAlpha = tint.alpha;
+        ctx.fillStyle = tint.color;
+        ctx.fillRect(px + 0.5, py + 0.5, Math.max(tw * geom.s - 1, 1.5), Math.max(th * geom.s - 1, 1.5));
+      }
+      ctx.globalAlpha = 1;
+    }
+    if (showLines && showFuelEv) {
+      // GR#25 deviation (trafficOverlays.ts header note #2): no per-tile
+      // fuel/EV capacity data is registered — evChargePointShortfallOf is a
+      // CITY-WIDE binary flag, applied uniformly to every demand tile.
+      const flag = evChargePointShortfallOf(state);
+      const tint = fuelEvTintOf(flag);
+      if (tint) {
+        for (const t of visibleDemandTiles) {
+          const sp = SPECS[buildingByTile!.get(`${t.x},${t.y}`)?.spec ?? ''];
+          const tw = sp?.w ?? 1;
+          const th = sp?.h ?? 1;
+          const px = geom.ox + t.x * geom.s;
+          const py = geom.oy + t.y * geom.s;
+          ctx.globalAlpha = tint.alpha;
+          ctx.fillStyle = tint.color;
+          ctx.fillRect(px + 0.5, py + 0.5, Math.max(tw * geom.s - 1, 1.5), Math.max(th * geom.s - 1, 1.5));
+        }
+        ctx.globalAlpha = 1;
+      }
+    }
+    if (showLines && showWear) {
+      const wearBySegment = state.roadWearBySegment;
+      const segmentIdByTile = lineSegmentIdByTileOf(state);
+      for (const b of visibleBuildings) {
+        const sp = SPECS[b.spec];
+        if (!sp || !isLineSpec(sp)) continue;
+        const segmentId = segmentIdByTile.get(`${b.x},${b.y}`);
+        // GR#25 deviation (trafficOverlays.ts header note not yet filed for
+        // this one — s.roadWearBySegment is CUMULATIVE ESAL, not a [0,1]
+        // condition; conditionIndexOf (trafficAssignment.ts, the SAME
+        // module segmentDelayOf/AC-1's congestion overlay already reads)
+        // converts it to the 0-100 conditionIndex the doc's AC-6 actually
+        // means. A segment with NO entry (never worn) is honest absence —
+        // never conditionIndexOf(0)'s fresh 100, which would paint every
+        // untouched segment fresh-green instead of leaving it untinted.
+        const rawWear = segmentId ? wearBySegment?.[segmentId] : undefined;
+        const condition = rawWear === undefined ? undefined : conditionIndexOf(rawWear) / 100;
+        const tint = wearTintOf(condition);
+        if (!tint) continue;
+        const px = geom.ox + b.x * geom.s;
+        const py = geom.oy + b.y * geom.s;
+        ctx.globalAlpha = tint.alpha;
+        ctx.fillStyle = tint.color;
+        ctx.fillRect(px + 0.5, py + 0.5, Math.max(sp.w * geom.s - 1, 1.5), Math.max(sp.h * geom.s - 1, 1.5));
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // station connectivity dots (BUG-659: off-screen stations don't need a dot).
     const links = stationLinks(state);
     for (const b of visibleBuildings) {
@@ -939,7 +1110,7 @@ export function MapView() {
       c2.restore();
     };
     drawConsolidatorOverlayRef.current();
-  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, state.consolidatorEnabled, state.consolidatorMode, state.consolidatorSectionMetres, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, roadTracker, geom, size]);
+  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, state.consolidatorEnabled, state.consolidatorMode, state.consolidatorSectionMetres, selected, hover, showWater, showPower, showLines, showRefs, showDemand, showModeShare, showCongestion, showParking, showFuelEv, showWear, cloneSelection, roadTracker, geom, size]);
 
   // FEAT-2326609761 inc2 (Aaron's marching-ants ruling): a dedicated,
   // mount-once animation loop. Deliberately SEPARATE from the state-driven
@@ -1491,6 +1662,48 @@ export function MapView() {
           onClick={() => setShowLines((v) => !v)}
         >
           Lines
+        </button>
+        <button
+          className={`btn tiny${showDemand ? ' active' : ''}`}
+          title="Toggle traffic demand overlay: per-tile trip-count intensity (pale = light, saturated red = heavy). Requires Lines."
+          onClick={() => setShowDemand((v) => !v)}
+        >
+          Demand
+        </button>
+        <button
+          className={`btn tiny${showModeShare ? ' active' : ''}`}
+          title="Toggle mode-share overlay: the CITY-WIDE dominant travel mode (car/transit/walk), painted uniformly across every demand tile — the webconsole has no per-tile mode-share data yet. Requires Lines."
+          onClick={() => setShowModeShare((v) => !v)}
+        >
+          Mode Share
+        </button>
+        <button
+          className={`btn tiny${showCongestion ? ' active' : ''}`}
+          title="Toggle congestion overlay: per-segment volume/capacity ratio, three-band (green/yellow/red). Requires Lines."
+          onClick={() => setShowCongestion((v) => !v)}
+        >
+          Congestion
+        </button>
+        <button
+          className={`btn tiny${showParking ? ' active' : ''}`}
+          title="Toggle parking shortfall overlay: red where demand exceeds kerb parking supply. Requires Lines."
+          onClick={() => setShowParking((v) => !v)}
+        >
+          Parking
+        </button>
+        <button
+          className={`btn tiny${showFuelEv ? ' active' : ''}`}
+          title="Toggle fuel/EV shortfall overlay: a CITY-WIDE binary flag (this city has some EV/fuel shortfall right now), painted uniformly across every demand tile — no per-tile fuel/EV capacity data exists yet. Requires Lines."
+          onClick={() => setShowFuelEv((v) => !v)}
+        >
+          Fuel/EV
+        </button>
+        <button
+          className={`btn tiny${showWear ? ' active' : ''}`}
+          title="Toggle road wear overlay: per-segment condition, green (fresh) to red (failed). Requires Lines."
+          onClick={() => setShowWear((v) => !v)}
+        >
+          Wear
         </button>
         <button
           className={`btn tiny${showRefs ? ' active' : ''}`}

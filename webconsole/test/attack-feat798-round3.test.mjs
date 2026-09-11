@@ -115,10 +115,33 @@ test('GR#16: sanitizeTrafficSnapshot rejects non-objects and non-finite fields, 
   // 0 (integratedTransportScoreOf's "0 connected stations" neutral) -- the
   // SAME two defaults attack-feat802-round.test.mjs's own legacy-save pin
   // asserts directly against sanitizeTrafficSnapshot.
+  // FEAT-2326609805 inc10 r2 (BUG-952 fix): the same regression class
+  // repeats -- inc10 added THREE more fields (p90CommuteMinutes,
+  // vOverCBySegment, coverageShareByService) and this pin must carry their
+  // documented absent-field defaults too, or the very next increment's
+  // deepEqual failure would (again) look like "the attacker's pin is
+  // stale" instead of a real shape regression. Fixture still omits all
+  // three (mirrors a pre-inc10 save): p90CommuteMinutes falls back to the
+  // (already-floored-to-0) medianCommuteMinutes; vOverCBySegment defaults
+  // to {} (no segment map at all -- honest absence, not a fabricated
+  // entry); coverageShareByService seeds `ambulance` from the legacy
+  // single-service `coverageShare` field (0 here, post-clamp) and leaves
+  // `fire`/`police` honestly null (never fabricated) until the next
+  // cadence tick.
   assert.deepEqual(
     sanitizeTrafficSnapshot({ tick: -5, medianCommuteMinutes: -3, gridlockShare: -2, coverageShare: -1 }),
-    { tick: 0, medianCommuteMinutes: 0, gridlockShare: 0, coverageShare: 0, safeRoadScore: 1, integratedTransportScore: 0 },
-    'negative fields must floor at 0; absent inc9 fields must default to their documented neutrals, never be silently dropped from the shape'
+    {
+      tick: 0,
+      medianCommuteMinutes: 0,
+      gridlockShare: 0,
+      coverageShare: 0,
+      safeRoadScore: 1,
+      integratedTransportScore: 0,
+      p90CommuteMinutes: 0,
+      vOverCBySegment: {},
+      coverageShareByService: { ambulance: 0, fire: null, police: null },
+    },
+    'negative fields must floor at 0; absent inc9/inc10 fields must default to their documented neutrals, never be silently dropped from the shape'
   );
   assert.equal(
     sanitizeTrafficSnapshot({ ...good, coverageShare: null }).coverageShare,

@@ -61,9 +61,10 @@
 
 import type { SimState } from './types.ts';
 import { memoOnState, wellbeingPartOf, earlyGameFactor, SPECS } from './data.ts';
-import { commuteTimeDistributionOf, gridlockedSegmentsOf, tilePathsOf, tileVehicleTripsOf, fuelLitresDemandedOf, vedAnnualGbpOf, wearSegmentInputsOf } from './trafficAssignment.ts';
+import { commuteTimeDistributionOf, gridlockedSegmentsOf, tilePathsOf, tileVehicleTripsOf, fuelLitresDemandedOf, vedAnnualGbpOf, wearSegmentInputsOf, segmentDelayOf } from './trafficAssignment.ts';
 import type { WearSegmentInput } from './trafficAssignment.ts';
 import { emergencyCoverageOf } from './emergencyResponse.ts';
+import type { EmergencyService } from './emergencyResponse.ts';
 // FEAT-2326609802 inc9 (AC-7 perf bound) — citySafeRoadScoreOf/
 // integratedTransportScoreOf both read segmentDelayOf/assignedFlowOf, the
 // SAME full-assignment expense class as commuteTimeDistributionOf/
@@ -267,7 +268,46 @@ export interface TrafficSnapshot {
    * assignedFlowOf, BUG-877's exact expense class). [0,1], 1 = best. */
   safeRoadScore: number;
   integratedTransportScore: number;
+  /**
+   * FEAT-2326609805 inc10 r2 (BUG-952 fix) — the p90 companion to
+   * medianCommuteMinutes, sourced from the SAME
+   * commuteTimeDistributionOf(s) call this function already makes (inc3
+   * AC-5 exports p90Minutes alongside medianMinutes; inc10 r1 wired the
+   * Transport screen's "Commute p90" row to echo the p50 field instead of
+   * pulling this real number — BUG-957). Clamped to the same
+   * MENTAL.commuteMinutesClampMax bound as medianCommuteMinutes.
+   */
+  p90CommuteMinutes: number;
+  /**
+   * FEAT-2326609805 inc10 r2 (BUG-952 fix) — per-segment v/c for the
+   * congestion map tint, sourced from segmentDelayOf(s) (already computed
+   * on this SAME cadence call by gridlockedSegmentsOf's own internal call
+   * to segmentDelayOf — this is not a new heavy derivation, just a second
+   * read of an already-memoised Map). Zero-flow segments are OMITTED
+   * (honest absence — segmentDelayOf itself never emits a fabricated 0 for
+   * an unrouted segment). Values are clamped to
+   * [0, V_OVER_C_RENDER_SAFETY_CAP] — an implementation safety bound
+   * against a corrupt/absurd persisted value reaching the render path,
+   * NOT a GR#15 business constant (v/c has no real upper bound; a
+   * congested segment can legitimately exceed 1).
+   */
+  vOverCBySegment: Record<string, number>;
+  /**
+   * FEAT-2326609805 inc10 r2 (BUG-952 fix) — per-service coverageShare
+   * (emergencyCoverageOf's own [0,1]-or-null field, AC-4), so the
+   * Transport screen's three emergency rows can read the cadence snapshot
+   * instead of calling emergencyCoverageOf(state, svc.id) live on every
+   * render. The pre-existing `coverageShare` field above stays as the
+   * ambulance-only figure other callers (wellbeing) already depend on;
+   * this is the superset all three services need. null means the SAME
+   * "no routable demand" honest-absence emergencyCoverageOf itself uses.
+   */
+  coverageShareByService: Record<EmergencyService, number | null>;
 }
+
+/** Render-path safety clamp (NOT a sourced business constant, GR#15 does not
+ * apply — see vOverCBySegment's own doc comment above). */
+const V_OVER_C_RENDER_SAFETY_CAP = 1000;
 
 /**
  * GR#16: coerce an untrusted/legacy value into a well-formed TrafficSnapshot
@@ -301,6 +341,49 @@ export function sanitizeTrafficSnapshot(v: unknown): TrafficSnapshot | undefined
   const safeRoadScore = safeRoadScoreRaw === null ? 1.0 : Math.max(0, Math.min(1, safeRoadScoreRaw));
   const integratedTransportScoreRaw = finiteNumber(o.integratedTransportScore);
   const integratedTransportScore = integratedTransportScoreRaw === null ? 0 : Math.max(0, Math.min(1, integratedTransportScoreRaw));
+
+  // FEAT-2326609805 inc10 r2 (BUG-952, GR#16 backward tolerance): a
+  // pre-inc10 snapshot has none of the three fields below. Each defaults
+  // to an honest neutral value rather than invalidating the whole
+  // snapshot (the same tolerance pattern inc9's two fields above use) —
+  // the render path (BUG-952's own DO item 6) must show no NaN/throw on
+  // an old save, just a momentarily-empty overlay/row until the next
+  // cadence tick recomputes for real.
+  const p90CommuteMinutesRaw = finiteNumber(o.p90CommuteMinutes);
+  const p90CommuteMinutes =
+    p90CommuteMinutesRaw === null
+      ? Math.max(0, Math.min(MENTAL.commuteMinutesClampMax, medianCommuteMinutes))
+      : Math.max(0, Math.min(MENTAL.commuteMinutesClampMax, p90CommuteMinutesRaw));
+
+  const vOverCBySegment: Record<string, number> = {};
+  if (typeof o.vOverCBySegment === 'object' && o.vOverCBySegment !== null && !Array.isArray(o.vOverCBySegment)) {
+    for (const [segId, raw] of Object.entries(o.vOverCBySegment as Record<string, unknown>)) {
+      const v = finiteNumber(raw);
+      if (v === null || v < 0) continue;
+      vOverCBySegment[segId] = Math.min(V_OVER_C_RENDER_SAFETY_CAP, v);
+    }
+  }
+
+  const coverageShareByService: Record<EmergencyService, number | null> = { ambulance: null, fire: null, police: null };
+  if (typeof o.coverageShareByService === 'object' && o.coverageShareByService !== null) {
+    const raw = o.coverageShareByService as Record<string, unknown>;
+    for (const svc of ['ambulance', 'fire', 'police'] as const) {
+      const v = raw[svc];
+      if (v === null) {
+        coverageShareByService[svc] = null;
+      } else {
+        const n = finiteNumber(v);
+        if (n !== null) coverageShareByService[svc] = Math.max(0, Math.min(1, n));
+      }
+    }
+  } else {
+    // Legacy snapshot: at least seed ambulance from the pre-existing
+    // single-service field so the Transport screen's ambulance row is not
+    // WORSE off than before this increment landed; fire/police stay
+    // honestly null (never fabricated) until the next cadence tick.
+    coverageShareByService.ambulance = coverageShare;
+  }
+
   const out: TrafficSnapshot = {
     tick: Math.max(0, Math.floor(tick)),
     // BUG-895 fix (r4): medianCommuteMinutes clamps to the data-sourced
@@ -312,6 +395,9 @@ export function sanitizeTrafficSnapshot(v: unknown): TrafficSnapshot | undefined
     coverageShare,
     safeRoadScore,
     integratedTransportScore,
+    p90CommuteMinutes,
+    vOverCBySegment,
+    coverageShareByService,
   };
 
   // FEAT-2326609800 inc7 r3 (BUG-929, GR#16): the three new cadence-cached
@@ -355,7 +441,7 @@ export function computeTrafficSnapshot(
   tick: number,
   prevGridlockTicksBySegment: Record<string, number>
 ): { snapshot: TrafficSnapshot; gridlockTicksBySegment: Record<string, number> } {
-  const { medianMinutes } = commuteTimeDistributionOf(s);
+  const { medianMinutes, p90Minutes } = commuteTimeDistributionOf(s);
   const { gridlocked, ticks } = gridlockedSegmentsOf(s, prevGridlockTicksBySegment);
   const gridlockedSet = new Set(gridlocked);
   const tilePaths = tilePathsOf(s);
@@ -375,6 +461,29 @@ export function computeTrafficSnapshot(
   const safeRoadScore = citySafeRoadScoreOf(s);
   const integratedTransportScore = integratedTransportScoreOf(s);
 
+  // FEAT-2326609805 inc10 r2 (BUG-952 fix) — per-service coverage for the
+  // Transport screen's three rows. All three calls hit the SAME
+  // memoOnState-cached Record this call already forced via the ambulance
+  // line above (emergencyCoverageOf's cache computes all three services in
+  // one pass, see emergencyResponse.ts:534-576) — zero extra Dijkstra work.
+  const coverageShareByService: Record<EmergencyService, number | null> = {
+    ambulance: coverageShare,
+    fire: emergencyCoverageOf(s, 'fire').coverageShare,
+    police: emergencyCoverageOf(s, 'police').coverageShare,
+  };
+
+  // FEAT-2326609805 inc10 r2 (BUG-952 fix) — per-segment v/c for the
+  // congestion map tint. segmentDelayOf(s) is the SAME memoOnState-cached
+  // Map gridlockedSegmentsOf's own internal call above already forced —
+  // this second call is a cache hit, not a second assignment pass.
+  const vOverCBySegmentRaw = segmentDelayOf(s);
+  const vOverCBySegment: Record<string, number> = {};
+  for (const [segId, d] of vOverCBySegmentRaw) {
+    if (Number.isFinite(d.vOverC) && d.vOverC >= 0) {
+      vOverCBySegment[segId] = Math.min(V_OVER_C_RENDER_SAFETY_CAP, d.vOverC);
+    }
+  }
+
   // FEAT-2326609800 inc7 r3 (BUG-929) — the money-path inputs ride the SAME
   // cadence window: computed here (inside the already-cadence-gated call),
   // never again from the per-tick money path (engine.ts's
@@ -385,7 +494,20 @@ export function computeTrafficSnapshot(
   const wearSegments = wearSegmentInputsOf(s);
 
   return {
-    snapshot: { tick, medianCommuteMinutes: medianMinutes, gridlockShare, coverageShare, fuelLitresDemanded, vedAnnualGbp, wearSegments, safeRoadScore, integratedTransportScore },
+    snapshot: {
+      tick,
+      medianCommuteMinutes: medianMinutes,
+      p90CommuteMinutes: p90Minutes,
+      gridlockShare,
+      coverageShare,
+      coverageShareByService,
+      vOverCBySegment,
+      fuelLitresDemanded,
+      vedAnnualGbp,
+      wearSegments,
+      safeRoadScore,
+      integratedTransportScore,
+    },
     gridlockTicksBySegment: ticks,
   };
 }

@@ -288,6 +288,50 @@ function main() {
     if (!modeIds.has(v.refinesModeId)) warn(`vehicle_classes.json fixedTrack['${v.id}'].refinesModeId '${v.refinesModeId}' not found in data/modes.json`);
   }
 
+  // FEAT-2326609805 inc10: overlays.json config sanity -- alphas in [0,1],
+  // demand bounds ascending, congestion/wear bands ascending. Structural
+  // only (the loader itself, trafficOverlays.ts, is the fail-closed gate
+  // MET-V945 for missing/non-numeric fields; this validator catches a
+  // present-but-nonsensical value the loader's isFinite check would pass).
+  {
+    const overlays = loadJson('data/traffic/overlays.json');
+    const alphaFields = [
+      ['demand.paleAlpha', overlays.demand?.paleAlpha],
+      ['demand.saturatedAlpha', overlays.demand?.saturatedAlpha],
+      ['modeShare.pureAlpha', overlays.modeShare?.pureAlpha],
+      ['congestion.redAlpha', overlays.congestion?.redAlpha],
+      ['congestion.yellowAlpha', overlays.congestion?.yellowAlpha],
+      ['congestion.greenAlpha', overlays.congestion?.greenAlpha],
+      ['parking.alpha', overlays.parking?.alpha],
+      ['fuelEv.alpha', overlays.fuelEv?.alpha],
+      ['wear.freshAlpha', overlays.wear?.freshAlpha],
+      ['wear.failedAlpha', overlays.wear?.failedAlpha],
+    ];
+    for (const [label, v] of alphaFields) {
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) {
+        warn(`overlays.json ${label} must be a finite number in [0,1], got ${JSON.stringify(v)}`);
+      }
+    }
+    if (!(overlays.demand?.paleTrips < overlays.demand?.saturatedTrips)) {
+      warn(`overlays.json demand.paleTrips (${overlays.demand?.paleTrips}) must be < demand.saturatedTrips (${overlays.demand?.saturatedTrips})`);
+    }
+    if (!(overlays.demand?.paleAlpha < overlays.demand?.saturatedAlpha)) {
+      warn(`overlays.json demand.paleAlpha must be < demand.saturatedAlpha`);
+    }
+    if (!(overlays.congestion?.yellowThreshold < overlays.congestion?.redThreshold)) {
+      warn(`overlays.json congestion.yellowThreshold must be < congestion.redThreshold`);
+    }
+    if (!(overlays.congestion?.greenAlpha < overlays.congestion?.yellowAlpha && overlays.congestion?.yellowAlpha < overlays.congestion?.redAlpha)) {
+      warn(`overlays.json congestion alphas must be strictly ascending green < yellow < red`);
+    }
+    if (!(overlays.wear?.conditionRedBand < overlays.wear?.conditionYellowBand)) {
+      warn(`overlays.json wear.conditionRedBand must be < wear.conditionYellowBand`);
+    }
+    if (!(overlays.wear?.freshAlpha < overlays.wear?.failedAlpha)) {
+      warn(`overlays.json wear.freshAlpha must be < wear.failedAlpha`);
+    }
+  }
+
   if (errors.length) {
     console.error(`FAIL: ${errors.length} issue(s):`);
     for (const e of errors) console.error(' -', e);

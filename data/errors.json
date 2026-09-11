@@ -6076,6 +6076,12 @@
       "message": "traffic.json trafficRecomputeTicks is missing or not a positive integer",
       "remedy": "Add a positive integer trafficRecomputeTicks field to data/traffic.json (FEAT-2326609798 inc5 r2, BUG-877)"
     },
+    "MET-V945": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "data/traffic/overlays.json is missing a positive finite numeric value for overlay config field %s",
+      "remedy": "add a valid positive finite numeric value for the field in data/traffic/overlays.json and re-run sync-traffic-data.mjs"
+    },
     "MET-V950": {
       "severity": "error",
       "module": "ui.webconsole",

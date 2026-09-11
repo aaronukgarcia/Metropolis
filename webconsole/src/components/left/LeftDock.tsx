@@ -28,6 +28,7 @@ import {
   ConstructionQueueTab,
 } from './tabs/buildZoningTabs';
 import { MilestonesTab, DemandForecastTab, RevenueForecastTab } from './tabs/projectionsTabs';
+import { TransportTab } from './tabs/transportTab';
 import { AlertsCriticalTab, AlertsWarningTab, AlertsInfoTab } from './tabs/alertsTabs';
 import { DebugTab } from './tabs/debugTab';
 import { ConsolidatorTab } from './tabs/consolidatorTab';
@@ -104,6 +105,7 @@ const GROUPS: TopGroup[] = [
       { id: 'queue', label: 'Queue', Body: ConstructionQueueTab },
       { id: 'structures', label: 'Structures', Body: StructuresTab },
       { id: 'lines', label: 'Lines & Networks', Body: LinesNetworksTab },
+      { id: 'transport', label: 'Transport', Body: TransportTab },
       { id: 'unlocks', label: 'Unlocks', Body: UnlocksTab },
       { id: 'specialists', label: 'Specialists', Body: SpecialistsTab },
       { id: 'reference', label: 'Reference', Body: ReferenceTab },

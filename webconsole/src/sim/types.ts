@@ -987,6 +987,14 @@ export interface SimState {
      * per-tick wellbeing/attract path. */
     safeRoadScore: number;
     integratedTransportScore: number;
+    /** FEAT-2326609805 inc10 r2 (BUG-952/BUG-957 fix) — see
+     * trafficWellbeing.ts's TrafficSnapshot interface for the full doc
+     * comment on these three fields (kept here as the mirrored inline
+     * shape SimState has always used for this field, GR#3 — same
+     * duplication-with-validation pattern as every other field above). */
+    p90CommuteMinutes: number;
+    vOverCBySegment: Record<string, number>;
+    coverageShareByService: { ambulance: number | null; fire: number | null; police: number | null };
   };
   /**
    * FEAT-2326609800 inc7 (AC-4, ASM-1534) — per-segment cumulative ESAL

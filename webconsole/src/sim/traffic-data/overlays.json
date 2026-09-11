@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609792",
+    "increment": 10,
+    "comment": "FEAT-2326609805 inc10 (read-only UI overlays + Transport screen). GR#15: every colour band edge / alpha level the overlay paint logic and the Transport screen bars use is sourced from THIS file, never a hand-typed literal in trafficOverlays.ts / MapView.tsx / transportTab.tsx. Bounds are fixture-observed placeholders (Aaron's balance pass, per the balance-number-regime memory, is a later exercise) — directional correctness, not tuned magnitudes."
+  },
+  "demand": {
+    "paleTrips": 10,
+    "saturatedTrips": 200,
+    "paleAlpha": 0.25,
+    "saturatedAlpha": 0.85
+  },
+  "modeShare": {
+    "minPersonTrips": 50,
+    "pureAlpha": 0.85
+  },
+  "congestion": {
+    "redThreshold": 0.8,
+    "yellowThreshold": 0.5,
+    "redAlpha": 0.85,
+    "yellowAlpha": 0.5,
+    "greenAlpha": 0.25
+  },
+  "parking": {
+    "alpha": 0.85
+  },
+  "fuelEv": {
+    "alpha": 0.85
+  },
+  "wear": {
+    "freshAlpha": 0.25,
+    "failedAlpha": 0.85,
+    "conditionYellowBand": 0.7,
+    "conditionRedBand": 0.3
+  },
+  "colors": {
+    "ok": "#3fb950",
+    "hot": "#ff7b72",
+    "yellow": "#e3b341",
+    "car": "#ff7b72",
+    "transit": "#4a9eff",
+    "walk": "#3fb950"
+  }
+}
