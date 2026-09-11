@@ -214,10 +214,26 @@ test('AC-14: an offline (road-disconnected) building contributes ZERO upkeep + c
   // economy delta is attributable to the block going offline.
   const block = (x, y) => ({ id: 10, spec: 'res_block', x, y, builtTick: -1000 });
 
+  // FEAT-2326609711 inc2: external buy-in (water/waste-water/refuse, default ON)
+  // adds its own outflow lines (Water Import / Waste-Water Contract / Contracted
+  // Refuse) that are NOT gated by road connectivity at all — they are billed
+  // regardless of a building's online status. Pin all buy-in toggles (and inc1's
+  // grid import) OFF explicitly so this AC-14 fixture's upkeep delta is
+  // attributable ONLY to the block's road-connectivity gate, as the test's own
+  // comment above requires — otherwise the buy-in lines leak into `upkeepTotal`
+  // and the "delta is exactly the block upkeep" assertion goes red on unrelated
+  // grounds (BUG: post-FEAT-2326609711 test breakage, fixed here).
+  const noBuyIn = {
+    gridImportEnabled: false,
+    waterImportEnabled: false,
+    wastewaterContractEnabled: false,
+    refuseContractEnabled: false,
+  };
+
   // ONLINE: road at the west edge (connected); block sits beside it.
-  const online = mk({ buildings: [roadAt(0, 50), block(0, 48)] });
+  const online = mk({ ...noBuyIn, buildings: [roadAt(0, 50), block(0, 48)] });
   // OFFLINE: an isolated road island (block is road-adjacent but not connected).
-  const offline = mk({ buildings: [roadAt(5, 50), block(5, 48)] });
+  const offline = mk({ ...noBuyIn, buildings: [roadAt(5, 50), block(5, 48)] });
 
   const onlineBlock = online.buildings.find((b) => b.spec === 'res_block');
   const offlineBlock = offline.buildings.find((b) => b.spec === 'res_block');

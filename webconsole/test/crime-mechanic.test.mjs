@@ -161,6 +161,17 @@ test('AC-5: low wellbeing increases crime (mutant: wellbeing feedback reversed, 
     // tank the rest of the non-crime, non-police/edu/parks wellbeing parts.
     taxRates: { residential: 60, commercial: 60, industrial: 60 },
     policies: { recycling: false, transitSubsidy: false, tourismDrive: false, austerity: true },
+    // FEAT-2326609711 inc2: external buy-in (water/waste-water/refuse)
+    // defaults ON and fully substitutes for zero local coverage, so leaving
+    // it at the default silently un-starves this fixture's utilities (the
+    // Utilities/Sewage/Refuse wellbeing parts read effective coverage = 100
+    // when covered) and shrinks the low/high wellbeing gap this AC needs.
+    // Pin all buy-in OFF so the zero-building utilities here are genuinely
+    // unserved, matching this comment's "zero ... utilities/waste tank the
+    // rest" intent.
+    waterImportEnabled: false,
+    wastewaterContractEnabled: false,
+    refuseContractEnabled: false,
   });
 
   const wbHigh = wellbeingCoreOf(highWellbeing);
