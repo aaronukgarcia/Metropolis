@@ -245,10 +245,14 @@ export function validateGameSaveObject(parsed: unknown): GameSave {
   // wearSegments) is coerced/dropped here instead of reaching
   // roadWearStepOf/fuelLitresDemandedFor/vedAnnualGbpFor raw. `undefined`
   // in, `undefined` out (a pre-cadence save is unaffected).
-  savepoint.snapshot = {
-    ...treasurySanitized,
-    trafficSnapshot: sanitizeTrafficSnapshot(treasurySanitized.trafficSnapshot),
-  };
+  // BUG-974 fix: only reassign `trafficSnapshot` when the object actually
+  // carries that own key. The unconditional spread-plus-assign below used
+  // to ADD a `trafficSnapshot: undefined` own key to a pre-inc7 save that
+  // never had one, so a load-then-resave of such a save gained a key it
+  // never had (GR#16: absence is a real state, never fabricated).
+  savepoint.snapshot = Object.prototype.hasOwnProperty.call(treasurySanitized, 'trafficSnapshot')
+    ? { ...treasurySanitized, trafficSnapshot: sanitizeTrafficSnapshot(treasurySanitized.trafficSnapshot) }
+    : treasurySanitized;
   return {
     format: GAME_SAVE_FORMAT,
     name: o.name as string,

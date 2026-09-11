@@ -54,6 +54,7 @@ import {
   ERR_WELLBEING_COMMUTE_ANCHOR_INVALID,
   ERR_WELLBEING_GRIDLOCK_WEIGHT_MISSING,
   ERR_TRAFFIC_RECOMPUTE_TICKS_INVALID,
+  TRAFFIC_SNAPSHOT_KEY_ORDER,
 } from '../src/sim/trafficWellbeing.ts';
 import {
   commuteTimeDistributionOf,
@@ -670,6 +671,98 @@ test('BUG-877/GR#16: sanitizeTrafficSnapshot coerces a legacy/corrupt value to u
   );
   const goodCoverage = sanitizeTrafficSnapshot({ tick: 5, medianCommuteMinutes: 40, gridlockShare: 0.2, coverageShare: 1.9 });
   assert.equal(goodCoverage.coverageShare, 1, 'coverageShare must clamp to [0,1] on a corrupt out-of-range NUMBER (distinct from the legitimate null case above)');
+});
+
+// ══════════════ BUG-974: ONE canonical TrafficSnapshot key order ══════════
+
+/**
+ * BUG-974 structural pin: a fully-populated TrafficSnapshot (every optional
+ * field present) built by sanitizeTrafficSnapshot must emit its own keys in
+ * EXACTLY TRAFFIC_SNAPSHOT_KEY_ORDER — no more, no fewer, no reordering. A
+ * mutant that shuffles either sanitizeTrafficSnapshot's internal field order
+ * or the exported TRAFFIC_SNAPSHOT_KEY_ORDER constant (without updating the
+ * other) reds here.
+ */
+test('BUG-974: sanitizeTrafficSnapshot emits keys in exactly TRAFFIC_SNAPSHOT_KEY_ORDER when every optional field is present', () => {
+  const full = sanitizeTrafficSnapshot({
+    tick: 5,
+    medianCommuteMinutes: 40,
+    gridlockShare: 0.2,
+    coverageShare: 0.5,
+    safeRoadScore: 0.9,
+    integratedTransportScore: 0.4,
+    p90CommuteMinutes: 55,
+    vOverCBySegment: { seg1: 0.8 },
+    coverageShareByService: { ambulance: 0.5, fire: 0.6, police: 0.7 },
+    fuelLitresDemanded: 100,
+    vedAnnualGbp: 200,
+    wearSegments: { seg1: { roadClassId: 'motorway', deltaEsalPerTick: 1 } },
+  });
+  assert.ok(full, 'setup: fully-populated fixture must sanitize to a real snapshot');
+  // Deliberately a HARD-CODED literal here (not a copy of the exported
+  // constant) — comparing against the constant itself would be a tautology
+  // that could never red if canonicalSnapshot and TRAFFIC_SNAPSHOT_KEY_ORDER
+  // were shuffled TOGETHER (proven: this exact tautology was caught in a
+  // scratch mutant run before this literal was hardcoded — swapping two
+  // entries in TRAFFIC_SNAPSHOT_KEY_ORDER left the old
+  // `Object.keys(full), [...TRAFFIC_SNAPSHOT_KEY_ORDER]` assertion GREEN).
+  const expectedOrder = [
+    'tick',
+    'medianCommuteMinutes',
+    'p90CommuteMinutes',
+    'gridlockShare',
+    'coverageShare',
+    'coverageShareByService',
+    'vOverCBySegment',
+    'safeRoadScore',
+    'integratedTransportScore',
+    'fuelLitresDemanded',
+    'vedAnnualGbp',
+    'wearSegments',
+  ];
+  assert.deepEqual(expectedOrder, [...TRAFFIC_SNAPSHOT_KEY_ORDER], 'sanity: the exported constant must match the documented canonical order literal above');
+  assert.deepEqual(Object.keys(full), expectedOrder, 'sanitizeTrafficSnapshot must emit keys in exactly this order');
+});
+
+/**
+ * BUG-974 structural pin (companion): computeTrafficSnapshot's real output
+ * (from a routed, populated city, so every field is genuinely computed, not
+ * defaulted) must ALSO match TRAFFIC_SNAPSHOT_KEY_ORDER exactly — proving
+ * the two producers can never again disagree on order (same fix,
+ * canonicalSnapshot, applied at both call sites).
+ */
+test('BUG-974: computeTrafficSnapshot emits keys in exactly TRAFFIC_SNAPSHOT_KEY_ORDER on a real city', () => {
+  let s = initialState();
+  const roadTiles = [];
+  for (let x = 0; x <= 15; x++) roadTiles.push({ x, y: 10 });
+  s = reducer(s, { type: 'placeRoadPath', spec: 'road', tiles: roadTiles });
+  s = reducer(s, { type: 'debugFunds', amount: 500_000_000 });
+  s = reducer(s, { type: 'place', spec: 'res_hut', x: 5, y: 11 });
+  s = reducer(s, { type: 'place', spec: 'com_shop', x: 10, y: 11 });
+  for (let i = 0; i < TRAFFIC_RECOMPUTE_TICKS + 1; i++) s = reducer(s, { type: 'tick' });
+  assert.ok(s.trafficSnapshot, 'setup: expected a cadence tick to have populated trafficSnapshot');
+  // Hard-coded literal (not derived from TRAFFIC_SNAPSHOT_KEY_ORDER) — see
+  // the sibling sanitizeTrafficSnapshot test above for why: comparing
+  // against the constant itself cannot red if the constant and
+  // canonicalSnapshot were shuffled together. computeTrafficSnapshot's live
+  // path always assigns every field (never an absent optional), so all 12
+  // are expected here.
+  const expectedOrder = [
+    'tick',
+    'medianCommuteMinutes',
+    'p90CommuteMinutes',
+    'gridlockShare',
+    'coverageShare',
+    'coverageShareByService',
+    'vOverCBySegment',
+    'safeRoadScore',
+    'integratedTransportScore',
+    'fuelLitresDemanded',
+    'vedAnnualGbp',
+    'wearSegments',
+  ];
+  assert.deepEqual(expectedOrder, [...TRAFFIC_SNAPSHOT_KEY_ORDER], 'sanity: the exported constant must match the documented canonical order literal above');
+  assert.deepEqual(Object.keys(s.trafficSnapshot), expectedOrder, 'computeTrafficSnapshot key order must follow the canonical order exactly');
 });
 
 // ===========================================================================

@@ -316,10 +316,30 @@ export function decodeSavepointBytes(raw: string): Savepoint {
     snap.buildings = coerceSnapshotBuildings(snap.buildings) as unknown[];
   }
   if (snap) {
-    snap.trafficSnapshot = sanitizeTrafficSnapshot(snap.trafficSnapshot);
-    snap.congestionTicksBySpec = sanitizeCongestionTicksBySpec(snap.congestionTicksBySpec);
-    snap.roadWearBySegment = sanitizeRoadWearBySegment(snap.roadWearBySegment);
-    snap.gridlockTicksBySegment = sanitizeCongestionTicksBySpec(snap.gridlockTicksBySegment);
+    // BUG-974 fix: assign the sanitized field back ONLY when the raw decoded
+    // object actually carried that OWN key. Before this fix, every field
+    // below was reassigned unconditionally, so a pre-inc7 save (whose JSON
+    // never had a `trafficSnapshot`/`congestionTicksBySpec`/
+    // `roadWearBySegment`/`gridlockTicksBySegment` key at all) came out of
+    // decodeSavepointBytes with FOUR brand-new own keys it never had going
+    // in (`trafficSnapshot: undefined` plus three freshly-invented empty
+    // `{}` maps from sanitizeCongestionTicksBySpec/sanitizeRoadWearBySegment
+    // returning `{}` rather than `undefined` for absent input) — a save
+    // round-tripped through this decoder gained keys and so could never be
+    // byte-identical to the save that produced it (GR#16: absence is a real
+    // state, never fabricated).
+    if (Object.prototype.hasOwnProperty.call(snap, 'trafficSnapshot')) {
+      snap.trafficSnapshot = sanitizeTrafficSnapshot(snap.trafficSnapshot);
+    }
+    if (Object.prototype.hasOwnProperty.call(snap, 'congestionTicksBySpec')) {
+      snap.congestionTicksBySpec = sanitizeCongestionTicksBySpec(snap.congestionTicksBySpec);
+    }
+    if (Object.prototype.hasOwnProperty.call(snap, 'roadWearBySegment')) {
+      snap.roadWearBySegment = sanitizeRoadWearBySegment(snap.roadWearBySegment);
+    }
+    if (Object.prototype.hasOwnProperty.call(snap, 'gridlockTicksBySegment')) {
+      snap.gridlockTicksBySegment = sanitizeCongestionTicksBySpec(snap.gridlockTicksBySegment);
+    }
   }
   return sp;
 }

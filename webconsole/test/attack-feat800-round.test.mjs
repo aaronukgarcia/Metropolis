@@ -1103,16 +1103,17 @@ test('R4_BUILD_SHAPE: every sanitizer / live producer of these maps finishes wit
   assert.match(producers[2][1], /Object\s*\.\s*prototype\s*\.\s*hasOwnProperty\s*\.\s*call\s*\(\s*prevTicks/, 'advanceCongestionTicks: prevTicks must be read through an own-key guard');
 });
 
-// R4_BUG974 (RECORDED GAP, green as written): the r4 rework did NOT change
-// decodeSavepointBytes' unconditional four-field assignment, so a pre-inc7
-// savepoint still gains four own keys (one of them trafficSnapshot:
-// undefined) at decode. Measured harmless — the pre-existing key ORDER is
-// untouched and 10 ticks are canonically identical to the same legacy state
-// fed straight to the reducer — but NOT byte-identical under
-// JSON.stringify, which is the whole content of BUG-974. Pinned in the
-// direction it actually behaves so the day BUG-974 is fixed this test fails
-// loudly and is flipped, rather than silently drifting.
-test('R4_BUG974 (RECORDED GAP): decodeSavepointBytes still adds four own keys to a pre-inc7 savepoint — value-safe, key-order-safe, not byte-identical', async () => {
+// R4_BUG974 (FIXED): decodeSavepointBytes now guards each of the four fields
+// (trafficSnapshot/congestionTicksBySpec/roadWearBySegment/
+// gridlockTicksBySegment) with an own-key check before reassigning the
+// sanitized value, so a pre-inc7 savepoint that never carried these keys no
+// longer gains them at decode (previously it always did — one of them
+// `trafficSnapshot: undefined`, the other three freshly-invented empty `{}`
+// maps — which is exactly why save/load/save was never byte-identical for
+// such a save; see BUG-974's own comment on the fix). Was pinned as a
+// RECORDED GAP in the direction the bug actually behaved; flipped here now
+// that the gap is closed.
+test('R4_BUG974 (FIXED): decodeSavepointBytes no longer invents own keys on a pre-inc7 savepoint — value-safe, key-order-safe, AND byte-identical', async () => {
   const { createSavepoint, persistSavepointForced, restoreFromSavepoint } = await import('../src/sim/replay.ts');
   const { initialState: init, reducer: red } = await import('../src/sim/engine.ts');
   class Mem {
@@ -1131,11 +1132,280 @@ test('R4_BUG974 (RECORDED GAP): decodeSavepointBytes still adds four own keys to
   const restored = restoreFromSavepoint(storage);
   assert.equal(restored.success, true, 'setup: the legacy savepoint must restore');
   const afterKeys = Object.keys(restored.state);
-  assert.deepEqual(afterKeys.filter((k) => !beforeKeys.includes(k)), ['trafficSnapshot', 'congestionTicksBySpec', 'roadWearBySegment', 'gridlockTicksBySegment'], 'BUG-974 (unfixed): decode still invents these four own keys');
-  assert.ok(Object.prototype.hasOwnProperty.call(restored.state, 'trafficSnapshot') && restored.state.trafficSnapshot === undefined, 'BUG-974 (unfixed): including an own trafficSnapshot whose value is undefined');
+  assert.deepEqual(afterKeys.filter((k) => !beforeKeys.includes(k)), [], 'BUG-974 (fixed): decode must invent NO own keys on a pre-inc7 savepoint');
+  assert.equal(Object.prototype.hasOwnProperty.call(restored.state, 'trafficSnapshot'), false, 'BUG-974 (fixed): no fabricated trafficSnapshot own key');
   assert.deepEqual(afterKeys.filter((k) => beforeKeys.includes(k)), beforeKeys, 'BUG-974 is bounded: the ORDER of every pre-existing key is untouched');
   let a = restored.state, b = legacy;
   for (let i = 0; i < 10; i++) { a = red(a, { type: 'tick' }); b = red(b, { type: 'tick' }); }
   const canon = (o) => JSON.stringify(o, Object.keys(o).sort());
   assert.equal(canon(a), canon(b), 'BUG-974 is value-safe: 10 ticks from a decoded legacy savepoint are canonically identical to the same state fed straight to the reducer');
+});
+
+// ═══════════════ BUG-974 INDEPENDENT ROUND (opus-round-bug974) ═══════════
+// Lasting pins from the independent destructive round on BUG-974 (the ONE
+// canonical TRAFFIC_SNAPSHOT_KEY_ORDER + canonicalSnapshot() builder, and
+// the present-only hasOwnProperty-guarded decode in replay.ts/gamesave.ts).
+// Every pin below was proven to RED against at least one scratch mutant of
+// the fix (7/7 mutants red: shuffled order constant, dropped decode guard on
+// trafficSnapshot and on roadWearBySegment, compute bypassing
+// canonicalSnapshot, sanitize bypassing it, gamesave's unconditional
+// spread+assign, and canonicalSnapshot copying keys without the own-key
+// guard).
+
+/**
+ * The canonical order as a HARD-CODED literal, deliberately NOT read from
+ * TRAFFIC_SNAPSHOT_KEY_ORDER: asserting Object.keys() against the constant
+ * itself is a tautology that stays green when the constant and
+ * canonicalSnapshot are shuffled TOGETHER (measured — a scratch mutant that
+ * swapped `tick`/`medianCommuteMinutes` in the constant left the first draft
+ * of ROUND_BUG974_D and _E GREEN).
+ */
+const ROUND_BUG974_EXPECTED_ORDER = [
+  'tick',
+  'medianCommuteMinutes',
+  'p90CommuteMinutes',
+  'gridlockShare',
+  'coverageShare',
+  'coverageShareByService',
+  'vOverCBySegment',
+  'safeRoadScore',
+  'integratedTransportScore',
+  'fuelLitresDemanded',
+  'vedAnnualGbp',
+  'wearSegments',
+];
+
+/** Shared fixtures for the BUG-974 round pins. */
+async function bug974Fixtures() {
+  const { reducer, initialState } = await import('../src/sim/engine.ts');
+  const { emptyJournal } = await import('../src/sim/journal.ts');
+  const gs = await import('../src/sim/gamesave.ts');
+  const tw = await import('../src/sim/trafficWellbeing.ts');
+  const rp = await import('../src/sim/replay.ts');
+  const text = (state) =>
+    gs.gameSaveText(gs.buildGameSave({ state, journal: emptyJournal(), journalTail: [], name: 'n', buildVersion: 'v', now: new Date(0) }));
+  const routedCity = (extraTicks) => {
+    let s = initialState();
+    s = reducer(s, { type: 'debugFunds', amount: 500_000_000 });
+    s = reducer(s, { type: 'unlockAll' });
+    const roadTiles = [];
+    for (let x = 0; x <= 25; x++) roadTiles.push({ x, y: 10 });
+    roadTiles.push({ x: 10, y: 11 });
+    roadTiles.push({ x: 20, y: 11 });
+    s = reducer(s, { type: 'placeRoadPath', spec: 'road', tiles: roadTiles });
+    s = reducer(s, { type: 'place', spec: 'res_estate', x: 10, y: 12 });
+    s = reducer(s, { type: 'place', spec: 'com_shop', x: 20, y: 12 });
+    for (let i = 0; i < extraTicks; i++) s = reducer(s, { type: 'tick' });
+    return s;
+  };
+  const preInc7 = (state) => {
+    const o = { ...state };
+    for (const f of ['trafficSnapshot', 'congestionTicksBySpec', 'roadWearBySegment', 'gridlockTicksBySegment']) delete o[f];
+    return o;
+  };
+  return { reducer, initialState, gs, tw, rp, text, routedCity, preInc7 };
+}
+
+/**
+ * ROUND_BUG974_A — the identity sweep the round was commissioned to run:
+ * save -> load -> save -> load -> save must be byte-identical for FOUR
+ * different snapshot shapes, not just the one the author's own fixture
+ * happened to produce. (c) is the shape the author's tests never built — a
+ * snapshot carrying the required fields but NONE of inc7's three optionals,
+ * i.e. the exact partial shape the sanitizer emits after poisoning
+ * wearSegments (BUG-941) — which is where an order constant that only
+ * agreed on the FULL key set would still drift.
+ */
+test('ROUND_BUG974_A: save/load/save is byte-identical for initial, routed, optional-less and pre-inc7 states', async () => {
+  const { initialState, gs, tw, text, routedCity, preInc7 } = await bug974Fixtures();
+  const c = routedCity(2 * tw.TRAFFIC_RECOMPUTE_TICKS + 3);
+  const snapNoOpt = { ...c.trafficSnapshot };
+  for (const f of ['fuelLitresDemanded', 'vedAnnualGbp', 'wearSegments']) delete snapNoOpt[f];
+  const cases = {
+    a_initial: initialState(),
+    b_routed: routedCity(2 * tw.TRAFFIC_RECOMPUTE_TICKS + 3),
+    c_noOptional: { ...c, trafficSnapshot: snapNoOpt },
+    d_preInc7: preInc7(routedCity(5)),
+  };
+  for (const [name, s] of Object.entries(cases)) {
+    const t1 = text(s);
+    const p1 = gs.parseGameSave(t1);
+    assert.equal(p1.ok, true, name + ': setup, the save must parse');
+    const t2 = text(p1.save.savepoint.snapshot);
+    assert.equal(t1, t2, name + ': save/load/save is NOT byte-identical');
+    const t3 = text(gs.parseGameSave(t2).save.savepoint.snapshot);
+    assert.equal(t2, t3, name + ': a third save/load pass drifted');
+  }
+
+  // (e) a genuinely pre-inc7 FILE: the four keys stripped from the persisted
+  // JSON itself, not merely from the in-memory SimState -- this is the case
+  // gamesave.ts's own present-only ternary exists for, and the one that reds
+  // if that ternary regresses to the old unconditional spread+assign.
+  const obj = JSON.parse(text(preInc7(routedCity(5))));
+  for (const f of ['trafficSnapshot', 'congestionTicksBySpec', 'roadWearBySegment', 'gridlockTicksBySegment']) delete obj.savepoint.snapshot[f];
+  const beforeKeys = Object.keys(obj.savepoint.snapshot);
+  const decoded = gs.parseGameSave(JSON.stringify(obj)).save.savepoint.snapshot;
+  assert.deepEqual(Object.keys(decoded).filter((k) => !beforeKeys.includes(k)), [], 'e_preInc7File: parseGameSave invented own keys on a pre-inc7 save file');
+  const e1 = text(decoded);
+  const e2 = text(gs.parseGameSave(e1).save.savepoint.snapshot);
+  assert.equal(e1, e2, 'e_preInc7File: save/load/save is NOT byte-identical for a pre-inc7 save file');
+});
+
+/**
+ * ROUND_BUG974_B — sanitizeTrafficSnapshot must be IDEMPOTENT (deep AND
+ * byte-wise) over the BUG-941 corruption shapes, must never emit an own key
+ * whose value is `undefined` (JSON drops such a key while structuredClone
+ * keeps it — that asymmetry is precisely BUG-974's failure mode), and must
+ * emit whatever subset of fields it does keep in canonical order.
+ */
+test('ROUND_BUG974_B: sanitizeTrafficSnapshot is idempotent, canonically ordered, and emits no undefined-valued own keys', async () => {
+  const { tw } = await bug974Fixtures();
+  const full = {
+    tick: 5, medianCommuteMinutes: 40, gridlockShare: 0.2, coverageShare: 0.5,
+    safeRoadScore: 0.9, integratedTransportScore: 0.4, p90CommuteMinutes: 55,
+    vOverCBySegment: { seg1: 0.8 },
+    coverageShareByService: { ambulance: 0.5, fire: 0.6, police: 0.7 },
+    fuelLitresDemanded: 100, vedAnnualGbp: 200,
+    wearSegments: { seg1: { roadClassId: 'motorway', deltaEsalPerTick: 1 } },
+  };
+  const shapes = {
+    full,
+    badWearClass: { ...full, wearSegments: { seg1: { roadClassId: 'nope', deltaEsalPerTick: 1 } } },
+    emptyWear: { ...full, wearSegments: {} },
+    nullWear: { ...full, wearSegments: null },
+    negativeFuel: { ...full, fuelLitresDemanded: -1 },
+    nanVed: { ...full, vedAnnualGbp: NaN },
+    protoWear: { ...full, wearSegments: JSON.parse('{"__proto__":{"roadClassId":"motorway","deltaEsalPerTick":1}}') },
+    nullCoverage: { ...full, coverageShare: null },
+    stringTick: { ...full, tick: '5' },
+    hugeMedian: { ...full, medianCommuteMinutes: 1e9 },
+  };
+  for (const [name, v] of Object.entries(shapes)) {
+    const s1 = tw.sanitizeTrafficSnapshot(v);
+    const s2 = tw.sanitizeTrafficSnapshot(s1);
+    assert.deepStrictEqual(s2, s1, name + ': sanitizeTrafficSnapshot is not idempotent (deep)');
+    assert.equal(JSON.stringify(s2), JSON.stringify(s1), name + ': sanitizeTrafficSnapshot is not idempotent (bytes)');
+    // A shape whose REQUIRED fields fail validation (stringTick) is honestly
+    // rejected wholesale -- `undefined`, no object to inspect. That is the
+    // BUG-877/GR#16 contract, already pinned elsewhere; the order/undefined-key
+    // assertions below only apply to the shapes that survive.
+    if (!s1) continue;
+    const keys = Object.keys(s1);
+    assert.deepEqual(keys, ROUND_BUG974_EXPECTED_ORDER.filter((k) => keys.includes(k)), name + ': surviving keys are not in canonical order');
+    for (const k of keys) assert.notEqual(s1[k], undefined, name + ': own key "' + k + '" carries an undefined value');
+  }
+});
+
+/**
+ * ROUND_BUG974_C — the SAVEPOINT path (createSavepoint ->
+ * persistSavepointForced -> restoreFromSavepoint -> persist again), which is
+ * a different decoder (decodeSavepointBytes) from the gamesave path pinned
+ * in _A: the persisted bytes must be identical across the round trip and the
+ * restored state's key SET AND ORDER must equal the original's.
+ */
+test('ROUND_BUG974_C: savepoint persist/restore/persist is byte-identical and invents no keys', async () => {
+  const { initialState, tw, rp, routedCity, preInc7 } = await bug974Fixtures();
+  class Mem {
+    constructor() { this.m = new Map(); }
+    getItem(k) { return this.m.has(k) ? this.m.get(k) : null; }
+    setItem(k, v) { this.m.set(k, String(v)); }
+    removeItem(k) { this.m.delete(k); }
+    key(i) { return [...this.m.keys()][i] ?? null; }
+    get length() { return this.m.size; }
+  }
+  const now = new Date();
+  const cases = {
+    a_initial: initialState(),
+    b_routed: routedCity(2 * tw.TRAFFIC_RECOMPUTE_TICKS + 3),
+    d_preInc7: preInc7(routedCity(5)),
+  };
+  for (const [name, s] of Object.entries(cases)) {
+    const st1 = new Mem();
+    rp.persistSavepointForced(st1, rp.createSavepoint(s, [], now, 'test', null));
+    const raw1 = st1.getItem(st1.key(0));
+    const r = rp.restoreFromSavepoint(st1);
+    assert.equal(r.success, true, name + ': setup, the savepoint must restore');
+    const st2 = new Mem();
+    rp.persistSavepointForced(st2, rp.createSavepoint(r.state, [], now, 'test', null));
+    assert.equal(raw1, st2.getItem(st2.key(0)), name + ': savepoint persist/restore/persist is NOT byte-identical');
+    assert.deepEqual(Object.keys(r.state), Object.keys(s), name + ': the restored state key set/order differs from the original');
+  }
+});
+
+/**
+ * ROUND_BUG974_D — the LIVE producer (computeTrafficSnapshot on a real
+ * routed city) and the sanitizer must agree on the key set after
+ * structuredClone, and the live snapshot must survive the JSON/clone key
+ * parity check: an own key valued `undefined` would appear under
+ * structuredClone but vanish under JSON.stringify, which is exactly the
+ * asymmetry that made save/load/save drift.
+ */
+test('ROUND_BUG974_D: live producer and sanitizer agree on keys through structuredClone and JSON', async () => {
+  const { tw, routedCity } = await bug974Fixtures();
+  const produced = routedCity(2 * tw.TRAFFIC_RECOMPUTE_TICKS + 3).trafficSnapshot;
+  assert.ok(produced, 'setup: a cadence tick must have populated trafficSnapshot');
+  const sanitized = tw.sanitizeTrafficSnapshot(JSON.parse(JSON.stringify(produced)));
+  assert.deepEqual(Object.keys(structuredClone(produced)), Object.keys(structuredClone(sanitized)), 'producer and sanitizer clone to different key sets');
+  assert.deepEqual(ROUND_BUG974_EXPECTED_ORDER, [...tw.TRAFFIC_SNAPSHOT_KEY_ORDER], 'the exported order constant drifted from the order this round measured');
+  assert.deepEqual(Object.keys(produced), ROUND_BUG974_EXPECTED_ORDER, 'the live producer key order is off-canon');
+  for (const k of Object.keys(produced)) assert.notEqual(produced[k], undefined, 'the live producer emitted an undefined-valued own key: ' + k);
+  assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(produced))), Object.keys(structuredClone(produced)), 'JSON/structuredClone key parity is broken on the live snapshot');
+});
+
+/**
+ * ROUND_BUG974_E — the THIRD TrafficSnapshot builder the fix did NOT route
+ * through canonicalSnapshot: engine.ts's BUG-949 bootstrap
+ * `{ ...trafficSnapshot, wearSegments: wearSegmentInputsOf(s) }`. It is
+ * order-safe TODAY only because `wearSegments` happens to be LAST in
+ * TRAFFIC_SNAPSHOT_KEY_ORDER, so re-appending it lands it back in its
+ * canonical slot. This pin makes that accident load-bearing and visible: add
+ * an optional field AFTER wearSegments in the order constant without routing
+ * this spread through canonicalSnapshot and this test reds (see the P3
+ * follow-up filed by the round).
+ */
+test('ROUND_BUG974_E: the BUG-949 wearSegments bootstrap spread still yields a canonically-ordered snapshot', async () => {
+  const { reducer, gs, tw, text, routedCity } = await bug974Fixtures();
+  const s = routedCity(2 * tw.TRAFFIC_RECOMPUTE_TICKS + 3);
+  const snapNoWear = { ...s.trafficSnapshot };
+  delete snapNoWear.wearSegments;
+  const bootstrapped = reducer({ ...s, trafficSnapshot: snapNoWear }, { type: 'tick' });
+  assert.ok(bootstrapped.trafficSnapshot.wearSegments, 'setup: the bootstrap must have re-populated wearSegments');
+  assert.deepEqual(Object.keys(bootstrapped.trafficSnapshot), ROUND_BUG974_EXPECTED_ORDER, 'the BUG-949 bootstrap spread produced a non-canonical key order');
+  const t1 = text(bootstrapped);
+  const t2 = text(gs.parseGameSave(t1).save.savepoint.snapshot);
+  assert.equal(t1, t2, 'a state produced by the BUG-949 bootstrap does not round-trip byte-identically');
+});
+
+/**
+ * ROUND_BUG974_F (RECORDED GAP, green as written) — BUG-974's fix closes the
+ * ABSENT-key half of the class (a pre-inc7 save no longer gains keys) but
+ * NOT the PRESENT-but-corrupt half: when the raw save DOES carry a
+ * `trafficSnapshot` key whose value is invalid (null / {} / a number / a
+ * string), the own-key guard passes, sanitizeTrafficSnapshot returns
+ * `undefined`, and the assignment leaves an own key valued `undefined` —
+ * which structuredClone preserves and JSON.stringify drops, so the decoded
+ * state and its own re-serialisation are not deepStrictEqual. Measured, not
+ * theorised. Pinned in the direction it actually behaves so the day the
+ * follow-up lands this test fails loudly and is flipped.
+ */
+test('ROUND_BUG974_F (RECORDED GAP): a present-but-corrupt trafficSnapshot still decodes to an own key valued undefined', async () => {
+  const { rp, routedCity } = await bug974Fixtures();
+  const s = routedCity(5);
+  const plain = JSON.parse(JSON.stringify(s));
+  for (const bad of [null, {}, 7, 'x']) {
+    const raw = JSON.stringify({
+      v: 1, slot: 0, savedAt: new Date().toISOString(), snapshotTick: s.tick,
+      buildVersion: 'v', lineageId: 'l', saveSeq: 1,
+      snapshot: { ...plain, trafficSnapshot: bad }, journalTail: [],
+    });
+    const d = rp.decodeSavepointBytes(raw).snapshot;
+    const label = JSON.stringify(bad);
+    assert.equal(Object.prototype.hasOwnProperty.call(d, 'trafficSnapshot'), true, label + ': the key was present going in, so it stays present');
+    assert.equal(d.trafficSnapshot, undefined, label + ': BUG-974 residual — the corrupt value sanitizes to undefined but the own key survives');
+    const viaClone = structuredClone(d);
+    const viaJson = JSON.parse(JSON.stringify(d));
+    assert.equal(Object.prototype.hasOwnProperty.call(viaClone, 'trafficSnapshot'), true, label + ': structuredClone keeps the undefined-valued key');
+    assert.equal(Object.prototype.hasOwnProperty.call(viaJson, 'trafficSnapshot'), false, label + ': JSON.stringify drops it — the asymmetry this gap records');
+    assert.throws(() => assert.deepStrictEqual(viaClone, viaJson), /deep-equal/, label + ': the clone-side and JSON-side states must currently differ');
+  }
 });

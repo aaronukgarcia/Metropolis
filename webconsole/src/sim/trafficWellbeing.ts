@@ -305,6 +305,70 @@ export interface TrafficSnapshot {
   coverageShareByService: Record<EmergencyService, number | null>;
 }
 
+/**
+ * BUG-974 fix — the ONE canonical key order for every TrafficSnapshot this
+ * codebase ever serializes. Before this fix, computeTrafficSnapshot's own
+ * object literal and sanitizeTrafficSnapshot's `out` object each wrote the
+ * SAME field set in a DIFFERENT order (the literal interleaves
+ * fuelLitresDemanded/vedAnnualGbp/wearSegments among the required fields;
+ * the sanitizer appends them at the end) — same length, same key SET, but
+ * JSON.stringify preserves insertion order, so buildGameSave -> gameSaveText
+ * -> parseGameSave -> gameSaveText produced two different byte strings for
+ * an identical logical snapshot (A4's save/load/save drift). Both
+ * computeTrafficSnapshot and sanitizeTrafficSnapshot now route their result
+ * through canonicalSnapshot() below, so the two can never disagree again.
+ * A structural pin (trafficWellbeing.test.mjs) compares Object.keys() of a
+ * fully-populated snapshot against this exact array so a field added to the
+ * interface without a matching order entry reds immediately.
+ */
+export const TRAFFIC_SNAPSHOT_KEY_ORDER = [
+  'tick',
+  'medianCommuteMinutes',
+  'p90CommuteMinutes',
+  'gridlockShare',
+  'coverageShare',
+  'coverageShareByService',
+  'vOverCBySegment',
+  'safeRoadScore',
+  'integratedTransportScore',
+  'fuelLitresDemanded',
+  'vedAnnualGbp',
+  'wearSegments',
+] as const;
+
+// Compile-time pin (BUG-974): every key of TrafficSnapshot must appear in
+// TRAFFIC_SNAPSHOT_KEY_ORDER above, and vice versa — a field added to the
+// interface without a matching order entry (or an order entry naming a
+// field that no longer exists) fails `tsc --noEmit` right here.
+type _TrafficSnapshotKeyOrderCheck = [keyof TrafficSnapshot] extends [(typeof TRAFFIC_SNAPSHOT_KEY_ORDER)[number]]
+  ? [(typeof TRAFFIC_SNAPSHOT_KEY_ORDER)[number]] extends [keyof TrafficSnapshot]
+    ? true
+    : false
+  : false;
+export const _trafficSnapshotKeyOrderCheck: _TrafficSnapshotKeyOrderCheck = true;
+
+/**
+ * BUG-974 fix — builds a TrafficSnapshot whose own keys are inserted in
+ * EXACTLY TRAFFIC_SNAPSHOT_KEY_ORDER, sourced from `fields`. A field that is
+ * optional on the interface (fuelLitresDemanded/vedAnnualGbp/wearSegments)
+ * is emitted ONLY when `fields` carries it as an OWN key (GR#16: absence is
+ * a real, meaningful state — "this snapshot predates the field" or "the
+ * sanitizer rejected this field" — never fabricated as `undefined`, which
+ * would still add an own key and change JSON.stringify's output). Required
+ * fields are always present on `fields` by construction (every caller below
+ * builds a complete object first), so they always come through.
+ */
+function canonicalSnapshot(fields: TrafficSnapshot): TrafficSnapshot {
+  const out: Record<string, unknown> = {};
+  const src = fields as unknown as Record<string, unknown>;
+  for (const key of TRAFFIC_SNAPSHOT_KEY_ORDER) {
+    if (Object.prototype.hasOwnProperty.call(src, key)) {
+      out[key] = src[key];
+    }
+  }
+  return out as unknown as TrafficSnapshot;
+}
+
 /** Render-path safety clamp (NOT a sourced business constant, GR#15 does not
  * apply — see vOverCBySegment's own doc comment above). */
 const V_OVER_C_RENDER_SAFETY_CAP = 1000;
@@ -481,7 +545,11 @@ export function sanitizeTrafficSnapshot(v: unknown): TrafficSnapshot | undefined
     // (BUG-917(b)) fires on it as designed.
     if (!sawInvalidEntry) out.wearSegments = Object.fromEntries(wearSegmentEntries);
   }
-  return out;
+  // BUG-974 fix: emit in the ONE canonical key order (see
+  // TRAFFIC_SNAPSHOT_KEY_ORDER's own doc comment) so this sanitizer can
+  // never again disagree with computeTrafficSnapshot's literal below on
+  // field ORDER (they already agreed on the field SET).
+  return canonicalSnapshot(out);
 }
 
 /**
@@ -551,8 +619,13 @@ export function computeTrafficSnapshot(
   const vedAnnualGbp = vedAnnualGbpOf(s);
   const wearSegments = wearSegmentInputsOf(s);
 
+  // BUG-974 fix: route through canonicalSnapshot so this literal's field
+  // order (any order is fine here — it only exists in source) can never
+  // again drift from sanitizeTrafficSnapshot's own key order. All fields
+  // below are real own keys of this object (never `undefined`-valued
+  // optionals), so canonicalSnapshot copies every one of them through.
   return {
-    snapshot: {
+    snapshot: canonicalSnapshot({
       tick,
       medianCommuteMinutes: medianMinutes,
       p90CommuteMinutes: p90Minutes,
@@ -565,7 +638,7 @@ export function computeTrafficSnapshot(
       wearSegments,
       safeRoadScore,
       integratedTransportScore,
-    },
+    }),
     gridlockTicksBySegment: ticks,
   };
 }

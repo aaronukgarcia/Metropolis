@@ -232,3 +232,87 @@ test('RED-PROOF: dropping a populated field from the snapshot is caught by the d
   );
   assert.equal(restored.taxRates, undefined, 'field was dropped from the snapshot, so it is undefined post-hydrate');
 });
+
+// ══════════════ BUG-974: trafficSnapshot key-order + present-only decode ══
+
+/**
+ * BUG-974 (b): a routed city (real roads + buildings, so trafficSnapshot is
+ * actually populated with every field — commuteTimeDistributionOf,
+ * gridlockedSegmentsOf, emergencyCoverageOf all have real inputs) advanced
+ * past TWO traffic cadence windows, save -> load -> save, must be
+ * BYTE-IDENTICAL text. Before the BUG-974 fix, computeTrafficSnapshot's
+ * object literal and sanitizeTrafficSnapshot's rebuilt object disagreed on
+ * field ORDER (same length, same key set), so the SECOND buildGameSave (over
+ * the sanitizer-shaped object coming out of parseGameSave) produced
+ * different JSON text than the first even though nothing about the city
+ * changed.
+ */
+test('BUG-974 (b): save/load/save is byte-identical for a routed city with a fully-populated trafficSnapshot', () => {
+  const { state: original, journal } = buildRichState();
+  assert.ok(original.trafficSnapshot, 'setup: buildRichState must have crossed at least one cadence window');
+  assert.ok(original.trafficSnapshot.wearSegments && Object.keys(original.trafficSnapshot.wearSegments).length >= 0, 'setup sanity: wearSegments field present (may legitimately be empty)');
+
+  const build = (state) => buildGameSave({ state, journal, journalTail: [], name: 'n', buildVersion: 'v', now: new Date(0) });
+  const t1 = gameSaveText(build(original));
+  const r1 = parseGameSave(t1).save.savepoint.snapshot;
+  const t2 = gameSaveText(build(r1));
+  assert.equal(t1, t2, 'save/load/save drifted for a routed city with a real trafficSnapshot');
+
+  // Second cadence window: advance further and repeat, so this pin does not
+  // rely on a single lucky snapshot shape.
+  let s2 = r1;
+  for (let i = 0; i < 40; i++) s2 = reducer(s2, { type: 'tick' });
+  const t3 = gameSaveText(build(s2));
+  const r3 = parseGameSave(t3).save.savepoint.snapshot;
+  const t4 = gameSaveText(build(r3));
+  assert.equal(t3, t4, 'save/load/save drifted after a second cadence window');
+});
+
+/**
+ * BUG-974 (c): a HAND-BUILT pre-inc7 save — no `trafficSnapshot` key at all,
+ * no `congestionTicksBySpec`/`roadWearBySegment`/`gridlockTicksBySegment`
+ * keys either (the exact shape a save from before FEAT-2326609800 landed
+ * would have) — must decode with NO new own keys and remain byte-identical
+ * across a save/load/save cycle. Before the fix, decodeSavepointBytes'
+ * unconditional reassignment (used by the restoreFromSavepoint path this
+ * test does not exercise) and gamesave.ts's unconditional spread (the path
+ * this test DOES exercise, via parseGameSave) both added a `trafficSnapshot:
+ * undefined` own key to a snapshot that never had one.
+ */
+test('BUG-974 (c): a hand-built pre-inc7 save (no trafficSnapshot/congestion/wear/gridlock keys) round-trips byte-identical and gains no keys', () => {
+  // initialState() itself already ran one advance() (which computes a
+  // trafficSnapshot on the very first tick — BUG-877(c)), so simulate a
+  // genuinely pre-inc7 SimState the same way the existing A4 `legacy()`
+  // fixture (attack-dynamic-bailout.test.mjs) simulates a pre-backfill one:
+  // delete the fields a save from before FEAT-2326609800 landed never had.
+  const original = { ...initialState() };
+  for (const f of ['trafficSnapshot', 'congestionTicksBySpec', 'roadWearBySegment', 'gridlockTicksBySegment']) delete original[f];
+  assert.equal(Object.prototype.hasOwnProperty.call(original, 'trafficSnapshot'), false, 'setup: fixture must not have a trafficSnapshot key');
+
+  const save = buildGameSave({ state: original, journal: emptyJournal(), journalTail: [], name: 'n', buildVersion: 'v', now: new Date(0) });
+  // Simulate a genuinely pre-inc7 save on disk: strip the four fields from
+  // the persisted JSON entirely (buildGameSave/createSavepoint may still
+  // carry them as absent-but-typed on today's SimState; a REAL legacy file
+  // never had the keys in its JSON at all).
+  const obj = JSON.parse(gameSaveText(save));
+  for (const f of ['trafficSnapshot', 'congestionTicksBySpec', 'roadWearBySegment', 'gridlockTicksBySegment']) {
+    delete obj.savepoint.snapshot[f];
+  }
+  const t1 = JSON.stringify(obj);
+  const preInc7Keys = Object.keys(obj.savepoint.snapshot);
+  assert.ok(!preInc7Keys.includes('trafficSnapshot'), 'setup: pre-inc7 fixture must not have trafficSnapshot in its JSON');
+
+  const parsed = parseGameSave(t1);
+  assert.equal(parsed.ok, true);
+  const decodedKeys = Object.keys(parsed.save.savepoint.snapshot);
+  assert.deepEqual(
+    decodedKeys.filter((k) => !preInc7Keys.includes(k)),
+    [],
+    'BUG-974 (fixed): parseGameSave must invent no new own keys on a pre-inc7 snapshot'
+  );
+
+  const t2 = gameSaveText(buildGameSave({ state: parsed.save.savepoint.snapshot, journal: emptyJournal(), journalTail: [], name: 'n', buildVersion: 'v', now: new Date(0) }));
+  const r2 = parseGameSave(t2).save.savepoint.snapshot;
+  const t3 = gameSaveText(buildGameSave({ state: r2, journal: emptyJournal(), journalTail: [], name: 'n', buildVersion: 'v', now: new Date(0) }));
+  assert.equal(t2, t3, 'BUG-974 (fixed): a pre-inc7 save must round-trip byte-identical after the first load');
+});
