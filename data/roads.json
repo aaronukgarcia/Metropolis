@@ -14,6 +14,14 @@
     { "id": "urban_expressway", "name": "Urban Expressway", "lanes": 4, "speedLimit": 70, "speedMin": 60, "speedMax": 110, "parking": false, "treeVerge": true, "widthCells": 5, "baseCostPounds": 50000 },
     { "id": "motorway", "name": "Motorway", "lanes": 6, "speedLimit": 110, "speedMin": 90, "speedMax": 120, "parking": false, "treeVerge": true, "widthCells": 5, "baseCostPounds": 80000 }
   ],
+  "minBendRadiusTiles": {
+    "$comment": "FEAT-1972079910 inc4 (AC-5, GR#15): the minimum straight-run length, in tile-steps (webconsole/src/sim/roadTracker.ts's legalisePath/isBendLegal definition -- the number of 4-connected steps required on BOTH sides of a 90-degree corner before that corner is legal), keyed by class id. Only the 5 real-world classes data.ts's ROAD_CLASS_ID_OF_TIER resolves the 5 game RoadTier road specs to carry an entry here -- that tier->class binding is a SCHEMA fact (like this file's own 11-class-slug vocabulary note above), not a balance number. PLACEHOLDER-balance (Aaron's pass pending): monotone non-decreasing with tier, never restated as a literal in TS -- webconsole/scripts/sync-traffic-data.mjs must re-run after any edit here so the in-tree mirror stays byte-identical.",
+    "residential_street": 1,
+    "avenue_2_plus_2": 2,
+    "two_lane": 3,
+    "dual_carriageway": 5,
+    "motorway": 8
+  },
   "maintenance": {
     "conditionDecayPerMonth": 0.02,
     "speedPenaltyPerConditionBelow": 0.4,

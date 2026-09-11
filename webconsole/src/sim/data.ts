@@ -50,6 +50,11 @@ import {
 // type-only debugjson.ts, never data.ts — so this import is call-time/
 // module-eval safe and introduces no cycle.
 import { codedError, recordError } from './backend.ts';
+// FEAT-1972079910 inc4 (AC-5, GR#15): the in-tree mirror of data/roads.json
+// (same source webconsole/scripts/sync-traffic-data.mjs keeps byte-identical
+// to the SSOT), read here for minBendRadiusTilesForTier below. Same import
+// pattern as trafficAssignment.ts's rawRoads.
+import rawRoads from './traffic-data/roads.json' with { type: 'json' };
 
 // FEAT-2326609790 (2026-09-05): MAP_W/MAP_H moved to grid.ts (a
 // zero-import leaf) so consolidator.ts/consolidatorGlide.ts can import the
@@ -460,6 +465,59 @@ export const RAIL_BRIDGE_COST_MULTIPLIER = 4;
  * tier-4 dual-carriageway tile — PLACEHOLDER-balance, Aaron's pass pending.
  */
 export const MOTORWAY_JUNCTION_COST = 480000;
+
+/**
+ * Maps the 5 game road-tier spec ids (ROAD_TIER_SPECS above) onto
+ * data/roads.json's 11 real-world class ids, per the doc's own two worked
+ * examples (tier1 'road'->residential_street, tier2 'rd_avenue'-
+ * >avenue_2_plus_2) and cross-checked against trafficAssignment.ts's AC-2
+ * Check fixture ("a single-tile two_lane segment, speedLimit 40 mph") and
+ * AC-4's mutant ("the motorway class, whose alpha 0.12 diverges from the
+ * default 0.15") — both only make sense if tier3 'rd_aroad' resolves to
+ * 'two_lane'.
+ *
+ * MOVED HERE from trafficAssignment.ts (FEAT-1972079910 inc4, GR#3 dedupe):
+ * this module is data.ts's own ROAD_TIER_SPECS's natural home, and
+ * data.ts's minBendRadiusTilesForTier (below) needed the SAME tier->class
+ * binding trafficAssignment.ts already owned — data.ts cannot import
+ * trafficAssignment.ts (trafficAssignment.ts already imports data.ts; that
+ * direction would be a cycle), so the binding moved down to the shared
+ * ancestor instead of being restated as a second literal. trafficAssignment.ts
+ * now imports this export and re-exports it unchanged for its own existing
+ * consumers (parkingFuel.ts, emergencyResponse.ts's test, trafficRewards.ts).
+ */
+export const ROAD_CLASS_ID_OF_TIER: Readonly<Record<number, string>> = Object.freeze({
+  1: 'residential_street',
+  2: 'avenue_2_plus_2',
+  3: 'two_lane',
+  4: 'dual_carriageway',
+  5: 'motorway',
+});
+
+/**
+ * FEAT-1972079910 inc4 (AC-5, GR#15): minimum straight-run length (in
+ * tile-steps — see roadTracker.ts's legalisePath/isBendLegal header comment
+ * for the exact "run" definition) a road tier's bends must respect, read
+ * from data/roads.json's minBendRadiusTiles table (never a hand-typed
+ * literal here). Fails closed with the registered code MET-V960
+ * (RoadBendMinRadiusMissing) when the tier's class has no positive-integer
+ * entry — a missing/invalid table becomes a loud throw, never a silent 0
+ * (which would make every bend "legal" by definition and quietly disable
+ * AC-5 entirely).
+ */
+const MIN_BEND_RADIUS_TILES = (rawRoads as { minBendRadiusTiles?: Record<string, unknown> }).minBendRadiusTiles ?? {};
+
+export function minBendRadiusTilesForTier(tier: RoadTier): number {
+  const classId = ROAD_CLASS_ID_OF_TIER[tier];
+  const v = classId ? MIN_BEND_RADIUS_TILES[classId] : undefined;
+  if (typeof v !== 'number' || !Number.isFinite(v) || !Number.isInteger(v) || v <= 0) {
+    throw codedError(
+      'MET-V960',
+      `data/roads.json minBendRadiusTiles is missing a positive integer entry for road class ${String(classId)} (tier ${tier})`
+    );
+  }
+  return v;
+}
 
 /**
  * Road tier of a spec, or 0 when it is not a drivable road. Reads `roadTier`

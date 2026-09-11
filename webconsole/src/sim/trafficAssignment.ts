@@ -26,6 +26,7 @@ import {
   memoOnState,
   CONGESTION_CONSTANTS,
   sanitizeRoadWearBySegment,
+  ROAD_CLASS_ID_OF_TIER,
   type LineSegment,
 } from './data.ts';
 import {
@@ -451,18 +452,19 @@ export function occupancyForMode(modeId: string): number {
  * ('road'/'rd_avenue') never actually get segmented today, so their mapping
  * below is present for completeness/future extension but not exercised at
  * runtime; see the report's "where the doc is wrong" section).
+ *
+ * MOVED to data.ts (FEAT-1972079910 inc4, GR#3 dedupe): data.ts's new
+ * minBendRadiusTilesForTier needed this same tier->class binding and
+ * data.ts is the lower layer (this module already imports FROM data.ts, so
+ * the reverse import would cycle) — re-exported here unchanged so every
+ * existing consumer of this export (parkingFuel.ts, trafficRewards.ts,
+ * emergencyResponse.ts's test) keeps working without modification.
  */
 // Additively exported (BUG-872, FEAT-2326609797 inc4 rework): emergencyResponse.ts's
 // narrow-class-penalty lookup needed the SAME tier->class mapping this module already owns --
 // GR#3 forbade the near-verbatim local copy that inc4's first build carried, so this table and
 // its lookup function are exported here rather than having a second copy silently diverge.
-export const ROAD_CLASS_ID_OF_TIER: Readonly<Record<number, string>> = Object.freeze({
-  1: 'residential_street',
-  2: 'avenue_2_plus_2',
-  3: 'two_lane',
-  4: 'dual_carriageway',
-  5: 'motorway',
-});
+export { ROAD_CLASS_ID_OF_TIER };
 
 export function roadClassIdOfSegment(seg: LineSegment): string {
   const sp = SPECS[seg.spec];

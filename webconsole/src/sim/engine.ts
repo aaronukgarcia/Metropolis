@@ -51,6 +51,7 @@ import {
   compostRevenueOf,
   RAIL_BRIDGE_COST_MULTIPLIER,
   MOTORWAY_JUNCTION_COST,
+  minBendRadiusTilesForTier,
   residentsCapacity,
   onlineResidentsCapacity,
   totalChildrenCapacity,
@@ -322,6 +323,11 @@ export function ownershipQuotaInflowOf(s: SimState): number {
   return Math.round(COE_ILLUSTRATIVE_PRICE_GBP * registrationRate);
 }
 import { planConnector } from './roadConnect.ts';
+// FEAT-1972079910 inc4 (AC-5): bend-legality check for the placeRoadPath
+// reducer (below) — the tracker preview (MapView.tsx) already legalises the
+// path before dispatch; this is the server-side (reducer) enforcement so the
+// rule holds for EVERY caller, genesis replay included.
+import { isBendLegal } from './roadTracker.ts';
 import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
 import type {
   Building,
@@ -9000,7 +9006,15 @@ export type Action =
   // the drag revisited a cell) is skipped, and placement stops the moment
   // funds run out, same affordability rule as single 'place'.
   | { type: 'placeMany'; spec: string; tiles: { x: number; y: number }[] }
-  | { type: 'placeRoadPath'; spec: string; tiles: { x: number; y: number }[] }
+  // FEAT-1972079910 inc4 (AC-5, R4): `bendLegal` is a REPLAY-COMPATIBILITY
+  // marker, not a claim to trust blindly — when true, the reducer below
+  // enforces bend legality on `tiles` (rejecting the whole path if it
+  // isn't). Every NEW dispatch (MapView.tsx) sets it; a pre-inc4 journal
+  // action (hard-reset replay, an old savepoint's action log) has no such
+  // field, so `bendLegal` reads `undefined` there and the check is SKIPPED —
+  // old actions replay byte-identically rather than being retroactively
+  // rejected by a rule that postdates them.
+  | { type: 'placeRoadPath'; spec: string; tiles: { x: number; y: number }[]; bendLegal?: boolean }
   // FEAT-2326609728 — one-click demand fix: bulk-place demandFixPlan(state)'s
   // count for one service, via the existing single-tile 'place' path.
   | { type: 'resolveDemand'; serviceKey: string }
@@ -9425,6 +9439,17 @@ function walkMix(
   const cappedByUnitLimit = placed === unitCap && placed < itemCount;
   return { state: s2, placed, roadTopologyChange: anyRoadTopologyChange, cappedByUnitLimit, builtMix };
 }
+
+/**
+ * FEAT-1972079910 inc4 (AC-5, MET-V961 RoadBendIllegalPathRejected):
+ * placeRoadPath's bend-legality refusal notice — same plain-constant shape
+ * as ADMINISTRATION_PLACE_BLOCKED_MESSAGE (fiscal.ts): a user-facing
+ * placeNotice string, not a thrown registry error (no data is missing or
+ * malformed here — the PLAYER's mouse path is what's illegal, which is an
+ * ordinary rejected action, same class as "Insufficient funds" below).
+ */
+export const ROAD_BEND_ILLEGAL_MESSAGE =
+  'Road path rejected — a bend is tighter than this road tier\'s minimum radius (MET-V961)';
 
 function reduceCore(
   state: SimState,
@@ -10050,6 +10075,30 @@ function reduceCore(
       // AC-8: road crossing motorway → motorway junction (flat £250k cost)
       // Same-spec overlaps are deduped (no placement, no charge).
       const newRoadTier = roadTierOf(sp);
+
+      // FEAT-1972079910 inc4 (AC-5, MET-V961, R4): enforce bend legality on
+      // the COMMITTED path. Only when the action carries the replay-
+      // compatibility marker `bendLegal: true` (every new dispatch does; a
+      // pre-inc4 journal action does not and skips this check untouched —
+      // see the Action type's doc comment). Whole-path rejection, no partial
+      // placement, funds untouched — mirrors the AC-4 all-or-nothing shape.
+      if (action.bendLegal && newRoadTier > 0) {
+        // BUG-1016: dedupPath (AC-6e, just above) can drop an INTERIOR
+        // repeated tile and leave the remainder non-4-connected; isBendLegal
+        // -> bendRadiiOf -> stepDir would then throw a BARE Error, escaping
+        // the reducer uncaught (GR#1/GR#7). Treat that malformed-path case
+        // as an ordinary bend-legality refusal via the SAME registered
+        // MET-V961 notice, never a thrown exception.
+        let legal: boolean;
+        try {
+          legal = isBendLegal(dedupPath, minBendRadiusTilesForTier(newRoadTier as RoadTier));
+        } catch {
+          legal = false;
+        }
+        if (!legal) {
+          return { ...state, placeNotice: ROAD_BEND_ILLEGAL_MESSAGE };
+        }
+      }
 
       // AC-7b validation: reject entire path if below-dual road would cross rail
       // (level crossings not implemented; whole-path occupied rejection).

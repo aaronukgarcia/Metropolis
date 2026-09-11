@@ -33,13 +33,16 @@ import {
   AUTO_BUILD_DEMAND_PERCENT,
   footprintOf,
   occupiedColumnsOf,
+  minBendRadiusTilesForTier,
+  roadTierOf,
+  type RoadTier,
 } from '../sim/data';
 import { responseMinutesOf, emergencyTargetMinutesOf } from '../sim/emergencyResponse';
 import { demandForecastOf, policyModeShareAdjustmentOf } from '../sim/trafficDemand';
 import { conditionIndexOf } from '../sim/trafficAssignment';
 import { parkingShortfallOf, evChargePointShortfallOf } from '../sim/parkingFuel';
 import { demandTintOf, modeShareTintOf, congestionTintOf, parkingTintOf, fuelEvTintOf, wearTintOf } from '../sim/trafficOverlays';
-import { computePath, type Tile } from '../sim/roadTracker';
+import { computePath, legalisePath, type Tile } from '../sim/roadTracker';
 import { viewportTileRect, visibleBuildingsOf } from '../render/viewportCull';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim } from '../sim/simContext';
@@ -183,6 +186,11 @@ export function MapView() {
     anchorY: number;
     currentPath: Tile[];
     totalCost: number;
+    // FEAT-1972079910 inc4 (AC-5, LEAD RULING v2): true when legalisePath
+    // had to snap the cursor to a reachable endpoint — the preview's ghost
+    // outline (below) tints so the player sees where the road will really
+    // end, no new UI surface.
+    snapped: boolean;
   } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -973,6 +981,19 @@ export function MapView() {
           ctx.fillRect(px + 0.5, py + 0.5, sp.w * geom.s - 1, sp.h * geom.s - 1);
         }
         ctx.globalAlpha = 1;
+        // FEAT-1972079910 inc4 (AC-5, LEAD RULING v2): when legalisePath had
+        // to snap the cursor to a reachable endpoint, outline the ghost's
+        // ACTUAL end tile so the player sees the road will not land where
+        // the mouse is — reuses the same blocked-outline styling used for
+        // ordinary build-mode placement (below), no new UI surface.
+        if (roadTracker.snapped && roadTracker.currentPath.length > 0) {
+          const endTile = roadTracker.currentPath[roadTracker.currentPath.length - 1];
+          const px = geom.ox + endTile.x * geom.s;
+          const py = geom.oy + endTile.y * geom.s;
+          ctx.strokeStyle = '#f2cc60';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(px - 1, py - 1, sp.w * geom.s + 2, sp.h * geom.s + 2);
+        }
       }
     }
 
@@ -1414,6 +1435,7 @@ export function MapView() {
                   anchorY: t.y,
                   currentPath: [{ x: t.x, y: t.y }],
                   totalCost: placementCost(sp),
+                  snapped: false,
                 });
                 e.currentTarget.setPointerCapture(e.pointerId);
                 return;
@@ -1446,8 +1468,29 @@ export function MapView() {
           if (roadTracker) {
             const t = tileFrom(e.clientX, e.clientY);
             if (t) {
-              const path = computePath(roadTracker.anchorX, roadTracker.anchorY, t.x, t.y);
               const sp = SPECS[state.tool.spec!];
+              // FEAT-1972079910 inc4 (AC-5, LEAD RULING v2 after r1 REJECT
+              // BUG-1014/BUG-1015): PLAN a fresh legal staircase straight
+              // from the anchor to the cursor — there is no raw hairpin
+              // mouse path to smooth any more, so nothing to collapse into
+              // one heading and nothing to shrink without revalidating. The
+              // tier's minimum bend radius is read from data/roads.json
+              // (GR#15) via minBendRadiusTilesForTier.
+              let path: Tile[];
+              let snapped = false;
+              if (sp && isRoadSpec(sp)) {
+                const legal = legalisePath(
+                  roadTracker.anchorX,
+                  roadTracker.anchorY,
+                  t.x,
+                  t.y,
+                  minBendRadiusTilesForTier(roadTierOf(sp) as RoadTier)
+                );
+                path = legal.tiles;
+                snapped = legal.snapped;
+              } else {
+                path = computePath(roadTracker.anchorX, roadTracker.anchorY, t.x, t.y);
+              }
               const cost = sp ? placementCost(sp) * path.length : 0;
               setRoadTracker((prev) =>
                 prev
@@ -1455,6 +1498,7 @@ export function MapView() {
                       ...prev,
                       currentPath: path,
                       totalCost: cost,
+                      snapped,
                     }
                   : null
               );
@@ -1507,6 +1551,12 @@ export function MapView() {
                 type: 'placeRoadPath',
                 spec: state.tool.spec,
                 tiles: roadTracker.currentPath,
+                // FEAT-1972079910 inc4 (AC-5): currentPath is already
+                // legalised (onPointerMove above) — bendLegal:true tells the
+                // reducer to ENFORCE bend legality on this action. Old
+                // journal/replay actions predating inc4 lack this field and
+                // replay byte-identically (no retroactive rewrite, R4).
+                bendLegal: true,
               });
             }
             setRoadTracker(null);

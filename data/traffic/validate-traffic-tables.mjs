@@ -431,6 +431,28 @@ function main() {
     }
   }
 
+  // FEAT-1972079910 inc4 (AC-5, GR#15): minBendRadiusTiles must cover exactly the 5 real-world
+  // classes data.ts's ROAD_CLASS_ID_OF_TIER resolves the 5 game RoadTier road specs to -- a
+  // SCHEMA fact (like the 11-class-slug vocabulary already noted in this file's own header
+  // comment), not a balance number, so listing them here is not a hardcoded expected VALUE
+  // (GR#15 governs values, not which classes the tier ladder is schema-defined to use). Every
+  // entry must be a positive integer, and non-decreasing across the tier order.
+  {
+    const TIER_CLASS_ORDER = ['residential_street', 'avenue_2_plus_2', 'two_lane', 'dual_carriageway', 'motorway'];
+    const table = roads.minBendRadiusTiles || {};
+    let prev = 0;
+    for (const classId of TIER_CLASS_ORDER) {
+      const v = table[classId];
+      if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) {
+        warn(`data/roads.json minBendRadiusTiles['${classId}'] must be a positive integer, got ${JSON.stringify(v)}`);
+      } else if (v < prev) {
+        warn(`data/roads.json minBendRadiusTiles['${classId}'] (${v}) is less than an earlier tier's value (${prev}) -- must be non-decreasing`);
+      } else {
+        prev = v;
+      }
+    }
+  }
+
   if (errors.length) {
     console.error(`FAIL: ${errors.length} issue(s):`);
     for (const e of errors) console.error(' -', e);
