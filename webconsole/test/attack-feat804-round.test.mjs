@@ -219,7 +219,8 @@ test('round: no module under webconsole/src consumes the three new exports (AC-8
   const walk = (dir) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
-      if (e.isDirectory()) walk(p);
+      // Lead fix after the bounded gate (2026-09-11): webconsole/src/generated/ holds the build-time version stamp, whose changelog embeds the last 100 commit SUBJECTS - once FEAT-2326609804's commit is in history its subject names the exports and this pin false-positives on every built tree (CI builds the stamp before node-test). Generated output is not a consumer.
+      if (e.isDirectory()) { if (e.name === 'generated') continue; walk(p); }
       else if (/\.tsx?$/.test(e.name)) files.push(p);
     }
   };
