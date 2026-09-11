@@ -153,6 +153,14 @@ jobs:
         with:
           version: v2.5.0
 
+      # units-lint (BUG-983, FEAT-2326609803): despite the /units-lint skill
+      # and CLAUDE.md both having claimed this ran in CI since 2026-08-22, it
+      # never did — nothing in this workflow ever invoked it. Node ships
+      # preinstalled on the windows-latest runner image (no npm install: the
+      # script only touches fs/path, no third-party deps).
+      - name: units-lint
+        run: node tools/plan/units-lint.js
+
   # --- Node test suite (BUG-200, P1, mkey foundation.repo) ---------------
   # Before this job, ci.yml ran zero `node --test` — every claude-*.js
   # guard/tooling script and tools/plan's tests (731 tests as of this

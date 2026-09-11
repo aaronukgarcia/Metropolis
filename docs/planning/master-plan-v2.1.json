@@ -584,8 +584,16 @@
       "name": "passenger-car units per lane per hour",
       "symbol": "pcu/ln/h",
       "dimension": "count",
-      "definedAt": "data/traffic/link_capacity.json:6",
-      "note": "FEAT-2326609792 inc0: HCM link-capacity convention keyed to data/roads.json class ids; data/traffic.json capacityPerLanePerHour is the engine.traffic BPR default in the same unit."
+      "definedAt": "data/traffic/link_capacity.json:7",
+      "note": "FEAT-2326609792 inc0: HCM link-capacity convention keyed to data/roads.json class ids; data/traffic.json capacityPerLanePerHour is the engine.traffic BPR default in the same unit. definedAt repointed to the unitsConvention line (:7, was :6's comment field) by FEAT-2326609803. BUG-905 (inc8 r1, webconsole/src/sim/trafficDemand.ts busPriorityCapacityDeltaOf): this figure was subtracted directly from a sum of count.person-tick-tile (LineUsage.capacity / ROAD_TIER_CAPACITY) — an incommensurable-units bug the two tables' near-equal magnitudes (1800/1700 vs. 250) masked. The fix (r4 ACCEPT row 7627) made busPriority's reallocation a dimensionless fraction of BUS_LANE_SPEC's own capacity instead; this unit is registered (plus count.person-tick-tile) and both tokens are in units-lint's detector vocabulary with a UNITS-LINT-003 mixing check so the same class of arithmetic is caught mechanically, not just by round."
+    },
+    {
+      "key": "count.person-tick-tile",
+      "name": "people (or vehicles) per simulation tick per road tile",
+      "symbol": "ppl/tick/tile",
+      "dimension": "count",
+      "definedAt": "webconsole/src/sim/data.ts:436",
+      "note": "FEAT-2326609803 (BUG-905 follow-up): the webconsole traffic model's per-tile throughput unit — ROAD_TIER_CAPACITY (data.ts:436, vehicles/tick per tile by RoadTier) and LineUsage.capacity (data.ts:3125, ROAD_TIER_CAPACITY x tiles, consumed by trafficDemand.ts's busPriorityCapacityDeltaOf/InfoOf and lineUsageOf). NOT the same unit as count.pcu-lane-hour (passenger-car-units per LANE per HOUR, an HCM highway-capacity convention with a different denominator entirely) despite both being loosely called 'capacity' in code and both landing in the low hundreds-to-low-thousands range — BUG-905 was exactly this pair subtracted from each other with no conversion. No registered scale/baseUnit conversion exists between the two units (deliberately: PLACEHOLDER-balance per data.ts:420-421, Aaron's row-by-row pass pending); code MUST NOT combine a count.pcu-lane-hour figure with a count.person-tick-tile figure via +/- without first converting through a sourced factor (peak-hour factor and lanes-per-tile both exist in the inc0/inc3 tables per BUG-905's own remediation note)."
     },
     {
       "key": "count.train-hour",

@@ -9,8 +9,12 @@
 ## Executive summary
 
 The code base is in unusually good shape for its size. The mechanical gates that exist
-(determinism gate, AST copy-guard, error-source scan, depguard UI/engine split, perf ratchet,
-units-lint) genuinely run in CI and are argued in-line in the code. The systemic risks found
+(determinism gate, AST copy-guard, error-source scan, depguard UI/engine split, perf ratchet)
+genuinely run in CI and are argued in-line in the code. **Correction (BUG-983, 2026-09-11):**
+units-lint was NOT one of these — despite this doc's original claim (and CLAUDE.md's), nothing
+in `.github/workflows/ci.yml` ever invoked `tools/plan/units-lint.js` before FEAT-2326609803's
+rework wired it into the `lint` job; it previously ran only via local discipline (`/units-lint`).
+The systemic risks found
 are almost all of one shape: **they live where the mechanical gates don't look** — the
 determinism gate never runs against the composed engine, two packages paint error codes in a
 form the scanner regex can't see, and six scripts in the commit/push path have zero tests.
