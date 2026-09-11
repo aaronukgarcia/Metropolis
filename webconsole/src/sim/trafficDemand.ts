@@ -34,6 +34,8 @@ import {
   lineUsageOf,
   lineSegmentIndexOf,
   memoOnState,
+  ROAD_TIER_CAPACITY,
+  ROAD_TIER_SPECS,
   type LineUsage,
 } from './data.ts';
 // BUG-851: the registry error path (GR#7/GR#17) — mirrors engine.ts's own
@@ -58,6 +60,19 @@ import rawVehicleClasses from './traffic-data/vehicle_classes.json' with { type:
 // engine defaults file at data/traffic.json, NOT the data/traffic/ inc0
 // research-table directory imported above.
 import rawTrafficConfig from './traffic-data/traffic.json' with { type: 'json' };
+// FEAT-2326609801 inc8 (AC-2/AC-4/AC-5/AC-6, GR#15): the congestion-policy
+// elasticity ranges (policy_levers.json) and the money-side rates
+// (taxation.json's ERP peak charge + COE quota price/growth rate) — both
+// committed inc0 tables, both already mirrored under traffic-data/ by
+// sync-traffic-data.mjs's plain readdir of data/traffic/ (no extras-list
+// edit needed). link_capacity.json's roadClasses (avenue_2_plus_2 /
+// bus_lane_variant capacityPcuPerLanePerHour) for the busPriority capacity
+// reallocation (AC-4) — same table trafficAssignment.ts already reads, read
+// again here rather than duplicated/hand-typed (GR#3: one table, no second
+// copy of its VALUES; `linkCapacityRow` itself is a private, unexported
+// helper in that module so a second minimal reader here is the only route).
+import rawPolicyLevers from './traffic-data/policy_levers.json' with { type: 'json' };
+import rawLinkCapacity from './traffic-data/link_capacity.json' with { type: 'json' };
 
 // --- Registry error codes (GR#7) -------------------------------------------
 // Minted via `node tools/plan/add-error.js add MET-Vnnn --mkey ui.webconsole
@@ -71,6 +86,19 @@ export const ERR_VEHICLE_CLASS_MISSING = 'MET-V901'; // DemandForecastVehicleCla
 export const ERR_LADDER_FIELD_MISSING = 'MET-V902'; // DemandForecastLadderFieldMissing
 export const ERR_TRAFFIC_CONFIG_MISSING = 'MET-V903'; // DemandForecastTrafficConfigMissing (BUG-847)
 export const ERR_POPULATION_INVALID = 'MET-V912'; // DemandForecastPopulationInvalid (BUG-850)
+// FEAT-2326609801 inc8: block V1000-V1099 claimed on this lane (the doc's
+// pre-assigned V940-V944 was already stale at build time — `claim-range
+// ui.webconsole` found V1000-V1099 as the actual lowest free block; see the
+// BOW comment for the disclosed deviation).
+export const ERR_POLICY_LEVER_EFFECT_INVALID = 'MET-V1000'; // PolicyLeverEffectInvalid
+// MET-V1001 (TaxationFieldInvalid) is used by fiscal.ts, not this file — see
+// that module's own AC-5/AC-6 money-reading section.
+export const ERR_LINK_CAPACITY_ROAD_CLASS_MISSING = 'MET-V1002'; // LinkCapacityRoadClassMissing
+// BUG-921 (round 3 REJECT): the totalDrivableCap>0 guard in forecastLineUsage
+// is now structurally unreachable with roads present (see
+// busPriorityCapacityInfoOf's BUS_LANE_MAX_SHARE_OF_CLASS clamp) — this code
+// is the fail-closed guard for that branch, never expected to fire.
+export const ERR_ROAD_CAPACITY_DENOMINATOR_ZERO = 'MET-V1003'; // RoadCapacityDenominatorZeroWithRoadsPresent
 
 function registryError(code: string, message: string): Error {
   return new Error(`${code}: ${message}`);
@@ -266,6 +294,382 @@ export function modeShareOf(point: LadderPoint): Record<string, number> {
   return out;
 }
 
+// --- FEAT-2326609801 inc8: congestion policy levers -------------------------
+// docs/planning/acceptance/FEAT-2326609792-inc8.md AC-2/AC-4/AC-5/AC-6.
+
+interface PolicyLever {
+  id: string;
+  expectedEffect: Record<string, unknown>;
+}
+interface PolicyLeversTable {
+  levers: PolicyLever[];
+}
+const policyLevers = rawPolicyLevers as unknown as PolicyLeversTable;
+
+/** GR#15: read a lever's [min,max] expectedEffect range straight out of
+ * policy_levers.json — never a hand-typed literal. Fails loud (module-load
+ * time, below) rather than silently degrading to NaN. */
+// A lever's expectedEffect range is a [min, max] pair - its arity, not a
+// magnitude (the magnitudes come from policy_levers.json).
+const LEVER_EFFECT_RANGE_ARITY = 2;
+function leverEffectRange(leverId: string, effectKey: string): readonly [number, number] {
+  const lever = policyLevers.levers.find((l) => l.id === leverId);
+  const v = lever?.expectedEffect[effectKey];
+  if (
+    !Array.isArray(v) ||
+    v.length !== LEVER_EFFECT_RANGE_ARITY ||
+    typeof v[0] !== 'number' ||
+    typeof v[1] !== 'number' ||
+    !Number.isFinite(v[0]) ||
+    !Number.isFinite(v[1])
+  ) {
+    throw registryError(
+      ERR_POLICY_LEVER_EFFECT_INVALID,
+      `data/traffic/policy_levers.json lever "${leverId}" is missing a valid [min,max] expectedEffect.${effectKey} range, got ${JSON.stringify(v)}`,
+    );
+  }
+  return [v[0], v[1]];
+}
+
+function midpointOf(range: readonly [number, number]): number {
+  return (range[0] + range[1]) / 2;
+}
+
+/**
+ * ASM-A (§4): the midpoint of policy_levers.json's own [min,max] elasticity
+ * range is the single deterministic figure (GR#21 — never re-rolled, never
+ * averaged with anything else). Percentage-point figures are divided by 100
+ * to become plain mode-share fractions; the road-pricing figure stays a
+ * fraction of the CURRENT car share (a multiplicative move, AC-2).
+ */
+const OWNERSHIP_QUOTA_CAR_SHARE_REDUCTION_FRACTION =
+  midpointOf(leverEffectRange('coe_ownership_quota', 'carModeShareReductionPercentagePoints')) / 100;
+const ROAD_PRICING_VOLUME_REDUCTION_FRACTION =
+  midpointOf(leverEffectRange('erp_road_pricing', 'peakPeriodVolumeReductionPercent')) / 100;
+const INTEGRATED_TICKETING_TRANSIT_GAIN_FRACTION =
+  midpointOf(leverEffectRange('integrated_transit_singapore_style', 'publicTransportModeShareGain')) / 100;
+
+/** AC-2's fixed public-transport target set (ownershipQuota/integratedTicketing
+ * gains land here, proportional to each mode's OWN pre-move share) and the
+ * car-adjacent source set (integratedTicketing draws from here). */
+const PUBLIC_TRANSPORT_MODE_IDS: readonly string[] = ['bus', 'heavy_rail', 'hs_rail'];
+const CAR_ADJACENT_MODE_IDS: readonly string[] = ['car', 'motorbike', 'taxi'];
+
+/**
+ * Moves `amount` of mode-share mass out of `fromModes` (proportional to each
+ * mode's OWN current share of the from-set total, clamped so a from-set with
+ * insufficient mass never goes negative) and into `toModes` (proportional to
+ * each mode's own PRE-MOVE share of the to-set total — the two sets are
+ * always disjoint by construction here, so "pre-move" is unambiguous; an
+ * empty/zero to-set falls back to an even split so mass is never dropped).
+ * Mutates `vector` in place — private to policyModeShareAdjustmentOf, which
+ * always operates on its own fresh clone (never the memoised modeShareOf
+ * result).
+ */
+function moveShare(
+  vector: Record<string, number>,
+  amount: number,
+  fromModes: readonly string[],
+  toModes: readonly string[],
+): void {
+  if (amount <= 0) return;
+  let fromTotal = 0;
+  for (const m of fromModes) fromTotal += vector[m] ?? 0;
+  if (fromTotal <= 0) return;
+  const actual = Math.min(amount, fromTotal);
+  for (const m of fromModes) {
+    vector[m] = (vector[m] ?? 0) - actual * ((vector[m] ?? 0) / fromTotal);
+  }
+  let toTotal = 0;
+  for (const m of toModes) toTotal += vector[m] ?? 0;
+  if (toTotal > 0) {
+    for (const m of toModes) {
+      vector[m] = (vector[m] ?? 0) + actual * ((vector[m] ?? 0) / toTotal);
+    }
+  } else if (toModes.length > 0) {
+    const even = actual / toModes.length;
+    for (const m of toModes) vector[m] = (vector[m] ?? 0) + even;
+  }
+}
+
+// Test-only direct access to the composition primitive (mirrors this file's
+// existing __xForTest instrumentation idiom, e.g. __getBfsOpCounterForTest)
+// — lets the AC-2 test exercise the doc's exact literal worked-example
+// fixture without needing a real ladder rung that happens to carry those
+// numbers.
+export function __moveShareForTest(
+  vector: Record<string, number>,
+  amount: number,
+  fromModes: readonly string[],
+  toModes: readonly string[],
+): void {
+  moveShare(vector, amount, fromModes, toModes);
+}
+
+/**
+ * policyModeShareAdjustmentOf (AC-2) — starts from modeShareOf(ladderPointOf(s))
+ * (inc2's per-rung split, untouched — a fresh object every call, never
+ * mutating the memoised source) and applies each ACTIVE policy's move in a
+ * FIXED order (ownershipQuota -> roadPricing -> integratedTicketing,
+ * regardless of toggle order) so composition is deterministic (GR#21).
+ * `busPriority` never appears here — it is a capacity effect, not a
+ * demand-share effect (AC-4).
+ *
+ * AC-3's identity requirement (every policy off -> byte-identical to
+ * modeShareOf's own output): every policy branch below is skipped when
+ * that policy is off, so the all-off path returns the fresh clone
+ * untouched — byte-identical to modeShareOf(point) by construction.
+ *
+ * BUG-907 (P3, confirmed independent finding): a final renormalisation
+ * block used to run here whenever at least one policy fired. It was DEAD
+ * CODE — moveShare conserves mass by construction (it subtracts `actual`
+ * from the from-set and adds the SAME `actual` to the to-set, with an
+ * even-split fallback so nothing is ever dropped), so the vector already
+ * summed to exactly 1 and dividing by 1.0 is an IEEE-754 identity. Removing
+ * the block left the trafficPolicies suite and the round's attack suite
+ * fully green (mutant M1 in the doc's AC-2 Check is an EQUIVALENT mutant,
+ * not a live one) — the AC-2 sum-to-1 pin below (which asserts the real
+ * proportional-distribution guarantee moveShare provides) is unchanged.
+ */
+export const policyModeShareAdjustmentOf: (s: SimState) => Record<string, number> = memoOnState((s) => {
+  const point = ladderPointOf(s);
+  const vector = { ...modeShareOf(point) };
+
+  if (s.policies.ownershipQuota) {
+    moveShare(vector, OWNERSHIP_QUOTA_CAR_SHARE_REDUCTION_FRACTION, ['car'], PUBLIC_TRANSPORT_MODE_IDS);
+  }
+  if (s.policies.roadPricing) {
+    const amount = (vector['car'] ?? 0) * ROAD_PRICING_VOLUME_REDUCTION_FRACTION;
+    moveShare(vector, amount, ['car'], PUBLIC_TRANSPORT_MODE_IDS);
+  }
+  if (s.policies.integratedTicketing) {
+    moveShare(vector, INTEGRATED_TICKETING_TRANSIT_GAIN_FRACTION, CAR_ADJACENT_MODE_IDS, PUBLIC_TRANSPORT_MODE_IDS);
+  }
+
+  return vector;
+});
+
+// --- FEAT-2326609801 inc8 (AC-4): busPriority capacity reallocation --------
+
+interface RoadClassCapacityRow {
+  roadClassId: string;
+  capacityPcuPerLanePerHour: number;
+}
+interface LinkCapacityTable {
+  roadClasses: RoadClassCapacityRow[];
+  busPriority?: { busLaneMaxShareOfClass?: number };
+}
+const linkCapacity = rawLinkCapacity as unknown as LinkCapacityTable;
+const roadCapacityById = new Map<string, RoadClassCapacityRow>(
+  linkCapacity.roadClasses.map((r) => [r.roadClassId, r]),
+);
+function linkCapacityPerLane(roadClassId: string): number {
+  const row = roadCapacityById.get(roadClassId);
+  if (!row) {
+    throw registryError(
+      ERR_LINK_CAPACITY_ROAD_CLASS_MISSING,
+      `data/traffic/link_capacity.json roadClasses has no entry for road class "${roadClassId}"`,
+    );
+  }
+  return row.capacityPcuPerLanePerHour;
+}
+
+/**
+ * BUG-921 (round 3 REJECT) fix: busLaneMaxShareOfClass — a NEW data-sourced
+ * placeholder field (data/traffic/link_capacity.json's busPriority block,
+ * 0.5, source-noted as a balance-regime directional placeholder) that bounds
+ * how much of BUS_LANE_SPEC's own raw capacity busPriority is allowed to
+ * reallocate. Round 3 found that without this bound, a single-road-class
+ * city (only rd_avenue tiles online) could have its ENTIRE road capacity
+ * clamped to 0 by the delta, driving forecastLineUsage's
+ * `totalDrivableCap > 0 ? ... : 0` branch and silently annihilating up to
+ * 80% of trips (BUG-921) in a shape that is FIXTURE-DEPENDENT, not
+ * structural, and that the round-3 author suite's own inline "conserved at
+ * the clamp boundary" comment did not reproduce (an integrity finding —
+ * fixed here by making the claim true rather than repeating an unverified
+ * one). Fail-closed (GR#7/GR#15): read once at load time, never a hand-typed
+ * TS literal.
+ */
+function readBusLaneMaxShareOfClass(): number {
+  const v = linkCapacity.busPriority?.busLaneMaxShareOfClass;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 1) {
+    throw registryError(
+      ERR_LINK_CAPACITY_ROAD_CLASS_MISSING,
+      `data/traffic/link_capacity.json busPriority.busLaneMaxShareOfClass is missing or not a finite value in (0,1] (got ${v})`,
+    );
+  }
+  return v;
+}
+const BUS_LANE_MAX_SHARE_OF_CLASS = readBusLaneMaxShareOfClass();
+
+/**
+ * AVENUE_ROAD_TIER — the road tier (data.ts's RoadTier) `rd_avenue` sits at.
+ * BUG-918/BUG-919 (round 2): matching by TIER is wrong — rd_roundabout is
+ * ALSO roadTier 2 (`Object.keys(SPECS).filter(k =>
+ * roadTierOf(SPECS[k])===2) === ['rd_avenue','rd_roundabout']`), so tier
+ * matching silently swept up auto-placed roundabout tiles. BUS_LANE_SPEC
+ * below is the fix: the bus-lane-eligible class is identified by its SPEC
+ * id (ROAD_TIER_SPECS[AVENUE_ROAD_TIER] — still data-sourced, GR#15, never
+ * a hand-typed literal), so exactly one class is ever affected no matter
+ * how many other tier-2 (or any-tier) specs the catalogue grows to hold.
+ */
+const AVENUE_ROAD_TIER = 2;
+
+/**
+ * busLaneSpec() (BUG-918/919 fix) — the ONE spec that carries bus lanes per
+ * roads.json/ASM-C ("a specific road repainted with bus lanes"): `rd_avenue`,
+ * read as ROAD_TIER_SPECS[AVENUE_ROAD_TIER] so it stays data-derived. Every
+ * other spec — including rd_roundabout, a junction tile you cannot repaint
+ * with a bus lane — is untouched by busPriority, regardless of its road tier.
+ *
+ * A FUNCTION, not a module-scope `const`: trafficDemand.ts sits in a
+ * circular-import cycle with data.ts (data.ts imports fiscal.ts, which this
+ * file's neighbours touch), and some import orderings evaluate this file's
+ * top-level statements before data.ts has finished initialising its own
+ * exports — a bare `const BUS_LANE_SPEC = ROAD_TIER_SPECS[...]` at module
+ * scope hit exactly that TDZ ("Cannot access 'ROAD_TIER_SPECS' before
+ * initialization") in trafficAssignment.test.mjs's import chain, even though
+ * the identical statement was safe in trafficPolicies.test.mjs's. Deferring
+ * the lookup into a function call (invoked only from inside memoOnState
+ * bodies, never at module-eval time) sidesteps the ordering hazard entirely.
+ */
+function busLaneSpec(): string {
+  return ROAD_TIER_SPECS[AVENUE_ROAD_TIER];
+}
+
+/**
+ * BusPriorityCapacityInfo / busPriorityCapacityInfoOf (BUG-918/BUG-921 fix)
+ * — the capacity-delta read-out PLUS a clamp report. Round 2 found a silent
+ * `Math.max(0, capacity - delta)` that swallowed a delta larger than the
+ * whole avenue class's capacity with no read-out anywhere ("clamp
+ * amplifier", A8d). Round 3 (BUG-921) then found the clamp ceiling itself
+ * was wrong: clamping to the class's FULL raw capacity still allows delta ==
+ * capacity, which drives that class's adjusted capacity to exactly zero and,
+ * in a single-road-class city, the whole road-capacity denominator to zero —
+ * annihilating up to 80% of trips through forecastLineUsage's (now
+ * fail-closed, see ERR_ROAD_CAPACITY_DENOMINATOR_ZERO) zero-denominator
+ * guard. The clamp ceiling is now `BUS_LANE_MAX_SHARE_OF_CLASS` (a NEW
+ * data-sourced placeholder, link_capacity.json's busPriority block, 0.5) OF
+ * the class's own raw capacity — never the full raw capacity — so the class
+ * always keeps AT LEAST half its capacity and the denominator can never
+ * reach zero while any road tile of any class exists. `clamped` is true
+ * whenever the fraction x tile-count arithmetic would have exceeded that
+ * ceiling, `requested` is the unclamped figure, `delta` is what actually
+ * gets applied. Note: with the SHIPPED capacity table (laneShareFraction
+ * ~0.0556, well under the 0.5 ceiling) `delta === requested` still holds for
+ * every currently-shipped data file — the clamp exists for a future/mis-
+ * tuned data file, not today's numbers (mirrors the `jobsCapTotal > 0`
+ * defensive-guard pattern elsewhere in this file); BUG-922's test pins the
+ * clamp path via a scratch-mirror data mutation that forces it to bind.
+ */
+export interface BusPriorityCapacityInfo {
+  /** Capacity actually reallocated — clamped to BUS_LANE_SPEC's own raw capacity, never negative. */
+  delta: number;
+  /** The unclamped fraction x tile-count figure the policy asked for. */
+  requested: number;
+  /** True when `requested` exceeded BUS_LANE_SPEC's own capacity and `delta` was clamped down to it. */
+  clamped: boolean;
+}
+
+/**
+ * busPriorityCapacityInfoOf (AC-4/ASM-C, BUG-905/918/919 fix) — the capacity
+ * moved OUT of general road capacity and INTO the bus line class, plus the
+ * clamp read-out (see BusPriorityCapacityInfo doc above).
+ *
+ * BUG-905: the ORIGINAL implementation subtracted a raw
+ * pcu-per-lane-per-hour figure (link_capacity.json) directly from a sum of
+ * LineUsage.capacity, which is ROAD_TIER_CAPACITY — people/vehicles per
+ * TICK per TILE (data.ts). Those two units are not commensurable; the
+ * subtraction only "worked" because the pcu figure happened to be smaller.
+ * Fixed direction (lead ruling, BUG-905): the bus-lane effect is a
+ * DIMENSIONLESS FRACTION — delta/rowCapacity from link_capacity.json (e.g.
+ * 100/1800 for the avenue row) — applied to the avenue tier's OWN
+ * ROAD_TIER_CAPACITY figure. No pcu-vs-people arithmetic ever happens, and a
+ * balance retune of ROAD_TIER_CAPACITY scales this policy's strength with
+ * it rather than drifting independently of it.
+ *
+ * Tile count is spec-counted from `s.buildings` by SPEC id (BUS_LANE_SPEC,
+ * BUG-919 fix) — never by road tier and never a hand-typed spec-id list.
+ * Zero when the policy is off, or when no avenue tiles are online yet.
+ *
+ * Clamp target (BUG-918): BUS_LANE_SPEC's own RAW capacity is read from
+ * `lineUsageOf(s)` — the SAME figure `adjustedRoadCapacitiesOf` below
+ * subtracts `delta` from — never a second, independently-counted tile-times-
+ * per-tile-capacity figure (that second copy is exactly how BUG-918's
+ * numerator/denominator drifted apart in round 2).
+ */
+// BUG-922 (round 3 REJECT) test-only seam: the shipped capacity table keeps
+// laneShareFraction structurally < BUS_LANE_MAX_SHARE_OF_CLASS (~0.0556 vs
+// 0.5), so the clamp branch below has NO executable coverage from real data
+// alone (documented, not a defect — mirrors demandForecastOf's own
+// jobsCapTotal > 0 equivalent-guard note). BUG-922's fix (per the lead's r4
+// ruling, "an injectable capacity table / a test-only seam") is this
+// override: a test sets it to force the clamp to bind, asserts `clamped` and
+// the conserved total, then MUST reset it to `null` (real data) afterwards —
+// never used by any production code path (mirrors __moveShareForTest's
+// existing test-only-instrumentation idiom in this same file).
+let __busLaneShareFractionOverrideForTest: number | null = null;
+export function __setBusLaneShareFractionOverrideForTest(v: number | null): void {
+  __busLaneShareFractionOverrideForTest = v;
+}
+
+export const busPriorityCapacityInfoOf: (s: SimState) => BusPriorityCapacityInfo = memoOnState((s) => {
+  if (!s.policies.busPriority) return { delta: 0, requested: 0, clamped: false };
+  const avenueCapPerLane = linkCapacityPerLane('avenue_2_plus_2');
+  const busLaneCapPerLane = linkCapacityPerLane('bus_lane_variant');
+  const laneShareFraction =
+    __busLaneShareFractionOverrideForTest !== null
+      ? __busLaneShareFractionOverrideForTest
+      : avenueCapPerLane > 0
+        ? (avenueCapPerLane - busLaneCapPerLane) / avenueCapPerLane
+        : 0;
+  const avenuePerTileCapacity = ROAD_TIER_CAPACITY[AVENUE_ROAD_TIER];
+  let onlineAvenueTileCount = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    if (b.spec === busLaneSpec()) onlineAvenueTileCount++;
+  }
+  const requested = laneShareFraction * avenuePerTileCapacity * onlineAvenueTileCount;
+  const avenueRawCapacity = lineUsageOf(s).find((u) => u.spec === busLaneSpec())?.capacity ?? 0;
+  // BUG-921 (round 3 REJECT) fix: the clamp ceiling is BUS_LANE_MAX_SHARE_OF_CLASS
+  // (0.5, data-sourced) OF the class's own raw capacity, never the class's
+  // FULL raw capacity — a bus-lane repaint can take at most half of a road
+  // class's throughput, so adjustedRoadCapacitiesOf below can never drive
+  // BUS_LANE_SPEC's own adjusted capacity to zero while any BUS_LANE_SPEC
+  // tile is online, and forecastTotalDrivableCapacityOf's denominator can
+  // never reach zero while ANY road tile (of any class) exists.
+  const clampCeiling = avenueRawCapacity * BUS_LANE_MAX_SHARE_OF_CLASS;
+  const delta = Math.max(0, Math.min(requested, clampCeiling));
+  return { delta, requested, clamped: delta < requested };
+});
+
+/** Back-compat numeric read-out — the figure every existing caller/test uses. */
+export const busPriorityCapacityDeltaOf: (s: SimState) => number = memoOnState(
+  (s) => busPriorityCapacityInfoOf(s).delta,
+);
+
+/**
+ * adjustedRoadCapacitiesOf (BUG-918 structural fix) — the per-road-class
+ * capacity AFTER busPriority's reallocation, computed EXACTLY ONCE so
+ * forecastLineUsage's apportionment numerator and
+ * forecastTotalDrivableCapacityOf's denominator can never diverge again
+ * (GR#3 — round 2's defect was precisely two independent copies of "total
+ * capacity minus delta" that drifted the moment only one was edited).
+ * `forecastLineUsage` and `forecastTotalDrivableCapacityOf` both read THIS
+ * map rather than re-deriving their own adjusted figure. Only BUS_LANE_SPEC
+ * loses capacity; every other road class (rd_roundabout included) keeps its
+ * full, unadjusted `LineUsage.capacity`.
+ */
+export const adjustedRoadCapacitiesOf: (s: SimState) => Map<string, number> = memoOnState((s) => {
+  const delta = busPriorityCapacityInfoOf(s).delta;
+  const out = new Map<string, number>();
+  for (const u of lineUsageOf(s)) {
+    if (u.kind !== 'road') continue;
+    out.set(u.spec, u.spec === busLaneSpec() ? Math.max(0, u.capacity - delta) : u.capacity);
+  }
+  return out;
+});
+
 /** AC-3 — blended weighted-average road-freight-vehicle capacity (tonnes),
  * weighted by the CITY's current rung's freightTonnesByVehicleClass shares
  * (itself trip_generation.json-rollup-derived — see scale_ladder.json's
@@ -434,6 +838,19 @@ export const demandForecastOf: (s: SimState) => TileDemand[] = memoOnState((s) =
   return out;
 });
 
+/**
+ * totalPersonTripsOf (FEAT-2326609801 inc8, AC-5) — the SAME per-tick total
+ * person-trips figure forecastLineUsage sums from demandForecastOf(s) —
+ * exported standalone (memoOnState, one shared source, GR#3) so
+ * roadPricingInflowOf can read it rather than re-deriving a second copy of
+ * the same sum.
+ */
+export const totalPersonTripsOf: (s: SimState) => number = memoOnState((s) => {
+  let total = 0;
+  for (const t of demandForecastOf(s)) total += t.personTrips;
+  return total;
+});
+
 // --- AC-4: per-line-class demand, PARALLEL to lineUsageOf (D1) -------------
 
 export interface ForecastLineUsage {
@@ -443,12 +860,31 @@ export interface ForecastLineUsage {
   legacyUsage: number;
   /** |demand - legacyUsage| / max(1, legacyUsage) — the D1 divergence indicator. */
   divergenceRatio: number;
+  /**
+   * FEAT-2326609801 inc8 (AC-4): present only for the synthetic 'bus' entry
+   * this increment adds when `busPriority` is active — the capacity
+   * reallocated OUT of `totalDrivableCap` and INTO this bus-lane figure.
+   * Absent (undefined) for every road/rail spec entry and whenever
+   * `busPriority` is off, so the AC-3 golden-fixture no-op check (every
+   * pre-inc8 entry byte-identical with every policy off) is unaffected.
+   */
+  capacity?: number;
 }
 
-/** Person-trip mode ids that use the ROAD network (GR#15: read from the
- * ladder's own modeShare keys, this list just selects WHICH keys are
- * road-using — walk/bicycle are non-vehicular and excluded). */
-const ROAD_PERSON_MODE_IDS: readonly string[] = ['car', 'motorbike', 'taxi', 'bus'];
+/** Person-trip mode ids that use the GENERAL road network (GR#15: read from
+ * the ladder's own modeShare keys, this list just selects WHICH keys are
+ * road-using — walk/bicycle are non-vehicular and excluded).
+ *
+ * BUG-904 fix: 'bus' is deliberately NOT a member of this list any more.
+ * When busPriority is active, bus person-trips ride the dedicated
+ * synthetic 'bus' line-class entry (below) and leave the general-road
+ * demand basis entirely — folding them in here as well as onto their own
+ * entry would double-count the same trips. When busPriority is inactive
+ * there is no dedicated bus infrastructure, so BUS_MODE_ID's share is
+ * folded back into the general-road figure explicitly in
+ * forecastLineUsage (never silently dropped). */
+const ROAD_PERSON_MODE_IDS: readonly string[] = ['car', 'motorbike', 'taxi'];
+const BUS_MODE_ID = 'bus';
 
 /**
  * forecastLineUsage (AC-4, D1) — per-line-class demand computed INDEPENDENTLY
@@ -461,19 +897,43 @@ const ROAD_PERSON_MODE_IDS: readonly string[] = ['car', 'motorbike', 'taxi', 'bu
  * ladder's own heavy_rail/hs_rail mode-share fractions of total person-trips.
  */
 export const forecastLineUsage: (s: SimState) => Map<string, ForecastLineUsage> = memoOnState((s) => {
-  const point = ladderPointOf(s);
-  const shares = modeShareOf(point);
+  // FEAT-2326609801 inc8 (AC-3): the ONE call-site change — reads the
+  // policy-adjusted shares (identity-equal to modeShareOf(point) when every
+  // policy is off, per policyModeShareAdjustmentOf's own AC-3 guarantee) in
+  // place of the raw `modeShareOf(point)` read. No other line in this
+  // function changes.
+  const shares = policyModeShareAdjustmentOf(s);
   const demandTiles = demandForecastOf(s);
 
-  let totalPersonTrips = 0;
+  const totalPersonTrips = totalPersonTripsOf(s);
   let totalFreightVehicleTrips = 0;
   for (const t of demandTiles) {
-    totalPersonTrips += t.personTrips;
     totalFreightVehicleTrips += t.freightVehicleTrips;
   }
 
+  // AC-4: busPriority moves capacity OUT of the road denominator and INTO a
+  // new synthetic 'bus' line-class entry below — never a demand-share move
+  // (mode SHARE is untouched, only the capacity split moves). BUG-918
+  // structural fix: both the numerator (adjustedCapacity per class, below)
+  // and the denominator (forecastTotalDrivableCapacityOf) now read the SAME
+  // adjustedRoadCapacitiesOf(s) map — there is no second, independently
+  // re-derived copy of "capacity minus delta" left anywhere for the two to
+  // drift apart on.
+  const busCapacityDelta = busPriorityCapacityInfoOf(s).delta;
+  const busActive = busCapacityDelta > 0;
+
+  // BUG-904 fix: bus person-trips ride the dedicated bus entry ONLY while
+  // that entry actually exists (busActive); otherwise they fold back into
+  // the general-road figure exactly as this file did before this
+  // increment. This keeps the invariant
+  //   Σ(demand over road classes) + busDemand === totalRoadDemand
+  // holding EXACTLY whether the policy is on or off — turning bus priority
+  // on can only move demand between classes, never mint or drop any.
+  const busPersonDemand = totalPersonTrips * (shares[BUS_MODE_ID] ?? 0);
   let roadPersonDemand = 0;
   for (const id of ROAD_PERSON_MODE_IDS) roadPersonDemand += totalPersonTrips * (shares[id] ?? 0);
+  if (!busActive) roadPersonDemand += busPersonDemand;
+
   const railDemand = totalPersonTrips * (shares['heavy_rail'] ?? 0);
   const hsDemand = totalPersonTrips * (shares['hs_rail'] ?? 0);
   const totalRoadDemand = roadPersonDemand + totalFreightVehicleTrips;
@@ -481,14 +941,39 @@ export const forecastLineUsage: (s: SimState) => Map<string, ForecastLineUsage> 
   const legacy = new Map<string, LineUsage>();
   for (const u of lineUsageOf(s)) legacy.set(u.spec, u);
 
-  let totalDrivableCap = 0;
-  for (const u of legacy.values()) if (u.kind === 'road') totalDrivableCap += u.capacity;
+  // BUG-904/BUG-918 fix: apportion totalRoadDemand over ADJUSTED per-class
+  // capacities read from adjustedRoadCapacitiesOf(s) — computed ONCE, spec-
+  // matched (BUS_LANE_SPEC, never by tier — BUG-919), and summed by
+  // forecastTotalDrivableCapacityOf(s) from that EXACT SAME map. Numerator
+  // and denominator can no longer diverge: turning bus priority on can only
+  // move demand OUT of BUS_LANE_SPEC and INTO the bus entry, never mint or
+  // destroy any (round 2's BUG-918 defect was the numerator subtracting the
+  // delta once per matching TIER — two specs, rd_avenue AND rd_roundabout —
+  // while the denominator subtracted it once in total).
+  const adjustedCapacities = adjustedRoadCapacitiesOf(s);
+  const totalDrivableCap = forecastTotalDrivableCapacityOf(s);
 
   const out = new Map<string, ForecastLineUsage>();
   for (const [spec, u] of legacy) {
     let demand: number;
     if (u.kind === 'road') {
-      demand = totalDrivableCap > 0 ? (totalRoadDemand * u.capacity) / totalDrivableCap : 0;
+      // BUG-921 (round 3 REJECT) fix: this branch reads a road-kind legacy
+      // entry, so at least one road tile exists — with BUS_LANE_MAX_SHARE_OF_CLASS
+      // bounding the clamp (see busPriorityCapacityInfoOf), totalDrivableCap
+      // is now STRUCTURALLY > 0 whenever any road tile exists, so the old
+      // silent `... : 0` fallback (which had annihilated up to 80% of trips
+      // in a single-road-class city, BUG-921) is UNREACHABLE. Fail closed
+      // (GR#7) rather than silently degrade — a future data/logic change
+      // that reopens this path must be caught immediately, not measured
+      // trip-loss weeks later.
+      if (totalDrivableCap <= 0) {
+        throw registryError(
+          ERR_ROAD_CAPACITY_DENOMINATOR_ZERO,
+          `forecastLineUsage: totalDrivableCap is ${totalDrivableCap} while a road tile (spec "${spec}") is present`,
+        );
+      }
+      const adjustedCapacity = adjustedCapacities.get(spec) ?? u.capacity;
+      demand = (totalRoadDemand * adjustedCapacity) / totalDrivableCap;
     } else if (spec === 'hs1') {
       demand = hsDemand;
     } else if (spec === 'rail') {
@@ -499,7 +984,25 @@ export const forecastLineUsage: (s: SimState) => Map<string, ForecastLineUsage> 
     const divergenceRatio = Math.abs(demand - u.usage) / Math.max(1, u.usage);
     out.set(spec, { demand, legacyUsage: u.usage, divergenceRatio });
   }
+  if (busActive) {
+    out.set('bus', { demand: busPersonDemand, legacyUsage: 0, divergenceRatio: 0, capacity: busCapacityDelta });
+  }
   return out;
+});
+
+/**
+ * forecastTotalDrivableCapacityOf (AC-4, BUG-918 structural fix) — the
+ * `totalDrivableCap` road-capacity denominator: the sum of
+ * adjustedRoadCapacitiesOf(s) — the EXACT SAME per-class adjusted-capacity
+ * map forecastLineUsage's numerator reads (GR#3, ONE source), never a
+ * second "total minus delta" figure computed independently. forecastLineUsage
+ * calls this function directly; the busPriority Check can also assert on it
+ * directly without reaching into forecastLineUsage's private closure.
+ */
+export const forecastTotalDrivableCapacityOf: (s: SimState) => number = memoOnState((s) => {
+  let totalDrivableCap = 0;
+  for (const [, cap] of adjustedRoadCapacitiesOf(s)) totalDrivableCap += cap;
+  return totalDrivableCap;
 });
 
 // --- AC-5/AC-6: per-segment demand, nearest-segment attribution ------------

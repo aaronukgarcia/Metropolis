@@ -239,7 +239,21 @@ export interface LedgerEntry {
   amount: number;
 }
 
-export type PolicyId = 'recycling' | 'transitSubsidy' | 'tourismDrive' | 'austerity';
+// FEAT-2326609801 inc8 (AC-1/AC-7): four congestion policy levers added to
+// the existing boolean-toggle PolicyId surface (extend, never duplicate —
+// data/policies.json's separate multiplicative-combination engine is out of
+// scope this increment, see the doc's §1 scoping note). `parkAndRide` is
+// deliberately NOT a member — AC-7 requires an unknown/unshipped PolicyId to
+// be unreachable at the TYPE level, never silently ignored at runtime.
+export type PolicyId =
+  | 'recycling'
+  | 'transitSubsidy'
+  | 'tourismDrive'
+  | 'austerity'
+  | 'ownershipQuota'
+  | 'roadPricing'
+  | 'busPriority'
+  | 'integratedTicketing';
 
 /**
  * FEAT-2326609761 inc2 (Aaron's glide-mode ruling, 2026-09-04): the

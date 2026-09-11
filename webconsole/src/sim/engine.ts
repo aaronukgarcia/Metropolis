@@ -106,6 +106,93 @@ export { wellbeingPartOf };
 // staying silent would hide a real construction defect from GR#7's error
 // registry entirely.
 import { recordError } from './backend.ts';
+// FEAT-2326609801 inc8 (AC-5/AC-6): the two policy-lever money inflows read
+// trafficDemand.ts's mode-share/trip-total exports (single source, GR#3),
+// but the MONEY calculation itself lives here in engine.ts, never in
+// trafficDemand.ts — that module's own AC-7 grep guard (trafficDemand.test.mjs)
+// asserts it never touches a currency-shaped output, and putting it in
+// fiscal.ts would create an import cycle (fiscal.ts -> trafficDemand.ts ->
+// data.ts -> fiscal.ts, since data.ts already imports STARTING_TREASURY from
+// fiscal.ts).
+import { policyModeShareAdjustmentOf, totalPersonTripsOf } from './trafficDemand.ts';
+import rawTaxation from './traffic-data/taxation.json' with { type: 'json' };
+
+// FEAT-2326609801 inc8 (AC-5/AC-6, GR#15): taxation.json's ERP peak charge
+// and COE quota price/growth rate, read at module-load time — never a
+// hand-typed literal. Plain GBP integers (Math.round) — mirrors this file's
+// own STARTING_TREASURY/GRID_IMPORT_TARIFF_PER_MW convention (fiscal.ts),
+// NOT the Go engine's int64 micro-pounds convention the data file's own
+// comments reference (that belongs to internal/foundation/det/money.go and
+// is not how the webconsole SimState represents `funds` — verified against
+// fiscal.ts/this file's existing plain-GBP inflow figures before wiring this).
+interface TaxationTable {
+  roadPricing: { electronicRoadPricingSingaporeStyle: { peakGbpPerCrossing: number } };
+  certificateOfEntitlement: {
+    illustrativePriceGBP: { value: number };
+    quotaGrowthRatePerYear: { value: number };
+  };
+}
+const taxation = rawTaxation as unknown as TaxationTable;
+const ERR_TAXATION_FIELD_INVALID = 'MET-V1001'; // TaxationFieldInvalid
+function requireFiniteTaxationField(v: unknown, path: string): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    throw new Error(
+      `${ERR_TAXATION_FIELD_INVALID}: data/traffic/taxation.json ${path} must be a finite number, got ${JSON.stringify(v)}`,
+    );
+  }
+  return v;
+}
+const PEAK_GBP_PER_CROSSING = requireFiniteTaxationField(
+  taxation.roadPricing?.electronicRoadPricingSingaporeStyle?.peakGbpPerCrossing,
+  'roadPricing.electronicRoadPricingSingaporeStyle.peakGbpPerCrossing',
+);
+const COE_ILLUSTRATIVE_PRICE_GBP = requireFiniteTaxationField(
+  taxation.certificateOfEntitlement?.illustrativePriceGBP?.value,
+  'certificateOfEntitlement.illustrativePriceGBP.value',
+);
+const COE_QUOTA_GROWTH_RATE_PER_YEAR = requireFiniteTaxationField(
+  taxation.certificateOfEntitlement?.quotaGrowthRatePerYear?.value,
+  'certificateOfEntitlement.quotaGrowthRatePerYear.value',
+);
+/** ASM-B (§4 of the acceptance doc): tick == day, unverified against the
+ * sim's real tick-to-calendar-day ratio — flagged to Aaron. */
+const POLICY_DAYS_PER_YEAR = 365;
+
+/**
+ * roadPricingInflowOf (AC-5) — sized off the POST-adjustment car share
+ * (policyModeShareAdjustmentOf), never the raw pre-adjustment ladder share
+ * (charging a trip the policy itself already suppressed would double-count
+ * the demand-share effect). Zero when the policy is off.
+ */
+export function roadPricingInflowOf(s: SimState): number {
+  if (!s.policies.roadPricing) return 0;
+  const adjustedCarShare = policyModeShareAdjustmentOf(s)['car'] ?? 0;
+  const totalPersonTrips = totalPersonTripsOf(s);
+  return Math.round(PEAK_GBP_PER_CROSSING * adjustedCarShare * totalPersonTrips);
+}
+
+/**
+ * ownershipQuotaInflowOf (AC-6) — an independent inflow (both this and
+ * roadPricing's may be active at once, AC-6). ASM-B's population-scaled
+ * new-registration proxy, never a real fleet model. Zero when the policy is
+ * off.
+ *
+ * BUG-906 fix: round the MONEY once, at the end — never the intermediate
+ * registration COUNT. Rounding the count first floors every fractional
+ * registration below 1 to exactly 0 (silent no-op below population 36,500
+ * with the shipped price/growth-rate data — computeFlows' `inflow !== 0`
+ * gate then drops the line entirely, no revenue, no zero line, no
+ * explanation) and then re-quantises every registration ABOVE that
+ * threshold onto whole-registration steps, producing a GBP-45,000 staircase
+ * instead of a figure that scales smoothly with population. Rounding the
+ * unrounded registration RATE × price at the end keeps the inflow strictly
+ * monotone non-decreasing in population with no threshold and no staircase.
+ */
+export function ownershipQuotaInflowOf(s: SimState): number {
+  if (!s.policies.ownershipQuota) return 0;
+  const registrationRate = (s.population * COE_QUOTA_GROWTH_RATE_PER_YEAR) / POLICY_DAYS_PER_YEAR;
+  return Math.round(COE_ILLUSTRATIVE_PRICE_GBP * registrationRate);
+}
 import { planConnector } from './roadConnect.ts';
 import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
 import type {
@@ -732,7 +819,18 @@ function rawState(): SimState {
     population: 0,
     xp: 30,
     taxRates: { residential: 9, commercial: 11, industrial: 13 },
-    policies: { recycling: false, transitSubsidy: false, tourismDrive: false, austerity: false },
+    // FEAT-2326609801 inc8 (AC-1): the four congestion policy levers default
+    // false for a brand-new city, same idiom as the pre-existing four.
+    policies: {
+      recycling: false,
+      transitSubsidy: false,
+      tourismDrive: false,
+      austerity: false,
+      ownershipQuota: false,
+      roadPricing: false,
+      busPriority: false,
+      integratedTicketing: false,
+    },
     // FEAT-2326609711 inc1 (AC-1): new cities default to external power cover
     // ON (GRID_IMPORT_ENABLED_DEFAULT, fiscal.ts — Aaron's Design Ruling).
     gridImportEnabled: GRID_IMPORT_ENABLED_DEFAULT,
@@ -1019,6 +1117,17 @@ export function computeFlows(
     if (sp?.tourism) tourism += sp.tourism * Math.min(1, s.population / 300);
   }
   if (tourism > 0) inflows.push({ label: 'Tourism', value: Math.round(tourism) });
+
+  // FEAT-2326609801 inc8 (AC-5/AC-6): two independent, fiscally-neutral-by-
+  // default policy-lever inflows — both functions internally gate on their
+  // own `s.policies.*` flag and return 0 when off, mirroring the
+  // gridExportRevenue > 0 / tourism > 0 "only show when non-zero" idiom
+  // above. Both may be active simultaneously (AC-6) — two separate lines,
+  // never merged into one label.
+  const roadPricingInflow = roadPricingInflowOf(s);
+  if (roadPricingInflow !== 0) inflows.push({ label: 'Road Pricing (ERP)', value: roadPricingInflow });
+  const ownershipQuotaInflow = ownershipQuotaInflowOf(s);
+  if (ownershipQuotaInflow !== 0) inflows.push({ label: 'Ownership Quota (COE)', value: ownershipQuotaInflow });
 
   // MOD-049 inc1: Grid Export revenue (power surplus sold to regional grid).
   // exportMW = max(0, capMW - needMW); exportRevenue = exportMW * tariff.
@@ -10679,6 +10788,34 @@ export function setReplayMode(active: boolean): void {
  * deterministic function of buildings (no Date/random). A plain `tick` already set
  * the graph in advance() with the same buildings ref, so it is not recomputed.
  */
+// FEAT-2326609801 inc8 (AC-1, GR#16 storage-boundary coercion): every
+// currently-shipped PolicyId, used to backfill a pre-inc8 save's `policies`
+// object (missing the four new keys entirely) with `false` rather than
+// letting them read `undefined` — mirrors sanitizeClaimedMilestones' own
+// "never trust the stored shape" discipline. A stray non-boolean value
+// (string/number/null) at an existing key is ALSO coerced to `false`, never
+// trusted at face value (same `typeof !== 'boolean'` discipline as
+// dynamicBailoutUsed above).
+const ALL_POLICY_IDS: readonly PolicyId[] = [
+  'recycling',
+  'transitSubsidy',
+  'tourismDrive',
+  'austerity',
+  'ownershipQuota',
+  'roadPricing',
+  'busPriority',
+  'integratedTicketing',
+];
+
+function sanitizePolicies(v: unknown): Record<PolicyId, boolean> {
+  const src = v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+  const out = {} as Record<PolicyId, boolean>;
+  for (const id of ALL_POLICY_IDS) {
+    out[id] = typeof src[id] === 'boolean' ? (src[id] as boolean) : false;
+  }
+  return out;
+}
+
 export function sanitizeTreasury(s: SimState): SimState {
   const funds = sanitizeFunds(s.funds);
   const loanBalance = sanitizeFunds(s.loanBalance);
@@ -10806,6 +10943,11 @@ export function sanitizeTreasury(s: SimState): SimState {
 
   const capexBackfilledPrev = typeof s.capexBackfilled === 'boolean' ? s.capexBackfilled : false;
   const dynamicBailoutUsedPrev = typeof s.dynamicBailoutUsed === 'boolean' ? s.dynamicBailoutUsed : undefined;
+  // FEAT-2326609801 inc8 (AC-1): backfill/coerce the policies object on
+  // every reducer() call (this function's own universal entry point) — a
+  // pre-inc8 save's `policies` is missing the four new keys entirely.
+  const policies = sanitizePolicies(s.policies);
+  const policiesChanged = ALL_POLICY_IDS.some((id) => policies[id] !== (s.policies as Record<string, boolean> | undefined)?.[id]);
   if (
     funds === s.funds &&
     loanBalance === s.loanBalance &&
@@ -10816,7 +10958,8 @@ export function sanitizeTreasury(s: SimState): SimState {
     !pendingMilestoneRewardsChanged &&
     capexBackfilled === capexBackfilledPrev &&
     cumulativeCapexSpent === s.cumulativeCapexSpent &&
-    dynamicBailoutUsed === dynamicBailoutUsedPrev
+    dynamicBailoutUsed === dynamicBailoutUsedPrev &&
+    !policiesChanged
   ) {
     return s;
   }
@@ -10829,6 +10972,7 @@ export function sanitizeTreasury(s: SimState): SimState {
     claimedMilestones,
     pendingRewards,
     pendingMilestoneRewards,
+    policies,
     cumulativeCapexSpent,
     capexBackfilled,
     dynamicBailoutUsed,

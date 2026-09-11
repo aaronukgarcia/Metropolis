@@ -39,6 +39,13 @@
     { "id": "metro",  "trainsPerHourMax": 34, "trainsPerHourRange": [30, 36], "passengersPerTrainRef": "vehicle_classes.json fixedTrack metro", "note": "brief anchor (tube 30-36 tph)" }
   ],
   "railClassSource": { "source": "Brief-specified anchors (rail 12-24tph, HS1 up to 18tph, tube 30-36tph) cross-checked against real-world UK signalling headway orders of magnitude (Network Rail/TfL published capacity figures, mapping sanity-check only).", "year": 2026, "confidence": "derived" },
+  "busPriority": {
+    "busLaneMaxShareOfClass": 0.5,
+    "note": "FEAT-2326609801 inc8, BUG-921 (round 3 REJECT): a bus-lane repaint can never consume the WHOLE of the class it is carved from -- the reallocated capacity delta is clamped to busLaneMaxShareOfClass x that class's own raw capacity, so the class (and therefore the whole road-capacity denominator, GR#3 one apportionment basis) never reaches zero while any road tile of any class exists. 0.5 is a directional PLACEHOLDER (balance regime, not independently measured) pending Aaron's balance pass -- see docs/planning/acceptance/FEAT-2326609792-inc8.md.",
+    "source": "Aaron's balance regime (placeholder, directional -- 'at most half a road's lanes get repainted for buses'), not independently re-measured",
+    "year": 2026,
+    "confidence": "placeholder"
+  },
   "provenance": {
     "source": "See per-block source fields above",
     "year": 2026,

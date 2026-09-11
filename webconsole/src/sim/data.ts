@@ -1,4 +1,4 @@
-import type { Building, Dims, SimState, ZoneKind } from './types.ts';
+import type { Building, Dims, PolicyId, SimState, ZoneKind } from './types.ts';
 import { formatPower, fmtMoney } from './utils.ts';
 // FEAT-1972079877: isPlaceable defers real specs to the existing unlock gate.
 // specUnlocked lives in engine.ts, which itself imports from data.ts — this is a
@@ -6868,7 +6868,7 @@ export function sanitizeClaimedMilestones(v: unknown): string[] {
 }
 
 export interface PolicyDef {
-  id: 'recycling' | 'transitSubsidy' | 'tourismDrive' | 'austerity';
+  id: PolicyId;
   label: string;
   description: string;
 }
@@ -6886,6 +6886,15 @@ export const POLICIES: PolicyDef[] = [
   { id: 'transitSubsidy', label: 'Free Transit', description: '+25% growth rate and +8 approval; forgoes fare revenue and pays a capped, scaling subsidy instead' },
   { id: 'tourismDrive', label: 'Tourism Drive', description: 'Adds Tourism income scaling with population' },
   { id: 'austerity', label: 'Austerity Budget', description: '-10% all outflows, -12 approval' },
+  // FEAT-2326609801 inc8 (AC-1): congestion policy levers, modelled on
+  // Gibraltar/Singapore (docs/planning/acceptance/FEAT-2326609792-inc8.md).
+  // Directional descriptions only, no bare formula (transitSubsidy precedent
+  // above) — real elasticity figures live in data/traffic/policy_levers.json
+  // and taxation.json, read by trafficDemand.ts/engine.ts, never restated here.
+  { id: 'ownershipQuota', label: 'Vehicle Ownership Quota', description: 'Caps new vehicle registrations (Singapore COE-style); shifts trips from car to public transport, raises revenue from quota certificates' },
+  { id: 'roadPricing', label: 'Electronic Road Pricing', description: 'Peak-period per-crossing road charge (Singapore ERP-style); reduces car trips and raises toll revenue' },
+  { id: 'busPriority', label: 'Bus Priority Lanes', description: 'Reallocates road capacity to dedicated bus lanes, speeding up bus journeys at the cost of general traffic capacity' },
+  { id: 'integratedTicketing', label: 'Integrated Ticketing', description: 'Single fare across bus and rail with sustained transit investment (Singapore/London-style); shifts trips from car/motorbike/taxi to public transport' },
 ];
 
 // FEAT-2326609795 inc2 (AC-8): re-export the demand-forecast surface so
