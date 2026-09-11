@@ -1192,7 +1192,7 @@ test('BUG-959: nearestSourceForTiles matches the flood\'s own seeds-only outcome
 // smaller/friendlier fixture.
 // ---------------------------------------------------------------------------
 
-test('BUG-969: first advance() on the REAL New Game state (initialState() unmodified, ~2,591 infra buildings) plus ten player huts is <= 25 ms (median of 5)', () => {
+test('BUG-969: first advance() on the REAL New Game state (initialState() unmodified, ~2,591 infra buildings) plus ten player huts runs NO map-sized flood (BFS op counter below MAP_W*MAP_H); wall time reported, never asserted', (t) => {
   const base = initialState();
   const infraCount = base.buildings.length;
   assert.ok(infraCount > 1000, `fixture guard: initialState() must carry its real map-spanning infra network, got only ${infraCount} buildings`);
@@ -1205,6 +1205,15 @@ test('BUG-969: first advance() on the REAL New Game state (initialState() unmodi
   }
   const state = { ...base, unlockedAll: true, buildings: withHuts, nextId: maxId + 1 };
 
+  // Lead conversion after the bounded gate (2026-09-11): the 25 ms wall-clock
+  // bound reddened under full-glob load (40..83 ms with a dozen agent lanes on
+  // the box) -- wall-clock bounds are banned in CI (verification standards).
+  // The STRUCTURAL fact BUG-935 fixed is that the first tick no longer runs a
+  // map-sized flood: boundedNearestSourceMapOf increments the exported BFS op
+  // counter once per visited tile (a full-map flood is >= MAP_W*MAP_H ops, and
+  // HEAD ran two of them), while nearestSourceForTiles does not touch it. The
+  // timing stays measured and reported as a diagnostic.
+  __resetBfsOpCounterForTest();
   const times = [];
   for (let i = 0; i < 5; i++) {
     // A FRESH state object each rep (spread of the same immutable base) --
@@ -1220,8 +1229,10 @@ test('BUG-969: first advance() on the REAL New Game state (initialState() unmodi
   }
   times.sort((a, b) => a - b);
   const median = times[Math.floor(times.length / 2)];
+  const floodOps = __getBfsOpCounterForTest();
+  t.diagnostic(`BUG-969 first advance() median ${median.toFixed(2)} ms (all reps: ${times.map((x) => x.toFixed(2)).join(', ')} ms); BFS flood ops across 5 reps: ${floodOps}`);
   assert.ok(
-    median <= 25,
-    `first advance() on the real New Game state took ${median.toFixed(2)}ms (all reps: ${times.map((t) => t.toFixed(2)).join(', ')}ms) -- must be <= 25ms per the r3 bar (HEAD ~348.5ms on this same state)`,
+    floodOps < MAP_W * MAP_H,
+    `first advance() on the real New Game state ran a map-sized nearest-source flood: ${floodOps} BFS ops across 5 reps (a single full-map flood is >= ${MAP_W * MAP_H}; HEAD ran two per tick) -- BUG-935's primitive must have handled it`
   );
 });
