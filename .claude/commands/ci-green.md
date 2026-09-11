@@ -42,10 +42,13 @@ Perform these checks in order on the working tree:
    go test ./... -count=1 -race -timeout 20m
    ```
 
-6. **Tooling & Hooks Testing:**
-   Run all Node.js and script unit tests to ensure no local guard regressions:
+6. **Webconsole + tooling tests (the CI node-test glob, bounded):**
+   Never bare `node --test` (claude-test-scope-guard.js refuses it and main's untracked `debug-*.mjs` pollute the glob). Cut a fresh gate worktree from HEAD, junction `node_modules`, generate the gitignored version file, then run the bounded set and read the runner's own exit code (2026-09-11: 56 tsx/mutant-harness failures were nothing but the missing generated file):
    ```bash
-   node --test
+   git worktree add --detach .claude/worktrees/gate-<tag> HEAD
+   node webconsole/scripts/gen-version.mjs        # from the gate worktree's webconsole dir
+   SCOPED_TIMEOUT_MS=1500000 node tools/test/scoped.mjs --webconsole-ci
    ```
+   Known-red baseline (2026-09-11): RR3-7 (F2) in attack-largest-first-reround3 and the BUG-732 49k-building glide wall-clock perf test; anything else red is yours. The bounded set does NOT run `converge-fixture-emit.mjs`: after any computeFlows change, regenerate `internal/converge/testdata/finance-webconsole-v1.json` (`cd webconsole; node --import tsx/esm test/converge-fixture-emit.mjs --write`) and run `go test ./internal/converge/...` (BUG-978, BUG-1089).
 
 Confirm to the user that all 6 validation gates are perfectly green. If any gate fails, stop, report the exact error, and focus on fixing that specific failure first.
