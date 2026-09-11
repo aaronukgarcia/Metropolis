@@ -1190,6 +1190,20 @@ test('BUG-959: nearestSourceForTiles matches the flood\'s own seeds-only outcome
 // ~348.5 ms on the same state; the r2 tree measured 22.1 ms). Reported
 // honestly (median of 5, both figures visible), never asserted against a
 // smaller/friendlier fixture.
+//
+// BUG-976 fix (this rework): the fixture above closed BUG-969's "discards
+// initialState()'s infra buildings" complaint but still shipped population 0,
+// so demandForecastOf(state) was EMPTY -- zero demand tiles means neither
+// nearestRoadSegmentTileMapOf's query set nor emergencyResponse's isochrones
+// ever call into a nearest-source map, so BUG-935's whole flood-vs-primitive
+// code path went unreached and the bound passed on HEAD too (opus-round3-
+// bug935 measured HEAD 7.1ms against this same population-0 shape, vacuously
+// under the 25ms/structural bar). The fixture now sets population 50,000 (the
+// round's own figure: HEAD 598.7ms vs lane 33.9ms on this shape via
+// computeTrafficSnapshot) and the test asserts BOTH that demandForecastOf(
+// state) is non-empty and that the deduped tile-key query set built from it
+// is non-empty, so a future regression back to population 0 fails these
+// fixture guards loudly instead of silently passing the perf bound again.
 // ---------------------------------------------------------------------------
 
 test('BUG-969: first advance() on the REAL New Game state (initialState() unmodified, ~2,591 infra buildings) plus ten player huts runs NO map-sized flood (BFS op counter below MAP_W*MAP_H); wall time reported, never asserted', (t) => {
@@ -1203,7 +1217,26 @@ test('BUG-969: first advance() on the REAL New Game state (initialState() unmodi
   for (let i = 0; i < 10; i++) {
     withHuts.push({ id: ++maxId, spec: 'res_hut', x: 5 + (i % 5), y: 5 + Math.floor(i / 5) });
   }
-  const state = { ...base, unlockedAll: true, buildings: withHuts, nextId: maxId + 1 };
+  // BUG-976 fix: the fixture used to ship population 0, which zeroes
+  // demandForecastOf's residentOccupancy (onlineResidentsCapacity > 0 but
+  // s.population / residentsCapTotal === 0), so demandForecastOf(state) was
+  // an EMPTY array -- neither nearestRoadSegmentTileMapOf's query set (built
+  // from demandForecastOf's tiles, trafficAssignment.ts ~930) nor
+  // emergencyResponse's isochrones ever queried a nearest-source map at all.
+  // HEAD's BUG-935 flood and the lane's nearestSourceForTiles primitive are
+  // therefore BYTE-IDENTICAL on this fixture -- zero work either way -- which
+  // is exactly why the pin was vacuous (HEAD passed it too, per BUG-976's own
+  // measurement: HEAD 7.1ms on the population-0 shape). Population 50,000
+  // (the r3 attacker's own figure, HEAD 598.7ms vs lane 33.9ms on this same
+  // shape via computeTrafficSnapshot) gives the ten res_hut tiles real
+  // residentsActual/personTrips, so demandForecastOf(state) is non-empty and
+  // the nearest-source query set it feeds is exercised for real.
+  const state = { ...base, unlockedAll: true, buildings: withHuts, nextId: maxId + 1, population: 50000 };
+
+  const demandTiles = demandForecastOf(state);
+  assert.ok(demandTiles.length > 0, `fixture guard: demandForecastOf(state) must be non-empty (population 50,000 over ten res_hut) or this pin measures nothing, got ${demandTiles.length} demand tiles`);
+  const queryTileKeys = new Set(demandTiles.map((t) => `${t.x},${t.y}`));
+  assert.ok(queryTileKeys.size > 0, 'fixture guard: the nearest-source query set (demand tiles deduped by tile key, the exact set nearestRoadSegmentTileMapOf/nearestSourceForTiles is called with) must be non-empty');
 
   // Lead conversion after the bounded gate (2026-09-11): the 25 ms wall-clock
   // bound reddened under full-glob load (40..83 ms with a dozen agent lanes on
@@ -1221,7 +1254,24 @@ test('BUG-969: first advance() on the REAL New Game state (initialState() unmodi
     // reusing one state across reps would measure the memo-hit cost of the
     // SECOND tick, not the real "first advance() after New Game" cost this
     // bug is about.
-    const rep = { ...state, buildings: [...withHuts] };
+    //
+    // BUG-976 fix: `base` (initialState()) already carries a trafficSnapshot
+    // baked in by initialState()'s OWN internal advance() bootstrap tick
+    // (engine.ts's initialState() = advance(rawState())) -- so without
+    // clearing it, isTrafficCadenceTickWithConfig(tick, !!s.trafficSnapshot,
+    // TRAFFIC_RECOMPUTE_TICKS) saw hasSnapshot=true and a non-cadence tick
+    // number, and SKIPPED computeTrafficSnapshot (and therefore the whole
+    // assignmentOf/nearestRoadSegmentTileMapOf flood-or-primitive path)
+    // entirely -- floodOps stayed 0 for a reason unrelated to BUG-935's fix,
+    // exactly the same "measures nothing" failure mode as the population-0
+    // fixture, just one layer deeper (verified: with trafficSnapshot left in
+    // place, forcing NEAREST_SOURCE_FOR_TILES_OPS_FALLBACK_THRESHOLD down to
+    // 1 in a scratch copy still produced floodOps=0). Clearing it here
+    // reproduces the documented "fresh state / old save" case the cadence
+    // check itself special-cases (engine.ts's own comment above
+    // isTrafficCadenceTick), which is the honest reading of "first advance()
+    // after New Game" -- a state that has never computed a snapshot yet.
+    const rep = { ...state, buildings: [...withHuts], trafficSnapshot: undefined };
     const t0 = process.hrtime.bigint();
     reducer(rep, { type: 'tick' });
     const t1 = process.hrtime.bigint();
