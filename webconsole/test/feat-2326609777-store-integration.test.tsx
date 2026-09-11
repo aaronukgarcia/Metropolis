@@ -165,6 +165,14 @@ test('FEAT-2326609777: store.tsx switches to runTickDelta after the first reply,
       return null;
     }
 
+    // BUG-936: store.tsx's tick-loop effect skips arming the real interval
+    // under NODE_TEST_CONTEXT unless a test opts in via this documented
+    // test-only global (read at arm time) — this test's own subject IS the
+    // tick-driver, so it opts in before mount rather than dispatching a
+    // speed action afterwards. initialState() stays pure at speed:1 in
+    // every context.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
+
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
     await act(async () => {
@@ -177,7 +185,7 @@ test('FEAT-2326609777: store.tsx switches to runTickDelta after the first reply,
     assert.ok(startingState, 'precondition: SimProvider mounted and exposed an initial state');
 
     const tickCallback = tickSpy.get();
-    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount');
+    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount (opted in via the test-only global)');
 
     const N = 60;
     for (let i = 0; i < N; i++) {
@@ -215,6 +223,7 @@ test('FEAT-2326609777: store.tsx switches to runTickDelta after the first reply,
   } finally {
     tickSpy.restore();
     delete (globalThis as any).Worker;
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });
@@ -274,6 +283,11 @@ test('FEAT-2326609777: a non-tick action superseding an in-flight delta-mode req
       return null;
     }
 
+    // BUG-936: opt in to the tick driver via the documented test-only global
+    // before mount (see the earlier test in this file for the full
+    // rationale) — read at arm time.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
+
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
     await act(async () => {
@@ -281,6 +295,7 @@ test('FEAT-2326609777: a non-tick action superseding an in-flight delta-mode req
     });
 
     const tickCallback = tickSpy.get();
+    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount (opted in via the test-only global)');
     const initialTick = latestState.tick;
 
     // Tick #1: full sync, flushed immediately — establishes the worker cache
@@ -332,6 +347,7 @@ test('FEAT-2326609777: a non-tick action superseding an in-flight delta-mode req
   } finally {
     tickSpy.restore();
     delete (globalThis as any).Worker;
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });
@@ -410,12 +426,17 @@ test('FEAT-2326609777 round follow-up: a wrong-basis delta reply is detected and
       latestState = state;
       return null;
     }
+    // BUG-936: opt in to the tick driver via the documented test-only global
+    // before mount (see the first test in this file for the full
+    // rationale) — read at arm time.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
     await act(async () => {
       root.render(React.default.createElement(SimProvider, { children: React.default.createElement(Probe) }));
     });
     const tickCallback = tickSpy.get();
+    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount (opted in via the test-only global)');
     const tickBefore = latestState.tick;
 
     // Request #1: full bootstrap. Request #2: delta, but the reply LIES
@@ -448,6 +469,7 @@ test('FEAT-2326609777 round follow-up: a wrong-basis delta reply is detected and
   } finally {
     tickSpy.restore();
     delete (globalThis as any).Worker;
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });
@@ -472,12 +494,17 @@ test('FEAT-2326609777 round follow-up: a full resync is forced after RESYNC_EVER
       latestState = state;
       return null;
     }
+    // BUG-936: opt in to the tick driver via the documented test-only global
+    // before mount (see the first test in this file for the full
+    // rationale) — read at arm time.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
     await act(async () => {
       root.render(React.default.createElement(SimProvider, { children: React.default.createElement(Probe) }));
     });
     const tickCallback = tickSpy.get();
+    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount (opted in via the test-only global)');
     const initialTick = latestState.tick;
 
     // Request #1 is the bootstrap full sync; requests #2..#(1+RESYNC_EVERY_TICKS)
@@ -511,6 +538,7 @@ test('FEAT-2326609777 round follow-up: a full resync is forced after RESYNC_EVER
   } finally {
     tickSpy.restore();
     delete (globalThis as any).Worker;
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });

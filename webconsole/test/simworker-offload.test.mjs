@@ -1583,6 +1583,13 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
         return null;
       }
 
+      // BUG-936: store.tsx's tick-loop effect skips arming the real interval
+      // under NODE_TEST_CONTEXT unless a test opts in via this documented
+      // test-only global (read at arm time) — this test's subject is the
+      // tick-driver itself, so opt in before mount. initialState() stays
+      // pure at speed:1 in every context.
+      globalThis.__METRO_TEST_TICK_DRIVER__ = true;
+
       const container = dom.window.document.getElementById('root');
       const root = createRoot(container);
       try {
@@ -1591,7 +1598,7 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
         });
 
         const tickCallback = spy.get();
-        assert.ok(tickCallback, 'the tick-loop interval must have been registered on mount');
+        assert.ok(tickCallback, 'the tick-loop interval must have been registered on mount (opted in via the test-only global)');
 
         const tickBefore = latestState.tick;
 
@@ -1642,6 +1649,7 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
     } finally {
       spy.restore();
       delete globalThis.Worker;
+      delete globalThis.__METRO_TEST_TICK_DRIVER__;
       dom.window.close();
     }
   });
@@ -1690,6 +1698,11 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
         return null;
       }
 
+      // BUG-936: opt in to the tick driver via the documented test-only
+      // global before mount (see the sibling test above for the full
+      // rationale) — read at arm time.
+      globalThis.__METRO_TEST_TICK_DRIVER__ = true;
+
       const container = dom.window.document.getElementById('root');
       const root = createRoot(container);
 
@@ -1698,7 +1711,7 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
       });
 
       const tickCallback = spy.get();
-      assert.ok(tickCallback, 'the tick-loop interval must have been registered on mount');
+      assert.ok(tickCallback, 'the tick-loop interval must have been registered on mount (opted in via the test-only global)');
 
       // First fire: posts, gets the unknown-type reply back.
       await act(async () => {
@@ -1732,6 +1745,7 @@ describe('BUG-597: worker glue hardening (postMessage throw + guard order)', () 
     } finally {
       spy.restore();
       delete globalThis.Worker;
+      delete globalThis.__METRO_TEST_TICK_DRIVER__;
       dom.window.close();
     }
   });

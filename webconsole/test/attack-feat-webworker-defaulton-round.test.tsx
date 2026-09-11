@@ -192,6 +192,13 @@ test('ATTACK: a late worker reply arriving AFTER the handshake-timeout fallback 
       return null;
     }
 
+    // BUG-936: store.tsx's tick-loop effect skips arming the real interval
+    // under NODE_TEST_CONTEXT unless a test opts in via this documented
+    // test-only global (read at arm time) — this test's subject IS the
+    // tick-driver itself, so opt in before mount rather than dispatching a
+    // speed action afterwards. initialState() stays pure at speed:1.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
+
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
     await act(async () => {
@@ -199,7 +206,7 @@ test('ATTACK: a late worker reply arriving AFTER the handshake-timeout fallback 
     });
 
     const tickCallback = intervalSpy.get();
-    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount');
+    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount (opted in via the test-only global)');
 
     const tickBefore = latestTick;
 
@@ -284,6 +291,7 @@ test('ATTACK: a late worker reply arriving AFTER the handshake-timeout fallback 
     intervalSpy.restore();
     timeoutSpy.restore();
     delete (globalThis as any).Worker;
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });
@@ -411,6 +419,11 @@ test('ATTACK: a worker that crashes mid-session (after a successful tick) does n
       return null;
     }
 
+    // BUG-936: opt in to the tick driver via the documented test-only global
+    // before mount (see the earlier test in this file for the full
+    // rationale) — read at arm time, so setting it here covers this mount.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
+
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
     await act(async () => {
@@ -418,7 +431,7 @@ test('ATTACK: a worker that crashes mid-session (after a successful tick) does n
     });
 
     const tickCallback = intervalSpy.get();
-    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount');
+    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount (opted in via the test-only global)');
 
     // First fire: healthy reply, proves the worker (handshake-complete now).
     const tickBefore = latestTick;
@@ -489,6 +502,7 @@ test('ATTACK: a worker that crashes mid-session (after a successful tick) does n
   } finally {
     intervalSpy.restore();
     delete (globalThis as any).Worker;
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });

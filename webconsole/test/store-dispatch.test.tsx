@@ -167,6 +167,15 @@ test('BAR-2: the tick-loop setInterval is not recreated across a burst of dispat
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
 
+    // BUG-936: store.tsx's tick-loop effect skips arming the real interval
+    // under NODE_TEST_CONTEXT unless a test opts back in via this documented
+    // test-only global, read AT ARM TIME (mount, for this test) — set it
+    // before render rather than dispatching a speed action after mount, so
+    // this test's own subject (the tick-loop's interval churn across the
+    // dispatch burst) is unaffected by an extra dispatch. initialState()
+    // itself stays pure at speed:1 in every context.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
+
     try {
       await act(async () => {
         root.render(
@@ -176,13 +185,11 @@ test('BAR-2: the tick-loop setInterval is not recreated across a burst of dispat
         );
       });
 
-      // Speed starts at 1 (see engine.ts initialState) so the tick-loop effect mounts one
-      // interval on initial render. Any ADDITIONAL setInterval call after this point (while
-      // speed/wrappedDispatch stay put) is the churn bug reappearing.
-      const setIntervalAfterMount = setIntervalCalls;
-      assert.ok(setIntervalAfterMount >= 1, 'tick-loop effect must have registered one interval on mount');
-
       const dispatch = (Probe as any)._lastDispatch as (a: unknown) => void;
+
+      const setIntervalAfterMount = setIntervalCalls;
+      assert.ok(setIntervalAfterMount >= 1, 'tick-loop effect must have registered one interval on mount (opted in via the test-only global)');
+
       for (let i = 0; i < 50; i++) {
         await act(async () => {
           dispatch({ type: 'debugFunds', amount: 10_000 });
@@ -210,6 +217,7 @@ test('BAR-2: the tick-loop setInterval is not recreated across a burst of dispat
       g.clearInterval = realClearInterval;
     }
   } finally {
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });

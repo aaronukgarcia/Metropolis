@@ -74,6 +74,16 @@ test('BUG-618 F3: real store dispatch path advances engineLagTracker — complet
       return null;
     }
 
+    // BUG-936: store.tsx's tick-loop effect skips arming the real interval
+    // under NODE_TEST_CONTEXT unless a test opts in via this documented
+    // test-only global (read at arm time) — this test's subject genuinely
+    // needs the real tick-driver interval, so opt in before mount. The
+    // subsequent speed:3 dispatch below still does its own job (switching
+    // to the fastest selectable interval for a short real wall-clock wait);
+    // it no longer ALSO doubles as the tick-driver's opt-in signal the way
+    // it incidentally did before this bug's fix.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
+
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
 
@@ -123,6 +133,7 @@ test('BUG-618 F3: real store dispatch path advances engineLagTracker — complet
     });
     engineLagTracker.resetAll();
   } finally {
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });

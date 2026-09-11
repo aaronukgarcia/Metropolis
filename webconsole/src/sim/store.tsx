@@ -2945,6 +2945,31 @@ export function SimProvider({ children }: { children: ReactNode }) {
       engineLagTracker.settle();
       return;
     }
+    // BUG-936 (test-only, default-off in production) — the DRIVER is the
+    // seam, not initialState()/rawState() (r1 of this bug put the seam in
+    // the reducer's pure initial state, which the lead bounced: it silently
+    // changed initialState().speed for every .mjs test and emitted fixture
+    // that never went near a mount). initialState() stays pure — speed is
+    // always 1 — so under NODE_TEST_CONTEXT this effect still fires with
+    // state.speed !== 0 on every SimProvider mount. Without this guard that
+    // arms a REAL window.setInterval(SPEED_MS[1]=900ms) on every one of the
+    // ~30 .tsx mount tests that never touch speed, and any render whose
+    // commit crosses that wall-clock boundary gets an unrequested tick
+    // inside act() (feat-2326609772-overlay-inc3's CI failures). Skip
+    // arming UNLESS a test has explicitly opted back in via the documented
+    // test-only global `globalThis.__METRO_TEST_TICK_DRIVER__ = true`
+    // (read here, at arm time, so a test can set it any time before the
+    // mount that should install a real interval). NODE_TEST_CONTEXT is
+    // Node's OWN env var, set automatically for every file `node --test`
+    // runs and never present in a production build (no `process` global in
+    // the browser), so this branch can never fire outside a test process —
+    // production behaviour is completely unchanged.
+    const underTestHarness = typeof process !== 'undefined' && !!process.env?.NODE_TEST_CONTEXT;
+    const testOptedIntoTickDriver = (globalThis as { __METRO_TEST_TICK_DRIVER__?: boolean }).__METRO_TEST_TICK_DRIVER__ === true;
+    if (underTestHarness && !testOptedIntoTickDriver) {
+      engineLagTracker.settle();
+      return;
+    }
     // BUG-618: report the interval length the tick-driver is ABOUT to run at
     // — read whenever this effect (re)fires, i.e. whenever state.speed
     // changes (this effect's own dependency array, below).

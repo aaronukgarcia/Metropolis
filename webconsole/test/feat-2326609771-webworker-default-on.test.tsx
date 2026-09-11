@@ -326,6 +326,13 @@ test('FEAT-2326609771: a throwing Worker constructor falls back silently-but-vis
       return null;
     }
 
+    // BUG-936: store.tsx's tick-loop effect skips arming the real interval
+    // under NODE_TEST_CONTEXT unless a test opts in via this documented
+    // test-only global (read at arm time) — this test's subject is the
+    // tick-driver itself, so opt in before mount. initialState() stays pure
+    // at speed:1.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
+
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
     await act(async () => {
@@ -353,7 +360,7 @@ test('FEAT-2326609771: a throwing Worker constructor falls back silently-but-vis
     assert.equal(workerErrors.length, workerErrorCountBefore + 1, 'exactly one registry-sourced MET-V856 error must be recorded for a throwing Worker constructor (GR#1/GR#7)');
 
     const tickCallback = spy.get();
-    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount');
+    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount (opted in via the test-only global)');
     const tickBefore = latestTick;
     await act(async () => {
       tickCallback!();
@@ -371,6 +378,7 @@ test('FEAT-2326609771: a throwing Worker constructor falls back silently-but-vis
   } finally {
     spy.restore();
     delete (globalThis as any).Worker;
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });
@@ -419,6 +427,11 @@ test('FEAT-2326609771: a Worker that never replies falls back once the DERIVED h
       return null;
     }
 
+    // BUG-936: opt in to the tick driver via the documented test-only global
+    // before mount (see the earlier test in this file for the full
+    // rationale) — read at arm time.
+    (globalThis as any).__METRO_TEST_TICK_DRIVER__ = true;
+
     const container = dom.window.document.getElementById('root')!;
     const root = createRoot(container);
     await act(async () => {
@@ -426,7 +439,7 @@ test('FEAT-2326609771: a Worker that never replies falls back once the DERIVED h
     });
 
     const tickCallback = tickSpy.get();
-    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount');
+    assert.ok(tickCallback, 'the tick-driver interval must have been registered on mount (opted in via the test-only global)');
 
     const tickBefore = latestTick;
     const buildingsBefore = latestBuildings;
@@ -502,6 +515,7 @@ test('FEAT-2326609771: a Worker that never replies falls back once the DERIVED h
     tickSpy.restore();
     timeoutSpy.restore();
     delete (globalThis as any).Worker;
+    delete (globalThis as any).__METRO_TEST_TICK_DRIVER__;
     dom.window.close();
   }
 });

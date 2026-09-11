@@ -239,8 +239,14 @@ test('BUG-618: chip shows "Engine: OK" (green) when the tracker is caught up', {
     ({ engineLagTracker } = await import('../src/sim/engineLag.ts'));
     engineLagTracker.resetAll();
 
+    // BUG-936: this test is specifically about the RUNNING ("caught up")
+    // display, not the paused one — mountTopBar doesn't go through
+    // SimProvider/store.tsx at all (it builds state directly from
+    // initialState(), which is pure and always speed:1), so the explicit
+    // override just documents the test's intent rather than relying on the
+    // shared default incidentally being non-zero.
     const container = dom.window.document.getElementById('root');
-    ({ root, act } = await mountTopBar(container));
+    ({ root, act } = await mountTopBar(container, 1));
 
     const chip = container.querySelector('.engine-lag-chip');
     assert.match(chip!.textContent || '', /Engine: OK/, 'a fresh, never-fed tracker must read as caught up, never a false alarm');
@@ -319,8 +325,11 @@ test('BUG-618/BUG-787: chip reflects a REAL sustained slow rate fed into engineL
     engineLagTracker.recordTickCompleted(base + 3000);
     engineLagTracker.recordTickCompleted(base + 6000);
 
+    // BUG-936: explicit running-speed override for the same reason as the
+    // "Engine: OK" test above — this test's subject is the sustained-rate
+    // display, which the component only shows while running.
     const container = dom.window.document.getElementById('root');
-    ({ root, act } = await mountTopBar(container));
+    ({ root, act } = await mountTopBar(container, 1));
 
     const chip = container.querySelector('.engine-lag-chip');
     assert.match(
