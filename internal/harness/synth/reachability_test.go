@@ -312,7 +312,9 @@ func buildReachabilityGraph(root string) ([]*reachFuncNode, error) {
 			return err
 		}
 		if info.IsDir() {
-			if info.Name() == ".git" || info.Name() == "node_modules" {
+			// Never skip the walk's own root (see scanForCallSites in
+			// phasehooks_test.go for why) — BUG-920.
+			if path != root && skipScanDir(path, info.Name(), true) {
 				return filepath.SkipDir
 			}
 			return nil

@@ -56,7 +56,12 @@ func scanTree(root string, entries map[string]registryEntry) []siteFinding {
 			return nil
 		}
 		if d.IsDir() {
-			if d.Name() == "testdata" {
+			// Never skip the walk's own root: a worktree checkout's root
+			// legitimately has a .git FILE (it IS a worktree root), and
+			// that must not stop the scan of the tree it was asked to
+			// scan — only nested worktrees/dot-dirs found BELOW root are
+			// excluded (BUG-920).
+			if path != root && skipScanDir(path, d.Name(), true) {
 				return filepath.SkipDir
 			}
 			return nil

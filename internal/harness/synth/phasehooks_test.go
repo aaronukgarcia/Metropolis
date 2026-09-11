@@ -512,7 +512,12 @@ func scanForCallSites(root string) ([]string, error) {
 			return err
 		}
 		if info.IsDir() {
-			if info.Name() == ".git" || info.Name() == "node_modules" {
+			// Never skip the walk's own root: a worktree checkout's root
+			// legitimately has a .git FILE (it IS a worktree root), and
+			// that must not stop the scan of the tree it was asked to
+			// scan — only nested worktrees/dot-dirs found BELOW root are
+			// excluded (BUG-920).
+			if path != root && skipScanDir(path, info.Name(), true) {
 				return filepath.SkipDir
 			}
 			return nil

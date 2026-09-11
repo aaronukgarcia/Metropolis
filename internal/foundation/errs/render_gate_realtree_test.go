@@ -116,7 +116,11 @@ func countScannedPackages(t *testing.T, root string) int {
 			return nil
 		}
 		if d.IsDir() {
-			if d.Name() == "testdata" {
+			// Never skip the walk's own root (see real_callsite_gate_test.go's
+			// scanTree for why: a worktree checkout's root legitimately has
+			// a .git FILE, and that must not stop the scan of the tree it
+			// was asked to scan) — BUG-920.
+			if path != root && skipScanDir(path, d.Name(), true) {
 				return filepath.SkipDir
 			}
 			return nil
