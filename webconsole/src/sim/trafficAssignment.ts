@@ -32,7 +32,7 @@ import {
   demandForecastOf,
   ladderPointOf,
   modeShareOf,
-  boundedNearestSourceMapOf,
+  nearestSourceForTiles,
   freightVehicleTripsByClassOf,
   type VehicleClassId,
 } from './trafficDemand.ts';
@@ -126,13 +126,18 @@ export function loadTrafficConfigFrom(raw: unknown): TrafficConfig {
       'data/traffic.json is missing a numeric webconsoleMetresPerTile field',
     );
   }
-  const maxRadius = j.maxAttributionRadiusTiles;
-  if (typeof maxRadius !== 'number' || !Number.isFinite(maxRadius) || maxRadius <= 0) {
+  const maxRadiusRaw = j.maxAttributionRadiusTiles;
+  if (typeof maxRadiusRaw !== 'number' || !Number.isFinite(maxRadiusRaw) || maxRadiusRaw <= 0) {
     throw registryError(
       ERR_MAX_ATTRIBUTION_RADIUS_MISSING,
       'data/traffic.json is missing a positive numeric maxAttributionRadiusTiles field',
     );
   }
+  // BUG-968 (r3 rework): floor to an integer so nearestSourceForTiles' radius
+  // domain always agrees with boundedNearestSourceMapOf's inclusive
+  // `dist < radius` layer semantics — see trafficDemand.ts's
+  // loadMaxAttributionRadiusTiles for the full rationale.
+  const maxRadius = Math.floor(maxRadiusRaw);
   const metresPerMile = j.metresPerMile;
   if (typeof metresPerMile !== 'number' || !Number.isFinite(metresPerMile) || metresPerMile <= 0) {
     throw registryError(
@@ -696,7 +701,30 @@ function computeNearestRoadSegmentTileMap(s: SimState): Map<string, string> {
   // rework applied to nearestSegmentWeights.
   const radius = Math.min(bboxDiameter, TRAFFIC.maxAttributionRadiusTiles);
 
-  const nearestSourceTile = boundedNearestSourceMapOf(roadTileKeys, radius);
+  // BUG-935 perf fix, BUG-958 rework (P1 from r1's round): this Map's real
+  // consumer (assignmentOf below) only ever queries `.get(tileKey)` for
+  // demandForecastOf(s)'s tiles, so the ORIGINAL fix queried exactly that
+  // set — but this function is cached on `s.buildings`' ARRAY IDENTITY
+  // (BUG-912 above), a cache whose whole soundness rests on its stated
+  // precondition: "this function's body reads ONLY s.buildings". Querying
+  // demandForecastOf(s) broke that precondition — demandForecastOf depends
+  // on population/occupancy/isOnline/the ladder, ALL of which change every
+  // tick without `s.buildings` changing, so the SAME buildings array can be
+  // cached against an empty demand set on a cold tick and silently serve
+  // that stale, too-small map forever after (r1's attacker reproduction:
+  // 100% of a tick's routed flow lost, decided only by which earlier state
+  // happened to warm the cache).
+  //
+  // Fix: derive the query set from `s.buildings` alone instead — every
+  // demandForecastOf(s) tile's (x,y) comes straight from a building `b`
+  // (`out.push({ x: b.x, y: b.y, ... })` in trafficDemand.ts), so "every
+  // building's own tile" is a SUPERSET of the true demand tiles that is
+  // still buildings-derived (and therefore cache-safe) and still
+  // city-proportional, never map-sized — it only ever grows past the exact
+  // demand set by the handful of buildings with no resident/job capacity or
+  // zero trips that tick, not by the pre-shipped infrastructure network.
+  const queryTileKeys = s.buildings.map((b) => `${b.x},${b.y}`);
+  const nearestSourceTile = nearestSourceForTiles(queryTileKeys, roadTileKeys, radius);
   const result = new Map<string, string>(); // tileKey -> owning nearest road segmentId
   for (const [tileKey, sourceTileKey] of nearestSourceTile) {
     result.set(tileKey, idx.tileToSegment.get(sourceTileKey)!);

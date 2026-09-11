@@ -39,13 +39,14 @@ import {
   ladderPointOf,
   modeShareOf,
   boundedNearestSourceMapOf,
+  nearestSourceForTiles,
   __resetBfsOpCounterForTest,
   __getBfsOpCounterForTest,
   __resetOffMapSeedsDroppedCounterForTest,
   __getOffMapSeedsDroppedCounterForTest,
 } from '../src/sim/trafficDemand.ts';
 import { MAP_W, MAP_H } from '../src/sim/grid.ts';
-import { initialState } from '../src/sim/engine.ts';
+import { initialState, reducer } from '../src/sim/engine.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -1081,3 +1082,146 @@ for (const { field, code, mutantFallback } of BUG865_FIELDS) {
     });
   }
 }
+
+// ---------------------------------------------------------------------------
+// BUG-935 r2 rework — BUG-958 (P1), BUG-959 (P3), BUG-960 (P3)
+// (round r1 REJECT, opus-round-bug935, row 7632; lead amendments r2)
+// ---------------------------------------------------------------------------
+
+test('BUG-958: computeNearestRoadSegmentTileMap\'s body reads NO SimState field other than `s.buildings` (structural pin, restores BUG-912\'s buildings-identity cache invariant)', () => {
+  const fnBody = src.slice(
+    src.indexOf('function computeNearestRoadSegmentTileMap(s: SimState): Map<string, string> {'),
+    src.indexOf('\nconst jobAdjacentRoadSegmentsOf'),
+  );
+  // Every `s.` occurrence in the body must be `s.buildings` — the SAME
+  // grep-style idiom BUG-912's own comment describes ("this function's body
+  // reads ONLY s.buildings"). `demandForecastOf(s)` (population/occupancy/
+  // isOnline/ladder-dependent) is the exact violation r1's round found; a
+  // reintroduction of that call, or of any other non-`s.buildings` field
+  // read, reds this pin even though it would pass every value-based test on
+  // a fixture where the buildings array happens to be fresh every tick.
+  const badReads = [...fnBody.matchAll(/\bs\.(\w+)/g)].map((m) => m[1]).filter((field) => field !== 'buildings');
+  assert.deepEqual(badReads, [], `computeNearestRoadSegmentTileMap must read only s.buildings, found: ${badReads.join(', ')}`);
+  // MUTANT: restoring `demandForecastOf(s).map((t) => \`${t.x},${t.y}\`)` in
+  // place of `s.buildings.map(...)` reintroduces a `s.` read with no
+  // corresponding `demandForecastOf` call inside THIS function's own body
+  // (the field list would still just be ['buildings'] since demandForecastOf
+  // is a separate call, not a `s.something` read) — the true regression
+  // guard is BUG-960's fixture below, which this structural pin is paired
+  // with per the r2 brief ("grep-style, like BUG-912's own").
+});
+
+test('BUG-960: a demand tile that joins the forecast without a construction event routes IDENTICALLY on a reused buildings array vs a fresh one (the r1 round\'s blind-spot fixture, now in the author suite)', () => {
+  const buildings = [
+    rd(1, 'rd_aroad', 0, 0),
+    rd(2, 'rd_aroad', 1, 0),
+    rd(3, 'rd_aroad', 2, 0),
+    bldg(4, 'res_hut', 0, 1),
+    bldg(5, 'off_suite', 2, 1),
+  ];
+  // Tick N: population 0 -> empty demand set, warms any buildings-identity
+  // cache with the SMALLEST possible query set.
+  const cold = board(buildings, 0);
+  assignedFlowOf(cold);
+  // Tick N+1: SAME buildings array reference, population risen -- BUG-958's
+  // fix must have derived its query set from s.buildings, not demand, so
+  // this reuses the SAME cached map and still finds the right origins.
+  const hot = board(buildings, 50000);
+  // Control: identical content, fresh array (guaranteed cache miss).
+  const control = board(buildings.map((b) => ({ ...b })), 50000);
+  assert.deepEqual(
+    [...assignedFlowOf(hot)].sort(),
+    [...assignedFlowOf(control)].sort(),
+    'a cache-warmed tick must route exactly like a cold one — same state content, same result (BUG-958 fix)',
+  );
+  assert.deepEqual(
+    unroutedDemandOf(hot),
+    unroutedDemandOf(control),
+    'unrouted demand must not depend on which earlier state warmed the buildings-keyed cache',
+  );
+});
+
+test('BUG-959: nearestSourceForTiles rejects an off-map QUERY tile (undefined, matching boundedNearestSourceMapOf, which never has an entry for a tile it never visited)', () => {
+  assert.equal(boundedNearestSourceMapOf(['10,10'], 250).get('-1,10'), undefined);
+  assert.equal(nearestSourceForTiles(['-1,10'], ['10,10'], 250).get('-1,10'), undefined);
+  assert.equal(nearestSourceForTiles([`${MAP_W},5`], ['10,10'], 250).get(`${MAP_W},5`), undefined);
+  assert.equal(nearestSourceForTiles(['5,-1'], ['10,10'], 250).get('5,-1'), undefined);
+  // MUTANT: dropping the query bounds-check (BUG-959) fabricates '10,10' for
+  // an off-map query key that the flood could never have produced (its
+  // `visited` map only ever contains tiles it actually reached, all
+  // bounds-checked at both the seed and the neighbour-expansion steps).
+});
+
+test('BUG-959: nearestSourceForTiles matches the flood\'s own seeds-only outcome for a NEGATIVE radius (the flood still self-maps an on-map source at distance 0)', () => {
+  assert.equal(boundedNearestSourceMapOf(['10,10'], -1).get('10,10'), '10,10');
+  assert.equal(nearestSourceForTiles(['10,10'], ['10,10'], -1).get('10,10'), '10,10');
+  // A query tile that is NOT itself a source must still find nothing at a
+  // negative radius (the flood's while-loop body never runs, so distance > 0
+  // is never reachable).
+  assert.equal(boundedNearestSourceMapOf(['10,10'], -1).get('11,10'), undefined);
+  assert.equal(nearestSourceForTiles(['11,10'], ['10,10'], -1).get('11,10'), undefined);
+  // MUTANT: the r1-round tree's early `if (radius < 0) return result;`
+  // returned an EMPTY map for a negative radius, which disagreed with the
+  // flood's own seed step and reds the self-map assertion above.
+});
+
+test('BUG-959: nearestSourceForTiles matches the flood\'s own seeds-only outcome for a NaN radius (a NaN comparison is always false, so the flood\'s expansion loop never runs -- NOT "no bound at all")', () => {
+  assert.equal(boundedNearestSourceMapOf(['10,10'], NaN).get('10,10'), '10,10');
+  assert.equal(nearestSourceForTiles(['10,10'], ['10,10'], NaN).get('10,10'), '10,10');
+  assert.equal(boundedNearestSourceMapOf(['10,10'], NaN).get('11,10'), undefined);
+  assert.equal(nearestSourceForTiles(['11,10'], ['10,10'], NaN).get('11,10'), undefined);
+  // Multiple sources at different distances -- only the exact-match (d===0)
+  // source may ever win under a NaN radius; a farther source must not.
+  assert.equal(nearestSourceForTiles(['10,10'], ['10,10', '9,10'], NaN).get('10,10'), '10,10');
+  // MUTANT (r1's own finding): `d > radius` with radius=NaN is ALWAYS false
+  // (every comparison against NaN is false), so an unguarded version would
+  // let EVERY source pass regardless of distance -- removing the bound
+  // entirely instead of collapsing it to zero. Reds the last assertion
+  // above (a 1-tile-distant source would win over the true self-match, or
+  // both would tie and the sort-order pick would be wrong).
+});
+
+// ---------------------------------------------------------------------------
+// BUG-969 (r3 rework, P3) — the author-suite perf fixture must measure the
+// REAL New Game state (initialState() UNMODIFIED, ~2,591 infra buildings --
+// the map-spanning road/rail network that IS the bug, per BUG-935's own
+// profile), never a fixture that discards it. The lead's r3 ruling re-set the
+// bar against that real state: first advance() <= 25 ms (HEAD measured
+// ~348.5 ms on the same state; the r2 tree measured 22.1 ms). Reported
+// honestly (median of 5, both figures visible), never asserted against a
+// smaller/friendlier fixture.
+// ---------------------------------------------------------------------------
+
+test('BUG-969: first advance() on the REAL New Game state (initialState() unmodified, ~2,591 infra buildings) plus ten player huts is <= 25 ms (median of 5)', () => {
+  const base = initialState();
+  const infraCount = base.buildings.length;
+  assert.ok(infraCount > 1000, `fixture guard: initialState() must carry its real map-spanning infra network, got only ${infraCount} buildings`);
+
+  let maxId = 0;
+  for (const b of base.buildings) if (b.id > maxId) maxId = b.id;
+  const withHuts = [...base.buildings];
+  for (let i = 0; i < 10; i++) {
+    withHuts.push({ id: ++maxId, spec: 'res_hut', x: 5 + (i % 5), y: 5 + Math.floor(i / 5) });
+  }
+  const state = { ...base, unlockedAll: true, buildings: withHuts, nextId: maxId + 1 };
+
+  const times = [];
+  for (let i = 0; i < 5; i++) {
+    // A FRESH state object each rep (spread of the same immutable base) --
+    // trafficSnapshot/segment caches are keyed on object/array identity, so
+    // reusing one state across reps would measure the memo-hit cost of the
+    // SECOND tick, not the real "first advance() after New Game" cost this
+    // bug is about.
+    const rep = { ...state, buildings: [...withHuts] };
+    const t0 = process.hrtime.bigint();
+    reducer(rep, { type: 'tick' });
+    const t1 = process.hrtime.bigint();
+    times.push(Number(t1 - t0) / 1e6);
+  }
+  times.sort((a, b) => a - b);
+  const median = times[Math.floor(times.length / 2)];
+  assert.ok(
+    median <= 25,
+    `first advance() on the real New Game state took ${median.toFixed(2)}ms (all reps: ${times.map((t) => t.toFixed(2)).join(', ')}ms) -- must be <= 25ms per the r3 bar (HEAD ~348.5ms on this same state)`,
+  );
+});

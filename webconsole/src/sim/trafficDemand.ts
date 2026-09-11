@@ -213,13 +213,23 @@ const VEHICLE_CAPACITY_TONNES = loadVehicleCapacities();
 
 interface TrafficConfigTable {
   maxAttributionRadiusTiles?: unknown;
+  nearestSourceForTilesOpsFallbackThreshold?: unknown;
 }
 const trafficConfig = rawTrafficConfig as unknown as TrafficConfigTable;
 
 /** BUG-847: bounds nearestSegmentWeights's BFS radius so cost is a function
  * of the MAP (MAP_W x MAP_H) and this figure, never of the city's own
  * occupied bounding-box diameter — validated once at module-load time,
- * fail-loud (GR#7), never a silent `undefined` -> NaN radius downstream. */
+ * fail-loud (GR#7), never a silent `undefined` -> NaN radius downstream.
+ * BUG-968 (r3 rework): `Number.isFinite` already rejects NaN and +/-Infinity
+ * here, so those were never reachable via this loader — but a FRACTIONAL
+ * value (e.g. 250.5) was previously accepted unchanged and forwarded to
+ * `nearestSourceForTiles`, which diverges from `boundedNearestSourceMapOf`
+ * on a non-integer radius (the flood's `dist < radius` admits a partial
+ * final layer; the primitive's `d > radius` does not). Math.floor here makes
+ * every consumer's radius an integer BY CONSTRUCTION, closing that
+ * divergence class outright rather than teaching the primitive to replicate
+ * the flood's fractional-layer behaviour. */
 function loadMaxAttributionRadiusTiles(): number {
   const v = trafficConfig.maxAttributionRadiusTiles;
   if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
@@ -228,9 +238,30 @@ function loadMaxAttributionRadiusTiles(): number {
       `data/traffic.json maxAttributionRadiusTiles must be a positive finite number, got ${JSON.stringify(v)}`,
     );
   }
-  return v;
+  return Math.floor(v);
 }
 const MAX_ATTRIBUTION_RADIUS_TILES = loadMaxAttributionRadiusTiles();
+
+/** BUG-935 r2 rework: `nearestSourceForTiles` below is O(queryTiles x
+ * onMapSources) — proportional to the CITY, not the map — but the flood it
+ * replaces is bounded by the map's area regardless of source count, so the
+ * two cost curves cross over at a large enough query x source product
+ * (measured crossover between 225M ops still ~5% faster and 400M ops ~52%
+ * SLOWER — see data/traffic.json's own note on this field). Reuses
+ * ERR_TRAFFIC_CONFIG_MISSING (no new error code, per the rework brief) —
+ * fail-loud exactly like MAX_ATTRIBUTION_RADIUS_TILES above, never a silent
+ * `?? someLiteral` fallback (GR#15). */
+function loadNearestSourceForTilesOpsFallbackThreshold(): number {
+  const v = trafficConfig.nearestSourceForTilesOpsFallbackThreshold;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+    throw registryError(
+      ERR_TRAFFIC_CONFIG_MISSING,
+      `data/traffic.json nearestSourceForTilesOpsFallbackThreshold must be a positive finite number, got ${JSON.stringify(v)}`,
+    );
+  }
+  return v;
+}
+const NEAREST_SOURCE_FOR_TILES_OPS_FALLBACK_THRESHOLD = loadNearestSourceForTilesOpsFallbackThreshold();
 
 // --- Scale-ladder access -----------------------------------------------------
 
@@ -1391,6 +1422,132 @@ export function boundedNearestSourceMapOf(sourceTileKeys: string[], radius: numb
     frontier = nextFrontier;
   }
   return visited;
+}
+
+/**
+ * BUG-935 perf fix — nearest-source lookup for a SPECIFIC, small set of
+ * query tiles only, never the whole reachable map. `boundedNearestSourceMapOf`
+ * above builds a Map entry for EVERY tile the flood reaches, but its two real
+ * callers (trafficAssignment.ts's nearestRoadSegmentTileMapOf,
+ * emergencyResponse.ts's nearestRoadSegmentOf) only ever call `.get(tileKey)`
+ * for a SMALL, city-proportional set of tiles (demand tiles + a handful of
+ * station tiles) — never for every reached tile. On a fresh game,
+ * `sourceTileKeys` is dominated by initialState()'s own ~1,855 map-spanning
+ * infrastructure tiles (BUG-593's documented finding: their bounding box
+ * already spans most of the map on EVERY game), so a full-map flood costs
+ * MAP-sized work even for a 10-building city — measured 1248 source tiles,
+ * radius 250 (data/traffic.json's cap), ~750ms self time in
+ * boundedNearestSourceMapOf alone (BUG-935).
+ *
+ * Correctness argument (why this is byte-identical to
+ * `boundedNearestSourceMapOf(sourceTileKeys, radius).get(tileKey)` for every
+ * queried tile, not an approximation): the flood above walks an OPEN grid —
+ * its only obstacle is the map edge, and every source/query tile handled
+ * here is already bounds-checked. The Manhattan (4-neighbour) path between
+ * any two in-bounds points never needs to leave the map (every point on a
+ * monotone Manhattan path between S and T lies within S and T's own
+ * bounding rectangle, which is itself inside the map since both endpoints
+ * are), so the flood's BFS distance from any source S to any tile T is
+ * EXACTLY `|Sx-Tx|+|Sy-Ty|` — never inflated by a detour. "Nearest source
+ * within `radius`, ties broken by the smallest source tileKey STRING" can
+ * therefore be computed directly per query tile from the raw coordinates,
+ * with no flooding at all. The tie-break matches exactly: sources are
+ * visited in ascending tileKey order (same sort the flood itself applies to
+ * seeds/frontiers), and only a STRICTLY smaller distance ever replaces the
+ * current best — so the first (lexicographically smallest) source reaching
+ * the minimum distance wins, identical to the flood's own
+ * `if (!existing || src < existing)` rule applied within one BFS layer.
+ *
+ * Cost: O(queryTiles * onMapSources) simple arithmetic — proportional to the
+ * CITY's own query set, never to the pre-shipped infrastructure network's
+ * footprint or the map's area.
+ */
+export function nearestSourceForTiles(
+  queryTileKeys: readonly string[],
+  sourceTileKeys: readonly string[],
+  radius: number,
+): Map<string, string> {
+  const result = new Map<string, string>();
+  if (queryTileKeys.length === 0 || sourceTileKeys.length === 0) return result;
+  // BUG-959 (r2 rework — closes the two deviations the r1 round found and
+  // pinned as "documented, unreachable"): match the flood EXACTLY rather
+  // than approximating it, so a future caller that DOES hit these edges
+  // (unlike today's two call sites) gets the same answer either way.
+  //
+  // radius semantics: the flood's own seed step (`visited.set(k, k)` in
+  // boundedNearestSourceMapOf) maps every on-map SOURCE to itself at
+  // distance 0 unconditionally — even when the expansion while-loop's body
+  // never runs at all, which happens for radius 0, any NEGATIVE radius
+  // (`dist(0) < radius` is false the instant radius <= 0), AND for a NaN
+  // radius (a NaN comparison is always false, so `dist < NaN` never lets
+  // the loop run either — NOT "no bound", the opposite: zero expansion).
+  // The flood's own maximum reachable BFS distance is otherwise exactly
+  // `radius` (verified in this module's own doc comment above), so
+  // `effectiveRadius` reduces to "radius itself when finite and >= 0, else
+  // 0 (seeds-only, i.e. an exact-match query only)".
+  const effectiveRadius = Number.isFinite(radius) && radius >= 0 ? radius : 0;
+  const sources: Array<{ x: number; y: number; key: string }> = [];
+  for (const k of sourceTileKeys) {
+    const comma = k.indexOf(',');
+    const x = Number(k.slice(0, comma));
+    const y = Number(k.slice(comma + 1));
+    // BUG-864(1) parity: an off-map source is dropped, never entered as a
+    // candidate — the same seed bounds check boundedNearestSourceMapOf
+    // applies before flooding.
+    if (x < 0 || x >= MAP_W || y < 0 || y >= MAP_H) continue;
+    sources.push({ x, y, key: k });
+  }
+  if (sources.length === 0) return result;
+
+  // BUG-935 r2 rework (BUG-958's own round flagged this as an open
+  // question): this function's O(queryTiles x onMapSources) cost is
+  // proportional to the CITY, but the flood it replaces is bounded by the
+  // MAP's area alone — at a large enough query x source product the flood
+  // is actually cheaper (measured crossover documented on
+  // data/traffic.json's nearestSourceForTilesOpsFallbackThreshold field).
+  // Falling back to the flood here is ALWAYS correct, not an approximation:
+  // it is the exact function this primitive is proven byte-identical to
+  // (this module's own doc comment above), so query results are identical
+  // either way — only the cost model changes.
+  if (queryTileKeys.length * sources.length > NEAREST_SOURCE_FOR_TILES_OPS_FALLBACK_THRESHOLD) {
+    const flood = boundedNearestSourceMapOf([...sourceTileKeys], radius);
+    const seenQueryFallback = new Set<string>();
+    for (const qk of queryTileKeys) {
+      if (seenQueryFallback.has(qk)) continue;
+      seenQueryFallback.add(qk);
+      const v = flood.get(qk);
+      if (v !== undefined) result.set(qk, v);
+    }
+    return result;
+  }
+
+  sources.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const seenQuery = new Set<string>();
+  for (const qk of queryTileKeys) {
+    if (seenQuery.has(qk)) continue;
+    seenQuery.add(qk);
+    const comma = qk.indexOf(',');
+    const qx = Number(qk.slice(0, comma));
+    const qy = Number(qk.slice(comma + 1));
+    // BUG-959: bounds-check the QUERY tile itself. The flood's `visited`
+    // map can only ever contain on-map tiles (every neighbour-expansion
+    // step bounds-checks before admitting a tile, and the seed step does
+    // too), so `.get(offMapKey)` on the flood's result is ALWAYS undefined
+    // — this function must never fabricate an answer for one.
+    if (qx < 0 || qx >= MAP_W || qy < 0 || qy >= MAP_H) continue;
+    let bestDist = Infinity;
+    let bestKey: string | null = null;
+    for (const src of sources) {
+      const d = Math.abs(src.x - qx) + Math.abs(src.y - qy);
+      if (d > effectiveRadius) continue;
+      if (d < bestDist) {
+        bestDist = d;
+        bestKey = src.key;
+      }
+    }
+    if (bestKey !== null) result.set(qk, bestKey);
+  }
+  return result;
 }
 
 /**

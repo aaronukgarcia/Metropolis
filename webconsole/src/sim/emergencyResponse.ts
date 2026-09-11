@@ -51,7 +51,7 @@
 
 import type { SimState } from './types.ts';
 import { SPECS, isOnline, lineSegmentIndexOf, memoOnState, type LineSegment, type Spec } from './data.ts';
-import { demandForecastOf, ladderPointOf, boundedNearestSourceMapOf } from './trafficDemand.ts';
+import { demandForecastOf, ladderPointOf, nearestSourceForTiles } from './trafficDemand.ts';
 import { segmentAdjacencyOf, segmentFreeFlowMinutesOf, segmentDelayOf, weightedPercentile } from './trafficAssignment.ts';
 
 // data files this module reads (GR#15 — every constant below is sourced,
@@ -107,7 +107,11 @@ export function loadMaxAttributionRadiusFrom(raw: unknown): number {
       'data/traffic.json is missing a positive numeric maxAttributionRadiusTiles field',
     );
   }
-  return v;
+  // BUG-968 (r3 rework): floor to an integer — see trafficDemand.ts's
+  // loadMaxAttributionRadiusTiles for the full rationale (a fractional
+  // radius made nearestSourceForTiles diverge from boundedNearestSourceMapOf
+  // on the final partial BFS layer).
+  return Math.floor(v);
 }
 const MAX_ATTRIBUTION_RADIUS_TILES = loadMaxAttributionRadiusFrom(rawTraffic);
 
@@ -275,6 +279,17 @@ export function speedFactorFor(s: SimState, segId: string, _seg: LineSegment): n
 
 // --- nearest-road-segment attachment (shared primitive re-composition) ----
 
+// BUG-935 perf fix: this Map's only two consumers below (emergencyIsochronesOf's
+// station-tile lookups, responseMinutesAllOf's demand-tile lookups) query
+// `.get(tileKey)` for a SMALL, city-proportional set of tiles — station
+// buildings (a handful even in a huge city) plus demandForecastOf(s)'s tiles
+// — never for every tile a full-map flood would reach. `roadTileKeys` is
+// dominated by initialState()'s ~1,855 map-spanning infrastructure tiles
+// (BUG-593), so the old full-map `boundedNearestSourceMapOf` flood cost
+// MAP-sized work even for a 10-building city. `nearestSourceForTiles`
+// (trafficDemand.ts) computes the same result directly for just the tiles
+// these two consumers actually read — byte-identical (see its own doc
+// comment for the proof), proportional to the CITY's own query set.
 const nearestRoadSegmentOf: (s: SimState) => Map<string, string> = memoOnState((s) => {
   const idx = lineSegmentIndexOf(s);
   const roadTileKeys: string[] = [];
@@ -294,7 +309,22 @@ const nearestRoadSegmentOf: (s: SimState) => Map<string, string> = memoOnState((
   }
   const bboxDiameter = Number.isFinite(minX) ? maxX - minX + (maxY - minY) : 0;
   const radius = Math.min(bboxDiameter, MAX_ATTRIBUTION_RADIUS_TILES);
-  const nearestSourceTile = boundedNearestSourceMapOf(roadTileKeys, radius);
+
+  const queryKeys = new Set<string>();
+  for (const t of demandForecastOf(s)) queryKeys.add(`${t.x},${t.y}`);
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    for (const service of SERVICES) {
+      if (isStationOfService(sp, service)) {
+        queryKeys.add(`${b.x},${b.y}`);
+        break;
+      }
+    }
+  }
+
+  const nearestSourceTile = nearestSourceForTiles([...queryKeys], roadTileKeys, radius);
   const result = new Map<string, string>();
   for (const [tileKey, sourceTileKey] of nearestSourceTile) {
     result.set(tileKey, idx.tileToSegment.get(sourceTileKey)!);

@@ -99,6 +99,7 @@ function main() {
   const modes = loadJson('data/modes.json');
   const vehicleClasses = loadJson('data/traffic/vehicle_classes.json');
   const tripGeneration = loadJson('data/traffic/trip_generation.json');
+  const trafficConfig = loadJson('data/traffic.json');
 
   const rungs = scaleLadder.rungs;
 
@@ -329,6 +330,26 @@ function main() {
     }
     if (!(overlays.wear?.freshAlpha < overlays.wear?.failedAlpha)) {
       warn(`overlays.json wear.freshAlpha must be < wear.failedAlpha`);
+    }
+  }
+
+  // BUG-968 (r3 rework, FEAT-2326609798 estate): data/traffic.json's
+  // maxAttributionRadiusTiles must be a positive, finite INTEGER --
+  // trafficDemand.ts/trafficAssignment.ts/emergencyResponse.ts's three
+  // loaders each Math.floor it before use so nearestSourceForTiles' radius
+  // domain always agrees with boundedNearestSourceMapOf's inclusive
+  // `dist < radius` layer semantics (a fractional radius previously admitted
+  // a divergence on the flood's final partial layer). This check does not
+  // enforce the floor itself (that lives in the three loaders, each with its
+  // own unit-testable pure form) -- it enforces that the SHIPPED data value
+  // is already an integer, so the floor is a no-op safety net, not a silent
+  // corrector of bad data.
+  {
+    const v = trafficConfig.maxAttributionRadiusTiles;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+      warn(`data/traffic.json maxAttributionRadiusTiles must be a positive finite number, got ${JSON.stringify(v)}`);
+    } else if (!Number.isInteger(v)) {
+      warn(`data/traffic.json maxAttributionRadiusTiles must be an INTEGER (BUG-968), got ${v}`);
     }
   }
 
