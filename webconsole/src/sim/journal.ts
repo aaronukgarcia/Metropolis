@@ -134,6 +134,16 @@ export function isStateAffecting(action: Action): boolean {
     // state-affecting, must journal + replay like every other toggle (tax/policy).
     case 'toggleGridImport':
       return true;
+    // FEAT-2326609711 inc2 (AC-5): the three utility buy-in toggles mutate
+    // waterImportEnabled/wastewaterContractEnabled/refuseContractEnabled —
+    // state-affecting, must journal + replay identically (mirrors
+    // toggleGridImport immediately above it).
+    case 'toggleWaterImport':
+      return true;
+    case 'toggleWastewaterContract':
+      return true;
+    case 'toggleRefuseContract':
+      return true;
     // FEAT-2326609761 inc1 (AC-1, ASM-1504): the consolidator enable toggle
     // mutates consolidatorEnabled — state-affecting, must journal + replay
     // identically (mirrors toggleGridImport immediately above it).

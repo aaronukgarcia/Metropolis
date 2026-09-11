@@ -209,7 +209,8 @@ test('ATTACK: a city with zero power buildings imports its whole demand, cleanly
   assert.equal(pw.cap, 0, 'precondition: no generation at all');
   const f = computeFlows(s);
   const v = flowValue(f, 'outflows', GRID_IMPORT_OUTFLOW_LABEL);
-  assert.equal(v, Math.round(pw.need * GRID_IMPORT_TARIFF_PER_MW));
+  // BUG-1028 rework: Math.ceil, not Math.round (fiscal.ts).
+  assert.equal(v, Math.ceil(pw.need * GRID_IMPORT_TARIFF_PER_MW));
   assert.ok(Number.isInteger(v) && v > 0);
   const after = reducer(s, { type: 'tick' });
   assert.ok(Number.isFinite(after.funds) && Number.isInteger(after.funds), 'funds must survive as an integer');

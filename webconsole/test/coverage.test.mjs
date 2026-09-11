@@ -186,7 +186,14 @@ test('wellbeing service parts consume the shared coverage ratios (high when cove
     wat_clean: 1,
     wat_waste: 1, // water/sewage coverage 1
   });
-  const bare = city(20000, {});
+  // FEAT-2326609711 inc2: wastewaterContractEnabled defaults ON (Lead Ruling
+  // R1) — a bought-in shortfall reads as fully covered for wellbeing
+  // purposes (effectiveWastewaterCoverageOf), which would otherwise mask
+  // the 'Sewage' row's zero-coverage case this test exercises. Disabled
+  // explicitly here so this test keeps proving the RAW legacy coverage math
+  // (mirrors inc1's own precedent of updating brownout.test.mjs's fixtures
+  // to pin gridImportEnabled: false for the same reason).
+  const bare = city(20000, {}, (s) => ({ ...s, wastewaterContractEnabled: false }));
   assert.equal(earlyGameFactor(20000), 1);
 
   for (const [label, svcId] of PAIRED) {

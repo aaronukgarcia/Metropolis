@@ -352,6 +352,22 @@ export interface SimState {
    */
   gridImportEnabled?: boolean;
   /**
+   * FEAT-2326609711 inc2 (AC-1, AC-5, AC-9/AC-10; Lead Ruling R1) — external
+   * cover toggles for the three remaining utilities: clean water,
+   * wastewater treatment, and refuse collection. Follow inc1's FLAT
+   * top-level field idiom exactly (never a nested externalCover object —
+   * the doc's AC-1 explicitly allows this inc1-compatible alias). Each
+   * defaults to its own *_ENABLED_DEFAULT (fiscal.ts, true for a new city)
+   * when undefined — a legacy state predating these fields is treated as ON
+   * by every read site (never a silent off fallback, mirroring
+   * gridImportEnabled's own idiom immediately above). Plain sim-state
+   * booleans (not React-local, not policies-keyed) so they serialise/
+   * journal/replay exactly like every other field.
+   */
+  waterImportEnabled?: boolean;
+  wastewaterContractEnabled?: boolean;
+  refuseContractEnabled?: boolean;
+  /**
    * FEAT-2326609761 inc1 (AC-1, ASM-1504): the CONSOLIDATOR enable toggle.
    * Deliberately SIM STATE, not localStorage — every other feature flag in
    * this codebase (liveEngineFlag.ts, webWorkerFlag.ts, debugBuildSpeed.ts)

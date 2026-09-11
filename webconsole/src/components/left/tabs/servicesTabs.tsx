@@ -27,7 +27,19 @@ import {
   type ServiceCoverage,
 } from '../../../sim/data';
 import { isBrownoutActive } from '../../../sim/data';
-import { GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT } from '../../../sim/fiscal';
+import {
+  GRID_IMPORT_TARIFF_PER_MW,
+  GRID_IMPORT_ENABLED_DEFAULT,
+  WATER_IMPORT_TARIFF_PER_PERSON_PER_TICK,
+  WATER_IMPORT_ENABLED_DEFAULT,
+  WASTEWATER_CONTRACT_TARIFF_PER_PERSON_PER_TICK,
+  WASTEWATER_CONTRACT_ENABLED_DEFAULT,
+  REFUSE_CONTRACT_TARIFF_PER_TONNE_PER_TICK,
+  REFUSE_CONTRACT_ENABLED_DEFAULT,
+  REFUSE_CONTRACT_OUTFLOW_LABEL,
+  gridImportCostPerTick,
+  utilityBuyInCostPerTick,
+} from '../../../sim/fiscal';
 import { fmtMoney, fmtMoneyEach, fmtNum, fmtPct, formatPower } from '../../../sim/utils';
 import { wasteDisplayModel } from '../../right/wasteModel';
 import { TabStrip } from '../../Tabs';
@@ -42,7 +54,10 @@ export function PowerTab() {
   const importOn = state.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT;
   const importedMw = importOn ? Math.max(0, pw.need - pw.cap) : 0;
   const shortfallMw = Math.max(0, pw.need - pw.cap);
-  const importCostPerTick = Math.round(importedMw * GRID_IMPORT_TARIFF_PER_MW);
+  // BUG-1050 (GR#3, no local arithmetic): call the fiscal SSOT directly
+  // instead of re-deriving the ceil-rounded product here — the panel can
+  // never drift from the booked outflow line.
+  const importCostPerTick = gridImportCostPerTick(pw.cap, pw.need, GRID_IMPORT_TARIFF_PER_MW);
   // §2 row 5 / AC-9: RAG via isBrownoutActive, never raw cap<need.
   const brownoutActive = isBrownoutActive(state);
   const rag = ragForPower({ coverageMet: pw.cap >= pw.need, brownoutActive });
@@ -108,6 +123,30 @@ export function WaterTab() {
   const plants = state.buildings.filter((b) => SPECS[b.spec]?.kind === 'water');
   const cleanHeadroom = bal.clean - demand.clean;
   const wasteHeadroom = bal.waste - demand.waste;
+  // FEAT-2326609711 inc2 (AC-9/AC-10): external cover toggles for clean
+  // water and wastewater treatment — same shape as PowerTab's toggle above.
+  const waterOn = state.waterImportEnabled ?? WATER_IMPORT_ENABLED_DEFAULT;
+  const waterShortfall = Math.max(0, demand.clean - bal.clean);
+  const waterImportedPersons = waterOn ? waterShortfall : 0;
+  // BUG-1050 (GR#3, no local arithmetic): call the fiscal SSOT.
+  const waterImportCostPerTick = utilityBuyInCostPerTick(bal.clean, demand.clean, WATER_IMPORT_TARIFF_PER_PERSON_PER_TICK);
+  const wastewaterOn = state.wastewaterContractEnabled ?? WASTEWATER_CONTRACT_ENABLED_DEFAULT;
+  const wastewaterShortfall = Math.max(0, demand.waste - bal.waste);
+  const wastewaterImportedPersons = wastewaterOn ? wastewaterShortfall : 0;
+  const wastewaterContractCostPerTick = utilityBuyInCostPerTick(
+    bal.waste,
+    demand.waste,
+    WASTEWATER_CONTRACT_TARIFF_PER_PERSON_PER_TICK
+  );
+  // BUG-1061 (supersedes the r2 BUG-1048 gate): the leak banner/tile are a
+  // CONSEQUENCE display, the exact UI twin of approvalOf's -5 penalty — so
+  // it must gate on the same CONTRACT TOGGLE, not on shortage-existence
+  // (isWastewaterShortageActive stays false on an over-built-clean-network
+  // leak even with the contract OFF, which had wrongly hidden the legacy
+  // warning on the byte-identical-with-main path). Contract ON -> fully
+  // substitutes, neutral line; contract OFF -> the raw physical-fact
+  // bal.leak drives the legacy "-5 approval" warning, matching main.
+  const leakConsequenceActive = bal.leak && !wastewaterOn;
   return (
     <>
       <div className="tiles">
@@ -115,7 +154,7 @@ export function WaterTab() {
           <div className="n">{fmtNum(bal.clean)}</div>
           <div className="l">Clean capacity</div>
         </div>
-        <div className={`tile ${wasteHeadroom < 0 || bal.leak ? 'neg' : 'pos'}`}>
+        <div className={`tile ${wasteHeadroom < 0 || leakConsequenceActive ? 'neg' : 'pos'}`}>
           <div className="n">{fmtNum(bal.waste)}</div>
           <div className="l">Discharge capacity</div>
         </div>
@@ -134,10 +173,72 @@ export function WaterTab() {
         Clean headroom {fmtNum(cleanHeadroom)} · discharge headroom {fmtNum(wasteHeadroom)}{' '}
         (capacity − demand; negative = the network is over capacity and short).
       </p>
-      {bal.leak && (
+      <div className="wb-row">
+        <div>
+          <b>Use external water cover</b>
+          <p className="muted">
+            Buys in any clean-water shortfall at {fmtMoneyEach(WATER_IMPORT_TARIFF_PER_PERSON_PER_TICK)}
+            /person/tick instead of a shortage. Off applies the legacy shortage penalty.
+          </p>
+        </div>
+        <button
+          className={`btn toggle ${waterOn ? 'on' : ''}`}
+          onClick={() => dispatch({ type: 'toggleWaterImport' })}
+        >
+          {waterOn ? 'On' : 'Off'}
+        </button>
+      </div>
+      {waterShortfall > 0 && waterOn && (
+        <p className="hint">
+          Importing {fmtNum(waterImportedPersons)} persons' worth this tick —{' '}
+          {fmtMoney(waterImportCostPerTick)}/tick (Water Import, shown in the Earnings tab).
+        </p>
+      )}
+      {waterShortfall > 0 && !waterOn && (
+        <p className="hint warn-text">
+          Clean-water shortfall not covered — legacy shortage applies. Toggle external cover back on,
+          or build more local capacity.
+        </p>
+      )}
+      <div className="wb-row">
+        <div>
+          <b>Use external sewage cover</b>
+          <p className="muted">
+            Buys in any wastewater shortfall at{' '}
+            {fmtMoneyEach(WASTEWATER_CONTRACT_TARIFF_PER_PERSON_PER_TICK)}/person/tick instead of a
+            shortage. Off applies the legacy shortage penalty.
+          </p>
+        </div>
+        <button
+          className={`btn toggle ${wastewaterOn ? 'on' : ''}`}
+          onClick={() => dispatch({ type: 'toggleWastewaterContract' })}
+        >
+          {wastewaterOn ? 'On' : 'Off'}
+        </button>
+      </div>
+      {wastewaterShortfall > 0 && wastewaterOn && (
+        <p className="hint">
+          Contracting {fmtNum(wastewaterImportedPersons)} persons' worth this tick —{' '}
+          {fmtMoney(wastewaterContractCostPerTick)}/tick (Waste-Water Contract, shown in the Earnings
+          tab).
+        </p>
+      )}
+      {wastewaterShortfall > 0 && !wastewaterOn && (
+        <p className="hint warn-text">
+          Wastewater shortfall not covered — legacy shortage applies. Toggle external cover back on,
+          or build more local capacity.
+        </p>
+      )}
+      {leakConsequenceActive && (
         <p className="hint warn-text">
           Leakage risk: discharge is below 80% of clean capacity — sewage backs up (-5 approval).
           Build a Waste-Water Plant or upgrade pipes.
+        </p>
+      )}
+      {bal.leak && !leakConsequenceActive && (
+        <p className="hint">
+          Discharge is below 80% of clean capacity, but the Waste-Water Contract is covering the
+          shortfall — no approval penalty while the contract is on.
         </p>
       )}
       {!bal.leak && bal.clean > 0 && bal.waste > 0 && (
@@ -209,34 +310,75 @@ export function WaterTab() {
 // Waste & Recycling (§1 row 15 — direct relocation, unchanged content).
 // ---------------------------------------------------------------------------
 export function WasteTab() {
-  const { state } = useSim();
+  const { state, dispatch } = useSim();
   const m = wasteDisplayModel(state);
   const coveragePct = Math.round(m.coverage * 100);
-  const rag = ragForWasteCollection(m.hasUncollected);
+  // FEAT-2326609711 inc2 rework (BUG-1027, LEAD RULING point 2): m.hasUncollected
+  // itself is now the fixed SSOT (wasteModel.ts routes it through data.ts's
+  // isRefuseShortageActive instead of raw `uncollected > 0`), so the RAG /
+  // tooltip / banner below read it unchanged — they can no longer assert a
+  // penalty the engine has in fact suppressed while the refuse contract is ON.
+  const shortageActive = m.hasUncollected;
+  const rag = ragForWasteCollection(shortageActive);
   const covCol = ragColor(rag);
   const divPct = Math.round(m.diversionRate * 100);
   const divCol = 'var(--done)';
+  // FEAT-2326609711 inc2 (AC-9/AC-10): external cover toggle for refuse
+  // collection — same shape as PowerTab/WaterTab's toggles.
+  const refuseOn = state.refuseContractEnabled ?? REFUSE_CONTRACT_ENABLED_DEFAULT;
+  const refuseShortfallTonnes = Math.max(0, m.generated - m.capacity);
+  const refuseContractedTonnes = refuseOn ? refuseShortfallTonnes : 0;
+  // BUG-1050 (GR#3, no local arithmetic): call the fiscal SSOT.
+  const refuseContractCostPerTick = utilityBuyInCostPerTick(m.capacity, m.generated, REFUSE_CONTRACT_TARIFF_PER_TONNE_PER_TICK);
   return (
     <>
       <div className="tiles">
-        <div className={`tile ${m.hasUncollected ? 'neg' : 'pos'}`}>
+        <div className={`tile ${shortageActive ? 'neg' : 'pos'}`}>
           <div className="n">{fmtNum(m.generated)}</div>
           <div className="l">Generated t/tick</div>
         </div>
-        <div className={`tile ${m.hasUncollected ? 'neg' : 'pos'}`}>
+        <div className={`tile ${shortageActive ? 'neg' : 'pos'}`}>
           <div className="n">{fmtNum(m.capacity)}</div>
           <div className="l">Collection cap</div>
         </div>
       </div>
+      <div className="wb-row">
+        <div>
+          <b>Use contracted refuse collection</b>
+          <p className="muted">
+            Contracts out any uncollected shortfall at{' '}
+            {fmtMoneyEach(REFUSE_CONTRACT_TARIFF_PER_TONNE_PER_TICK)}/tonne/tick instead of leaving it
+            on the street. Off applies the legacy shortage penalty.
+          </p>
+        </div>
+        <button
+          className={`btn toggle ${refuseOn ? 'on' : ''}`}
+          onClick={() => dispatch({ type: 'toggleRefuseContract' })}
+        >
+          {refuseOn ? 'On' : 'Off'}
+        </button>
+      </div>
+      {refuseShortfallTonnes > 0 && refuseOn && (
+        <p className="hint">
+          Contracting {fmtNum(refuseContractedTonnes)} t/tick this tick —{' '}
+          {fmtMoney(refuseContractCostPerTick)}/tick (Contracted Refuse, shown in the Earnings tab).
+        </p>
+      )}
+      {refuseShortfallTonnes > 0 && !refuseOn && (
+        <p className="hint warn-text">
+          Uncollected shortfall not covered — legacy shortage applies. Toggle contracted collection
+          back on, or build more local capacity.
+        </p>
+      )}
       <h4>Collection coverage</h4>
       <div className="wb-row" title={
         `${fmtNum(m.collected)} / ${fmtNum(m.generated)} t collected` +
-        ` — uncollected ${fmtNum(m.uncollected)} t${m.hasUncollected ? ' (LEFT ON THE STREET)' : ''}`
+        ` — uncollected ${fmtNum(m.uncollected)} t${shortageActive ? ' (LEFT ON THE STREET)' : ''}`
       }>
         <span className="d-label">Collected</span>
         <div className="d-bar">
           <span
-            className={`d-fill ${m.hasUncollected ? 'neg' : 'pos'}`}
+            className={`d-fill ${shortageActive ? 'neg' : 'pos'}`}
             style={{ left: 0, width: `${Math.max(0, Math.min(100, coveragePct))}%`, background: covCol }}
           />
         </div>
@@ -244,10 +386,16 @@ export function WasteTab() {
           {coveragePct}%
         </span>
       </div>
-      {m.hasUncollected ? (
+      {shortageActive ? (
         <p className="hint warn-text">
           {fmtNum(m.uncollected)} t/tick left uncollected — refuse accumulates and drives the
           waste-health penalty. Build more Refuse Depots to raise coverage.
+        </p>
+      ) : refuseShortfallTonnes > 0 ? (
+        <p className="hint">
+          Contracted refuse collecting the shortfall — {fmtNum(refuseShortfallTonnes)} t/tick bought
+          in via {REFUSE_CONTRACT_OUTFLOW_LABEL} at {fmtMoney(refuseContractCostPerTick)}/tick, no
+          waste-health penalty while the contract is on.
         </p>
       ) : (
         <p className="hint">

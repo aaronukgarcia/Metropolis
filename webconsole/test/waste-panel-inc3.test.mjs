@@ -120,7 +120,15 @@ test('generation city: mix fractions sum to 100% and match the hand-computed pro
 
 test('under-collected city: uncollected tonnage flagged red, coverage < 1, landfill takes the remainder', () => {
   // 100 res_block ⇒ 60 t generated; ONE depot ⇒ 50 t capacity < 60 ⇒ 10 t uncollected.
+  // FEAT-2326609711 inc2 rework (BUG-1027): hasUncollected is now gated by
+  // isRefuseShortageActive (data.ts), which defaults the refuse contract ON
+  // (REFUSE_CONTRACT_ENABLED_DEFAULT) — a covered shortfall is bought in and
+  // is NOT "left on the street". This test exercises the RAW legacy shortage
+  // math pre-dating the contract, so the contract is explicitly OFF here
+  // (same precedent as coverage.test.mjs/demanddock-overhaul.test.mjs/
+  // waste-inc1.test.mjs's own explicit-OFF fixtures).
   const s = bareCity(0);
+  s.refuseContractEnabled = false;
   add(s, 'res_block', 100);
   add(s, 'waste_depot', 1); // 50 t cap
   const m = wasteDisplayModel(s);

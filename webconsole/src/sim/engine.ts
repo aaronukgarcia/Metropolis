@@ -26,6 +26,10 @@ import {
   serviceCoverageOf,
   brownoutOf,
   isBrownoutActive,
+  effectiveCleanWaterCoverageOf,
+  effectiveWastewaterCoverageOf,
+  effectiveRefuseCoverageOf,
+  effectiveServiceCoverageOf,
   BROWNOUT_WELLBEING_K,
   stationLinks,
   totalJobs,
@@ -44,7 +48,7 @@ import {
   ROAD_TIER_SPECS,
   ROAD_TIER_CAPACITY,
   computeRoadConnectivity,
-  collectionCoverageOf,
+  wasteStatsOf,
   collectionOpexOf,
   landfillTippingOf,
   recyclingRevenueOf,
@@ -356,7 +360,7 @@ import {
   isTrafficCadenceTickWithConfig,
   safeRoadScoreFromSnapshotOf,
 } from './trafficWellbeing.ts';
-import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL, INSOLVENCY_WARNING_THRESHOLD, POLICY_COST_CAP_FRACTION, transitSubsidyCostPerTick, transitFareRevenuePerTick, TRANSIT_FARE_RATE_PER_RIDER, TRANSIT_FARE_REVENUE_LABEL, freightTaxPerTick, taxIncomeAtRate, POLICY_CAP_REFERENCE_TAX_RATE, OFFICE_TAX_YIELD_FACTOR, INSTITUTIONAL_KINDS, INSTITUTIONAL_TAX_LABEL, INSTITUTIONAL_TAX_YIELD_FACTOR } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL, INSOLVENCY_WARNING_THRESHOLD, POLICY_COST_CAP_FRACTION, transitSubsidyCostPerTick, transitFareRevenuePerTick, TRANSIT_FARE_RATE_PER_RIDER, TRANSIT_FARE_REVENUE_LABEL, freightTaxPerTick, taxIncomeAtRate, POLICY_CAP_REFERENCE_TAX_RATE, OFFICE_TAX_YIELD_FACTOR, INSTITUTIONAL_KINDS, INSTITUTIONAL_TAX_LABEL, INSTITUTIONAL_TAX_YIELD_FACTOR, WATER_IMPORT_TARIFF_PER_PERSON_PER_TICK, WATER_IMPORT_ENABLED_DEFAULT, WATER_IMPORT_OUTFLOW_LABEL, WASTEWATER_CONTRACT_TARIFF_PER_PERSON_PER_TICK, WASTEWATER_CONTRACT_ENABLED_DEFAULT, WASTEWATER_CONTRACT_OUTFLOW_LABEL, REFUSE_CONTRACT_TARIFF_PER_TONNE_PER_TICK, REFUSE_CONTRACT_ENABLED_DEFAULT, REFUSE_CONTRACT_OUTFLOW_LABEL, utilityBuyInCostPerTick } from './fiscal.ts';
 // FEAT-2326609761 (CONSOLIDATOR mutation lane) — read-only discovery/opportunity
 // functions from the PARALLEL read-only lane's module. Safe one-directional
 // import: consolidator.ts is a LEAF (mirrors TICKS_PER_MONTH/CONNECT_EXEMPT_KINDS
@@ -848,7 +852,17 @@ export function attractivenessOf(s: SimState, wbOverall: number): number {
   // and wellbeingOf's own service parts consume), each row clamped to 0..1
   // (oversupply beyond "fully covered" doesn't make the city MORE
   // attractive to move into).
-  const coverageRows = serviceCoverageOf(s);
+  //
+  // FEAT-2326609711 inc2 rework (BUG-1026/BUG-1030, LEAD RULING point 1):
+  // routed through data.ts's effectiveServiceCoverageOf — the SSOT wrapper
+  // that substitutes cleanwater/waste/power's rows with their EFFECTIVE
+  // coverage while their buy-in contract is ON — instead of the raw
+  // serviceCoverageOf(s). Before this fix a fully bought-in shortfall still
+  // docked migration (the r1 REJECT half-wire: attract had ZERO response to
+  // the toggle). Cover OFF, or no shortfall on any row, is byte-identical to
+  // the pre-feature average (each effective*CoverageOf helper returns the
+  // raw ratio unchanged in both those cases).
+  const coverageRows = effectiveServiceCoverageOf(s);
   const avgCoverage = coverageRows.length
     ? coverageRows.reduce((sum, r) => sum + clampN(r.coverage, 0, 1), 0) / coverageRows.length
     : 1;
@@ -980,6 +994,12 @@ function rawState(): SimState {
     // FEAT-2326609711 inc1 (AC-1): new cities default to external power cover
     // ON (GRID_IMPORT_ENABLED_DEFAULT, fiscal.ts — Aaron's Design Ruling).
     gridImportEnabled: GRID_IMPORT_ENABLED_DEFAULT,
+    // FEAT-2326609711 inc2 (AC-1): new cities default to external cover ON
+    // for the three remaining utilities (WATER_IMPORT_ENABLED_DEFAULT etc.,
+    // fiscal.ts — Lead Ruling R1, mirrors gridImportEnabled immediately above).
+    waterImportEnabled: WATER_IMPORT_ENABLED_DEFAULT,
+    wastewaterContractEnabled: WASTEWATER_CONTRACT_ENABLED_DEFAULT,
+    refuseContractEnabled: REFUSE_CONTRACT_ENABLED_DEFAULT,
     // FEAT-2326609761 inc1 (AC-1, ASM-1504): new cities default to the
     // consolidator OFF (CONSOLIDATOR_ENABLED_DEFAULT, above).
     consolidatorEnabled: CONSOLIDATOR_ENABLED_DEFAULT,
@@ -1317,6 +1337,39 @@ export function computeFlows(
     ? gridImportCostPerTick(pw.cap, pw.need, GRID_IMPORT_TARIFF_PER_MW)
     : 0;
 
+  // FEAT-2326609711 inc2: Water Import / Waste-Water Contract / Contracted
+  // Refuse (external buy-in for the three remaining utilities). Same shape
+  // as inc1's Grid Import immediately above: shortfall = max(0, need - cap)
+  // in the utility's own unit (persons for water/wastewater — the SAME
+  // serviceCoverageOf 'cleanwater'/'waste' rows the wellbeing parts read,
+  // GR#3 — tonnes for refuse, wasteStatsOf's generated/capacity, the SAME
+  // basis collectionCoverageOf/collectionOpexOf already use); cost =
+  // shortfall * tariff, only booked when the toggle is ON (each `?? DEFAULT`
+  // so a legacy state predating these fields reads as ON, AC-1/AC-12) AND a
+  // real shortfall exists (AC-2's "line absent, not zero" idiom). Pushed to
+  // `outflows` further down, once that array exists (AC-6: exactly once).
+  const cleanwaterRow = serviceCoverageOf(s).find((c) => c.id === 'cleanwater');
+  const waterImportOn = s.waterImportEnabled ?? WATER_IMPORT_ENABLED_DEFAULT;
+  const waterImportCost = waterImportOn
+    ? utilityBuyInCostPerTick(cleanwaterRow?.cap ?? 0, cleanwaterRow?.need ?? 0, WATER_IMPORT_TARIFF_PER_PERSON_PER_TICK)
+    : 0;
+
+  const wastewaterRow = serviceCoverageOf(s).find((c) => c.id === 'waste');
+  const wastewaterContractOn = s.wastewaterContractEnabled ?? WASTEWATER_CONTRACT_ENABLED_DEFAULT;
+  const wastewaterContractCost = wastewaterContractOn
+    ? utilityBuyInCostPerTick(
+        wastewaterRow?.cap ?? 0,
+        wastewaterRow?.need ?? 0,
+        WASTEWATER_CONTRACT_TARIFF_PER_PERSON_PER_TICK
+      )
+    : 0;
+
+  const wasteStats = wasteStatsOf(s);
+  const refuseContractOn = s.refuseContractEnabled ?? REFUSE_CONTRACT_ENABLED_DEFAULT;
+  const refuseContractCost = refuseContractOn
+    ? utilityBuyInCostPerTick(wasteStats.capacity, wasteStats.generated, REFUSE_CONTRACT_TARIFF_PER_TONNE_PER_TICK)
+    : 0;
+
   // BUG-569: an under-construction harbour shouldn't grant the Freight Tax
   // boost yet — existence alone isn't enough, mirror the isOnline gate.
   const harbourBoost = s.buildings.some((b) => b.spec === 'land_harbour' && isOnline(s, b))
@@ -1376,6 +1429,18 @@ export function computeFlows(
   // — pushed exactly once, here, never a second side-channel debit.
   if (gridImportOn && gridImportCost > 0) {
     outflows.push({ label: GRID_IMPORT_OUTFLOW_LABEL, value: gridImportCost });
+  }
+  // FEAT-2326609711 inc2 (AC-2/AC-6): the three utility buy-in outflows,
+  // computed above — pushed exactly once each, here, never a second
+  // side-channel debit (mirrors Grid Import immediately above).
+  if (waterImportOn && waterImportCost > 0) {
+    outflows.push({ label: WATER_IMPORT_OUTFLOW_LABEL, value: waterImportCost });
+  }
+  if (wastewaterContractOn && wastewaterContractCost > 0) {
+    outflows.push({ label: WASTEWATER_CONTRACT_OUTFLOW_LABEL, value: wastewaterContractCost });
+  }
+  if (refuseContractOn && refuseContractCost > 0) {
+    outflows.push({ label: REFUSE_CONTRACT_OUTFLOW_LABEL, value: refuseContractCost });
   }
 
   const c3 = countByKindOnline(s);
@@ -9036,6 +9101,9 @@ export type Action =
   | { type: 'tax'; which: keyof TaxRates; rate: number }
   | { type: 'policy'; id: PolicyId }
   | { type: 'toggleGridImport' }
+  | { type: 'toggleWaterImport' }
+  | { type: 'toggleWastewaterContract' }
+  | { type: 'toggleRefuseContract' }
   // FEAT-2326609761 inc1 (AC-1, ASM-1504): the CONSOLIDATOR enable toggle —
   // journalled sim state, deliberately NOT localStorage (see the field's own
   // doc comment on SimState.consolidatorEnabled, types.ts).
@@ -10703,6 +10771,27 @@ function reduceCore(
         gridImportEnabled: !(state.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT),
       };
 
+    // FEAT-2326609711 inc2 (AC-9/AC-10): toggle external cover for the three
+    // remaining utilities. Plain sim-state mutations, mirroring
+    // toggleGridImport's shape exactly.
+    case 'toggleWaterImport':
+      return {
+        ...state,
+        waterImportEnabled: !(state.waterImportEnabled ?? WATER_IMPORT_ENABLED_DEFAULT),
+      };
+
+    case 'toggleWastewaterContract':
+      return {
+        ...state,
+        wastewaterContractEnabled: !(state.wastewaterContractEnabled ?? WASTEWATER_CONTRACT_ENABLED_DEFAULT),
+      };
+
+    case 'toggleRefuseContract':
+      return {
+        ...state,
+        refuseContractEnabled: !(state.refuseContractEnabled ?? REFUSE_CONTRACT_ENABLED_DEFAULT),
+      };
+
     // FEAT-2326609761 inc1 (AC-1, AC-2): flips consolidatorEnabled. Mirrors
     // toggleGridImport's shape exactly — plain sim-state mutation, journals/
     // replays/serialises like every other reducer action (journal.ts's
@@ -11285,7 +11374,23 @@ export const approvalOf: (s: SimState) => number = memoOnState((s) => {
   const avgTax = (t.residential + t.commercial + t.industrial) / 3;
   let a = 62 - avgTax * 1.5;
   a += Math.min(6, 3 * stationLinks(s).connectedIds.size);
-  if (waterBalanceOf(s).leak) a -= 5;
+  // BUG-1061 (FEAT-2326609711 inc2 r3 REJECT driver, supersedes the r2
+  // BUG-1048 gate): waterBalanceOf(s).leak is a CAPACITY-RATIO fact
+  // (waste/clean < 0.8) that can fire even when there is no
+  // population-level waste-water SHORTAGE at all (an over-built clean
+  // network next to a merely-adequate waste plant) — isWastewaterShortageActive
+  // is FALSE on those cities regardless of the contract toggle, which had
+  // silently suppressed the legacy -5 penalty even with every cover
+  // EXPLICITLY OFF, breaking the cover-OFF byte-identity-with-main
+  // guarantee (BUG-1047's own bar). The consequence must gate on the
+  // CONTRACT itself, not on shortage-existence: contract OFF -> legacy
+  // capacity-ratio leak behaviour, byte-identical to main; contract ON ->
+  // fully substitutes (no penalty), matching the "no consequence beyond the
+  // outflow line" ruling. waterBalanceOf(s).leak stays the raw
+  // physical-fact predicate (deliberately toggle-blind, mirroring
+  // brownoutOf/isBrownoutActive's split) for any caller that wants the
+  // capacity ratio itself.
+  if (waterBalanceOf(s).leak && !(s.wastewaterContractEnabled ?? WASTEWATER_CONTRACT_ENABLED_DEFAULT)) a -= 5;
   if (s.policies.transitSubsidy) a += 8;
   if (s.policies.austerity) a -= 12;
   if (s.policies.recycling) a -= 2;
@@ -11423,7 +11528,16 @@ const buildServiceWellbeingParts: (s: SimState) => { label: string; value: numbe
   const education = (ratio('nursery') + ratio('primary') + ratio('college')) / 3;
   // BUG-392 base: utilities coverage = min(power, clean water) — the weakest
   // grid utility bounds the part.
-  const utilities = Math.min(ratio('power'), ratio('cleanwater'));
+  // FEAT-2326609711 inc2 (Lead Ruling R3): the clean-water half reads
+  // data.ts's effectiveCleanWaterCoverageOf (this feature's SSOT) instead of
+  // the raw ratio('cleanwater') — while external cover is ON a bought-in
+  // shortfall reports as fully covered (1) here, so a covered city's
+  // Utilities part is bounded ONLY by power, exactly matching Aaron's "no
+  // consequence beyond the outflow line" ruling for THIS increment (contrast
+  // inc1's power path, which deliberately keeps its own base coverage term
+  // visible — see effectiveCleanWaterCoverageOf's doc comment). Cover OFF,
+  // or no shortfall, is byte-identical to the pre-feature ratio (AC-3/AC-13).
+  const utilities = Math.min(ratio('power'), effectiveCleanWaterCoverageOf(s));
   // BUG-393 seam, ON TOP of the coverage base: while a power DEFICIT is
   // active, rolling outages hurt everything the grid touches beyond the mere
   // MW shortfall the coverage ratio already expresses — so the blended part
@@ -11490,7 +11604,11 @@ const buildServiceWellbeingParts: (s: SimState) => { label: string; value: numbe
     { label: 'Fire safety', value: part(ratio('fire')) },
     { label: 'Jobs/Employment', value: employment },
     { label: 'Utilities', value: utilitiesValue },
-    { label: 'Sewage', value: part(ratio('waste')) },
+    // FEAT-2326609711 inc2 (Lead Ruling R3): reads effectiveWastewaterCoverageOf
+    // instead of the raw ratio('waste') — a bought-in wastewater shortfall
+    // reports as fully covered (1); cover OFF/no shortfall is byte-identical
+    // to the pre-feature value.
+    { label: 'Sewage', value: part(effectiveWastewaterCoverageOf(s)) },
     // FEAT-1972079906 inc1 — WASTE-HEALTH penalty. Uncollected refuse hurts
     // wellbeing: the part tracks collection coverage (part(1) ⇒ ~100 = no penalty
     // when fully collected; part(0) ⇒ ~0 when nothing is collected), so a higher
@@ -11498,7 +11616,11 @@ const buildServiceWellbeingParts: (s: SimState) => { label: string; value: numbe
     // generates NO waste (no online residents/jobs) coverage is defined as 1, so
     // the part is neutral and adds no penalty. (A disease/health track is inc2.)
     // ⚠ BALANCE-NUMBER PLACEHOLDER: reuses the shared coverage→part map.
-    { label: 'Refuse', value: part(collectionCoverageOf(s)) },
+    // FEAT-2326609711 inc2 (Lead Ruling R3): reads effectiveRefuseCoverageOf
+    // instead of the raw collectionCoverageOf(s) — a bought-in refuse
+    // shortfall reports as fully collected (1); cover OFF/no shortfall is
+    // byte-identical to the pre-feature value.
+    { label: 'Refuse', value: part(effectiveRefuseCoverageOf(s)) },
     { label: 'Traffic/Commute', value: congestion },
     // FEAT-2326609798 inc5 r2 (Lead amendments 1/2, after r1 REJECT
     // BUG-877/879) — three NEW PENALTY terms alongside (never replacing) the

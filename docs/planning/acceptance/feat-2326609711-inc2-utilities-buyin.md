@@ -57,9 +57,18 @@ On tick 1, when water need > clean capacity, no shortage applies; instead, outfl
 
 Check: `lastFlows.outflows` contains entry:
 - `label === 'Water Import'` (exact label)
-- `value === Math.round((500 − 350) × 0.08)` = Math.round(12) = 12 (the shortfall 150 people × 0.08)
+- `value === Math.ceil((500 − 350) × 0.08)` = Math.ceil(12) = 12 (the shortfall 150 people × 0.08)
 
 If capacity >= need (no shortage), line is absent (not zero-value).
+
+**BUG-1028 rework (LEAD RULING point 3):** the rounding mode is `Math.ceil`, not
+`Math.round` — a non-zero shortfall must never book £0 (Math.round let any
+shortfall below the round-up threshold through for free — 1..6 persons at
+this tariff). `Math.ceil` of any strictly-positive product is always >= 1,
+so "a non-zero shortfall costs at least £1" falls out of the rounding mode
+itself. This example's 12 is unaffected (already an exact integer); the
+floor behaviour matters at fractional shortfalls, see BUG-1028 for the
+sub-rounding-threshold case this closes.
 
 **Mutation:** tariff calculation uses `needPersons * 0.04` (cheaper). Value becomes 20 instead of 12. Test goes red.
 

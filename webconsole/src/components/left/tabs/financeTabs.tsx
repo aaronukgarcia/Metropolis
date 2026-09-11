@@ -251,6 +251,12 @@ export function EarningsTab() {
   const totalOut = state.lastFlows.outflows.reduce((a, b) => a + b.value, 0);
   const totalIn = rows.reduce((a, r) => a + r.gross, 0);
   const gridImportFlow = state.lastFlows.outflows.find((f) => f.label === 'Grid Import');
+  // FEAT-2326609711 inc2 (AC-8): the three utility buy-in outflow rows,
+  // rendered ONLY when actually occurring this tick (mirrors Grid Import's
+  // "present in lastFlows.outflows" idiom, never a stale/previous value).
+  const waterImportFlow = state.lastFlows.outflows.find((f) => f.label === 'Water Import');
+  const wastewaterContractFlow = state.lastFlows.outflows.find((f) => f.label === 'Waste-Water Contract');
+  const refuseContractFlow = state.lastFlows.outflows.find((f) => f.label === 'Contracted Refuse');
   return (
     <table className="table">
       <thead>
@@ -270,6 +276,30 @@ export function EarningsTab() {
             <td>Grid Import</td>
             <td className="muted">external power cover</td>
             <td className="out">{fmtMoney(-gridImportFlow.value)}</td>
+            <td />
+          </tr>
+        )}
+        {waterImportFlow && (
+          <tr>
+            <td>Water Import</td>
+            <td className="muted">external water cover</td>
+            <td className="out">{fmtMoney(-waterImportFlow.value)}</td>
+            <td />
+          </tr>
+        )}
+        {wastewaterContractFlow && (
+          <tr>
+            <td>Waste-Water Contract</td>
+            <td className="muted">external sewage cover</td>
+            <td className="out">{fmtMoney(-wastewaterContractFlow.value)}</td>
+            <td />
+          </tr>
+        )}
+        {refuseContractFlow && (
+          <tr>
+            <td>Contracted Refuse</td>
+            <td className="muted">contracted refuse collection</td>
+            <td className="out">{fmtMoney(-refuseContractFlow.value)}</td>
             <td />
           </tr>
         )}

@@ -134,10 +134,20 @@ export const GRID_IMPORT_OUTFLOW_LABEL = 'Grid Import';
  * Calculate Grid Import cost per tick: the shortfall (need - cap, floored at
  * 0) times the external tariff. Mirrors gridExportRevenuePerTick exactly
  * (same shape, opposite side of the meter). Pure, deterministic (GR#21).
+ *
+ * FEAT-2326609711 inc2 rework (BUG-1028, LEAD RULING point 3): Math.ceil, not
+ * Math.round — a non-zero shortfall must never book £0. Math.round let any
+ * shortfall below the round-up threshold through for free (a sub-24 MW
+ * deficit at this tariff), the inverse of the AC-4 pay-back invariant the
+ * tariffs exist to enforce. Math.ceil of any strictly-positive product is
+ * always >= 1, so "a non-zero shortfall costs at least £1" falls out of the
+ * rounding mode itself — no separate floor needed. Applied here too (not
+ * just the inc2 utilities) for consistency across every buy-in line, per the
+ * ruling.
  */
 export function gridImportCostPerTick(capMW: number, needMW: number, tariff: number): number {
   const importMW = Math.max(0, needMW - capMW);
-  return Math.round(importMW * tariff);
+  return Math.ceil(importMW * tariff);
 }
 
 /**
@@ -469,6 +479,181 @@ export function verifyGridTariffInvariant(
     exportExceedsLocal,
     importExceedsLocal,
     allHold: importExceedsExport && exportExceedsLocal && importExceedsLocal,
+  };
+}
+
+/**
+ * FEAT-2326609711 inc2 (Design Ruling, Aaron 2026-09-01) — external buy-in
+ * tariffs for the three remaining utilities: clean water, wastewater
+ * treatment, and refuse collection. Mirrors inc1's GRID_IMPORT_TARIFF_PER_MW
+ * exactly (same shape, opposite side of the meter for a different resource).
+ * ⚠ PLACEHOLDER-balance (Aaron's row-by-row pass pending). Each must stay
+ * STRICTLY GREATER than the cheapest LOCAL plant's own amortised unit cost
+ * (AC-4 invariant, verifyUtilityTariffInvariants below) — external cover is
+ * dearer per unit than building local capacity, so local investment still
+ * pays back over a horizon.
+ */
+export const WATER_IMPORT_TARIFF_PER_PERSON_PER_TICK = 0.08;
+export const WASTEWATER_CONTRACT_TARIFF_PER_PERSON_PER_TICK = 0.06;
+/**
+ * BUG (found building AC-4, reported in this increment's BOW comment): the
+ * doc's placeholder of 0.5 fails the AC-4 invariant outright — the ONLY
+ * refuse-collection spec in today's catalogue (waste_depot: cost 5,400,000 /
+ * wasteCapacity 50 t/tick / upkeep 300) amortises at exactly £18/tonne/tick
+ * over UTILITY_PLANT_AMORTISATION_TICKS, 36x the doc's proposed tariff.
+ * Raised to the smallest round value that clears the invariant with margin;
+ * Aaron's balance pass may retune further.
+ */
+export const REFUSE_CONTRACT_TARIFF_PER_TONNE_PER_TICK = 20;
+
+/**
+ * FEAT-2326609711 inc2 — new cities default to external cover ON for all
+ * three utilities (Aaron's ruling carried over from inc1: "a hamlet starts
+ * on external contracts for everything"). Mechanical only (rawState()/
+ * genesis + new-game flow), not a player-felt £ number.
+ */
+export const WATER_IMPORT_ENABLED_DEFAULT = true;
+export const WASTEWATER_CONTRACT_ENABLED_DEFAULT = true;
+export const REFUSE_CONTRACT_ENABLED_DEFAULT = true;
+
+/**
+ * FEAT-2326609711 inc2 — SSOT labels for the three outflow lines (exact
+ * strings per the Lead Ruling R5), so the engine and the UI can never
+ * disagree (GR#3, mirrors GRID_IMPORT_OUTFLOW_LABEL).
+ */
+export const WATER_IMPORT_OUTFLOW_LABEL = 'Water Import';
+export const WASTEWATER_CONTRACT_OUTFLOW_LABEL = 'Waste-Water Contract';
+export const REFUSE_CONTRACT_OUTFLOW_LABEL = 'Contracted Refuse';
+
+/**
+ * Calculate an external buy-in cost per tick: the shortfall (need - cap,
+ * floored at 0) times the external tariff. Shared by all three inc2
+ * utilities (water/wastewater are person-based, refuse is tonne-based) —
+ * the formula shape is identical to gridImportCostPerTick, just genericised
+ * over the unit so three near-identical functions aren't hand-duplicated
+ * (GR#3). Pure, deterministic (GR#21).
+ *
+ * FEAT-2326609711 inc2 rework (BUG-1028, LEAD RULING point 3): Math.ceil, not
+ * Math.round — see gridImportCostPerTick's doc comment for the full
+ * rationale (a non-zero shortfall must never book £0; Math.ceil of any
+ * strictly-positive product is always >= 1 with no separate floor needed).
+ */
+export function utilityBuyInCostPerTick(capUnits: number, needUnits: number, tariff: number): number {
+  const shortfallUnits = Math.max(0, needUnits - capUnits);
+  return Math.ceil(shortfallUnits * tariff);
+}
+
+/**
+ * FEAT-2326609711 inc2 (AC-4) — tariff invariant verification, loaded and
+ * called ONLY at test time (mirrors verifyGridTariffInvariant exactly).
+ * Derives the CHEAPEST local plant's amortised cost per utility from the
+ * LIVE catalogue (data.ts SPECS, GR#15) — never a hardcoded number.
+ *
+ * Takes the catalogue as a parameter for the same leaf-module reason
+ * verifyGridTariffInvariant does (see its doc comment) — fiscal.ts stays a
+ * pure, injectable derivation with no data.ts import.
+ *
+ * Water plants are `kind:'water', tag:'clean'` (served = persons); waste-
+ * water plants are `kind:'water', tag:'waste'` (served = persons); refuse
+ * depots are any spec with `wasteCapacity > 0` (tonnes). Reuses the same
+ * UTILITY_PLANT_AMORTISATION_TICKS horizon as power's amortisation window —
+ * civil infrastructure of this class does not have a separately-sourced
+ * lifespan figure in the catalogue today, so this reuses the one physical
+ * capex horizon already in the codebase (⚠ PLACEHOLDER-balance, Aaron may
+ * retune per-utility once a real horizon is sourced).
+ */
+export const UTILITY_PLANT_AMORTISATION_TICKS = POWER_PLANT_AMORTISATION_TICKS;
+
+export interface UtilityInvariantResult {
+  cheapestWaterPlantId: string | null;
+  cheapestWaterAmortisedPerPersonTick: number;
+  cheapestWastewaterPlantId: string | null;
+  cheapestWastewaterAmortisedPerPersonTick: number;
+  cheapestRefusePlantId: string | null;
+  cheapestRefuseAmortisedPerTonneTick: number;
+  waterExceedsLocal: boolean;
+  wastewaterExceedsLocal: boolean;
+  refuseExceedsLocal: boolean;
+  allHold: boolean;
+}
+
+/** Minimal shape verifyUtilityTariffInvariants() needs from a catalogue Spec —
+ * kept local (not importing the full data.ts Spec type) for the same
+ * fiscal.ts -> data.ts -> engine.ts -> fiscal.ts cycle-avoidance reason as
+ * GridImportPlantLike above. The caller (tests, never gameplay) passes
+ * data.ts's live SPECS in explicitly. */
+export interface UtilityPlantLike {
+  id: string;
+  kind: string;
+  tag?: 'clean' | 'waste' | 'pollution';
+  served?: number;
+  wasteCapacity?: number;
+  placeholder?: boolean;
+  cost: number;
+  upkeep: number;
+}
+
+export function verifyUtilityTariffInvariants(
+  specs: Record<string, UtilityPlantLike>,
+): UtilityInvariantResult {
+  let cheapestWaterPlantId: string | null = null;
+  let cheapestWaterAmortisedPerPersonTick = Infinity;
+  let cheapestWastewaterPlantId: string | null = null;
+  let cheapestWastewaterAmortisedPerPersonTick = Infinity;
+  let cheapestRefusePlantId: string | null = null;
+  let cheapestRefuseAmortisedPerTonneTick = Infinity;
+
+  for (const sp of Object.values(specs)) {
+    if (sp.placeholder) continue;
+    if (sp.kind === 'water' && sp.tag === 'clean' && sp.served && sp.served > 0 && sp.cost > 0) {
+      const capexPerUnitTick = sp.cost / (sp.served * UTILITY_PLANT_AMORTISATION_TICKS);
+      const upkeepPerUnitTick = (sp.upkeep ?? 0) / sp.served;
+      const amortised = capexPerUnitTick + upkeepPerUnitTick;
+      if (amortised < cheapestWaterAmortisedPerPersonTick) {
+        cheapestWaterAmortisedPerPersonTick = amortised;
+        cheapestWaterPlantId = sp.id;
+      }
+    }
+    if (sp.kind === 'water' && sp.tag === 'waste' && sp.served && sp.served > 0 && sp.cost > 0) {
+      const capexPerUnitTick = sp.cost / (sp.served * UTILITY_PLANT_AMORTISATION_TICKS);
+      const upkeepPerUnitTick = (sp.upkeep ?? 0) / sp.served;
+      const amortised = capexPerUnitTick + upkeepPerUnitTick;
+      if (amortised < cheapestWastewaterAmortisedPerPersonTick) {
+        cheapestWastewaterAmortisedPerPersonTick = amortised;
+        cheapestWastewaterPlantId = sp.id;
+      }
+    }
+    if (sp.wasteCapacity && sp.wasteCapacity > 0 && sp.cost > 0) {
+      const capexPerUnitTick = sp.cost / (sp.wasteCapacity * UTILITY_PLANT_AMORTISATION_TICKS);
+      const upkeepPerUnitTick = (sp.upkeep ?? 0) / sp.wasteCapacity;
+      const amortised = capexPerUnitTick + upkeepPerUnitTick;
+      if (amortised < cheapestRefuseAmortisedPerTonneTick) {
+        cheapestRefuseAmortisedPerTonneTick = amortised;
+        cheapestRefusePlantId = sp.id;
+      }
+    }
+  }
+
+  if (cheapestWaterPlantId === null) cheapestWaterAmortisedPerPersonTick = 0;
+  if (cheapestWastewaterPlantId === null) cheapestWastewaterAmortisedPerPersonTick = 0;
+  if (cheapestRefusePlantId === null) cheapestRefuseAmortisedPerTonneTick = 0;
+
+  const waterExceedsLocal = WATER_IMPORT_TARIFF_PER_PERSON_PER_TICK > cheapestWaterAmortisedPerPersonTick;
+  const wastewaterExceedsLocal =
+    WASTEWATER_CONTRACT_TARIFF_PER_PERSON_PER_TICK > cheapestWastewaterAmortisedPerPersonTick;
+  const refuseExceedsLocal = REFUSE_CONTRACT_TARIFF_PER_TONNE_PER_TICK > cheapestRefuseAmortisedPerTonneTick;
+
+  return {
+    cheapestWaterPlantId,
+    cheapestWaterAmortisedPerPersonTick,
+    cheapestWastewaterPlantId,
+    cheapestWastewaterAmortisedPerPersonTick,
+    cheapestRefusePlantId,
+    cheapestRefuseAmortisedPerTonneTick,
+    waterExceedsLocal,
+    wastewaterExceedsLocal,
+    refuseExceedsLocal,
+    allHold: waterExceedsLocal && wastewaterExceedsLocal && refuseExceedsLocal,
   };
 }
 

@@ -114,6 +114,9 @@ import {
   GRID_IMPORT_ENABLED_DEFAULT,
   INSTITUTIONAL_KINDS,
   UPKEEP_BUCKET,
+  WATER_IMPORT_ENABLED_DEFAULT,
+  WASTEWATER_CONTRACT_ENABLED_DEFAULT,
+  REFUSE_CONTRACT_ENABLED_DEFAULT,
 } from './fiscal.ts';
 import { getPerformanceSnapshot } from './perfhud.ts';
 import { getLiveVersion } from './liveVersionRef.ts';
@@ -306,6 +309,11 @@ export interface DebugJson {
     pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
     /** FEAT-2326609711 inc1 (AC-1) — external power cover toggle. */
     gridImportEnabled: boolean;
+    /** FEAT-2326609711 inc2 (AC-1) — external cover toggles for the three
+     * remaining utilities: clean water, wastewater, refuse. */
+    waterImportEnabled: boolean;
+    wastewaterContractEnabled: boolean;
+    refuseContractEnabled: boolean;
     /** FEAT-2326609761 inc1 (AC-1, ASM-1504) — consolidator enable toggle. */
     consolidatorEnabled: boolean;
     /** FEAT-2326609761 inc2 (Aaron's glide-mode/slider rulings, 2026-09-03/04). */
@@ -666,6 +674,10 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   lastGrowthDiag: 'demographics.growthDiag',
   // FEAT-2326609711 inc1 (AC-1).
   gridImportEnabled: 'sim.gridImportEnabled',
+  // FEAT-2326609711 inc2 (AC-1).
+  waterImportEnabled: 'sim.waterImportEnabled',
+  wastewaterContractEnabled: 'sim.wastewaterContractEnabled',
+  refuseContractEnabled: 'sim.refuseContractEnabled',
   // FEAT-2326609761 inc1 (AC-1, ASM-1504).
   consolidatorEnabled: 'sim.consolidatorEnabled',
   // FEAT-2326609761 inc2 (Aaron's glide-mode/slider rulings, 2026-09-03/04).
@@ -1053,6 +1065,11 @@ export function buildDebugJson(
       // FEAT-2326609711 inc1 (AC-1): backward tolerance for a legacy state
       // predating this field, mirrors insolvencyState/bailoutState above.
       gridImportEnabled: s.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT,
+      // FEAT-2326609711 inc2 (AC-1): backward tolerance for a legacy state
+      // predating these fields, mirrors gridImportEnabled immediately above.
+      waterImportEnabled: s.waterImportEnabled ?? WATER_IMPORT_ENABLED_DEFAULT,
+      wastewaterContractEnabled: s.wastewaterContractEnabled ?? WASTEWATER_CONTRACT_ENABLED_DEFAULT,
+      refuseContractEnabled: s.refuseContractEnabled ?? REFUSE_CONTRACT_ENABLED_DEFAULT,
       // FEAT-2326609761 inc1 (AC-1, ASM-1504): backward tolerance for a
       // legacy state predating this field, mirrors gridImportEnabled above.
       consolidatorEnabled: s.consolidatorEnabled ?? CONSOLIDATOR_ENABLED_DEFAULT,

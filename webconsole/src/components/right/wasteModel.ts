@@ -16,6 +16,7 @@ import {
   efwPowerOf,
   recyclingRevenueOf,
   compostRevenueOf,
+  isRefuseShortageActive,
 } from '../../sim/data.ts';
 
 /** One processor row of the processing mix (tonnes routed + its share of collected). */
@@ -38,7 +39,15 @@ export interface WasteDisplayModel {
   uncollected: number;
   /** min(1, capacity/generated); 1 when nothing generated. */
   coverage: number;
-  /** True when refuse is left on the street (coverage < 1) — the red condition. */
+  /** True when refuse is genuinely left on the street THIS TICK — the red
+   *  condition. FEAT-2326609711 inc2 rework (BUG-1027, LEAD RULING point 2):
+   *  routed through data.ts's isRefuseShortageActive (the SSOT the engine's
+   *  wellbeing Refuse part also gates on) instead of the raw
+   *  `uncollected > 0` — while the refuse contract is ON a real tonnage
+   *  shortfall is bought in and is NOT "left on the street" for display
+   *  purposes either, exactly mirroring isBrownoutActive's UI consumers.
+   *  Contract OFF, or no shortfall at all, is byte-identical to the
+   *  pre-feature reading. */
   hasUncollected: boolean;
   // Processing (inc2, processingMixOf)
   mixRows: WasteMixRow[];
@@ -82,7 +91,7 @@ export function wasteDisplayModel(s: SimState): WasteDisplayModel {
     collected: stats.collected,
     uncollected: stats.uncollected,
     coverage: stats.coverage,
-    hasUncollected: stats.uncollected > 0,
+    hasUncollected: isRefuseShortageActive(s),
     mixRows,
     diversionRate: mix.diversionRate,
     diverted: mix.diverted,

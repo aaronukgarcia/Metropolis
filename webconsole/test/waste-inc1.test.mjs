@@ -141,6 +141,13 @@ const refuseOf = (s) => wellbeingOf(s).parts.find((p) => p.label === 'Refuse').v
 test('waste-health: higher uncollected fraction ⇒ lower wellbeing (monotonic)', () => {
   const build = (depots) => {
     const s = bareCity(100000); // pop high ⇒ earlyGameFactor = 1 (no blend toward 55)
+    // FEAT-2326609711 inc2: refuseContractEnabled defaults ON (Lead Ruling
+    // R1) — a bought-in shortfall reads as fully covered
+    // (effectiveRefuseCoverageOf), which would flatten this monotonic curve
+    // to 100 regardless of depots. Disabled explicitly so this test keeps
+    // proving the RAW legacy waste-health penalty (mirrors inc1's own
+    // precedent of pinning gridImportEnabled: false in brownout.test.mjs).
+    s.refuseContractEnabled = false;
     add(s, 'res_block', 100); // 60 t generated
     if (depots > 0) add(s, 'waste_depot', depots);
     return s;

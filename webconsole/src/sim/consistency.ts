@@ -25,6 +25,9 @@ import {
   applyOutflowPolicies,
   UPKEEP_BUCKET,
   GRID_IMPORT_OUTFLOW_LABEL,
+  WATER_IMPORT_OUTFLOW_LABEL,
+  WASTEWATER_CONTRACT_OUTFLOW_LABEL,
+  REFUSE_CONTRACT_OUTFLOW_LABEL,
   BAILOUT_STANDING_COST_LABEL,
 } from './fiscal.ts';
 
@@ -1037,6 +1040,12 @@ export function runConsistencyChecks(
       // operating costs). Without this, any tick with an active Grid Import
       // outflow would falsely diverge this check (upkeepBuckets never includes it).
       flow.label !== GRID_IMPORT_OUTFLOW_LABEL &&
+      // FEAT-2326609711 inc2: the three utility buy-in outflows are the SAME
+      // shortfall-based operating-cost shape as Grid Import — exclude them
+      // from the upkeep-total reconciliation for the same reason.
+      flow.label !== WATER_IMPORT_OUTFLOW_LABEL &&
+      flow.label !== WASTEWATER_CONTRACT_OUTFLOW_LABEL &&
+      flow.label !== REFUSE_CONTRACT_OUTFLOW_LABEL &&
       // BUG-504 Option A: 'Bailout Standing Cost' is a credit-rating/interest
       // surcharge keyed off active-bailout state, NOT per-building `upkeep` —
       // exclude it from the upkeep-total reconciliation exactly like

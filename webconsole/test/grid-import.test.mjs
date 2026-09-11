@@ -123,13 +123,24 @@ test('r2 fix: serviceDemandOf power row DOES escalate/alert with the identical s
 // ---------- AC-2: import outflow = (need - cap) * tariff ----------
 
 test('AC-2: gridImportCostPerTick(50, 70, 2.5) === 50 (shortfall 20 MW @ 2.5/MW)', () => {
-  assert.equal(gridImportCostPerTick(50, 70, GRID_IMPORT_TARIFF_PER_MW), Math.round((70 - 50) * 2.5));
+  // BUG-1028 rework: Math.ceil, not Math.round — applied to Grid Import too,
+  // for consistency with the inc2 utilities (fiscal.ts doc comment).
+  assert.equal(gridImportCostPerTick(50, 70, GRID_IMPORT_TARIFF_PER_MW), Math.ceil((70 - 50) * 2.5));
   assert.equal(gridImportCostPerTick(50, 70, 2.5), 50);
 });
 
 test('AC-2: gridImportCostPerTick returns 0 when cap >= need (no shortage)', () => {
   assert.equal(gridImportCostPerTick(70, 70, 2.5), 0);
   assert.equal(gridImportCostPerTick(100, 70, 2.5), 0);
+});
+
+test('BUG-1050: gridImportCostPerTick is CEIL, not ROUND, on a fractional-product fixture', () => {
+  // The AC-2 test above only exercises exact-integer products (20 MW * 2.5 =
+  // 50), which a ceil -> round revert survives. A 0.1 MW deficit at 2.5/MW
+  // is 0.25, ceil = 1, round = 0 — the two diverge only on a fraction.
+  assert.equal(gridImportCostPerTick(0, 0.1, 2.5), 1, 'ceil(0.25) = 1, not round(0.25) = 0');
+  assert.equal(gridImportCostPerTick(0, 0.3, 2.5), 1, 'ceil(0.75) = 1, not round(0.75) = 1 (would coincide) — see the 0.24 case below for the real killer');
+  assert.equal(gridImportCostPerTick(0, 0.096, 2.5), 1, 'ceil(0.24) = 1 — round(0.24) = 0, the exact BUG-1028 shape');
 });
 
 test('AC-2: computeFlows Grid Import value matches the helper exactly; absent (not zero) when no shortage', () => {

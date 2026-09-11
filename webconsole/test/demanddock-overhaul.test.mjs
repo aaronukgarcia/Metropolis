@@ -361,6 +361,13 @@ test('AC-1: serviceDemandOf includes a refuse row when the collection depot is i
     // does not affect the refuse shortfall precondition below.
     population: 5_000,
     buildings: [...base.buildings, { id: 90001, spec: 'ind_factory', x: 10, y: 10 }],
+    // FEAT-2326609711 inc2: refuseContractEnabled defaults ON (Lead Ruling
+    // R1) — a bought-in shortfall reads as fully covered
+    // (effectiveRefuseCoverageOf), which would zero out this row's demand
+    // index. Disabled explicitly so this test keeps proving the RAW legacy
+    // shortfall-escalates-demand behaviour (mirrors inc1's precedent of
+    // pinning gridImportEnabled: false in pre-existing brownout fixtures).
+    refuseContractEnabled: false,
   };
   const waste = wasteStatsOf(s);
   assert.ok(waste.generated > waste.capacity, 'precondition: a real refuse shortfall (generated > capacity)');

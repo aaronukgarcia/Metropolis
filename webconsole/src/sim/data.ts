@@ -49,7 +49,13 @@ import { PARTITIONED_DERIVATIONS, totalJobsPartitioned } from './sectorPartition
 import { scaleConstructionTicks } from './debugBuildSpeed.ts';
 // FEAT-2326609711 inc1: fiscal.ts is a leaf module (imports only ./types.ts),
 // so importing GRID_IMPORT_ENABLED_DEFAULT here creates no cycle.
-import { GRID_IMPORT_ENABLED_DEFAULT, STARTING_TREASURY } from './fiscal.ts';
+import {
+  GRID_IMPORT_ENABLED_DEFAULT,
+  STARTING_TREASURY,
+  WATER_IMPORT_ENABLED_DEFAULT,
+  WASTEWATER_CONTRACT_ENABLED_DEFAULT,
+  REFUSE_CONTRACT_ENABLED_DEFAULT,
+} from './fiscal.ts';
 // FEAT-wage-stage1 (Q100067/Q100086, 2026-09-03): same leaf-module guarantee
 // as the import above — fiscal.ts's KIND_TO_WAGE_SECTOR/SectorJobs are pulled
 // in here (not the other way around) so totalJobsBySector() below can bucket
@@ -4234,6 +4240,150 @@ export function isBrownoutActive(s: SimState): boolean {
 }
 
 /**
+ * FEAT-2326609711 inc2 rework (BUG-1026/BUG-1030, LEAD RULING point 1) —
+ * effective POWER coverage ratio (0..1), mirroring isBrownoutActive's shape
+ * exactly the way effectiveCleanWaterCoverageOf mirrors it, generalised to a
+ * continuous ratio instead of a binary flag: while Grid Import cover is ON
+ * and a real deficit exists, the deficit is bought in and reported as FULLY
+ * COVERED (1) — for the ONE consumer this exists for (attractivenessOf's
+ * avgCoverage, engine.ts), the price-premium-only ruling applies to power
+ * too ("fully substitutes" is not power-specific).
+ *
+ * Deliberately NOT used by buildServiceWellbeingParts' Utilities part (which
+ * intentionally keeps the base ratio('power') term visible when covered,
+ * per inc1's own partial-insulation design — see effectiveCleanWaterCoverageOf's
+ * doc comment for why inc1 and inc2 differ there) — this helper's only
+ * consumer is the coverage AVERAGE that feeds migration, where "no
+ * consequence beyond the outflow line" is unambiguous regardless of that
+ * inc1/inc2 wellbeing divergence.
+ */
+export function effectivePowerCoverageOf(s: SimState): number {
+  const raw = serviceCoverageOf(s).find((c) => c.id === 'power')?.coverage ?? 1;
+  const gridImportOn = s.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT;
+  // BUG-1047: clamp ONLY the substituted value (1), never the raw ratio —
+  // the outer Math.min(1, raw) previously destroyed an oversupplied city's
+  // surplus (raw > 1) signal even when the toggle is OFF and nothing is
+  // being substituted at all.
+  return raw < 1 && gridImportOn ? 1 : raw;
+}
+
+/**
+ * FEAT-2326609711 inc2 (Lead Ruling R3) — SINGLE SOURCE OF TRUTH for whether
+ * a clean-water shortfall's CONSEQUENCES (Utilities wellbeing part,
+ * serviceDemandOf's demand-index escalation) should apply THIS tick.
+ * Mirrors isBrownoutActive's shape exactly, generalised to a continuous
+ * coverage ratio instead of power's binary brownout flag — per Aaron's
+ * ruling for THIS increment ("with cover ON the shortage has NO consequence
+ * beyond the outflow line"), unlike inc1's power path where the BASE
+ * coverage-derived quality signal stays visible even with cover on and only
+ * the EXTRA brownout multiplier is suppressed (see attack-grid-import.test.mjs's
+ * FIXED tripwire comment) — that partial-insulation design was Aaron's
+ * inc1-specific call; inc2's Design Ruling text is unambiguous that a
+ * covered utility shortfall has no consequence of any kind.
+ *
+ * Every consumer of the clean-water shortage MUST read either this
+ * predicate (for a boolean gate) or effectiveCleanWaterCoverageOf (for the
+ * ratio itself) — never recompute `!(s.waterImportEnabled ?? DEFAULT)`
+ * locally (GR#3).
+ */
+export function isWaterShortageActive(s: SimState): boolean {
+  const cov = serviceCoverageOf(s).find((c) => c.id === 'cleanwater');
+  const shortage = !!cov && cov.need > 0 && cov.coverage < 1;
+  const waterOn = s.waterImportEnabled ?? WATER_IMPORT_ENABLED_DEFAULT;
+  return shortage && !waterOn;
+}
+
+/**
+ * FEAT-2326609711 inc2 — effective clean-water coverage ratio (0..1,
+ * matching the existing `ratio()` helper's Math.min(1, …) clamp), consumed
+ * by every wellbeing/demand-index reader instead of the raw
+ * serviceCoverageOf 'cleanwater' row. While external cover is ON and a real
+ * shortfall exists, the shortfall is bought in — reported as FULLY COVERED
+ * (1) to every consumer, exactly matching a genuinely oversupplied city for
+ * consequence purposes (the price premium, not a quality penalty, is the
+ * entire cost — see isWaterShortageActive's doc comment for the ruling).
+ * Cover OFF, or no shortfall at all, returns the raw ratio unchanged
+ * (byte-identical to the pre-feature legacy path, AC-3/AC-13).
+ */
+export function effectiveCleanWaterCoverageOf(s: SimState): number {
+  const raw = serviceCoverageOf(s).find((c) => c.id === 'cleanwater')?.coverage ?? 1;
+  const waterOn = s.waterImportEnabled ?? WATER_IMPORT_ENABLED_DEFAULT;
+  // BUG-1047: pass the raw ratio through UNCLAMPED when not substituting —
+  // only the substituted value (1) is ever the ceiling.
+  return raw < 1 && waterOn ? 1 : raw;
+}
+
+/** FEAT-2326609711 inc2 — wastewater twin of isWaterShortageActive (same
+ * shape, 'waste' serviceCoverageOf row + wastewaterContractEnabled). */
+export function isWastewaterShortageActive(s: SimState): boolean {
+  const cov = serviceCoverageOf(s).find((c) => c.id === 'waste');
+  const shortage = !!cov && cov.need > 0 && cov.coverage < 1;
+  const wastewaterOn = s.wastewaterContractEnabled ?? WASTEWATER_CONTRACT_ENABLED_DEFAULT;
+  return shortage && !wastewaterOn;
+}
+
+/** FEAT-2326609711 inc2 — wastewater twin of effectiveCleanWaterCoverageOf. */
+export function effectiveWastewaterCoverageOf(s: SimState): number {
+  const raw = serviceCoverageOf(s).find((c) => c.id === 'waste')?.coverage ?? 1;
+  const wastewaterOn = s.wastewaterContractEnabled ?? WASTEWATER_CONTRACT_ENABLED_DEFAULT;
+  // BUG-1047: raw passes through unclamped when not substituting.
+  return raw < 1 && wastewaterOn ? 1 : raw;
+}
+
+/** FEAT-2326609711 inc2 — refuse twin of isWaterShortageActive, reading
+ * wasteStatsOf's collection coverage (tonnes-based) instead of a
+ * serviceCoverageOf row (refuse has no such row — its coverage lives in
+ * wasteStatsOf/collectionCoverageOf, GR#3 SSOT unchanged by this feature). */
+export function isRefuseShortageActive(s: SimState): boolean {
+  const waste = wasteStatsOf(s);
+  const shortage = waste.generated > 0 && waste.coverage < 1;
+  const refuseOn = s.refuseContractEnabled ?? REFUSE_CONTRACT_ENABLED_DEFAULT;
+  return shortage && !refuseOn;
+}
+
+/** FEAT-2326609711 inc2 — refuse twin of effectiveCleanWaterCoverageOf. */
+export function effectiveRefuseCoverageOf(s: SimState): number {
+  const raw = collectionCoverageOf(s);
+  const refuseOn = s.refuseContractEnabled ?? REFUSE_CONTRACT_ENABLED_DEFAULT;
+  // BUG-1047: raw passes through unclamped when not substituting.
+  return raw < 1 && refuseOn ? 1 : raw;
+}
+
+/**
+ * FEAT-2326609711 inc2 rework (BUG-1026/BUG-1030, LEAD RULING point 1) —
+ * single SSOT wrapper around serviceCoverageOf() that substitutes every
+ * bought-in service's row with its EFFECTIVE coverage instead of the raw
+ * ratio, so a reader that wants "coverage for CONSEQUENCE purposes" (as
+ * opposed to a raw meter reading) can never miss a row the way
+ * attractivenessOf's avgCoverage did. Substitutes 'cleanwater' ->
+ * effectiveCleanWaterCoverageOf, 'waste' -> effectiveWastewaterCoverageOf,
+ * 'power' -> effectivePowerCoverageOf; every other row (nursery/primary/
+ * college/gp/hosp/police/fire/parks) passes through unchanged — none of
+ * those services has a buy-in toggle. Refuse has no row in
+ * serviceCoverageOf() (its coverage lives in wasteStatsOf/
+ * collectionCoverageOf, see isRefuseShortageActive's doc comment) so it is
+ * not part of this array; a reader that also needs refuse must additionally
+ * consume effectiveRefuseCoverageOf directly (serviceDemandOf and
+ * buildServiceWellbeingParts already do — see their own comments).
+ *
+ * Cover OFF, or no shortfall on any row, is byte-identical to
+ * serviceCoverageOf(s) unchanged (AC-3/AC-13 — each effective*CoverageOf
+ * helper returns the raw ratio unchanged in both those cases).
+ */
+export function effectiveServiceCoverageOf(s: SimState): ServiceCoverage[] {
+  const rows = serviceCoverageOf(s);
+  const effCleanwater = effectiveCleanWaterCoverageOf(s);
+  const effWaste = effectiveWastewaterCoverageOf(s);
+  const effPower = effectivePowerCoverageOf(s);
+  return rows.map((r) => {
+    if (r.id === 'cleanwater') return { ...r, coverage: effCleanwater };
+    if (r.id === 'waste') return { ...r, coverage: effWaste };
+    if (r.id === 'power') return { ...r, coverage: effPower };
+    return r;
+  });
+}
+
+/**
  * BUG-652 — jobs contributed by ONE building at its current tier, safe for a
  * spec that carries `jobs` ALONGSIDE another capacity field (residents/
  * children/served). capacityAtTier()'s array/fallback assumes a spec has
@@ -5034,6 +5184,21 @@ export function serviceDemandOf(
 ): { id: string; label: string; value: number; spec: string; alert?: boolean }[] {
   const f = earlyGameFactor(s.population);
   const rows = serviceCoverageOf(s).map((c) => {
+    // FEAT-2326609711 inc2 (Lead Ruling R3): clean-water/wastewater demand
+    // index reads the EFFECTIVE coverage (data.ts SSOT above) instead of the
+    // raw serviceCoverageOf row — while external cover is ON, a bought-in
+    // shortfall must not raise this meter either ("no consequence beyond
+    // the outflow line"). Cover OFF, or no shortfall, is byte-identical to
+    // the pre-feature value (effectiveXCoverageOf returns the raw ratio
+    // unchanged in both those cases).
+    if (c.id === 'cleanwater') {
+      const eff = effectiveCleanWaterCoverageOf(s);
+      return { id: c.id, label: c.label, value: Math.round(demandIndexOf(eff) * f), spec: c.spec };
+    }
+    if (c.id === 'waste') {
+      const eff = effectiveWastewaterCoverageOf(s);
+      return { id: c.id, label: c.label, value: Math.round(demandIndexOf(eff) * f), spec: c.spec };
+    }
     if (c.id !== 'power') {
       return { id: c.id, label: c.label, value: Math.round(demandIndexOf(c.coverage) * f), spec: c.spec };
     }
@@ -5067,10 +5232,13 @@ export function serviceDemandOf(
   // 'waste_depot' fallback is the only refuse-capable spec today, matching the
   // fire row's pathological-all-locked fallback pattern above.
   const waste = wasteStatsOf(s);
+  // FEAT-2326609711 inc2 (Lead Ruling R3): reads effectiveRefuseCoverageOf
+  // instead of the raw waste.coverage — see the cleanwater/waste rows above
+  // for the same reasoning (covered shortfall must not raise this meter).
   const refuseRow = {
     id: 'refuse',
     label: 'Refuse',
-    value: Math.round(demandIndexOf(waste.coverage) * f),
+    value: Math.round(demandIndexOf(effectiveRefuseCoverageOf(s)) * f),
     spec: optimalProvider(s, 'refuse', s.funds, waste.generated - waste.capacity)?.id ?? 'waste_depot',
   };
   return [...rows, refuseRow];
