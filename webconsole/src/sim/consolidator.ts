@@ -86,16 +86,19 @@ const CONNECT_EXEMPT_KINDS: ReadonlySet<ZoneKind> = new Set<ZoneKind>([
 // ---------------------------------------------------------------------------
 
 /**
- * Mirrors the tile-grid reference size documented at data.ts:122 ("Tile grid
- * = 50 m"). The acceptance doc's AC-3 calls for promoting that comment to a
- * shared export in data.ts — deliberately NOT done here (see file header):
- * data.ts is contended by other lanes, and this constant is needed by only
- * this read-only module in inc1. If/when the mutation lane (or a later
- * increment) promotes a real `TILE_METRES` export from data.ts, this local
- * constant should be replaced by that import in one line — the VALUE is
- * already the single source of truth (50), just not yet a shared symbol.
+ * Tile-grid reference size (data.ts:122 "Tile grid = 50 m"). Do NOT promote
+ * this to a data.ts export: data.ts is this module's cycle partner, and a
+ * top-level read across that cycle is exactly BUG-1051.
+ *
+ * BUG-1051 (2026-09-11): the symbol now lives in the dependency-free leaf
+ * grid.ts and is RE-EXPORTED here so every existing consumer is unchanged.
+ * sectorPartition.ts read it from this module at top level while
+ * consolidator.ts -> data.ts -> sectorPartition.ts formed a cycle, which
+ * threw a TDZ ReferenceError whenever a consolidator suite was the entry
+ * point (CI run 34570495115). Never re-declare it here.
  */
-export const TILE_METRES = 50;
+export { TILE_METRES } from './grid.ts';
+import { TILE_METRES } from './grid.ts';
 
 /**
  * AARON'S RULING (2026-09-03, via the coordinator, on this module's own

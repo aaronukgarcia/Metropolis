@@ -15,8 +15,10 @@
 // REAL exports of consolidator.ts (TILE_METRES = 50,
 // CONSOLIDATOR_SECTION_METRES = 800, with a runtime override via
 // sectionMetresOf(s)) — NOT as data.ts exports the doc assumed. Consuming
-// consolidator.ts's TILE_METRES here (rather than re-declaring a second
-// `50`) is the GR#3 single-definition move. The doc's AC-3 "sectors nest
+// the ONE TILE_METRES definition here (rather than re-declaring a second
+// `50`) is the GR#3 single-definition move; since BUG-1051 that definition
+// lives in the dependency-free leaf grid.ts (consolidator.ts re-exports it)
+// and must be imported from the leaf, never across the consolidator cycle. The doc's AC-3 "sectors nest
 // exactly N x into sections" invariant is DROPPED outright: section size is
 // now a per-state runtime slider (sectionMetresOf), so no compile-time
 // nesting ratio can hold in general. SECTOR_METRES is therefore an
@@ -42,8 +44,11 @@
 // harness can prove byte-identity rather than "close enough".
 
 import type { SimState } from './types.ts';
-import { TILE_METRES } from './consolidator.ts';
-import { MAP_W, MAP_H } from './grid.ts';
+// BUG-1051: TILE_METRES comes from the dependency-free leaf grid.ts, never
+// from consolidator.ts — that module imports data.ts which imports this
+// one, so a top-level read across the cycle is a TDZ error whenever a
+// consolidator suite is the entry point (CI run 34570495115).
+import { MAP_W, MAP_H, TILE_METRES } from './grid.ts';
 import { codedError } from './backend.ts';
 // FEAT-2326609764 inc1: data.ts imports PARTITIONED_DERIVATIONS/
 // sectorIndexOf/foldCityJobs from THIS file (totalJobs()'s flag branch),

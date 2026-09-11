@@ -27,3 +27,15 @@
 //     refused (MET-V873), never silently truncated.
 export const MAP_W = 624;
 export const MAP_H = 368;
+
+/**
+ * Tile grid reference size in metres (data.ts:122 "Tile grid = 50 m").
+ * BUG-1051 (2026-09-11): hosted HERE, in the dependency-free leaf, because
+ * consolidator.ts previously owned it and sectorPartition.ts read it at
+ * module top level while consolidator.ts -> data.ts -> sectorPartition.ts
+ * formed a cycle: any suite whose entry point was consolidator.ts hit
+ * "Cannot access 'TILE_METRES' before initialization" (CI run 34570495115).
+ * consolidator.ts re-exports this symbol so every existing consumer is
+ * unchanged; sectorPartition.ts imports the leaf directly.
+ */
+export const TILE_METRES = 50;
