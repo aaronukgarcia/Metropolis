@@ -340,6 +340,7 @@ import {
   compositeWithTrafficPenalty,
   TRAFFIC_RECOMPUTE_TICKS,
   isTrafficCadenceTickWithConfig,
+  safeRoadScoreFromSnapshotOf,
 } from './trafficWellbeing.ts';
 import { councilTaxPerTick, businessTaxPerTick, sectorWagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, BAILOUT_DURATION_TICKS, ASSET_SALE_VALUE_FRACTION, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY, BAILOUT_CLEAN_END_THRESHOLD, SUSTAINED_RECOVERY_TICKS, DECLINE_AVERAGING_WINDOW_TICKS, BAILOUT_STANDING_COST_LABEL, bailoutStandingCostPerTick, PLAY_MODE_INJECTION_AMOUNT, PLAY_MODE_INJECTION_LABEL, netOpexBleedPerTick, computeDynamicBailoutOffer, DYNAMIC_BAILOUT_INJECTION_LABEL, INSOLVENCY_WARNING_THRESHOLD, POLICY_COST_CAP_FRACTION, transitSubsidyCostPerTick, transitFareRevenuePerTick, TRANSIT_FARE_RATE_PER_RIDER, TRANSIT_FARE_REVENUE_LABEL, freightTaxPerTick, taxIncomeAtRate, POLICY_CAP_REFERENCE_TAX_RATE, OFFICE_TAX_YIELD_FACTOR, INSTITUTIONAL_KINDS, INSTITUTIONAL_TAX_LABEL, INSTITUTIONAL_TAX_YIELD_FACTOR } from './fiscal.ts';
 // FEAT-2326609761 (CONSOLIDATOR mutation lane) — read-only discovery/opportunity
@@ -854,6 +855,17 @@ export function attractivenessOf(s: SimState, wbOverall: number): number {
   const workers = s.population * WORKFORCE_PARTICIPATION_RATE;
   const jobTerm = clampN(jobs / Math.max(workers, 1), 0, 2) / 2;
   const jobsMultiplier = 0.5 + 0.5 * jobTerm;
+
+  // FEAT-2326609802 inc9 / BUG-938 lead ruling r3: an attract multiplier off
+  // integratedTransportScoreFromSnapshotOf was REMOVED here. The webconsole's
+  // only mode-split model is population-keyed (see trafficRewards.ts's
+  // modeShareBalanceOf doc comment), so the score has no build-sensitive
+  // input today — wiring it into attract would be a hidden population bonus
+  // dressed up as a reward for integrated transport. attractivenessOf is
+  // therefore byte-identical to its pre-inc9 form (c9c0072); the diagnostic
+  // stays available via s.trafficSnapshot.integratedTransportScore for the
+  // read-out only. FEAT-2326609804 tracks the prerequisite (a per-tile mode
+  // split) that would make a real coupling honest.
 
   return taxTerm * transitTerm * civicTerm * stationTerm * jobsMultiplier;
 }
@@ -11409,6 +11421,23 @@ const buildServiceWellbeingParts: (s: SimState) => { label: string; value: numbe
     { label: 'Commute time', value: commuteWellbeingPartOf(s) },
     { label: 'Gridlock', value: gridlockWellbeingPartOf(s) },
     { label: 'Emergency response', value: emergencyWellbeingPartOf(s) },
+    // FEAT-2326609802 inc9 (AC-5, AC-7 perf bound) — ONE NEW POSITIVE-signed
+    // row (1 = best, no inversion, unlike the coverage-derived parts above):
+    // reward safe roads, per Aaron's epic brief. Read via s.trafficSnapshot
+    // ONLY (BUG-877's exact cadence discipline, safeRoadScoreFromSnapshotOf,
+    // trafficWellbeing.ts) — a direct trafficRewards.ts call here would
+    // force a full traffic assignment (Dijkstra) every tick, the same 96x
+    // cost-blowup BUG-877 itself measured.
+    //
+    // BUG-938 lead ruling r3: the 'Integrated transport' part was REMOVED —
+    // integratedTransportScoreFromSnapshotOf is population-keyed today (the
+    // webconsole has no per-tile mode-split model, see trafficRewards.ts's
+    // modeShareBalanceOf doc comment), so a wellbeing row built from it
+    // would reward population alone, not anything the player builds. The
+    // score stays available as an exported diagnostic on s.trafficSnapshot
+    // for the read-out; FEAT-2326609804 tracks the prerequisite for a real
+    // per-tile-sensitive coupling.
+    { label: 'Safe roads', value: part(safeRoadScoreFromSnapshotOf(s)) },
   ];
   return parts;
 });

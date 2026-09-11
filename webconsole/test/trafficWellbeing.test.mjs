@@ -644,7 +644,10 @@ test('BUG-877/GR#16: sanitizeTrafficSnapshot coerces a legacy/corrupt value to u
   assert.equal(sanitizeTrafficSnapshot({}), undefined, 'a malformed object missing required numeric fields must sanitize to absent, never NaN-filled');
   assert.equal(sanitizeTrafficSnapshot({ tick: 'x', medianCommuteMinutes: 1, gridlockShare: 0, coverageShare: null }), undefined);
   const good = sanitizeTrafficSnapshot({ tick: 5, medianCommuteMinutes: 40, gridlockShare: 1.5, coverageShare: null });
-  assert.deepEqual(good, { tick: 5, medianCommuteMinutes: 40, gridlockShare: 1, coverageShare: null }, 'gridlockShare must clamp to [0,1] even on a corrupt out-of-range value; coverageShare:null must be preserved exactly (not coerced to 0)');
+  // FEAT-2326609802 inc9 addition: safeRoadScore/integratedTransportScore
+  // default to their own documented neutral values (1.0/0) when absent from
+  // the raw value -- backward tolerance for a pre-inc9 legacy snapshot.
+  assert.deepEqual(good, { tick: 5, medianCommuteMinutes: 40, gridlockShare: 1, coverageShare: null, safeRoadScore: 1, integratedTransportScore: 0 }, 'gridlockShare must clamp to [0,1] even on a corrupt out-of-range value; coverageShare:null must be preserved exactly (not coerced to 0); the two inc9 fields must default neutrally when absent');
   const goodCoverage = sanitizeTrafficSnapshot({ tick: 5, medianCommuteMinutes: 40, gridlockShare: 0.2, coverageShare: 1.9 });
   assert.equal(goodCoverage.coverageShare, 1, 'coverageShare must clamp to [0,1] on a corrupt out-of-range NUMBER (distinct from the legitimate null case above)');
 });

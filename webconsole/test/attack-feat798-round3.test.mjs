@@ -104,10 +104,21 @@ test('GR#16: sanitizeTrafficSnapshot rejects non-objects and non-finite fields, 
 
   // Negatives floor at 0; a null coverageShare is preserved as the honest
   // no-station absence (NOT coerced to a number).
+  // BUG-924 (inc9 r1): the object below now ALSO carries safeRoadScore/
+  // integratedTransportScore -- inc9 added these two fields to
+  // TrafficSnapshot and this full-object deepEqual pin was not updated with
+  // them, so the pin went red the instant inc9 landed (a real regression
+  // this attacker pin is meant to catch, not loosen away). The fixture input
+  // still omits both fields (mirrors a pre-inc9 save), so the EXPECTED
+  // output takes their documented absent-field defaults -- safeRoadScore 1.0
+  // (citySafeRoadScoreOf's "nothing routed yet" neutral), integratedTransportScore
+  // 0 (integratedTransportScoreOf's "0 connected stations" neutral) -- the
+  // SAME two defaults attack-feat802-round.test.mjs's own legacy-save pin
+  // asserts directly against sanitizeTrafficSnapshot.
   assert.deepEqual(
     sanitizeTrafficSnapshot({ tick: -5, medianCommuteMinutes: -3, gridlockShare: -2, coverageShare: -1 }),
-    { tick: 0, medianCommuteMinutes: 0, gridlockShare: 0, coverageShare: 0 },
-    'negative fields must floor at 0'
+    { tick: 0, medianCommuteMinutes: 0, gridlockShare: 0, coverageShare: 0, safeRoadScore: 1, integratedTransportScore: 0 },
+    'negative fields must floor at 0; absent inc9 fields must default to their documented neutrals, never be silently dropped from the shape'
   );
   assert.equal(
     sanitizeTrafficSnapshot({ ...good, coverageShare: null }).coverageShare,

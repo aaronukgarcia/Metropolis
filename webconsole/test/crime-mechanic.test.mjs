@@ -190,8 +190,22 @@ test('AC-5: low wellbeing increases crime (mutant: wellbeing feedback reversed, 
   // the achievable crime delta: measured 6 before this feature, 5 after
   // (verified by temporarily removing the new part and re-running this exact
   // scenario) — still clearly signed and meaningful, just one point lower.
-  // Threshold lowered from >5 to >4 to track the real, still-decisive gap;
-  // a reversed/zeroed/constant-ed wellbeing term still fails this outright
+  // FEAT-2326609802 inc9 (BUG-940 fix, r3): this city has no road tiles and
+  // an identical population in both fixtures, so the ONE new 'Safe roads'
+  // wellbeing part (trafficRewards.ts's safeRoadScoreOf, via
+  // buildServiceWellbeingParts) reads the SAME neutral value (1.0, its own
+  // "0 scored segments" absence rule) in BOTH cities -- one more identical
+  // part widening the averaging denominator (12 -> 13). Measured (this
+  // fixture, both before and after this increment's ONE-part addition):
+  // delta = 5, UNCHANGED from the pre-inc9 baseline -- a single extra
+  // identical part at this denominator size does not move the delta enough
+  // to cross an integer boundary here (unlike the two-part r1/r2 builds,
+  // which the now-superseded BUG-938 ruling removed one of). Threshold
+  // therefore returns to its PRE-inc9 value, >4 (parts count: 12 before
+  // this feature epoch's traffic wellbeing rows, 13 after this one addition
+  // -- NOT 14, since the BUG-938 ruling removed the second 'Integrated
+  // transport' part before it ever shipped as a wellbeing row); a
+  // reversed/zeroed/constant-ed wellbeing term still fails this outright
   // (it would produce delta <= 0, not 5).
   assert.ok(
     crimeLow - crimeHigh > 4,

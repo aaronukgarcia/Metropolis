@@ -64,6 +64,11 @@ import { memoOnState, wellbeingPartOf, earlyGameFactor, SPECS } from './data.ts'
 import { commuteTimeDistributionOf, gridlockedSegmentsOf, tilePathsOf, tileVehicleTripsOf, fuelLitresDemandedOf, vedAnnualGbpOf, wearSegmentInputsOf } from './trafficAssignment.ts';
 import type { WearSegmentInput } from './trafficAssignment.ts';
 import { emergencyCoverageOf } from './emergencyResponse.ts';
+// FEAT-2326609802 inc9 (AC-7 perf bound) — citySafeRoadScoreOf/
+// integratedTransportScoreOf both read segmentDelayOf/assignedFlowOf, the
+// SAME full-assignment expense class as commuteTimeDistributionOf/
+// gridlockedSegmentsOf above, so they are cadence-refreshed here too (BUG-877).
+import { citySafeRoadScoreOf, integratedTransportScoreOf } from './trafficRewards.ts';
 // BUG-892 fix (r4) — the emergency-response penalty must only apply once the
 // player can actually build an ambulance station (ASM-1518 amendment: "a
 // city that cannot yet build a station is not punished for lacking one").
@@ -256,6 +261,12 @@ export interface TrafficSnapshot {
   vedAnnualGbp?: number;
   /** AC-4/AC-5 — per-segment wear-accrual inputs, see WearSegmentInput's own doc. */
   wearSegments?: Record<string, WearSegmentInput>;
+  /** FEAT-2326609802 inc9 (AC-7) — citySafeRoadScoreOf/integratedTransportScoreOf,
+   * cadence-refreshed alongside the other three heavy traffic derivations
+   * above (they force the SAME full assignment via segmentDelayOf/
+   * assignedFlowOf, BUG-877's exact expense class). [0,1], 1 = best. */
+  safeRoadScore: number;
+  integratedTransportScore: number;
 }
 
 /**
@@ -278,6 +289,18 @@ export function sanitizeTrafficSnapshot(v: unknown): TrafficSnapshot | undefined
     if (cs === null) return undefined;
     coverageShare = Math.max(0, Math.min(1, cs));
   }
+  // FEAT-2326609802 inc9 (backward tolerance, GR#16) — a legacy save from
+  // before this increment carries a trafficSnapshot with no
+  // safeRoadScore/integratedTransportScore fields. Rather than reject the
+  // WHOLE snapshot (forcing a full re-derivation of the three pre-existing
+  // fields too), default the two NEW fields to their own documented
+  // neutral values (citySafeRoadScoreOf's "0 scored segments -> 1.0",
+  // integratedTransportScoreOf's "0 connected stations -> 0") until the
+  // next cadence tick recomputes them for real.
+  const safeRoadScoreRaw = finiteNumber(o.safeRoadScore);
+  const safeRoadScore = safeRoadScoreRaw === null ? 1.0 : Math.max(0, Math.min(1, safeRoadScoreRaw));
+  const integratedTransportScoreRaw = finiteNumber(o.integratedTransportScore);
+  const integratedTransportScore = integratedTransportScoreRaw === null ? 0 : Math.max(0, Math.min(1, integratedTransportScoreRaw));
   const out: TrafficSnapshot = {
     tick: Math.max(0, Math.floor(tick)),
     // BUG-895 fix (r4): medianCommuteMinutes clamps to the data-sourced
@@ -287,6 +310,8 @@ export function sanitizeTrafficSnapshot(v: unknown): TrafficSnapshot | undefined
     medianCommuteMinutes: Math.max(0, Math.min(MENTAL.commuteMinutesClampMax, medianCommuteMinutes)),
     gridlockShare: Math.max(0, Math.min(1, gridlockShare)),
     coverageShare,
+    safeRoadScore,
+    integratedTransportScore,
   };
 
   // FEAT-2326609800 inc7 r3 (BUG-929, GR#16): the three new cadence-cached
@@ -347,6 +372,8 @@ export function computeTrafficSnapshot(
   }
   const gridlockShare = totalWeight > 0 ? gridlockedWeight / totalWeight : 0;
   const coverageShare = emergencyCoverageOf(s, 'ambulance').coverageShare;
+  const safeRoadScore = citySafeRoadScoreOf(s);
+  const integratedTransportScore = integratedTransportScoreOf(s);
 
   // FEAT-2326609800 inc7 r3 (BUG-929) — the money-path inputs ride the SAME
   // cadence window: computed here (inside the already-cadence-gated call),
@@ -358,7 +385,7 @@ export function computeTrafficSnapshot(
   const wearSegments = wearSegmentInputsOf(s);
 
   return {
-    snapshot: { tick, medianCommuteMinutes: medianMinutes, gridlockShare, coverageShare, fuelLitresDemanded, vedAnnualGbp, wearSegments },
+    snapshot: { tick, medianCommuteMinutes: medianMinutes, gridlockShare, coverageShare, fuelLitresDemanded, vedAnnualGbp, wearSegments, safeRoadScore, integratedTransportScore },
     gridlockTicksBySegment: ticks,
   };
 }
@@ -499,6 +526,40 @@ export const commuteWellbeingPartOf: (s: SimState) => number = memoOnState((s) =
   const penalty = commutePenaltyWithConfig(medianMinutes, MENTAL);
   return wellbeingPartOf(1 - penalty, s.population);
 });
+
+/**
+ * FEAT-2326609802 inc9 — cadence-refreshed read of citySafeRoadScoreOf, via
+ * s.trafficSnapshot ONLY (never a live call to trafficRewards.ts's own
+ * exports, which would force a full traffic assignment every tick — the
+ * SAME BUG-877 expense class the three traffic wellbeing parts above avoid).
+ * Absent snapshot (fresh state) reads the same neutral 1.0 citySafeRoadScoreOf
+ * itself returns for "0 scored segments".
+ *
+ * BUG-939 (GR#16) fix: a plain `typeof === 'number'` check passes for NaN,
+ * so a snapshot that reaches this reader WITHOUT going through
+ * sanitizeTrafficSnapshot first (e.g. a hand-built fixture, or a future
+ * bypass) could hand a NaN straight to a caller's clampN, which propagates
+ * NaN rather than rejecting it (Math.min/Math.max do not reject NaN). Coerce
+ * at THIS read instead, same shape as the sanitizer: Number.isFinite guards
+ * both NaN and +/-Infinity, defaulting to the documented neutral.
+ */
+export const safeRoadScoreFromSnapshotOf: (s: SimState) => number = memoOnState((s) =>
+  s.trafficSnapshot && Number.isFinite(s.trafficSnapshot.safeRoadScore) ? s.trafficSnapshot.safeRoadScore : 1.0
+);
+
+/**
+ * FEAT-2326609802 inc9 — cadence-refreshed read of integratedTransportScoreOf
+ * (EXPORTED DIAGNOSTIC ONLY as of the BUG-938 lead ruling r3 — no wellbeing
+ * part or attract multiplier consumes it any more; it still lives on
+ * s.trafficSnapshot for the read-out and stays finite-guarded here for the
+ * same GR#16 reason as safeRoadScoreFromSnapshotOf above, in case a future
+ * consumer reads it directly). Same idiom as safeRoadScoreFromSnapshotOf.
+ * Absent snapshot reads the same neutral 0 integratedTransportScoreOf itself
+ * returns for "0 connected stations".
+ */
+export const integratedTransportScoreFromSnapshotOf: (s: SimState) => number = memoOnState((s) =>
+  s.trafficSnapshot && Number.isFinite(s.trafficSnapshot.integratedTransportScore) ? s.trafficSnapshot.integratedTransportScore : 0
+);
 
 export const gridlockWellbeingPartOf: (s: SimState) => number = memoOnState((s) => {
   const share = s.trafficSnapshot ? s.trafficSnapshot.gridlockShare : 0;

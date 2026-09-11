@@ -965,6 +965,15 @@ export interface SimState {
     // "which segments still exist" bound for roadWearBySegment orphan
     // pruning — no separate validSegmentIds field needed.
     wearSegments?: Record<string, { roadClassId: string; deltaEsalPerTick: number }>;
+    /** FEAT-2326609802 inc9 (AC-7 perf bound) — citySafeRoadScoreOf/
+     * integratedTransportScoreOf are themselves cheap (O(segments)/
+     * O(connected stations)), but BOTH read segmentDelayOf/assignedFlowOf,
+     * which force a FULL traffic assignment (Dijkstra) the same way
+     * commuteTimeDistributionOf/gridlockedSegmentsOf do (BUG-877). So they
+     * are cadence-refreshed here too, never called directly from a
+     * per-tick wellbeing/attract path. */
+    safeRoadScore: number;
+    integratedTransportScore: number;
   };
   /**
    * FEAT-2326609800 inc7 (AC-4, ASM-1534) — per-segment cumulative ESAL

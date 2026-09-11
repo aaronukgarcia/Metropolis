@@ -162,6 +162,9 @@
       "V1000-V1099": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V930-V934": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 5-wide block found after scanning existing codes and reservations on layer \"V\"; consumed by inc6 (parking/fuel/EV) on main)",
       "V940-V949": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\"; FEAT-2326609800 inc7 renumbers here per r3 lead amendment)",
+      "V950-V959": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V883-V883": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V940-V949": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V950-V959": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -6069,7 +6072,39 @@
       "severity": "error",
       "module": "ui.webconsole",
       "message": "roads.json classes is missing a positive numeric baseCostPounds entry for road class %s",
-      "remedy": "add a positive numeric baseCostPounds entry to data/roads.json classes for the missing road class"
+      "remedy": "add a positive numeric baseCostPounds entry to data/roads.json classes for the missing road class",
+      "message": "traffic.json trafficRecomputeTicks is missing or not a positive integer",
+      "remedy": "Add a positive integer trafficRecomputeTicks field to data/traffic.json (FEAT-2326609798 inc5 r2, BUG-877)"
+    },
+    "MET-V950": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "data/traffic/rewards.json safeRoadScore.components is missing or malformed",
+      "remedy": "Restore the safeRoadScore.components array in rewards.json with all four weighted components"
+    },
+    "MET-V951": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "data/traffic/rewards.json roadClassBaseSafety has no entry for road class %s",
+      "remedy": "Add the missing road class key to safeRoadScore's roadClassBaseSafety byRoadClassId table"
+    },
+    "MET-V952": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "data/traffic/rewards.json junctionTypeSafety has no entry for junction key %s",
+      "remedy": "Add the missing junction key to safeRoadScore's junctionTypeSafety byJunctionType table"
+    },
+    "MET-V953": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "data/traffic/rewards.json integratedTransportScore.components is missing or malformed",
+      "remedy": "Restore the integratedTransportScore.components array in rewards.json with both weighted components"
+    },
+    "MET-V954": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "the current scale-ladder rung's modeShare vector is empty, entropy balance cannot be computed",
+      "remedy": "Check data/traffic/scale_ladder.json rungs for a non-empty modeShare object at every population point"
     }
   }
 }
