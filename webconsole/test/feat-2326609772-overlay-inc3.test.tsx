@@ -57,7 +57,13 @@ function stripState() {
   for (let x = 0; x < MAP_W; x++) {
     buildings.push({ id: x + 1, spec: 'm20', x, y: STRIP_Y } as Building);
   }
-  return { ...base, buildings, population: 0, funds: base.funds, administrationState: null, declineState: null };
+  // speed: 0 (lead fix after CI run 34543913946, RCA on FEAT-2326609798): these
+  // tests assert nothing about ticking, yet initialState() ships speed 1 so the
+  // store installs a REAL 900 ms setInterval tick driver on mount. inc5's first
+  // cadence snapshot pushed every test here past 900 ms, a tick fired inside
+  // act(), MapView drew twice (576 = 2 x 288 fillRects) and SimState mutated
+  // (tick 1->2). speed 0 makes the store skip the interval entirely.
+  return { ...base, buildings, population: 0, funds: base.funds, administrationState: null, declineState: null, speed: 0 };
 }
 
 // One plain 'road' tile (tier 1, NOT in SEGMENT_ROAD_CLASSES — no segment
@@ -87,6 +93,7 @@ function plainRoadState(residentBuildingCount: number) {
     funds: base.funds,
     administrationState: null,
     declineState: null,
+    speed: 0, // see stripState(): never race the real 900 ms tick driver
   };
 }
 
