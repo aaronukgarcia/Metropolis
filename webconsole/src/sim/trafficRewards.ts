@@ -527,6 +527,22 @@ export const modeShareBalanceOf: (s: SimState) => number = memoOnState((s) => {
   return shannonModeBalanceOf(cityShares);
 });
 
+// FEAT-2326609804 (inc4, AC-8) landed the structural prerequisite named
+// above: webconsole/src/sim/trafficModeSplit.ts now exports a per-tile
+// (land-use density band + local rail/bus/tram access) mode-share model and
+// a trip-weighted city-wide rollup (its own export, named in that module's
+// own doc comment — deliberately NOT imported or referenced by identifier
+// here, since this increment is the STRUCTURAL prerequisite only, no
+// consumer yet per its own AC-8: any rewrite that imports it and re-enables
+// the coupling below is scope-creep for a SEPARATE follow-up increment).
+// The intended follow-up rewrite of modeShareBalanceOf above:
+//   const cityShares = <trafficModeSplit.ts's trip-weighted rollup>(s);
+//   return shannonModeBalanceOf(cityShares);
+// replacing the population-keyed `modeShareOf(ladderPointOf(s))` read with
+// that build-sensitive vector — at which point integratedTransportScoreOf
+// (below) can also be re-wired into a wellbeing part / attract multiplier
+// per this file's THE RULING comment above. Not done in inc4.
+
 /** AC-4 — final score = 0.5*interchangeAdjacency + 0.5*modeShareBalance
  * (rewards.json's OWN weights), bounded [0,1]. */
 export const integratedTransportScoreOf: (s: SimState) => number = memoOnState((s) => {

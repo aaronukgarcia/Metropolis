@@ -1,0 +1,316 @@
+{
+  "version": 1,
+  "meta": {
+    "bow": "FEAT-2326609804",
+    "increment": 4,
+    "comment": "engine.traffic (planned MOD) inc4 table: per-tile mode split keyed on (landUseDensityBand, localAccessBand). landUseDensityMapping buckets every SPECS id that carries residents or jobs (extracted from webconsole/src/sim/data.ts at HEAD 72474a7f) by (residents+jobs) magnitude into mode_share_by_density.json's own 8 band ids -- reusing that table's real-survey anchors rather than inventing a second density model (GR#3). The composite-key table then applies a small car->bus mass shift for local_access_low/_medium (a tile with local transit access diverts a slice of car trips to bus), renormalised to sum to 1.0 exactly per row. local_access_high (rail AND bus) rows are intentionally absent -- no bus/tram segment class is placeable yet (ASM-1533), so no tile can resolve to that band today; a tile that somehow does falls back to the city-level split (AC-3), which is the honest, non-fabricated answer for an unreached combination."
+  },
+  "provenance": {
+    "source": "Derived from data/traffic/mode_share_by_density.json (UK DfT NTS / Tokyo PTS / Singapore HITS composite, see that file) plus a directional car->bus shift for local transit access, not independently surveyed at the composite-key level.",
+    "year": 2026,
+    "confidence": "derived",
+    "note": "Directional only pending Aaron balance pass (balance-number regime) \u00e2\u20ac\u201d the ORDERING (more local access -> more bus share, less car share) is the load-bearing claim, not the exact magnitudes."
+  },
+  "modeIds": [
+    "walk",
+    "bicycle",
+    "car",
+    "motorbike",
+    "taxi",
+    "bus",
+    "tram",
+    "metro",
+    "heavy_rail",
+    "hs_rail",
+    "ferry"
+  ],
+  "walkAccessRadiusMetres": 400,
+  "landUseDensityMapping": {
+    "station_ashford": "low_urban",
+    "res_hut": "rural",
+    "res_block": "small_town",
+    "uni": "medium_urban",
+    "off_suite": "rural",
+    "off_tower": "low_urban",
+    "mine_quarry": "rural",
+    "mine_deep": "small_town",
+    "land_stadium": "low_urban",
+    "land_airport": "megacity",
+    "bus_depot": "rural",
+    "tram_depot": "small_town",
+    "grand_terminus": "small_town",
+    "res_terrace": "rural",
+    "res_lowrise": "low_urban",
+    "res_midrise": "low_urban",
+    "res_highrise": "medium_urban",
+    "res_penthouse": "medium_urban",
+    "com_market": "rural",
+    "com_super": "small_town",
+    "com_mall": "low_urban",
+    "ind_light": "rural",
+    "ind_warehouse": "rural",
+    "ind_heavy": "low_urban",
+    "ind_cement": "small_town",
+    "ind_logistics": "small_town",
+    "off_data": "small_town",
+    "hea_teaching": "dense_urban",
+    "land_tunnel": "dense_urban",
+    "res_estate_compact": "dense_urban",
+    "res_estate": "dense_urban",
+    "res_estate_sprawl": "high_density",
+    "res_tower_nyc": "metro_core",
+    "res_tower_sgp": "megacity",
+    "off_businesspark": "dense_urban",
+    "off_towers_downtown": "dense_urban",
+    "off_tower_canary": "metro_core",
+    "off_tower_marina": "megacity",
+    "ind_estate": "dense_urban",
+    "farm_estate": "dense_urban",
+    "com_hypermarket": "dense_urban"
+  },
+  "table": {
+    "rural_local_access_none": {
+      "walk": 0.14,
+      "bicycle": 0.03,
+      "car": 0.66,
+      "motorbike": 0.02,
+      "taxi": 0.02,
+      "bus": 0.11,
+      "tram": 0,
+      "metro": 0,
+      "heavy_rail": 0.02,
+      "hs_rail": 0,
+      "ferry": 0
+    },
+    "rural_local_access_medium": {
+      "walk": 0.14,
+      "bicycle": 0.03,
+      "car": 0.61,
+      "motorbike": 0.02,
+      "taxi": 0.02,
+      "bus": 0.16,
+      "tram": 0,
+      "metro": 0,
+      "heavy_rail": 0.02,
+      "hs_rail": 0,
+      "ferry": 0
+    },
+    "small_town_local_access_none": {
+      "walk": 0.16,
+      "bicycle": 0.04,
+      "car": 0.58,
+      "motorbike": 0.02,
+      "taxi": 0.02,
+      "bus": 0.14,
+      "tram": 0,
+      "metro": 0,
+      "heavy_rail": 0.04,
+      "hs_rail": 0,
+      "ferry": 0
+    },
+    "small_town_local_access_medium": {
+      "walk": 0.16,
+      "bicycle": 0.04,
+      "car": 0.5299999999999999,
+      "motorbike": 0.02,
+      "taxi": 0.02,
+      "bus": 0.19,
+      "tram": 0,
+      "metro": 0,
+      "heavy_rail": 0.04,
+      "hs_rail": 0,
+      "ferry": 0
+    },
+    "low_urban_local_access_none": {
+      "walk": 0.18,
+      "bicycle": 0.05,
+      "car": 0.49,
+      "motorbike": 0.02,
+      "taxi": 0.03,
+      "bus": 0.16,
+      "tram": 0.02,
+      "metro": 0.02,
+      "heavy_rail": 0.03,
+      "hs_rail": 0,
+      "ferry": 0
+    },
+    "low_urban_local_access_medium": {
+      "walk": 0.18,
+      "bicycle": 0.05,
+      "car": 0.44,
+      "motorbike": 0.02,
+      "taxi": 0.03,
+      "bus": 0.21000000000000002,
+      "tram": 0.02,
+      "metro": 0.02,
+      "heavy_rail": 0.03,
+      "hs_rail": 0,
+      "ferry": 0
+    },
+    "medium_urban_local_access_none": {
+      "walk": 0.2,
+      "bicycle": 0.06,
+      "car": 0.38,
+      "motorbike": 0.02,
+      "taxi": 0.03,
+      "bus": 0.17,
+      "tram": 0.03,
+      "metro": 0.06,
+      "heavy_rail": 0.05,
+      "hs_rail": 0,
+      "ferry": 0
+    },
+    "medium_urban_local_access_medium": {
+      "walk": 0.2,
+      "bicycle": 0.06,
+      "car": 0.33,
+      "motorbike": 0.02,
+      "taxi": 0.03,
+      "bus": 0.22000000000000003,
+      "tram": 0.03,
+      "metro": 0.06,
+      "heavy_rail": 0.05,
+      "hs_rail": 0,
+      "ferry": 0
+    },
+    "dense_urban_local_access_none": {
+      "walk": 0.21,
+      "bicycle": 0.07,
+      "car": 0.285,
+      "motorbike": 0.015,
+      "taxi": 0.035,
+      "bus": 0.16,
+      "tram": 0.03,
+      "metro": 0.11,
+      "heavy_rail": 0.08,
+      "hs_rail": 0.005,
+      "ferry": 0
+    },
+    "dense_urban_local_access_medium": {
+      "walk": 0.21,
+      "bicycle": 0.07,
+      "car": 0.235,
+      "motorbike": 0.015,
+      "taxi": 0.035,
+      "bus": 0.21000000000000002,
+      "tram": 0.03,
+      "metro": 0.11,
+      "heavy_rail": 0.08,
+      "hs_rail": 0.005,
+      "ferry": 0
+    },
+    "high_density_local_access_none": {
+      "walk": 0.2,
+      "bicycle": 0.07,
+      "car": 0.23,
+      "motorbike": 0.01,
+      "taxi": 0.03,
+      "bus": 0.14,
+      "tram": 0.025,
+      "metro": 0.16,
+      "heavy_rail": 0.12,
+      "hs_rail": 0.015,
+      "ferry": 0
+    },
+    "high_density_local_access_medium": {
+      "walk": 0.2,
+      "bicycle": 0.07,
+      "car": 0.18,
+      "motorbike": 0.01,
+      "taxi": 0.03,
+      "bus": 0.19,
+      "tram": 0.025,
+      "metro": 0.16,
+      "heavy_rail": 0.12,
+      "hs_rail": 0.015,
+      "ferry": 0
+    },
+    "metro_core_local_access_none": {
+      "walk": 0.18,
+      "bicycle": 0.06,
+      "car": 0.155,
+      "motorbike": 0.01,
+      "taxi": 0.03,
+      "bus": 0.11,
+      "tram": 0.02,
+      "metro": 0.22,
+      "heavy_rail": 0.18,
+      "hs_rail": 0.03,
+      "ferry": 0.005
+    },
+    "metro_core_local_access_medium": {
+      "walk": 0.18,
+      "bicycle": 0.06,
+      "car": 0.105,
+      "motorbike": 0.01,
+      "taxi": 0.03,
+      "bus": 0.16,
+      "tram": 0.02,
+      "metro": 0.22,
+      "heavy_rail": 0.18,
+      "hs_rail": 0.03,
+      "ferry": 0.005
+    },
+    "megacity_local_access_none": {
+      "walk": 0.15,
+      "bicycle": 0.05,
+      "car": 0.09,
+      "motorbike": 0.005,
+      "taxi": 0.025,
+      "bus": 0.085,
+      "tram": 0.015,
+      "metro": 0.27,
+      "heavy_rail": 0.24,
+      "hs_rail": 0.05,
+      "ferry": 0.02
+    },
+    "megacity_local_access_medium": {
+      "walk": 0.15,
+      "bicycle": 0.05,
+      "car": 0.039999999999999994,
+      "motorbike": 0.005,
+      "taxi": 0.025,
+      "bus": 0.135,
+      "tram": 0.015,
+      "metro": 0.27,
+      "heavy_rail": 0.24,
+      "hs_rail": 0.05,
+      "ferry": 0.02
+    }
+  },
+  "densityBandMagnitudeThresholds": [
+    {
+      "band": "rural",
+      "minMagnitude": 8
+    },
+    {
+      "band": "small_town",
+      "minMagnitude": 35
+    },
+    {
+      "band": "low_urban",
+      "minMagnitude": 110
+    },
+    {
+      "band": "medium_urban",
+      "minMagnitude": 350
+    },
+    {
+      "band": "dense_urban",
+      "minMagnitude": 800
+    },
+    {
+      "band": "high_density",
+      "minMagnitude": 2500
+    },
+    {
+      "band": "metro_core",
+      "minMagnitude": 10000
+    },
+    {
+      "band": "megacity",
+      "minMagnitude": 20000
+    }
+  ],
+  "densityBandMagnitudeThresholdsNote": "BUG-989 fix (round 2): per-band MINIMUM (residents+jobs) magnitude, derived MECHANICALLY from landUseDensityMapping's own existing per-spec assignment (min magnitude of every spec currently mapped to that band, computed once by an uncommitted scratch script against webconsole/src/sim/data.ts's SPECS catalogue at the SAME HEAD landUseDensityMapping was generated from -- see meta.comment). Reconstructing every spec's tier-0 band via 'the highest threshold whose minMagnitude <= the spec's (residents+jobs) magnitude' reproduces landUseDensityMapping's existing per-spec assignment EXACTLY (verified: 0 mismatches across all 41 mapped specs) -- this is not a second, possibly-divergent density model, it is the SAME assignment re-expressed as a monotone step function of magnitude so the TS loader can evaluate it at ANY magnitude, not just the 41 magnitudes already in the catalogue. This is what makes the per-tile lookup TIER-AWARE (AC-1's 'use the TIER, not the raw capacityRaw field' requirement, BUG-989): a building's ACTUAL scaled capacity at its current capacityTier (capacityAtTier(spec, tier), data.ts) is looked up against these thresholds at runtime, instead of a fixed per-spec-id band that never moves regardless of upgrades."
+}

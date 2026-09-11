@@ -6111,6 +6111,36 @@
       "module": "ui.webconsole",
       "message": "the current scale-ladder rung's modeShare vector is empty, entropy balance cannot be computed",
       "remedy": "Check data/traffic/scale_ladder.json rungs for a non-empty modeShare object at every population point"
+    },
+    "MET-V955": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "mode_split_local.json table is missing a composite densityBand_accessBand key, falling back to the city-level split",
+      "remedy": "add the missing composite key to mode_split_local.json's table, or confirm the city-level fallback is intended for that combination"
+    },
+    "MET-V956": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "mode_split_local.json table is missing or malformed",
+      "remedy": "check data/traffic/mode_split_local.json's table field"
+    },
+    "MET-V957": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "mode_split_local.json landUseDensityMapping is missing a required SPECS id",
+      "remedy": "add the missing spec id to landUseDensityMapping"
+    },
+    "MET-V958": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "mode_split_local.json walkAccessRadiusMetres is missing or invalid",
+      "remedy": "set a positive finite walkAccessRadiusMetres"
+    },
+    "MET-V959": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "mode_split_local.json table entry mode-share vector is invalid",
+      "remedy": "fix the vector so its keys match modeIds and sum to 1.0"
     }
   }
 }

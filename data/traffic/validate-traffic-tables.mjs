@@ -353,6 +353,84 @@ function main() {
     }
   }
 
+  // FEAT-2326609804 (inc4, AC-1/AC-3/AC-7): mode_split_local.json structural checks.
+  // walkAccessRadiusMetres positive finite (AC-2/AC-7 — the TS loader reads this, never a
+  // hand-typed literal); landUseDensityMapping values must be real mode_share_by_density.json
+  // band ids (GR#3 — the local table reuses that table's anchors, never a second density
+  // model); every table row's mode-share vector must use EXACTLY modeIds and sum to 1.0
+  // (AC-3's own vector shape, matching mode_share_by_density.json's own bands[].shares check
+  // above); every table key must be `${densityBand}_${accessBand}` with a recognised access
+  // band suffix (local_access_none/_low/_medium/_high — AC-2's four bands).
+  {
+    const localSplit = loadJson('data/traffic/mode_split_local.json');
+    const radius = localSplit.walkAccessRadiusMetres;
+    if (typeof radius !== 'number' || !Number.isFinite(radius) || radius <= 0) {
+      warn(`mode_split_local.json walkAccessRadiusMetres must be a positive finite number, got ${JSON.stringify(radius)}`);
+    }
+    const knownBands = new Set(modeShare.bands.map((b) => b.id));
+    const mapping = localSplit.landUseDensityMapping || {};
+    for (const [specId, band] of Object.entries(mapping)) {
+      if (!knownBands.has(band)) {
+        warn(`mode_split_local.json landUseDensityMapping['${specId}'] band '${band}' not found in mode_share_by_density.json bands`);
+      }
+    }
+    // BUG-989 (round 2): densityBandMagnitudeThresholds is the TIER-AWARE
+    // runtime source (trafficModeSplit.ts's densityBandOf keys off a
+    // building's SCALED capacityAtTier magnitude against this step function,
+    // not the static per-spec landUseDensityMapping alone) — structural
+    // checks: a non-empty array of {band, minMagnitude}, every band a known
+    // mode_share_by_density.json band id, minMagnitude a non-negative finite
+    // number, and STRICTLY ascending by minMagnitude (the step function is
+    // only well-defined if thresholds never repeat or go backwards).
+    const thresholds = Array.isArray(localSplit.densityBandMagnitudeThresholds) ? localSplit.densityBandMagnitudeThresholds : [];
+    if (thresholds.length === 0) {
+      warn('mode_split_local.json densityBandMagnitudeThresholds must be a non-empty array');
+    } else {
+      let prevMag = -Infinity;
+      const seenBands = new Set();
+      for (const t of thresholds) {
+        if (!t || typeof t.band !== 'string' || !knownBands.has(t.band)) {
+          warn(`mode_split_local.json densityBandMagnitudeThresholds has an entry with an unrecognised band '${t && t.band}'`);
+        }
+        if (t && seenBands.has(t.band)) warn(`mode_split_local.json densityBandMagnitudeThresholds repeats band '${t.band}'`);
+        if (t) seenBands.add(t.band);
+        const mag = t && t.minMagnitude;
+        if (typeof mag !== 'number' || !Number.isFinite(mag) || mag < 0) {
+          warn(`mode_split_local.json densityBandMagnitudeThresholds entry for '${t && t.band}' has an invalid minMagnitude ${JSON.stringify(mag)}`);
+        } else if (mag <= prevMag) {
+          warn(`mode_split_local.json densityBandMagnitudeThresholds is not strictly ascending (band '${t.band}' minMagnitude ${mag} <= previous ${prevMag})`);
+        } else {
+          prevMag = mag;
+        }
+      }
+    }
+    const localModeIds = Array.isArray(localSplit.modeIds) ? localSplit.modeIds : [];
+    const localModeIdSet = new Set(localModeIds);
+    const knownAccessBands = new Set(['local_access_none', 'local_access_low', 'local_access_medium', 'local_access_high']);
+    for (const [key, vector] of Object.entries(localSplit.table || {})) {
+      const accessSuffix = [...knownAccessBands].find((a) => key.endsWith(`_${a}`));
+      if (!accessSuffix) {
+        warn(`mode_split_local.json table key '${key}' does not end with a recognised local-access band`);
+      } else {
+        const densityBand = key.slice(0, key.length - accessSuffix.length - 1);
+        if (!knownBands.has(densityBand)) {
+          warn(`mode_split_local.json table key '${key}' density-band prefix '${densityBand}' not found in mode_share_by_density.json bands`);
+        }
+      }
+      const vectorKeys = Object.keys(vector);
+      if (vectorKeys.length !== localModeIdSet.size || !vectorKeys.every((k) => localModeIdSet.has(k))) {
+        warn(`mode_split_local.json table['${key}'] keys do not exactly match modeIds`);
+      }
+      const sum = sumOf(vector);
+      // BUG-987 (round 2): tightened from 1e-6 to 1e-9 to match the TS
+      // loader's own tightened tolerance and trafficModeSplit.test.mjs's
+      // AC-4 assertion tolerance — a row summing to 1.000001 (the old bound's
+      // limit) would make AC-4's renormalisation a NON-no-op, silently
+      // hiding a real drift under the module's own load-time check.
+      if (Math.abs(sum - 1) > 1e-9) warn(`mode_split_local.json table['${key}'] sums to ${sum}`);
+    }
+  }
+
   if (errors.length) {
     console.error(`FAIL: ${errors.length} issue(s):`);
     for (const e of errors) console.error(' -', e);
