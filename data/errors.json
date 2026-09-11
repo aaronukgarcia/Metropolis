@@ -159,7 +159,10 @@
       "V930-V934": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 5-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V940-V949": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V950-V959": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V1000-V1099": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V1000-V1099": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V930-V934": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 5-wide block found after scanning existing codes and reservations on layer \"V\"; consumed by inc6 (parking/fuel/EV) on main)",
+      "V940-V949": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\"; FEAT-2326609800 inc7 renumbers here per r3 lead amendment)",
+      "V950-V959": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -6037,6 +6040,36 @@
       "module": "ui.webconsole",
       "message": "forecastLineUsage's road-capacity denominator was zero while road tiles were present -- the bus-lane capacity clamp should make this structurally unreachable",
       "remedy": "Check busLaneMaxShareOfClass in link_capacity.json and adjustedRoadCapacitiesOf's clamp math"
+    },
+    "MET-V940": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "trip_generation.json tripsPerVehiclePerDay is missing a positive numeric entry for vehicle class %s",
+      "remedy": "add a positive numeric tripsPerVehiclePerDay.<class>.tripsPerVehiclePerDay entry to data/traffic/trip_generation.json and re-run sync-traffic-data.mjs"
+    },
+    "MET-V941": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "fuel duty rate (data/fuel.json duty.ratePencePerLitre) or vehicle fuel efficiency (data/traffic/vehicle_classes.json roadVehicles fuelLitresPerKm) is missing or not a positive finite number for the affected vehicle class",
+      "remedy": "set a positive numeric duty.ratePencePerLitre in data/fuel.json AND/OR a positive numeric fuelLitresPerKm entry in data/traffic/vehicle_classes.json for the affected class, then re-run sync-traffic-data.mjs"
+    },
+    "MET-V942": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "taxation.json fleetAverageByVehicleClass is missing a positive numeric gbpPerYear entry for vehicle class %s",
+      "remedy": "add a positive numeric gbpPerYear entry to data/traffic/taxation.json fleetAverageByVehicleClass for the missing class"
+    },
+    "MET-V943": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "road_wear.json wearToRepairCost configuration (esalFactors.<class>.esalFactorPer100VehicleKm, conditionDecayPerESAL, repairTriggerConditionIndex, or repairCostCurve) is missing or not a valid positive/finite value",
+      "remedy": "add/repair the missing or invalid field in data/traffic/road_wear.json (esalFactors per vehicle class, wearToRepairCost.conditionDecayPerESAL, wearToRepairCost.repairTriggerConditionIndex, or wearToRepairCost.repairCostCurve) and re-run sync-traffic-data.mjs"
+    },
+    "MET-V944": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "roads.json classes is missing a positive numeric baseCostPounds entry for road class %s",
+      "remedy": "add a positive numeric baseCostPounds entry to data/roads.json classes for the missing road class"
     }
   }
 }

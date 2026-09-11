@@ -42,7 +42,9 @@ export function mirrorPairs() {
   // "Surface"): parkingFuel.ts's AC-5 reads data/fuel.json's eras[] EV-share
   // curve, so it needs the same in-tree-mirror treatment as traffic.json/
   // roads.json above (BUG-860 class - a bare '../../../data/fuel.json'
-  // import would break under the shadow-copy harnesses).
+  // import would break under the shadow-copy harnesses). FEAT-2326609800
+  // inc7 (AC-1) also reads duty.ratePencePerLitre client-side for the Fuel
+  // Duty inflow, so fuel.json's mirror now serves both increments.
   for (const extra of ['traffic.json', 'roads.json', 'wellbeing.json', 'fuel.json']) {
     pairs.push({ src: join(repoRoot, 'data', extra), dst: join(dstDir, extra), name: extra });
   }

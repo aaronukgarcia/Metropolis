@@ -1543,3 +1543,65 @@ export function forecastUnattributedOf(s: SimState): Map<string, UnattributedDem
   forecastSegmentUsage(s);
   return unattributedByState.get(s) ?? new Map();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FEAT-2326609800 inc7 "TAX, WEAR AND REPAIR" — per-class flow prerequisite.
+// (docs/planning/acceptance/FEAT-2326609792-inc7.md AC-1). ADDITIVE ONLY: no
+// existing export above (demandForecastOf/nearestSegmentWeights/
+// forecastSegmentUsage/blendedFreightVehicleCapacity) is touched — a sibling
+// lane owns those internals this increment (GR#3, do not re-derive).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Vehicle-class ids this epic's per-class flow/wear/tax machinery keys on —
+ * the union of ROAD_PERSON_MODE_IDS (trafficAssignment.ts) and
+ * ROAD_FREIGHT_VEHICLE_IDS (this file), exactly matching
+ * data/traffic/road_wear.json's esalFactors keys (AC-4) and
+ * data/traffic/taxation.json's fleetAverageByVehicleClass keys (AC-3). */
+export type VehicleClassId = 'car' | 'motorbike' | 'taxi' | 'bus' | 'cargo_van' | 'rigid_truck' | 'articulated_truck';
+
+/**
+ * AC-1 — un-blends `demandForecastOf`'s per-tile `freightVehicleTrips` (a
+ * BLENDED scalar, `blendedFreightVehicleCapacity`'s weighted-average basis)
+ * into its per-class components, keyed by tile "x,y", WITHOUT re-deriving a
+ * second freight-capacity model: each class's share is `t.freightVehicleTrips
+ * x (that class's freightTonnesByVehicleClass share ÷ the sum of all road-
+ * freight shares)` — a straight proportional split of the SAME blended total
+ * demandForecastOf already computed, so `Σ_class result[tile][class] ===
+ * demandForecastOf(s)` tile's `freightVehicleTrips` EXACTLY (AC-1's Check),
+ * by construction (the per-class proportions sum to 1). When every road-
+ * freight class reports zero share this rung (the same division-by-zero
+ * edge blendedFreightVehicleCapacity itself falls back on), 100% of the
+ * tile's freight vehicle-trips are attributed to `rigid_truck` — the SAME
+ * fallback class, not a second one invented here (GR#3).
+ *
+ * PURE + DETERMINISTIC (GR#21): memoOnState over SimState only, one
+ * ladderPointOf + one demandForecastOf call (both already memoised), no
+ * wall-clock/PRNG/storage read. Iterates demandForecastOf's own
+ * deterministically-sorted tile array — no map-range-with-break.
+ */
+export const freightVehicleTripsByClassOf: (s: SimState) => Map<string, Partial<Record<VehicleClassId, number>>> =
+  memoOnState((s) => {
+    const point = ladderPointOf(s);
+    const shares: Record<string, number> = {};
+    let totalShare = 0;
+    for (const id of ROAD_FREIGHT_VEHICLE_IDS) {
+      const share = numericFieldOrZero(point, `freightTonnesByVehicleClass.${id}`);
+      shares[id] = share;
+      totalShare += share;
+    }
+    const out = new Map<string, Partial<Record<VehicleClassId, number>>>();
+    for (const t of demandForecastOf(s)) {
+      if (t.freightVehicleTrips <= 0) continue;
+      const byClass: Partial<Record<VehicleClassId, number>> = {};
+      if (totalShare > 0) {
+        for (const id of ROAD_FREIGHT_VEHICLE_IDS) {
+          const proportion = shares[id] / totalShare;
+          if (proportion > 0) byClass[id as VehicleClassId] = t.freightVehicleTrips * proportion;
+        }
+      } else {
+        byClass.rigid_truck = t.freightVehicleTrips;
+      }
+      out.set(`${t.x},${t.y}`, byClass);
+    }
+    return out;
+  });

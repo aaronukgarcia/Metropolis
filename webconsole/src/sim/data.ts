@@ -3634,6 +3634,31 @@ export function sanitizeCongestionTicksBySpec(v: unknown): Record<string, number
 }
 
 /**
+ * FEAT-2326609800 inc7 (AC-4/AC-8, GR#16) — Type-Safe Storage Boundary
+ * sanitiser for `s.roadWearBySegment`, same shape as
+ * sanitizeCongestionTicksBySpec above: a corrupt save can hand back ANY
+ * JSON-representable value (string, array, non-numeric/NaN/negative
+ * entries). Non-object collapses to `{}` (old-save default — zero wear,
+ * types.ts doc, AC-8). Each entry sanitises to a non-negative finite number
+ * — UNLIKE the congestion-tick sanitiser, wear has no fixed upper cap (a
+ * segment's cumulative ESAL is unbounded in principle; conditionIndexOf's
+ * own clamp to [0,100] is where boundedness belongs, not here — folding a
+ * cap into this sanitiser would silently discard genuine over-threshold
+ * wear history). Zero entries omitted — self-pruning, mirrors the
+ * congestion-tick idiom.
+ */
+export function sanitizeRoadWearBySegment(v: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return out;
+  for (const [segId, raw] of Object.entries(v as Record<string, unknown>)) {
+    const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+    const clamped = Math.max(0, n);
+    if (clamped > 0) out[segId] = clamped;
+  }
+  return out;
+}
+
+/**
  * FEAT-congestion-teeth-2026-09-02 (AC-1) — advance the per-line sustained-
  * congestion tick counters ONE tick, given the PRIOR counters and THIS
  * tick's lineUsageOf() rows. PURE + DETERMINISTIC (GR#21): no Date/random;

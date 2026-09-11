@@ -25,9 +25,18 @@ import {
   lineSegmentIndexOf,
   memoOnState,
   CONGESTION_CONSTANTS,
+  sanitizeRoadWearBySegment,
   type LineSegment,
 } from './data.ts';
-import { demandForecastOf, ladderPointOf, modeShareOf, boundedNearestSourceMapOf } from './trafficDemand.ts';
+import {
+  demandForecastOf,
+  ladderPointOf,
+  modeShareOf,
+  boundedNearestSourceMapOf,
+  freightVehicleTripsByClassOf,
+  type VehicleClassId,
+} from './trafficDemand.ts';
+export type { VehicleClassId } from './trafficDemand.ts';
 
 // data files this module reads (GR#15 — every constant below is sourced,
 // never hand-typed). This module owns ONLY the webconsoleMetresPerTile field
@@ -37,6 +46,14 @@ import rawTraffic from './traffic-data/traffic.json' with { type: 'json' };
 import rawLinkCapacity from './traffic-data/link_capacity.json' with { type: 'json' };
 import rawRoads from './traffic-data/roads.json' with { type: 'json' };
 import rawVehicleClasses from './traffic-data/vehicle_classes.json' with { type: 'json' };
+// FEAT-2326609800 inc7 (AC-2/AC-3/AC-4): fuel duty rate, VED fleet-average
+// rates, and ESAL wear/repair-cost curve — all read-only from this module's
+// point of view (owned by data/fuel.json / data/traffic/taxation.json /
+// data/traffic/road_wear.json respectively).
+import rawFuel from './traffic-data/fuel.json' with { type: 'json' };
+import rawTaxation from './traffic-data/taxation.json' with { type: 'json' };
+import rawRoadWear from './traffic-data/road_wear.json' with { type: 'json' };
+import rawTripGeneration from './traffic-data/trip_generation.json' with { type: 'json' };
 
 // --- Registry error codes (GR#7) --------------------------------------------
 // Claimed via `node tools/plan/add-error.js claim-range ui.webconsole --size 6`
@@ -49,10 +66,24 @@ export const ERR_BPR_PARAM_INVALID = 'MET-V910'; // TrafficAssignmentBprParamInv
 export const ERR_PEAK_HOUR_FACTOR_MISSING = 'MET-V911'; // TrafficAssignmentPeakHourFactorMissing (BUG-854)
 export const ERR_MAX_ATTRIBUTION_RADIUS_MISSING = 'MET-V881'; // TrafficAssignmentMaxAttributionRadiusMissing (BUG-864, GR#15)
 export const ERR_METRES_PER_MILE_MISSING = 'MET-V882'; // TrafficAssignmentMetresPerMileMissing (BUG-864, GR#15)
+// FEAT-2326609800 inc7 (AC-2/AC-3/AC-4, GR#7) — claimed via
+// `node tools/plan/add-error.js claim-range ui.webconsole --size 5` (the
+// brief pre-assigned V935-V939, but that block was NOT actually reserved in
+// data/errors.json at dispatch time — claim-range's lowest-free scan granted
+// V930-V934 instead; see the BOW comment/report for the discrepancy).
+export const ERR_TRIPS_PER_VEHICLE_MISSING = 'MET-V940'; // TrafficWearTripsPerVehicleMissing
+export const ERR_FUEL_DUTY_RATE_MISSING = 'MET-V941'; // TrafficWearFuelDutyRateMissing
+export const ERR_VED_RATE_MISSING = 'MET-V942'; // TrafficWearVedRateMissing
+export const ERR_ESAL_FACTOR_MISSING = 'MET-V943'; // TrafficWearEsalFactorMissing (also covers other road_wear.json wearToRepairCost field gaps)
+export const ERR_BASE_COST_MISSING = 'MET-V944'; // TrafficWearBaseCostMissing
 
 function registryError(code: string, message: string): Error {
   return new Error(`${code}: ${message}`);
 }
+// BUG-914(a): exported so engine.ts can throw ERR_BASE_COST_MISSING
+// (MET-V944) fail-closed for an unknown road class, instead of the `?? 0`
+// silent-free-repair fallback that made MET-V944 registered-but-dead.
+export { registryError };
 
 // --- data/traffic.json typed view -------------------------------------------
 
@@ -153,8 +184,200 @@ interface RoadClassRow {
   lanes: number;
   speedLimit: number;
 }
-const ROADS = (rawRoads as { classes: RoadClassRow[] }).classes;
+const ROADS_TABLE = rawRoads as unknown as {
+  classes: RoadClassRow[];
+  maintenance: { conditionDecayPerMonth: number };
+};
+const ROADS = ROADS_TABLE.classes;
 const roadRowById = new Map<string, RoadClassRow>(ROADS.map((r) => [r.id, r]));
+
+/** FEAT-2326609800 inc7 (AC-5, GR#15) — reused (never restated) as the
+ * per-tick repair-cost amortisation basis: roads.json's own age-based decay
+ * RATE is the only per-tick-shaped fraction this data set carries, so this
+ * increment repurposes it rather than hand-typing a new fraction (the doc's
+ * own "flagged ASM if no suitable field exists" escape did not apply — a
+ * suitable field DOES exist, just for a different original purpose; the
+ * report flags this repurposing honestly for Aaron's balance pass). Divided
+ * by TICKS_PER_MONTH at the engine.ts call site (this module has no
+ * calendar/tick constant of its own, GR#3 — TICKS_PER_MONTH is engine.ts's).
+ *
+ * FISCAL BOUNDARY (AC-8, inc3, `trafficAssignment.test.mjs`'s own pin):
+ * this module NEVER reads roads.json's currency-shaped class-cost field —
+ * that read (and the ERR_BASE_COST_MISSING registry error) lives in
+ * engine.ts instead, the ONLY place trafficAssignment.ts's inc3 fiscal-
+ * boundary invariant permits a currency figure. This module exposes only
+ * the PHYSICAL roadClassId (roadClassIdOfSegment, already exported) a
+ * repair event occurred on; engine.ts converts that id to a cost.
+ */
+export const ROAD_MAINTENANCE_CONDITION_DECAY_PER_MONTH = ROADS_TABLE.maintenance.conditionDecayPerMonth;
+
+// --- FEAT-2326609800 inc7: fuel.json / taxation.json / road_wear.json / trip_generation.json typed views ---
+
+interface FuelTable {
+  duty: { ratePencePerLitre: number };
+}
+const FUEL = rawFuel as unknown as FuelTable;
+// BUG-914(b): loadFuelDutyRateFrom(raw) is a pure loader taking the raw
+// parsed JSON as an ARGUMENT (the BUG-865 idiom), so the fail-closed branch
+// is directly testable with a scratch object — the real data/fuel.json
+// import below is the only production caller.
+export function loadFuelDutyRateFrom(raw: FuelTable): number {
+  const v = raw?.duty?.ratePencePerLitre;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+    throw registryError(ERR_FUEL_DUTY_RATE_MISSING, 'data/fuel.json duty.ratePencePerLitre is missing or not a positive finite number');
+  }
+  return v;
+}
+export const FUEL_DUTY_RATE_PENCE_PER_LITRE: number = loadFuelDutyRateFrom(FUEL);
+
+interface TaxationTable {
+  vehicleExciseDuty: { fleetAverageByVehicleClass: Record<string, { gbpPerYear: number }> };
+}
+const TAXATION = rawTaxation as unknown as TaxationTable;
+// BUG-914(b): `table` defaults to the real parsed data/traffic/taxation.json
+// (production behaviour unchanged) but is overridable so a test can exercise
+// the missing/NaN/negative/string branches with a scratch table instead of
+// mutating the real file.
+export function vedGbpPerYearFor(classId: string, table: TaxationTable = TAXATION): number {
+  const row = table.vehicleExciseDuty.fleetAverageByVehicleClass[classId];
+  if (!row || typeof row.gbpPerYear !== 'number' || !Number.isFinite(row.gbpPerYear) || row.gbpPerYear <= 0) {
+    throw registryError(ERR_VED_RATE_MISSING, `data/traffic/taxation.json fleetAverageByVehicleClass is missing a positive numeric gbpPerYear entry for vehicle class ${classId}`);
+  }
+  return row.gbpPerYear;
+}
+
+interface RoadWearTable {
+  esalFactors: Record<string, { esalFactorPer100VehicleKm: number }>;
+  wearToRepairCost: {
+    conditionDecayPerESAL: { value: number };
+    repairTriggerConditionIndex: { value: number };
+    repairCostCurve: Array<{ conditionIndex: number; repairCostMultiplier: number }>;
+    targetTicksToResurfaceAtCapacity?: { value: number; referenceVehiclesPerTickAtCapacity: number };
+  };
+}
+const ROAD_WEAR = rawRoadWear as unknown as RoadWearTable;
+// BUG-914(b): same overridable-table idiom as vedGbpPerYearFor above.
+export function esalFactorFor(classId: string, table: RoadWearTable = ROAD_WEAR): number {
+  const row = table.esalFactors[classId];
+  if (!row || typeof row.esalFactorPer100VehicleKm !== 'number' || !Number.isFinite(row.esalFactorPer100VehicleKm) || row.esalFactorPer100VehicleKm < 0) {
+    throw registryError(ERR_ESAL_FACTOR_MISSING, `data/traffic/road_wear.json esalFactors is missing a positive numeric esalFactorPer100VehicleKm entry for vehicle class ${classId}`);
+  }
+  return row.esalFactorPer100VehicleKm;
+}
+// BUG-914(b): loadConditionDecayPerEsalFrom/loadRepairTriggerConditionIndexFrom/
+// loadRepairCostCurveFrom are pure loaders over a raw RoadWearTable-shaped
+// object (BUG-865 idiom) — directly testable with a scratch object.
+export function loadConditionDecayPerEsalFrom(raw: RoadWearTable): number {
+  const v = raw.wearToRepairCost?.conditionDecayPerESAL?.value;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+    throw registryError(ERR_ESAL_FACTOR_MISSING, 'data/traffic/road_wear.json wearToRepairCost.conditionDecayPerESAL.value is missing or not a positive finite number');
+  }
+  return v;
+}
+export function loadRepairTriggerConditionIndexFrom(raw: RoadWearTable): number {
+  const v = raw.wearToRepairCost?.repairTriggerConditionIndex?.value;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100) {
+    throw registryError(ERR_ESAL_FACTOR_MISSING, 'data/traffic/road_wear.json wearToRepairCost.repairTriggerConditionIndex.value is missing or not a finite number in [0,100]');
+  }
+  return v;
+}
+export function loadRepairCostCurveFrom(raw: RoadWearTable): Array<{ conditionIndex: number; repairCostMultiplier: number }> {
+  const curve = raw.wearToRepairCost?.repairCostCurve;
+  if (!Array.isArray(curve) || curve.length < 2) {
+    throw registryError(ERR_ESAL_FACTOR_MISSING, 'data/traffic/road_wear.json wearToRepairCost.repairCostCurve is missing or has fewer than 2 anchor points');
+  }
+  // Defensive sort descending by conditionIndex (the shipped data is already
+  // sorted this way, but the interpolation below depends on it structurally).
+  return [...curve].sort((a, b) => b.conditionIndex - a.conditionIndex);
+}
+// BUG-932 (FEAT-2326609800 inc7 r3 lead amendment): the live conditionDecayPerESAL
+// constant is now DERIVED from road_wear.json's targetTicksToResurfaceAtCapacity
+// (a stated in-game timescale) rather than an independent hand-typed rate --
+// loadConditionDecayPerEsalFrom above stays for its OWN missing/NaN/negative/
+// string pin coverage of the legacy literal field (backward documentation), but
+// no longer feeds the live constant.
+export function loadTargetTicksToResurfaceAtCapacityFrom(raw: RoadWearTable): number {
+  const v = raw.wearToRepairCost?.targetTicksToResurfaceAtCapacity?.value;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+    throw registryError(ERR_ESAL_FACTOR_MISSING, 'data/traffic/road_wear.json wearToRepairCost.targetTicksToResurfaceAtCapacity.value is missing or not a positive finite number');
+  }
+  return v;
+}
+export function loadReferenceVehiclesPerTickAtCapacityFrom(raw: RoadWearTable): number {
+  const v = raw.wearToRepairCost?.targetTicksToResurfaceAtCapacity?.referenceVehiclesPerTickAtCapacity;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+    throw registryError(ERR_ESAL_FACTOR_MISSING, 'data/traffic/road_wear.json wearToRepairCost.targetTicksToResurfaceAtCapacity.referenceVehiclesPerTickAtCapacity is missing or not a positive finite number');
+  }
+  return v;
+}
+/**
+ * BUG-932 — derives conditionDecayPerESAL from a STATED timescale instead of
+ * an independent literal: a 1km reference segment carrying
+ * referenceVehiclesPerTickAtCapacity car-equivalent vehicles every tick
+ * accrues (refVehicles x 1km x car's esalFactorPer100VehicleKm / 100) ESAL
+ * per tick; targetTicksToResurfaceAtCapacity ticks of that must exactly
+ * consume the (100 - repairTriggerConditionIndex) points between a fresh
+ * road and the repair trigger. The reference flow is a fixed placeholder
+ * constant (not the scale-ladder's peakHourFactor-derived capacity) because
+ * this constant is computed at MODULE LOAD time, before any SimState (and
+ * therefore any scale-ladder rung) exists — see the data file's own
+ * referenceVehiclesPerTickAtCapacitySource note.
+ */
+export function deriveConditionDecayPerEsalFrom(raw: RoadWearTable): number {
+  const targetTicks = loadTargetTicksToResurfaceAtCapacityFrom(raw);
+  const refVehiclesPerTick = loadReferenceVehiclesPerTickAtCapacityFrom(raw);
+  const trigger = loadRepairTriggerConditionIndexFrom(raw);
+  const carEsalFactor = esalFactorFor('car', raw);
+  const REFERENCE_SEGMENT_KM = 1;
+  const esalPerTickAtCapacity = (refVehiclesPerTick * REFERENCE_SEGMENT_KM * carEsalFactor) / 100;
+  if (esalPerTickAtCapacity <= 0) {
+    throw registryError(ERR_ESAL_FACTOR_MISSING, 'data/traffic/road_wear.json derives a non-positive reference ESAL/tick at capacity — check esalFactors.car and targetTicksToResurfaceAtCapacity.referenceVehiclesPerTickAtCapacity');
+  }
+  return (100 - trigger) / (esalPerTickAtCapacity * targetTicks);
+}
+const CONDITION_DECAY_PER_ESAL: number = deriveConditionDecayPerEsalFrom(ROAD_WEAR);
+export const REPAIR_TRIGGER_CONDITION_INDEX: number = loadRepairTriggerConditionIndexFrom(ROAD_WEAR);
+const REPAIR_COST_CURVE: Array<{ conditionIndex: number; repairCostMultiplier: number }> = loadRepairCostCurveFrom(ROAD_WEAR);
+
+interface TripGenerationTableForWear {
+  tripsPerVehiclePerDay: Record<string, { tripsPerVehiclePerDay: number }>;
+}
+const TRIP_GENERATION_WEAR = rawTripGeneration as unknown as TripGenerationTableForWear;
+// BUG-914(b): same overridable-table idiom as vedGbpPerYearFor/esalFactorFor above.
+export function tripsPerVehiclePerDayFor(classId: string, table: TripGenerationTableForWear = TRIP_GENERATION_WEAR): number {
+  const row = table.tripsPerVehiclePerDay?.[classId];
+  if (!row || typeof row.tripsPerVehiclePerDay !== 'number' || !Number.isFinite(row.tripsPerVehiclePerDay) || row.tripsPerVehiclePerDay <= 0) {
+    throw registryError(ERR_TRIPS_PER_VEHICLE_MISSING, `data/traffic/trip_generation.json tripsPerVehiclePerDay is missing a positive numeric entry for vehicle class ${classId}`);
+  }
+  return row.tripsPerVehiclePerDay;
+}
+
+/** vehicle_classes.json roadVehicles' fuelLitresPerKm, by class id — only the
+ * 6 classes that carry a numeric fuelLitresPerKm row (buses are modelled as
+ * PSV subtypes with no roadVehicles fuelLitresPerKm figure — ASM, see report;
+ * the Fuel Duty basis below honestly excludes bus rather than fabricate one). */
+const fuelLitresPerKmById = new Map<string, number>(
+  (rawVehicleClasses as unknown as { roadVehicles: Array<{ id: string; fuelLitresPerKm?: number }> }).roadVehicles
+    .filter((v) => typeof v.fuelLitresPerKm === 'number')
+    .map((v) => [v.id, v.fuelLitresPerKm as number]),
+);
+// BUG-914(b): same overridable-table idiom as vedGbpPerYearFor/esalFactorFor.
+export function fuelLitresPerKmFor(classId: string, table: ReadonlyMap<string, number> = fuelLitresPerKmById): number {
+  const v = table.get(classId);
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+    throw registryError(ERR_FUEL_DUTY_RATE_MISSING, `data/traffic/vehicle_classes.json roadVehicles is missing a positive numeric fuelLitresPerKm entry for vehicle class ${classId}`);
+  }
+  return v;
+}
+
+/** Vehicle classes with a real fuelLitresPerKm figure today (excludes bus —
+ * see fuelLitresPerKmById's doc). GR#3: schema-shape id list, not a "value",
+ * same idiom as ROAD_PERSON_MODE_IDS/ROAD_FREIGHT_VEHICLE_IDS above. */
+const FUEL_DUTY_CLASS_IDS: readonly VehicleClassId[] = ['car', 'motorbike', 'taxi', 'cargo_van', 'rigid_truck', 'articulated_truck'];
+/** Vehicle classes with a real taxation.json fleetAverageByVehicleClass row
+ * today (excludes bus — taxation.json's table has no bus entry, buses use a
+ * separate PSV-operator licensing regime in reality, not modelled here). */
+const VED_CLASS_IDS: readonly VehicleClassId[] = ['car', 'motorbike', 'taxi', 'cargo_van', 'rigid_truck', 'articulated_truck'];
 
 // --- data/traffic/vehicle_classes.json typed view (A-10, occupancy) --------
 
@@ -422,7 +645,34 @@ export const segmentFreeFlowMinutesOf: (s: SimState) => Map<string, number> = me
 // `tileToSegment` here — no second, unbounded BFS implementation anywhere
 // in this codebase.
 
-const nearestRoadSegmentTileMapOf: (s: SimState) => Map<string, string> = memoOnState((s) => {
+// BUG-912 perf fix: this function's body reads ONLY `s.buildings` (via
+// lineSegmentIndexOf(s), itself buildings-derived, and the bbox loop below)
+// — nothing else from SimState. Keying its cache on `s` (memoOnState) meant
+// it recomputed the EXPENSIVE bounded nearest-source BFS (boundedNearestSourceMapOf,
+// over every map tile within radius of the road network) from scratch on
+// EVERY tick, even the overwhelming majority where no building was placed
+// or demolished — because `s` is a fresh object every tick but `s.buildings`
+// usually is not. Rekeying on `s.buildings`' own array identity (the SAME
+// idiom data.ts's buildingByIdOf already uses, safe for the same reason:
+// this codebase's whole update discipline is immutable replace, never
+// in-place mutation, so "same buildings array reference" really does mean
+// "same set of Buildings, unchanged") turns the common no-construction tick
+// into an O(1) cache hit instead of a full BFS. Measured: this was THE
+// dominant cost of BUG-912's regression (a CPU profile on the attacker's
+// 4,900-building/70x70 fixture showed ~43% of all tick time inside
+// boundedNearestSourceMapOf via this call site alone) — inc7 is the FIRST
+// feature to route trafficAssignment.ts's Dijkstra/BFS pipeline through the
+// money/tick hot path every tick (previously only the Lines overlay read
+// it, on demand); this fix does not change WHAT is computed, only HOW OFTEN.
+const nearestRoadSegmentTileMapByBuildings = new WeakMap<SimState['buildings'], Map<string, string>>();
+const nearestRoadSegmentTileMapOf: (s: SimState) => Map<string, string> = (s) => {
+  const cached = nearestRoadSegmentTileMapByBuildings.get(s.buildings);
+  if (cached) return cached;
+  const value = computeNearestRoadSegmentTileMap(s);
+  nearestRoadSegmentTileMapByBuildings.set(s.buildings, value);
+  return value;
+};
+function computeNearestRoadSegmentTileMap(s: SimState): Map<string, string> {
   const idx = lineSegmentIndexOf(s);
   const roadTileKeys: string[] = [];
   for (const [tileKey, segId] of idx.tileToSegment) {
@@ -452,7 +702,7 @@ const nearestRoadSegmentTileMapOf: (s: SimState) => Map<string, string> = memoOn
     result.set(tileKey, idx.tileToSegment.get(sourceTileKey)!);
   }
   return result;
-});
+}
 
 const jobAdjacentRoadSegmentsOf: (s: SimState) => Set<string> = memoOnState((s) => {
   const idx = lineSegmentIndexOf(s);
@@ -609,6 +859,14 @@ export interface UnroutedDemand {
 
 interface AssignmentResult {
   assignedFlow: Map<string, number>;
+  // FEAT-2326609800 inc7 (AC-1) — the SAME accumulation, ADDITIVELY tagged
+  // per vehicle-class BEFORE the accumulate() call (never after — tagging
+  // after would need to re-derive each class's share of the already-summed
+  // total, a second, divergence-prone model, GR#3). Sums to assignedFlow by
+  // construction: every contribution to `assignedFlow` below has an exactly
+  // matching contribution pushed into `assignedFlowByClass` in the SAME
+  // iteration, never a separate pass.
+  assignedFlowByClass: Map<string, Partial<Record<VehicleClassId, number>>>;
   unrouted: UnroutedDemand[];
   tilePaths: Map<string, string[]>; // "x,y" -> ordered segmentId path
   tileVehicleTrips: Map<string, number>; // "x,y" -> routed vehicle-trips (for commute weighting)
@@ -632,8 +890,10 @@ const assignmentOf: (s: SimState) => AssignmentResult = memoOnState((s) => {
   const destSet = jobAdjacentRoadSegmentsOf(s);
   const demandTiles = demandForecastOf(s);
   const shares = modeShareOf(ladderPointOf(s));
+  const freightByClassByTile = freightVehicleTripsByClassOf(s); // FEAT-2326609800 inc7 AC-1
 
   const assignedFlow = new Map<string, number>();
+  const assignedFlowByClass = new Map<string, Partial<Record<VehicleClassId, number>>>();
   const unrouted: UnroutedDemand[] = [];
   const tilePaths = new Map<string, string[]>();
   const tileVehicleTrips = new Map<string, number>();
@@ -642,14 +902,42 @@ const assignmentOf: (s: SimState) => AssignmentResult = memoOnState((s) => {
   const accumulate = (m: Map<string, number>, key: string, v: number): void => {
     m.set(key, (m.get(key) ?? 0) + v);
   };
+  const accumulateClass = (segId: string, classId: VehicleClassId, v: number): void => {
+    let row = assignedFlowByClass.get(segId);
+    if (!row) {
+      row = {};
+      assignedFlowByClass.set(segId, row);
+    }
+    row[classId] = (row[classId] ?? 0) + v;
+  };
 
   for (const t of demandTiles) {
+    // FEAT-2326609800 inc7 (AC-1): tag each mode's/class's vehicle-trips
+    // contribution BEFORE summing into the blended roadVehicleTrips scalar —
+    // the per-class byTileClass map below is kept in exact lock-step with
+    // roadVehicleTrips (every term added to one is added to the other), so
+    // Σ_class byTileClass[class] === roadVehicleTrips by construction.
     let roadVehicleTrips = 0;
+    const byTileClass: Partial<Record<VehicleClassId, number>> = {};
     for (const modeId of ROAD_PERSON_MODE_IDS) {
       const share = shares[modeId] ?? 0;
       if (share <= 0) continue;
       const occ = occupancyForMode(modeId);
-      if (occ > 0) roadVehicleTrips += (t.personTrips * share) / occ;
+      if (occ > 0) {
+        const v = (t.personTrips * share) / occ;
+        roadVehicleTrips += v;
+        if (v > 0) {
+          const classId = modeId as VehicleClassId;
+          byTileClass[classId] = (byTileClass[classId] ?? 0) + v;
+        }
+      }
+    }
+    const freightByClass = freightByClassByTile.get(`${t.x},${t.y}`);
+    if (freightByClass) {
+      for (const [classId, v] of Object.entries(freightByClass)) {
+        if (!v) continue;
+        byTileClass[classId as VehicleClassId] = (byTileClass[classId as VehicleClassId] ?? 0) + v;
+      }
     }
     roadVehicleTrips += t.freightVehicleTrips;
     if (roadVehicleTrips <= 0) continue;
@@ -673,14 +961,39 @@ const assignmentOf: (s: SimState) => AssignmentResult = memoOnState((s) => {
       unrouted.push({ x: t.x, y: t.y, vehicleTrips: roadVehicleTrips, reason: 'no-path' });
       continue;
     }
-    for (const segId of path) accumulate(assignedFlow, segId, roadVehicleTrips);
+    // BUG-912 perf fix: Object.entries(byTileClass) allocated a fresh array
+    // of [key,value] pairs for EVERY segment of EVERY tile's path — with
+    // ~4,900 demand tiles and multi-segment paths that was millions of
+    // short-lived allocations per tick (measured 7.8x-10.1x reducer cost).
+    // Hoist it to ONCE PER TILE, before the per-segment loop, since
+    // byTileClass itself does not change while walking the path.
+    const byTileClassEntries = Object.entries(byTileClass) as Array<[VehicleClassId, number]>;
+    for (const segId of path) {
+      accumulate(assignedFlow, segId, roadVehicleTrips);
+      for (const [classId, v] of byTileClassEntries) {
+        if (v) accumulateClass(segId, classId, v);
+      }
+    }
     tilePaths.set(tileKey, path);
     tileVehicleTrips.set(tileKey, roadVehicleTrips);
   }
-  return { assignedFlow, unrouted, tilePaths, tileVehicleTrips };
+  return { assignedFlow, assignedFlowByClass, unrouted, tilePaths, tileVehicleTrips };
 });
 
 export const assignedFlowOf: (s: SimState) => Map<string, number> = (s) => assignmentOf(s).assignedFlow;
+/** FEAT-2326609800 inc7 (AC-1) — additive export of assignmentOf's own
+ * per-class tagging (`:606-620` above), same shape as the tilePathsOf/
+ * tileVehicleTripsOf inc5 precedent: `Σ_class assignedFlowByClassOf(s).get(seg)[class]`
+ * equals `assignedFlowOf(s).get(seg)` for every segment carrying flow, to
+ * within ordinary floating-point summation-order rounding (BUG-917(c),
+ * corrected 2026-09-11: the two are NOT bit-identical — the blended scalar
+ * accumulates one term per path segment while the per-class map accumulates
+ * up to seven, so the summation orders differ; measured divergence ~1e-16
+ * relative, well inside a `4 * Number.EPSILON` tolerance, harmless in
+ * magnitude but not "exact" or "by construction" as this comment previously
+ * claimed). */
+export const assignedFlowByClassOf: (s: SimState) => Map<string, Partial<Record<VehicleClassId, number>>> = (s) =>
+  assignmentOf(s).assignedFlowByClass;
 export const unroutedDemandOf: (s: SimState) => UnroutedDemand[] = (s) => assignmentOf(s).unrouted;
 
 // FEAT-2326609798 inc5 (AC-2, ASM-1520) — additive exports of assignmentOf's
@@ -901,3 +1214,343 @@ export function __structuralDijkstraBoundForTest(s: SimState): number {
   const segmentCount = lineSegmentIndexOf(s).segments.length;
   return originTileCount * segmentCount;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FEAT-2326609800 inc7 "TAX, WEAR AND REPAIR"
+// (docs/planning/acceptance/FEAT-2326609792-inc7.md AC-2..AC-8).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * AC-2/AC-4 basis — road-only segment length in km, reusing the EXACT same
+ * tile-count x webconsoleMetresPerTile basis segmentFreeFlowMinutesFor
+ * already uses for its metres figure (AC-2, inc3) — never re-derived. Rail/
+ * hs1 segments are excluded (out of scope for vehicle-km/wear, road-only).
+ */
+export const segmentKmOf: (s: SimState) => Map<string, number> = memoOnState((s) => {
+  const idx = lineSegmentIndexOf(s);
+  const out = new Map<string, number>();
+  for (const seg of idx.segments) {
+    if (seg.kind !== 'road') continue;
+    out.set(seg.segmentId, (seg.tiles * TRAFFIC.webconsoleMetresPerTile) / 1000);
+  }
+  return out;
+});
+
+/**
+ * AC-2 basis — real per-class vehicle-km this city's routed road network
+ * carries today: Σ over every segment carrying that class's flow of
+ * (assignedFlowByClassOf x segmentKm). This is the REAL routed figure (not
+ * the ladder's population-proxy fuelLitresDemandedPerDay) — the diverging-
+ * fixture requirement AC-2's Check calls for.
+ */
+export const cityVehicleKmByClassOf: (s: SimState) => Partial<Record<VehicleClassId, number>> = memoOnState((s) => {
+  const byClass = assignedFlowByClassOf(s);
+  const km = segmentKmOf(s);
+  const out: Partial<Record<VehicleClassId, number>> = {};
+  const sortedSegIds = [...byClass.keys()].sort();
+  for (const segId of sortedSegIds) {
+    const segKm = km.get(segId);
+    if (!segKm) continue;
+    const classes = byClass.get(segId)!;
+    for (const [classId, flow] of Object.entries(classes)) {
+      if (!flow) continue;
+      const id = classId as VehicleClassId;
+      out[id] = (out[id] ?? 0) + flow * segKm;
+    }
+  }
+  return out;
+});
+
+/**
+ * AC-2 — Fuel Duty basis: total litres/day demanded across every class that
+ * carries a real vehicle_classes.json fuelLitresPerKm figure (excludes bus,
+ * see fuelLitresPerKmById's doc — a genuine data gap, not a fabricated
+ * figure). ASM-1531: fuel litres taxed at 100% fossil rate this increment,
+ * EV share not netted out (inc6's job).
+ */
+export const fuelLitresDemandedOf: (s: SimState) => number = memoOnState((s) => {
+  const km = cityVehicleKmByClassOf(s);
+  let total = 0;
+  for (const id of FUEL_DUTY_CLASS_IDS) {
+    const classKm = km[id] ?? 0;
+    if (classKm <= 0) continue;
+    total += classKm * fuelLitresPerKmFor(id);
+  }
+  return total;
+});
+
+/**
+ * AC-1 (per-class flow prerequisite, city-wide TOTAL not per-segment) — each
+ * class's total daily vehicle-trips GENERATED city-wide (person modes via
+ * modeShareOf/occupancyForMode, freight via freightVehicleTripsByClassOf),
+ * summed over every demand tile. Deliberately NOT derived from
+ * assignedFlowByClassOf's per-SEGMENT routed flow — a trip that traverses N
+ * segments would otherwise be counted N times, which would silently inflate
+ * AC-3's vehicles-owned basis by the average path length. This is the trip-
+ * GENERATION total, the correct basis for "how many vehicles of this class
+ * does the city's daily activity imply" (D1).
+ */
+export const cityVehicleTripsByClassOf: (s: SimState) => Partial<Record<VehicleClassId, number>> = memoOnState((s) => {
+  const shares = modeShareOf(ladderPointOf(s));
+  const freightByTile = freightVehicleTripsByClassOf(s);
+  const out: Partial<Record<VehicleClassId, number>> = {};
+  for (const t of demandForecastOf(s)) {
+    for (const modeId of ROAD_PERSON_MODE_IDS) {
+      const share = shares[modeId] ?? 0;
+      if (share <= 0) continue;
+      const occ = occupancyForMode(modeId);
+      if (occ <= 0) continue;
+      const v = (t.personTrips * share) / occ;
+      if (v > 0) {
+        const id = modeId as VehicleClassId;
+        out[id] = (out[id] ?? 0) + v;
+      }
+    }
+  }
+  const sortedTileKeys = [...freightByTile.keys()].sort();
+  for (const tileKey of sortedTileKeys) {
+    const byClass = freightByTile.get(tileKey)!;
+    for (const [classId, v] of Object.entries(byClass)) {
+      if (!v) continue;
+      const id = classId as VehicleClassId;
+      out[id] = (out[id] ?? 0) + v;
+    }
+  }
+  return out;
+});
+
+/**
+ * AC-3 (D1) — implied vehicles-owned per class: that class's total daily
+ * vehicle-trips ÷ trip_generation.json's new tripsPerVehiclePerDay figure
+ * for that class. Only the 6 classes with a real taxation.json
+ * fleetAverageByVehicleClass row are computed (excludes bus — see
+ * VED_CLASS_IDS's doc).
+ */
+export const vehiclesOwnedByClassOf: (s: SimState) => Partial<Record<VehicleClassId, number>> = memoOnState((s) => {
+  const trips = cityVehicleTripsByClassOf(s);
+  const out: Partial<Record<VehicleClassId, number>> = {};
+  for (const id of VED_CLASS_IDS) {
+    const t = trips[id] ?? 0;
+    if (t <= 0) continue;
+    out[id] = t / tripsPerVehiclePerDayFor(id);
+  }
+  return out;
+});
+
+/**
+ * AC-3 — total annual VED (GBP/year, NOT yet divided by TICKS_PER_YEAR — the
+ * calendar conversion is engine.ts's own TICKS_PER_YEAR constant, this
+ * module has no calendar constant, GR#3): Σ_class vehiclesOwnedByClassOf x
+ * taxation.json fleetAverageByVehicleClass[class].gbpPerYear.
+ */
+export const vedAnnualGbpOf: (s: SimState) => number = memoOnState((s) => {
+  const owned = vehiclesOwnedByClassOf(s);
+  let total = 0;
+  for (const id of VED_CLASS_IDS) {
+    const n = owned[id] ?? 0;
+    if (n <= 0) continue;
+    total += n * vedGbpPerYearFor(id);
+  }
+  return total;
+});
+
+// --- AC-5: condition index + repair-cost curve ------------------------------
+
+/**
+ * AC-5 — conditionIndex from cumulative ESAL wear: road_wear.json's
+ * conditionDecayPerESAL points lost per cumulative ESAL unit, clamped to
+ * [0,100]. This is the ESAL-driven component ONLY — additive to (never
+ * replacing) roads.json's own age-based conditionDecayPerMonth, which no
+ * consumer wires yet anywhere in the TS engine (confirmed by inspection,
+ * doc §2) and stays out of this increment's scope.
+ */
+export function conditionIndexOf(wear: number): number {
+  const w = Number.isFinite(wear) && wear > 0 ? wear : 0;
+  return Math.max(0, Math.min(100, 100 - w * CONDITION_DECAY_PER_ESAL));
+}
+
+/**
+ * AC-5 — piecewise-linear interpolation of road_wear.json's repairCostCurve
+ * (6 anchor points, conditionIndex 100..0 descending). Never re-derived via
+ * an independent formula (AC-8's mutant: a Math.pow(loadRatio,4) rebuild
+ * would silently drift from this file's own calibrated shape).
+ */
+export function repairCostMultiplierOf(conditionIndex: number): number {
+  const ci = Math.max(0, Math.min(100, conditionIndex));
+  for (let i = 0; i < REPAIR_COST_CURVE.length - 1; i++) {
+    const hi = REPAIR_COST_CURVE[i];
+    const lo = REPAIR_COST_CURVE[i + 1];
+    if (ci <= hi.conditionIndex && ci >= lo.conditionIndex) {
+      const span = hi.conditionIndex - lo.conditionIndex;
+      const frac = span > 0 ? (hi.conditionIndex - ci) / span : 0;
+      return hi.repairCostMultiplier + frac * (lo.repairCostMultiplier - hi.repairCostMultiplier);
+    }
+  }
+  return REPAIR_COST_CURVE[REPAIR_COST_CURVE.length - 1].repairCostMultiplier;
+}
+
+// --- AC-4/AC-5/AC-6: advanceRoadWear / roadWearStepOf ----------------------
+
+export interface RoadRepairEvent {
+  segmentId: string;
+  roadClassId: string;
+  /** conditionIndex AT THE MOMENT OF REPAIR (before the reset to 0) — the
+   * multiplier is priced off the segment's degraded state, per AC-5. */
+  conditionIndexBeforeRepair: number;
+  multiplier: number;
+}
+
+export interface RoadWearStep {
+  /** Next tick's s.roadWearBySegment — self-pruning (zero/repaired entries omitted, mirrors sanitizeRoadWearBySegment's idiom). */
+  nextWearBySegment: Record<string, number>;
+  /** Every segment repaired (paid) THIS tick — empty on a tick where nothing crosses the trigger. engine.ts folds these into the 'Roads' upkeep bucket exactly once (AC-5). */
+  repairEvents: RoadRepairEvent[];
+  /** BUG-915: the SANITIZED wear-before-any-decision map, exposed so engine.ts's
+   * payment gate can fall back to "wear persists" for a DEFERRED (unaffordable)
+   * repair event without re-importing/re-running sanitizeRoadWearBySegment itself
+   * (this module is the sole computer of the wear step; engine.ts only decides
+   * whether the already-computed reset is actually committed). */
+  prevWearBySegment: Record<string, number>;
+}
+
+/** One cadence-refreshed wear-accrual input per CURRENT road segment (BUG-929, FEAT-2326609800 inc7 r3). */
+export interface WearSegmentInput {
+  roadClassId: string;
+  /** This segment's ESAL delta for ONE tick at the flow this cadence window observed (0 when the segment carries no flow). */
+  deltaEsalPerTick: number;
+}
+
+/**
+ * BUG-929 (lead amendment r3) — the EXPENSIVE half of the wear/repair
+ * mechanic (assignedFlowByClassOf's Dijkstra-derived flow, segmentKmOf,
+ * lineSegmentIndexOf), computed ONCE per traffic cadence tick and cached
+ * into s.trafficSnapshot.wearSegments by trafficWellbeing.ts's
+ * computeTrafficSnapshot — never called from the per-tick money path
+ * again. Keyed by EVERY current road segment (delta 0 when the segment
+ * carries no flow this cadence window), so its own key set doubles as the
+ * "which segments still exist" bound roadWearStepFromSnapshot uses for
+ * orphan pruning (BUG-917(b)) without a live lineSegmentIndexOf call.
+ */
+export const wearSegmentInputsOf: (s: SimState) => Record<string, WearSegmentInput> = memoOnState((s) => {
+  const flowByClass = assignedFlowByClassOf(s);
+  const km = segmentKmOf(s);
+  const idx = lineSegmentIndexOf(s);
+  const out: Record<string, WearSegmentInput> = {};
+  for (const seg of idx.segments) {
+    if (seg.kind !== 'road') continue;
+    const roadClassId = roadClassIdOfSegment(seg);
+    const classes = flowByClass.get(seg.segmentId);
+    const segKm = km.get(seg.segmentId) ?? 0;
+    let delta = 0;
+    if (classes && segKm > 0) {
+      for (const [classId, flow] of Object.entries(classes)) {
+        if (!flow) continue;
+        delta += (flow * segKm * esalFactorFor(classId)) / 100;
+      }
+    }
+    out[seg.segmentId] = { roadClassId, deltaEsalPerTick: delta };
+  }
+  return out;
+});
+
+/**
+ * AC-4/AC-5/AC-6 — ONE pure step of the wear/repair state machine, over
+ * CACHED cadence inputs (never a live assignment call — BUG-929). Safe to
+ * call from BOTH computeFlows (for repairEvents, folded into the 'Roads'
+ * bucket THIS tick) and advance() (for nextWearBySegment, written to
+ * next.roadWearBySegment): both call sites pass the SAME (prevWearRaw,
+ * wearSegments) pair within the same tick, so a caller that memoises on
+ * those two references (as engine.ts's roadRepairPaymentOf/roadWearOf do,
+ * mirroring the old memoOnState(s) idiom) never disagrees or double-computes
+ * (GR#21).
+ *
+ * Per segment (considering every segment the cadence snapshot carries plus
+ * every segment with prior wear, so a segment that stops carrying flow while
+ * still degraded is not silently forgotten):
+ *   - If the PREVIOUS tick's conditionIndex is already below
+ *     repairTriggerConditionIndex (60): a repair fires THIS tick — priced
+ *     (in engine.ts, this module's own fiscal boundary forbids reading a
+ *     currency-shaped road-class figure, AC-8) off that pre-repair
+ *     conditionIndex via repairCostMultiplierOf, wear resets to 0 (AC-6), and NO
+ *     further ESAL accrual happens this tick for that segment (it is freshly
+ *     resurfaced, condition 100, before this tick's flow could re-degrade
+ *     it — matches AC-6's Check: "the FRESH rate, not the pre-repair rate").
+ *   - Otherwise: this segment's CACHED deltaEsalPerTick (the cadence
+ *     window's own flow x segmentKm x esalFactorPer100VehicleKm/100,
+ *     reapplied every tick until the next cadence refresh — the same
+ *     cadence-lag approximation gridlockTicksBySegment already uses)
+ *     accrues onto the carried-forward wear.
+ *
+ * AC-6's false-pass guard (never reset on a mere READ): this function is
+ * PURE — it never mutates SimState. Only engine.ts's advance() (the sole
+ * writer of s.roadWearBySegment, mirroring the sustained-congestion tick
+ * counter's own doc) commits
+ * `nextWearBySegment` into the next tick's state. A debugjson.ts read-out or
+ * a test calling conditionIndexOf/repairCostMultiplierOf directly can never
+ * trigger a reset — only advance()'s own commit can.
+ */
+export function roadWearStepFromSnapshot(
+  prevWearRaw: unknown,
+  wearSegments: Readonly<Record<string, WearSegmentInput>>,
+): RoadWearStep {
+  const prevWear = sanitizeRoadWearBySegment(prevWearRaw);
+  const nextWear: Record<string, number> = { ...prevWear };
+  const repairEvents: RoadRepairEvent[] = [];
+
+  const consideredSegIds = new Set<string>([...Object.keys(wearSegments), ...Object.keys(prevWear)]);
+  const sortedSegIds = [...consideredSegIds].sort(); // deterministic, GR#21 — no map-range-with-break
+
+  for (const segId of sortedSegIds) {
+    const prevSegWear = prevWear[segId] ?? 0;
+    const prevConditionIndex = conditionIndexOf(prevSegWear);
+    const input = wearSegments[segId];
+
+    if (prevConditionIndex < REPAIR_TRIGGER_CONDITION_INDEX) {
+      if (input) {
+        repairEvents.push({
+          segmentId: segId,
+          roadClassId: input.roadClassId,
+          conditionIndexBeforeRepair: prevConditionIndex,
+          multiplier: repairCostMultiplierOf(prevConditionIndex),
+        });
+      }
+      delete nextWear[segId]; // AC-6: resurfaced this tick, wear resets to 0 (self-pruning).
+      continue;
+    }
+
+    if (!input) continue; // segment no longer in the cadence snapshot and not yet due for repair — wear unchanged.
+    if (input.deltaEsalPerTick > 0) nextWear[segId] = prevSegWear + input.deltaEsalPerTick;
+  }
+
+  // BUG-917(b): orphan-wear growth bound. A segment id is geometry-derived
+  // (churns whenever roads are laid/demolished), so a wear entry whose
+  // segment no longer exists in the CURRENT cadence snapshot can never
+  // again carry flow or reach the repair trigger — it would otherwise
+  // survive in the save forever (unbounded growth, proven by
+  // attack-feat800-round.test.mjs's STATE_GROWTH case before this fix).
+  // Dropping it here is safe and deterministic: wearSegments is refreshed
+  // from the same cadence-gated pure computation every replay reproduces
+  // identically, so every replay drops the exact same keys on the exact
+  // same cadence-boundary tick (a bulldozed segment's wear entry survives
+  // at most one cadence window before being dropped, never forever).
+  for (const segId of Object.keys(nextWear)) {
+    if (!(segId in wearSegments)) delete nextWear[segId];
+  }
+
+  return { nextWearBySegment: nextWear, repairEvents, prevWearBySegment: prevWear };
+}
+
+/**
+ * BUG-929 bootstrap/test-compatibility wrapper — when `s.trafficSnapshot`
+ * already carries a cadence-refreshed `wearSegments` map, reads it
+ * (zero live assignment work, the money-path contract). When absent (a
+ * fresh city, an old save, or a hand-built test fixture that never ran a
+ * real advance() tick), computes `wearSegmentInputsOf(s)` fresh exactly
+ * once — the SAME bootstrap rule trafficWellbeing.ts's cadence fields
+ * already use, so every existing direct caller (trafficWear.test.mjs)
+ * keeps its exact prior behaviour on a snapshot-less state.
+ */
+export const roadWearStepOf: (s: SimState) => RoadWearStep = memoOnState((s) => {
+  const wearSegments = s.trafficSnapshot?.wearSegments ?? wearSegmentInputsOf(s);
+  return roadWearStepFromSnapshot(s.roadWearBySegment, wearSegments);
+});

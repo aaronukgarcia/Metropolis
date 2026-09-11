@@ -95,6 +95,126 @@ import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
 // consume it as `engine.ts`'s wellbeing-part idiom, matching every other
 // symbol in this list (see data.ts's wellbeingPartOf doc comment).
 export { wellbeingPartOf };
+// FEAT-2326609800 inc7 "TAX, WEAR AND REPAIR" — fuel duty + VED inflows and
+// the road-wear/repair-cost step, all computed by trafficAssignment.ts's
+// pure, memoOnState derivations (GR#3 — no second money model here).
+import {
+  fuelLitresDemandedOf,
+  FUEL_DUTY_RATE_PENCE_PER_LITRE,
+  vedAnnualGbpOf,
+  roadWearStepOf,
+  ROAD_MAINTENANCE_CONDITION_DECAY_PER_MONTH,
+  ERR_BASE_COST_MISSING,
+  registryError,
+} from './trafficAssignment.ts';
+import type { RoadWearStep } from './trafficAssignment.ts';
+// FEAT-2326609800 inc7 (AC-5, AC-8 fiscal boundary): trafficAssignment.ts's
+// own inc3 invariant forbids it from ever reading a currency-shaped
+// roads.json field (trafficAssignment.test.mjs's own AC-8 pin: no `Pounds`
+// token may appear in that file's source) — this module reads
+// roads.json's baseCostPounds directly instead, keyed by the SAME
+// roadClassId trafficAssignment.ts's roadWearStepOf already reports on each
+// RoadRepairEvent (a physical id, not a money figure).
+import rawRoadsForRepairCost from './traffic-data/roads.json' with { type: 'json' };
+const ROAD_CLASS_BASE_COST_POUNDS: ReadonlyMap<string, number> = new Map(
+  (rawRoadsForRepairCost as { classes: Array<{ id: string; baseCostPounds: number }> }).classes.map((c) => [c.id, c.baseCostPounds]),
+);
+
+/**
+ * BUG-929 (lead amendment r3) — the Fuel Duty/Road Tax (VED) money-path
+ * inputs used to call trafficAssignment.ts's fuelLitresDemandedOf(s)/
+ * vedAnnualGbpOf(s) directly EVERY tick, which (via cityVehicleKmByClassOf/
+ * cityVehicleTripsByClassOf -> assignedFlowByClassOf) triggered a full
+ * Dijkstra traffic assignment every tick regardless of the traffic cadence —
+ * the r2 round's measured 2.19x reducer-tick regression (BUG-929). Now reads
+ * ONLY s.trafficSnapshot's cadence-cached fields; falls back to a fresh
+ * live compute exactly once when the snapshot (or these specific fields on
+ * it) is absent — the SAME bootstrap rule trafficWellbeing.ts's own cadence
+ * fields use (a fresh city / old save / hand-built test fixture with no
+ * trafficSnapshot at all behaves identically to before this fix).
+ */
+function fuelLitresDemandedFor(s: SimState): number {
+  const cached = s.trafficSnapshot?.fuelLitresDemanded;
+  return typeof cached === 'number' && Number.isFinite(cached) ? cached : fuelLitresDemandedOf(s);
+}
+function vedAnnualGbpFor(s: SimState): number {
+  const cached = s.trafficSnapshot?.vedAnnualGbp;
+  return typeof cached === 'number' && Number.isFinite(cached) ? cached : vedAnnualGbpOf(s);
+}
+
+/**
+ * BUG-915/BUG-914(a) — the ONE payment decision for road repairs, shared
+ * (via memoOnState, exactly like roadWearStepOf itself, GR#21) between
+ * computeFlows() (which needs the rounded cost to fold into the 'Roads'
+ * bucket) and advance() (which needs the FINAL committed
+ * next.roadWearBySegment). Both call sites read this SAME memoised result
+ * for a given `s`, so they can never disagree about which segments were
+ * actually repaired this tick.
+ *
+ * Rules (lead amendment r2, BUG-915):
+ *  - An unknown road class throws MET-V934 fail-closed (BUG-914a) — no
+ *    silent `?? 0` free repair.
+ *  - The total cost across every repair event THIS tick is summed
+ *    UNROUNDED, then rounded EXACTLY ONCE (never per-event).
+ *  - A repair proceeds (wear resets) only when the rounded total is
+ *    affordable: `roundedCost <= 0` (a repair that rounds to a GBP-0
+ *    charge is still "paid" — there is nothing to withhold) OR
+ *    `s.funds >= roundedCost` (funds AT THE START of this tick, the same
+ *    figure computeFlows()/advance() both see before this tick's other
+ *    flows are applied).
+ *  - If NOT affordable, EVERY repair event due this tick is deferred
+ *    together (one shared funds check, not per-segment): wear persists at
+ *    its pre-repair value (never reset), nothing is booked to 'Roads',
+ *    and the segment id is recorded in `deferredSegmentIds` for the
+ *    debug field engine.ts's advance() writes to next state.
+ */
+interface RoadRepairPayment {
+  /** GBP to book into the 'Roads' bucket this tick — 0 when nothing is due or nothing is affordable. */
+  roundedCost: number;
+  /** Whether this tick's due repairs were paid (true also when roundedCost === 0 — free repairs always proceed). */
+  affordable: boolean;
+  /** The next.roadWearBySegment to actually commit — resets only the AFFORDABLE segments, defers the rest. */
+  committedNextWearBySegment: Record<string, number>;
+  /** Segment ids whose repair was due this tick but deferred for lack of funds (sorted, GR#21). */
+  deferredSegmentIds: string[];
+}
+const roadRepairPaymentOf: (s: SimState) => RoadRepairPayment = memoOnState((s) => {
+  const step: RoadWearStep = roadWearStepOf(s);
+  let unroundedTotal = 0;
+  for (const ev of step.repairEvents) {
+    if (!ROAD_CLASS_BASE_COST_POUNDS.has(ev.roadClassId)) {
+      throw registryError(
+        ERR_BASE_COST_MISSING,
+        `data/roads.json classes is missing a positive numeric baseCostPounds entry for road class ${ev.roadClassId}`,
+      );
+    }
+    const baseCostPounds = ROAD_CLASS_BASE_COST_POUNDS.get(ev.roadClassId)!;
+    if (typeof baseCostPounds !== 'number' || !Number.isFinite(baseCostPounds) || baseCostPounds <= 0) {
+      throw registryError(
+        ERR_BASE_COST_MISSING,
+        `data/roads.json classes has a non-positive/non-finite baseCostPounds entry for road class ${ev.roadClassId}`,
+      );
+    }
+    unroundedTotal += ev.multiplier * baseCostPounds * (ROAD_MAINTENANCE_CONDITION_DECAY_PER_MONTH / TICKS_PER_MONTH);
+  }
+  const roundedCost = Math.round(unroundedTotal);
+  // BUG-915: sub-threshold-rounds-to-zero repairs always proceed (nothing to
+  // withhold); everything else is gated on THIS tick's starting funds.
+  const affordable = step.repairEvents.length === 0 || roundedCost <= 0 || s.funds >= roundedCost;
+  if (affordable) {
+    return { roundedCost: Math.max(0, roundedCost), affordable: true, committedNextWearBySegment: step.nextWearBySegment, deferredSegmentIds: [] };
+  }
+  const committedNextWearBySegment: Record<string, number> = { ...step.nextWearBySegment };
+  const deferredSegmentIds: string[] = [];
+  for (const ev of step.repairEvents) {
+    const persisted = step.prevWearBySegment[ev.segmentId] ?? 0;
+    if (persisted > 0) committedNextWearBySegment[ev.segmentId] = persisted;
+    else delete committedNextWearBySegment[ev.segmentId];
+    deferredSegmentIds.push(ev.segmentId);
+  }
+  deferredSegmentIds.sort();
+  return { roundedCost: 0, affordable: false, committedNextWearBySegment, deferredSegmentIds };
+});
 // R3-D FIX (round-3 finding, LOW — "make the nextId self-heal loud"): a
 // DELIBERATE, NARROW exception to this file's own convention of zero
 // side-effects in the reducer (no console.* calls anywhere else in
@@ -1024,6 +1144,15 @@ export function computeFlows(
     // the SAME flows path as everything else (no side channel, no ledger eviction).
     { label: 'Regional Grant', value: regionalGrantPerTick(s.tick) },
   ];
+  // FEAT-2326609800 inc7 (AC-2/AC-3): fuel duty + Road Tax (VED), sized by the
+  // city's REAL routed traffic (trafficAssignment.ts's assignedFlowByClassOf-
+  // derived vehicle-km/vehicle-ownership), never a population proxy. Booked
+  // once each, only when positive (mirrors every other conditional inflow in
+  // this function, e.g. Grid Export/Tourism above).
+  const fuelDuty = Math.round((fuelLitresDemandedFor(s) * FUEL_DUTY_RATE_PENCE_PER_LITRE) / 100);
+  if (fuelDuty > 0) inflows.push({ label: 'Fuel Duty', value: fuelDuty });
+  const roadTaxVed = Math.round(vedAnnualGbpFor(s) / TICKS_PER_YEAR);
+  if (roadTaxVed > 0) inflows.push({ label: 'Road Tax (VED)', value: roadTaxVed });
   // BUG-404 FIX: removed the duplicate tourismDrive Tourism entry here.
   // All tourism income (both policy and building-sourced) is calculated and added
   // once below at the unified tourism calculation site (lines ~227-230).
@@ -1170,6 +1299,21 @@ export function computeFlows(
     if (!upkeep) continue;
     const k = UPKEEP_BUCKET[sp.kind];
     if (k) buckets[k] = (buckets[k] ?? 0) + upkeep;
+  }
+  // FEAT-2326609800 inc7 (AC-5, GR#3), BUG-915 payment gate: every segment
+  // that crosses below road_wear.json's repairTriggerConditionIndex THIS
+  // tick gets repaired ONLY IF this tick's starting funds cover the
+  // rounded-once total cost (repairCostMultiplierOf x the segment's
+  // road-class baseCostPounds x roads.json's own age-decay-rate figure
+  // repurposed as a per-tick amortisation fraction) — folded into the
+  // EXISTING 'Roads' bucket total, never a second 'Road Repair' outflow
+  // label (AC-5's own mutant). roadRepairPaymentOf is memoised over `s`, so
+  // this call and the SAME call inside advance() below (for
+  // next.roadWearBySegment) agree exactly on which segments were actually
+  // paid and never double-compute or disagree (BUG-915).
+  const roadRepairPayment = roadRepairPaymentOf(s);
+  if (roadRepairPayment.roundedCost > 0) {
+    buckets['Roads'] = (buckets['Roads'] ?? 0) + roadRepairPayment.roundedCost;
   }
   let outflows: FlowItem[] = Object.entries(buckets)
     .filter(([, v]) => v > 0)
@@ -7473,6 +7617,19 @@ function advance(s: SimState): SimState {
     gridlockTicksBySegment = result.gridlockTicksBySegment;
     trafficSnapshot = result.snapshot;
   }
+  // FEAT-2326609800 inc7 (AC-4/AC-6), BUG-915: roadRepairPaymentOf(s) is
+  // memoOnState, so this is a cache hit against the SAME call computeFlows()
+  // made earlier this tick (via `computeFlows(s)` above, `s` unchanged) —
+  // guaranteed to agree with the repair cost already folded into this
+  // tick's 'Roads' outflow, and to defer exactly the segments that outflow
+  // did NOT charge for. engine.ts is the SOLE writer of s.roadWearBySegment
+  // (mirrors congestionTicksBySpec's own doc).
+  const roadRepairPaymentForAdvance = roadRepairPaymentOf(s);
+  const roadWearBySegment = roadRepairPaymentForAdvance.committedNextWearBySegment;
+  // BUG-915: debug/informational field — segment ids whose repair was due
+  // this tick but deferred for lack of funds (empty when nothing was due or
+  // everything due was affordable). Never read by conservation/money logic.
+  const roadRepairDeferredSegmentIds = roadRepairPaymentForAdvance.deferredSegmentIds;
 
   const exposedInsolvencyState: InsolvencyState =
     declineState !== null
@@ -7627,8 +7784,15 @@ function advance(s: SimState): SimState {
     gridlockTicksBySegment,
     // FEAT-2326609798 inc5 r2 (BUG-877): the cadence-refreshed traffic
     // wellbeing snapshot the three traffic wellbeing parts read EXCLUSIVELY
-    // (trafficWellbeing.ts) — never recomputed off-cadence.
+    // (trafficWellbeing.ts) — never recomputed off-cadence. FEAT-2326609800
+    // inc7 r3 (BUG-929) also rides this same snapshot for its money-path
+    // inputs (fuelLitresDemanded/vedAnnualGbp/wearSegments/validSegmentIds).
     trafficSnapshot,
+    // FEAT-2326609800 inc7 (AC-4/AC-6): this tick's advanced per-segment
+    // road wear, read by the NEXT tick's computeFlows()/roadWearStepOf().
+    roadWearBySegment,
+    // BUG-915: this tick's deferred (unaffordable) repairs, debug-only.
+    roadRepairDeferredSegmentIds,
   };
 
   // FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1) — detect any

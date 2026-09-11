@@ -933,7 +933,61 @@ export interface SimState {
     medianCommuteMinutes: number;
     gridlockShare: number;
     coverageShare: number | null;
+    /**
+     * FEAT-2326609800 inc7 r3 (BUG-929 lead amendment) — the money-path
+     * inputs that used to be recomputed from the live assignment EVERY tick
+     * (the 2.19x reducer-tick regression the r2 round measured) now refresh
+     * only on this same traffic cadence, exactly like medianCommuteMinutes/
+     * gridlockShare/coverageShare above. computeFlows()/advanceRoadWear()
+     * read ONLY these fields — never trafficAssignment.ts's live
+     * assignedFlowByClassOf/cityVehicleKmByClassOf/etc. directly — so a
+     * non-cadence tick does zero assignment work (pinned by
+     * trafficAssignment.ts's exported op counter). Optional for backward
+     * tolerance: a legacy save's trafficSnapshot predates inc7 and simply
+     * lacks these fields — treated as "absent", triggering one fresh
+     * bootstrap compute on the next advance()/computeFlows() call, exactly
+     * like a snapshot-less fresh city.
+     */
+    fuelLitresDemanded?: number;
+    /** AC-3 — total annual VED (GBP/year, not yet divided by TICKS_PER_YEAR). */
+    vedAnnualGbp?: number;
+    /**
+     * AC-4/AC-5 wear-increment inputs, one entry per segment currently
+     * carrying routed flow: the per-tick ESAL delta this segment accrues
+     * (Σ_class flow x segmentKm x esalFactorPer100VehicleKm / 100, computed
+     * ONCE per cadence window and reapplied every tick until the next
+     * refresh — the same cadence-lag approximation gridlockTicksBySegment
+     * already uses) plus the roadClassId a repair event on this segment
+     * should be priced against.
+     */
+    // wearSegments carries EVERY current road segment (delta 0 for a segment
+    // with no flow this cadence window), so its own key set doubles as the
+    // "which segments still exist" bound for roadWearBySegment orphan
+    // pruning — no separate validSegmentIds field needed.
+    wearSegments?: Record<string, { roadClassId: string; deltaEsalPerTick: number }>;
   };
+  /**
+   * FEAT-2326609800 inc7 (AC-4, ASM-1534) — per-segment cumulative ESAL
+   * (Equivalent Single-Axle Load) wear, mirroring `congestionTicksBySpec`'s
+   * exact shape: engine.ts's `advance()` is the SOLE writer, computed each
+   * tick from `trafficAssignment.ts`'s `assignedFlowByClassOf` x segment-km x
+   * `road_wear.json` esalFactors (never a hand-typed ratio, GR#15). Optional
+   * for backward tolerance: a legacy state without it sanitizes to `{}` (zero
+   * wear on every segment — old saves are not retroactively penalised, AC-8).
+   * Resets a segment's entry to 0 the tick its repair cost is actually paid
+   * (AC-6, a resurfacing event) — never on a mere read of an over-threshold
+   * segment.
+   */
+  roadWearBySegment?: Record<string, number>;
+  /**
+   * BUG-915 — debug/informational field ONLY (never read by conservation or
+   * money logic): segment ids whose repair crossed the trigger THIS tick
+   * but was DEFERRED because this tick's starting funds could not cover the
+   * rounded total repair cost. Empty array when nothing was due or every
+   * due repair was affordable. Optional for backward tolerance: a legacy
+   * state without it sanitizes to `[]`.
+   */
+  roadRepairDeferredSegmentIds?: string[];
   /**
    * FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1) — ids of
    * data.ts MILESTONES already paid out, so a one-time cash reward + notice

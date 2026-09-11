@@ -88,7 +88,7 @@ import {
 } from './data.ts';
 import type { PipeTierAgg } from './data.ts';
 import type { ConsolidationPass } from './consolidator.ts';
-import { sanitizeCrimeRate, sanitizeCongestionTicksBySpec, sanitizeClaimedMilestones } from './data.ts';
+import { sanitizeCrimeRate, sanitizeCongestionTicksBySpec, sanitizeRoadWearBySegment, sanitizeClaimedMilestones } from './data.ts';
 import { sanitizeTrafficSnapshot } from './trafficWellbeing.ts';
 import {
   HISTORY_CAP,
@@ -330,10 +330,22 @@ export interface DebugJson {
     crimeRatePreviousMonth: number;
     /** FEAT-congestion-teeth-2026-09-02 (AC-1) — per road-line-spec sustained-congestion tick counters. */
     congestionTicksBySpec: Record<string, number>;
-    /** FEAT-2326609798 inc5 r2 (BUG-877 cadence fix) — traffic wellbeing snapshot, or null if never computed. */
-    trafficSnapshot: { tick: number; medianCommuteMinutes: number; gridlockShare: number; coverageShare: number | null } | null;
+    /** FEAT-2326609798 inc5 r2 (BUG-877 cadence fix) — traffic wellbeing snapshot, or null if never computed. FEAT-2326609800 inc7 r3 (BUG-929) extends this with the cadence-cached money-path inputs; see types.ts's trafficSnapshot doc. */
+    trafficSnapshot: {
+      tick: number;
+      medianCommuteMinutes: number;
+      gridlockShare: number;
+      coverageShare: number | null;
+      fuelLitresDemanded?: number;
+      vedAnnualGbp?: number;
+      wearSegments?: Record<string, { roadClassId: string; deltaEsalPerTick: number }>;
+    } | null;
     /** FEAT-2326609798 inc5 (AC-2) — per line-segment sustained-gridlock tick counters. */
     gridlockTicksBySegment: Record<string, number>;
+    /** FEAT-2326609800 inc7 (AC-4/AC-6) — per-segment cumulative ESAL road wear, read-out for a future condition overlay (inc10). */
+    roadWearBySegment: Record<string, number>;
+    /** BUG-915 — debug-only: segment ids whose repair was due this tick but deferred for lack of funds. */
+    roadRepairDeferredSegmentIds: string[];
     /** FEAT-milestone-cash-rewards-2026-09-02 (Q100047b) — ids of data.ts MILESTONES already paid out. */
     claimedMilestones: string[];
     /** FEAT-milestone-cash-rewards-2026-09-02 — milestone rewards claimed but not yet paid (drains next tick). */
@@ -677,6 +689,9 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   gridlockTicksBySegment: 'sim.gridlockTicksBySegment',
   // FEAT-2326609798 inc5 r2 (BUG-877 cadence fix).
   trafficSnapshot: 'sim.trafficSnapshot',
+  // FEAT-2326609800 inc7 (AC-4/AC-6).
+  roadWearBySegment: 'sim.roadWearBySegment',
+  roadRepairDeferredSegmentIds: 'sim.roadRepairDeferredSegmentIds',
   // FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1).
   claimedMilestones: 'sim.claimedMilestones',
   pendingMilestoneRewards: 'sim.pendingMilestoneRewards',
@@ -1098,8 +1113,18 @@ export function buildDebugJson(
       // coerces an untrusted/legacy value to a well-formed snapshot or
       // `undefined` (absent) -- never a raw cast. `?? null` here is a
       // JSON-shape choice (debug.json has no `undefined`), not a config
-      // default.
+      // default. FEAT-2326609800 inc7 r3 (BUG-929): the sanitizer also
+      // covers the cadence-cached money-path fields (fuelLitresDemanded/
+      // vedAnnualGbp/wearSegments) — see its own doc.
       trafficSnapshot: sanitizeTrafficSnapshot(s.trafficSnapshot) ?? null,
+      // FEAT-2326609800 inc7 (GR#16): same shape as congestionTicksBySpec above.
+      roadWearBySegment: sanitizeRoadWearBySegment(s.roadWearBySegment),
+      // BUG-915: debug-only field — surfaced here for forensic visibility,
+      // never consulted by any money/conservation logic. GR#16: coerce
+      // defensively (a non-array or non-string entry sanitizes to []).
+      roadRepairDeferredSegmentIds: Array.isArray(s.roadRepairDeferredSegmentIds)
+        ? s.roadRepairDeferredSegmentIds.filter((x): x is string => typeof x === 'string')
+        : [],
       // FEAT-milestone-cash-rewards-2026-09-02 (GR#16): same shape as
       // crimeRatePreviousMonth/congestionTicksBySpec above — sanitizeClaimedMilestones
       // covers backward tolerance (legacy state -> []) AND a corrupt save's

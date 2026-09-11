@@ -98,6 +98,7 @@ function main() {
   const linkCap = loadJson('data/traffic/link_capacity.json');
   const modes = loadJson('data/modes.json');
   const vehicleClasses = loadJson('data/traffic/vehicle_classes.json');
+  const tripGeneration = loadJson('data/traffic/trip_generation.json');
 
   const rungs = scaleLadder.rungs;
 
@@ -246,6 +247,24 @@ function main() {
       const v = row.turnoutMinutes;
       if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
         warn(`emergency_response.json services['${row.service}'].turnoutMinutes must be a positive finite number, got ${JSON.stringify(v)}`);
+      }
+    }
+  }
+
+  // FEAT-2326609800 inc7 rework (BUG-914(d)): every roadVehicles class in
+  // vehicle_classes.json must carry a positive, finite
+  // trip_generation.json tripsPerVehiclePerDay entry -- deleting the block,
+  // or leaving it non-numeric/non-positive, must RED this check (mirrors
+  // the emergency_response.json turnoutMinutes precedent above; this is the
+  // field tripsPerVehiclePerDayFor in trafficAssignment.ts reads
+  // fail-closed, MET-V940).
+  {
+    const tpvd = tripGeneration.tripsPerVehiclePerDay ?? {};
+    for (const v of vehicleClasses.roadVehicles) {
+      const row = tpvd[v.id];
+      const val = row?.tripsPerVehiclePerDay;
+      if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) {
+        warn(`trip_generation.json tripsPerVehiclePerDay['${v.id}'].tripsPerVehiclePerDay must be a positive finite number, got ${JSON.stringify(val)}`);
       }
     }
   }

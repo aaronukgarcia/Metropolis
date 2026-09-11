@@ -61,7 +61,8 @@
 
 import type { SimState } from './types.ts';
 import { memoOnState, wellbeingPartOf, earlyGameFactor, SPECS } from './data.ts';
-import { commuteTimeDistributionOf, gridlockedSegmentsOf, tilePathsOf, tileVehicleTripsOf } from './trafficAssignment.ts';
+import { commuteTimeDistributionOf, gridlockedSegmentsOf, tilePathsOf, tileVehicleTripsOf, fuelLitresDemandedOf, vedAnnualGbpOf, wearSegmentInputsOf } from './trafficAssignment.ts';
+import type { WearSegmentInput } from './trafficAssignment.ts';
 import { emergencyCoverageOf } from './emergencyResponse.ts';
 // BUG-892 fix (r4) — the emergency-response penalty must only apply once the
 // player can actually build an ambulance station (ASM-1518 amendment: "a
@@ -241,6 +242,20 @@ export interface TrafficSnapshot {
   gridlockShare: number;
   /** ambulance coverageShare, or null for honest zero-station absence (ASM-1518). */
   coverageShare: number | null;
+  /**
+   * FEAT-2326609800 inc7 r3 (BUG-929) — the money-path inputs that used to
+   * be recomputed from the live traffic assignment EVERY tick now refresh
+   * only on this same cadence. Optional: a pre-inc7 snapshot (or a sanitized
+   * field that failed validation) simply lacks these — engine.ts's own
+   * fuelLitresDemandedFor/vedAnnualGbpFor/roadWearStepOf fall back to a
+   * fresh bootstrap compute when absent, exactly like this snapshot's other
+   * three fields do when the WHOLE snapshot is absent.
+   */
+  fuelLitresDemanded?: number;
+  /** AC-3 — total annual VED (GBP/year, not yet divided by TICKS_PER_YEAR). */
+  vedAnnualGbp?: number;
+  /** AC-4/AC-5 — per-segment wear-accrual inputs, see WearSegmentInput's own doc. */
+  wearSegments?: Record<string, WearSegmentInput>;
 }
 
 /**
@@ -263,7 +278,7 @@ export function sanitizeTrafficSnapshot(v: unknown): TrafficSnapshot | undefined
     if (cs === null) return undefined;
     coverageShare = Math.max(0, Math.min(1, cs));
   }
-  return {
+  const out: TrafficSnapshot = {
     tick: Math.max(0, Math.floor(tick)),
     // BUG-895 fix (r4): medianCommuteMinutes clamps to the data-sourced
     // mental.commuteMinutesClampMax (both shares already clamped to [0,1]
@@ -273,6 +288,31 @@ export function sanitizeTrafficSnapshot(v: unknown): TrafficSnapshot | undefined
     gridlockShare: Math.max(0, Math.min(1, gridlockShare)),
     coverageShare,
   };
+
+  // FEAT-2326609800 inc7 r3 (BUG-929, GR#16): the three new cadence-cached
+  // money-path fields are each independently optional -- a bad/missing
+  // field is simply DROPPED (engine.ts's own bootstrap fallback then
+  // recomputes it fresh), never enough on its own to invalidate the
+  // required core fields above (which is what would send the WHOLE
+  // snapshot to `undefined`, forcing a redundant assignment on cadence
+  // fields that were actually fine).
+  const fuelLitresDemanded = finiteNumber(o.fuelLitresDemanded);
+  if (fuelLitresDemanded !== null && fuelLitresDemanded >= 0) out.fuelLitresDemanded = fuelLitresDemanded;
+  const vedAnnualGbp = finiteNumber(o.vedAnnualGbp);
+  if (vedAnnualGbp !== null && vedAnnualGbp >= 0) out.vedAnnualGbp = vedAnnualGbp;
+  if (typeof o.wearSegments === 'object' && o.wearSegments !== null && !Array.isArray(o.wearSegments)) {
+    const wearSegments: Record<string, WearSegmentInput> = {};
+    for (const [segId, raw] of Object.entries(o.wearSegments as Record<string, unknown>)) {
+      if (typeof raw !== 'object' || raw === null) continue;
+      const r = raw as Record<string, unknown>;
+      const roadClassId = typeof r.roadClassId === 'string' && r.roadClassId.length > 0 ? r.roadClassId : null;
+      const deltaEsalPerTick = finiteNumber(r.deltaEsalPerTick);
+      if (roadClassId === null || deltaEsalPerTick === null || deltaEsalPerTick < 0) continue;
+      wearSegments[segId] = { roadClassId, deltaEsalPerTick };
+    }
+    out.wearSegments = wearSegments;
+  }
+  return out;
 }
 
 /**
@@ -308,8 +348,17 @@ export function computeTrafficSnapshot(
   const gridlockShare = totalWeight > 0 ? gridlockedWeight / totalWeight : 0;
   const coverageShare = emergencyCoverageOf(s, 'ambulance').coverageShare;
 
+  // FEAT-2326609800 inc7 r3 (BUG-929) — the money-path inputs ride the SAME
+  // cadence window: computed here (inside the already-cadence-gated call),
+  // never again from the per-tick money path (engine.ts's
+  // fuelLitresDemandedFor/vedAnnualGbpFor/roadWearStepOf all read these
+  // cached fields first, falling back to a fresh compute only when absent).
+  const fuelLitresDemanded = fuelLitresDemandedOf(s);
+  const vedAnnualGbp = vedAnnualGbpOf(s);
+  const wearSegments = wearSegmentInputsOf(s);
+
   return {
-    snapshot: { tick, medianCommuteMinutes: medianMinutes, gridlockShare, coverageShare },
+    snapshot: { tick, medianCommuteMinutes: medianMinutes, gridlockShare, coverageShare, fuelLitresDemanded, vedAnnualGbp, wearSegments },
     gridlockTicksBySegment: ticks,
   };
 }
