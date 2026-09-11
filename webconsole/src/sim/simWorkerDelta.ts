@@ -228,14 +228,23 @@ export interface SimStateDelta {
    *  integrity stamp `applyStateDelta` checks against the state it is
    *  asked to patch (see DeltaBasisMismatchError's header). */
   baseTick: number;
-  /** Every SimState field EXCEPT `buildings` and `roadConnectivity`, sent
-   *  in full every time. Deliberately NOT diffed further: the capture-13
-   *  measurement shows these fields combined are already only ~3.4% of the
-   *  total payload (history/ledger/pipeTier/consolidatorLog/scalars), so
-   *  diffing them too would add real complexity for a saving well under
-   *  this feature's own <5%-of-full-clone bar — see FEAT-2326609777's BOW
-   *  comment for the "cheapest SUFFICIENT fix" framing. */
-  rest: Omit<SimState, 'buildings' | 'roadConnectivity'>;
+  /** Every SimState field EXCEPT `buildings`, `roadConnectivity` and any
+   *  field whose value is the SAME OBJECT REFERENCE in `base` (see
+   *  diffSimState for why reference identity is the exact, conservative
+   *  test and how applyStateDelta restores the omitted fields for free).
+   *
+   *  HISTORY: this was originally "every field, in full, every time",
+   *  justified by a capture-13 measurement putting the whole of `rest` at
+   *  ~3.4% of the payload. FEAT-2326609800 inc7 invalidated that
+   *  measurement: `trafficSnapshot.wearSegments` is a per-segment table
+   *  that reaches ~147KB on the 13k-building dogfood fixture and is
+   *  recomputed only on the traffic cadence, yet was re-sent on all 60 of
+   *  60 ticks — 89.5% of the delta, pushing the measured ratio to 20.21%
+   *  against this feature's own <5% bar. Dropping reference-identical
+   *  fields returns it to 2.18% and is a pure payload optimisation: the
+   *  reconstructed state stays byte-identical (proven by this feature's
+   *  10-tick round-trip test against a real reducer chain). */
+  rest: Partial<Omit<SimState, 'buildings' | 'roadConnectivity'>>;
   buildings: BuildingsDelta;
   /** Present only when the VALUE differs from the base (roadConnectivityEqual
    *  false) — omitted (undefined) means "unchanged, reuse the base's copy". */
@@ -244,12 +253,31 @@ export interface SimStateDelta {
 
 /** Pure diff of two full SimStates. */
 export function diffSimState(base: SimState, next: SimState): SimStateDelta {
-  const { buildings: nextBuildings, roadConnectivity: nextRoadConnectivity, ...rest } = next;
+  const { buildings: nextBuildings, roadConnectivity: nextRoadConnectivity, ...allRest } = next;
+  // Drop every `rest` field the tick did not replace. The test is REFERENCE
+  // identity, not deep equality, and that is deliberate on both sides:
+  //  - SOUND: applyStateDelta rebuilds with `{ ...base, ...delta.rest }`, so
+  //    an omitted field is served from `base` — and `base[k] === next[k]`
+  //    means that is the very same object `next` carries. The `hasOwnProperty`
+  //    guard keeps KEY PRESENCE identical too (SimState has optional fields
+  //    such as `trafficSnapshot`; omitting a key `base` does not own would
+  //    reconstruct a state missing it, which deepStrictEqual — and the
+  //    10-tick round-trip test — would catch).
+  //  - CHEAP + never wrong in the unsafe direction: a field the reducer
+  //    rebuilt into a value-equal but distinct object is still SENT (merely
+  //    a missed saving), never dropped. No deep compare runs on the hot path.
+  const rest: Partial<Omit<SimState, 'buildings' | 'roadConnectivity'>> = {};
+  const baseRecord = base as unknown as Record<string, unknown>;
+  for (const key of Object.keys(allRest)) {
+    const nextValue = (allRest as Record<string, unknown>)[key];
+    if (Object.prototype.hasOwnProperty.call(baseRecord, key) && baseRecord[key] === nextValue) continue;
+    (rest as Record<string, unknown>)[key] = nextValue;
+  }
   const buildings = diffBuildings(base.buildings, nextBuildings);
   const roadConnectivity = roadConnectivityEqual(base.roadConnectivity, nextRoadConnectivity)
     ? undefined
     : nextRoadConnectivity;
-  return { baseTick: base.tick, rest: rest as Omit<SimState, 'buildings' | 'roadConnectivity'>, buildings, roadConnectivity };
+  return { baseTick: base.tick, rest, buildings, roadConnectivity };
 }
 
 /** Pure reconstruction: the exact inverse of diffSimState —

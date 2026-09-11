@@ -29,6 +29,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { reducer } from '../src/sim/engine.ts';
 import { buildScaleFixture } from './scale/fixture.mjs';
+import { TRAFFIC_RECOMPUTE_TICKS } from '../src/sim/trafficWellbeing.ts';
 import {
   diffBuildings,
   applyBuildingsDelta,
@@ -167,6 +168,94 @@ test('FEAT-2326609777: applyStateDelta(base, diffSimState(base, next)) reproduce
     assert.deepEqual(reconstructed, next, `tick ${i}: reconstructed state must be byte-identical to the real reducer output`);
     s = next;
   }
+});
+
+// ===========================================================================
+// (3b) BUG-951 REGRESSION PIN — `rest` must OMIT reference-identical fields.
+//
+// `rest` originally shipped every non-buildings/roadConnectivity field in
+// full on every tick, justified by a capture-13 measurement putting all of
+// `rest` at ~3.4% of the payload. FEAT-2326609800 inc7 invalidated that:
+// TrafficSnapshot gained `wearSegments`, a per-segment table that reaches
+// ~147KB on the 13k-building dogfood fixture. It is recomputed only on the
+// traffic cadence (TRAFFIC_RECOMPUTE_TICKS) and is the SAME OBJECT on every
+// other tick, yet was re-sent on all 60 of 60 ticks — 89.5% of the delta,
+// taking the measurement in (4) below from an expected sub-5% to 20.21%.
+//
+// diffSimState now drops any `rest` field that is `===` its counterpart in
+// `base`. The test below pins the MECHANISM (so the aggregate ratio in (4)
+// can never go green for the wrong reason) and, critically, pins that the
+// omission is LOSSLESS — including key presence for SimState's OPTIONAL
+// fields, which a naive `delete` would silently drop.
+//
+// MUTANT (verified red, 2026-09-11): restore the old body
+// (`rest: { ...allRest }`, no identity filter) -> the `omitted` assertion
+// below fails, and (4)'s ratio returns to 20.21%.
+// ===========================================================================
+
+test('BUG-951: diffSimState omits reference-identical `rest` fields (trafficSnapshot on a non-cadence tick) and applyStateDelta still reproduces them exactly', () => {
+  let s = buildScaleFixture({ buildingCount: 500, targetPopulation: 20_000, settleTicks: 1 });
+  let sawOmittedTrafficSnapshot = false;
+  let sawShippedTrafficSnapshot = false;
+  let sawOmittedAnyObjectField = false;
+
+  // Window sized from the DATA (never a literal): long enough to guarantee
+  // both a traffic-cadence tick and non-cadence ticks inside it.
+  const WINDOW_TICKS = TRAFFIC_RECOMPUTE_TICKS * 2 + 2;
+  for (let i = 0; i < WINDOW_TICKS; i++) {
+    const base = s;
+    const next = reducer(base, { type: 'tick' });
+    const delta = diffSimState(base, next);
+
+    // LOSSLESS: the reconstruction must still be byte-identical, key presence
+    // included (assert.deepEqual here is assert/strict's deepStrictEqual, which
+    // distinguishes an absent key from a key present-with-undefined).
+    assert.deepEqual(
+      applyStateDelta(base, delta),
+      next,
+      `tick ${i}: dropping reference-identical fields must not change the reconstruction`
+    );
+
+    // Every field the delta DID ship must be one the tick genuinely replaced.
+    for (const key of Object.keys(delta.rest)) {
+      assert.notEqual(
+        base[key] === next[key] && Object.prototype.hasOwnProperty.call(base, key),
+        true,
+        `tick ${i}: '${key}' is the same reference in base and next but was shipped anyway`
+      );
+    }
+    // Every field the delta OMITTED must be reference-identical in base.
+    for (const key of Object.keys(next)) {
+      if (key === 'buildings' || key === 'roadConnectivity') continue;
+      if (Object.prototype.hasOwnProperty.call(delta.rest, key)) continue;
+      assert.equal(
+        base[key],
+        next[key],
+        `tick ${i}: '${key}' was omitted from the delta but is NOT the same reference in base`
+      );
+      if (typeof next[key] === 'object' && next[key] !== null) sawOmittedAnyObjectField = true;
+    }
+
+    if (base.trafficSnapshot === next.trafficSnapshot) {
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(delta.rest, 'trafficSnapshot'),
+        false,
+        `tick ${i}: trafficSnapshot is unchanged (same reference) but was re-sent in full — ` +
+          `this is the inc7 wearSegments regression that took the payload to 20.2% of a full clone`
+      );
+      sawOmittedTrafficSnapshot = true;
+    } else {
+      sawShippedTrafficSnapshot = true;
+    }
+    s = next;
+  }
+
+  // ANTI-VACUITY: the window must have contained BOTH a cadence tick (so the
+  // snapshot really is still shipped when it changes — the filter is not just
+  // dropping it forever) and non-cadence ticks (so the omission was exercised).
+  assert.ok(sawOmittedTrafficSnapshot, 'setup: at least one non-cadence tick must occur in the window');
+  assert.ok(sawShippedTrafficSnapshot, 'setup: at least one traffic-cadence tick must occur in the window');
+  assert.ok(sawOmittedAnyObjectField, 'setup: at least one object-valued rest field must have been omitted');
 });
 
 // ===========================================================================

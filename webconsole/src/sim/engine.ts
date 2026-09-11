@@ -1140,7 +1140,17 @@ export function regionalGrantPerTick(tick: number): number {
 
 export function computeFlows(
   s: SimState,
-): { inflows: FlowItem[]; outflows: FlowItem[]; policyCapNotices: string[]; transitSubsidyCapBound: boolean } {
+): {
+  inflows: FlowItem[];
+  outflows: FlowItem[];
+  policyCapNotices: string[];
+  transitSubsidyCapBound: boolean;
+  /** PRE-policy road-resurfacing charge folded into the 'Roads' bucket below
+   * (FEAT-2326609800 inc7 AC-5). Reported so advance() can record it on
+   * lastFlows and consistency.ts can reconcile the upkeep total exactly —
+   * see types.ts's lastFlows.roadRepairGbp doc comment. */
+  roadRepairGbp: number;
+} {
   // BUG-520 (remaining part): Business/Freight/Office Tax must count only
   // ONLINE buildings — a road-disconnected commercial/industrial/office/mine
   // building already pays zero upkeep (isOnline gate below), so it must also
@@ -1531,7 +1541,13 @@ export function computeFlows(
   // IDENTICAL recycling(0.93 on discounted labels) + austerity(0.9 all) pipeline,
   // in the same order with the same rounding, to its recomputed outflows.
   outflows = applyOutflowPolicies(outflows, s.policies);
-  return { inflows, outflows, policyCapNotices, transitSubsidyCapBound };
+  return {
+    inflows,
+    outflows,
+    policyCapNotices,
+    transitSubsidyCapBound,
+    roadRepairGbp: roadRepairPayment.roundedCost,
+  };
 }
 
 /**
@@ -6836,7 +6852,13 @@ function advance(s: SimState): SimState {
     }
   }
 
-  let { inflows, outflows, policyCapNotices, transitSubsidyCapBound } = computeFlows(s);
+  // FEAT-2326609800 inc7: `roadRepairGbp` is the road-resurfacing charge
+  // computeFlows() folded into the 'Roads' bucket this tick, carried onto
+  // lastFlows below so consistency.ts's upkeep reconciliation is exact (see
+  // types.ts). Destructured from the SAME single computeFlows(s) call the
+  // tick already made — never a second call (computeFlows is not memoised;
+  // a second invocation would double the whole tick's flow cost).
+  let { inflows, outflows, policyCapNotices, transitSubsidyCapBound, roadRepairGbp } = computeFlows(s);
 
   // BUG-400: the Regional Grant is no longer injected here as a monthly lump.
   // computeFlows() now books it as a SMOOTHED per-tick inflow (regionalGrantPerTick),
@@ -7731,7 +7753,7 @@ function advance(s: SimState): SimState {
     // population-scaled flows on (s.population, before the growth update above), so
     // consistency checks recompute Wages/Council Tax against the SAME basis the engine
     // used — not the grown end-of-tick population.
-    lastFlows: { inflows, outflows, population: s.population },
+    lastFlows: { inflows, outflows, population: s.population, roadRepairGbp },
     // BUG-397 F1: this tick's Transit Subsidy cap-bound outcome, written back
     // so NEXT tick's computeFlows(s) sees it as `s.transitSubsidyCapBound`
     // and can detect the bind/release transition instead of re-notifying

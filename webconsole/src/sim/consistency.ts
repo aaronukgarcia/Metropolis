@@ -433,6 +433,10 @@ export interface RecomputedFlowsOverride {
   inflows: FlowItem[];
   outflows: FlowItem[];
   population?: number;
+  /** FEAT-2326609800 inc7: the PRE-policy road-resurfacing charge the
+   * recomputed flows folded into their 'Roads' bucket — see types.ts's
+   * lastFlows.roadRepairGbp. Mirrors `population` exactly. */
+  roadRepairGbp?: number;
 }
 
 /**
@@ -974,6 +978,20 @@ export function runConsistencyChecks(
     if (!upkeep) continue;
     const k = UPKEEP_BUCKET[sp.kind];
     if (k) upkeepBuckets[k] = (upkeepBuckets[k] ?? 0) + upkeep;
+  }
+  // FEAT-2326609800 inc7 (AC-5): computeFlows() folds the tick's road
+  // resurfacing charge into the EXISTING 'Roads' bucket BEFORE
+  // applyOutflowPolicies (never a separate outflow label), so this recompute
+  // must fold the identical PRE-policy figure in at the identical point or
+  // the total diverges by the repair cost on every tick a segment resurfaces.
+  // It cannot be re-derived here: roadRepairPaymentOf() reads the wear the
+  // charge was levied against, and that wear has already been RESET on the
+  // post-tick state this check runs on — so the engine records the figure it
+  // actually charged on lastFlows, exactly as BUG-419 does for `population`.
+  // `?? 0` keeps pre-inc7 saves (and hand-built fixtures) reconciling as before.
+  const roadRepairUpkeep = actualFlowsOverride?.roadRepairGbp ?? actualFlows.roadRepairGbp ?? 0;
+  if (roadRepairUpkeep > 0) {
+    upkeepBuckets['Roads'] = (upkeepBuckets['Roads'] ?? 0) + roadRepairUpkeep;
   }
   const upkeepEntries = Object.entries(upkeepBuckets)
     .filter(([, v]) => v > 0)

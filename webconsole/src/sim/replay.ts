@@ -984,8 +984,12 @@ export function migrateLegacySavepointsInPlace(storage: StorageLike): boolean {
  * in that could itself drift from a later tampering.
  */
 function recomputeFlowsOverride(state: SimState): RecomputedFlowsOverride {
-  const { inflows, outflows } = computeFlows(state);
-  return { inflows, outflows, population: state.population };
+  // FEAT-2326609800 inc7: carry the road-resurfacing charge this recompute
+  // folded into its own 'Roads' bucket, so the upkeep reconciliation on the
+  // retry path reads the SAME figure these flows were built from (see
+  // types.ts's lastFlows.roadRepairGbp).
+  const { inflows, outflows, roadRepairGbp } = computeFlows(state);
+  return { inflows, outflows, population: state.population, roadRepairGbp };
 }
 
 /**

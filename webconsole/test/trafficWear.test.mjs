@@ -48,7 +48,13 @@ import {
 } from '../src/sim/trafficAssignment.ts';
 import { assignedFlowOf, occupancyForMode } from '../src/sim/trafficAssignment.ts';
 import { freightVehicleTripsByClassOf, demandForecastOf, ladderPointOf, modeShareOf } from '../src/sim/trafficDemand.ts';
-import { lineSegmentIndexOf, sanitizeRoadWearBySegment, SPECS } from '../src/sim/data.ts';
+import {
+  lineSegmentIndexOf,
+  sanitizeRoadWearBySegment,
+  SPECS,
+  isOnline,
+  upkeepChargeableOf,
+} from '../src/sim/data.ts';
 import { initialState, computeFlows, reducer, TICKS_PER_YEAR } from '../src/sim/engine.ts';
 import { TRAFFIC_RECOMPUTE_TICKS } from '../src/sim/trafficWellbeing.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
@@ -472,6 +478,78 @@ test('AC-7: conservation.funds-vs-flows and both label-uniqueness checks hold EV
   // the time-box (analytical: this test's assertion runs on EVERY tick,
   // including the repair tick, so any such side-channel divergence would
   // already be caught by the per-tick loop above).
+});
+
+// BUG-950 REGRESSION PIN (the gap AC-7 above left open): AC-7 asserts
+// conservation + both label-uniqueness checks on every tick, but NOT
+// `flows.upkeep-total-matches` — and that is the one check AC-5's
+// "fold the repair into the EXISTING Roads bucket" ruling actually breaks.
+// consistency.ts rebuilds the upkeep buckets from SPECS, so it cannot
+// re-derive a wear-triggered repair from the POST-tick state (the wear the
+// charge was levied against has already been reset). The fix records the
+// PRE-policy figure computeFlows() actually charged on `lastFlows.roadRepairGbp`
+// — exactly as BUG-419 records `lastFlows.population` — and consistency.ts
+// folds it into its own 'Roads' bucket at the identical point, before
+// applyOutflowPolicies. Found by the webconsole CI set: on the 13k-building
+// scale fixture this reddened scale-gate.test.mjs twice (the per-selector
+// table's post-sampling consistency assertion and half B's load-path
+// snapshot check) on 37 of 120 ticks, divergences of 6..323 GBP.
+//
+// MUTANT (verified red, 2026-09-11): delete the `if (roadRepairUpkeep > 0)`
+// fold in consistency.ts's upkeep recompute (or make advance() record
+// `roadRepairGbp: 0`) -> this test fails on the first repair tick with
+// "Upkeep total diverged: computed N vs actual N+repair".
+test('BUG-950: flows.upkeep-total-matches holds on EVERY tick of 120 including the ticks a wear repair is CHARGED into the Roads bucket', () => {
+  let s = { ...mixedFixture(), funds: 500_000_000, roadWearBySegment: {} };
+  const idx = lineSegmentIndexOf(s);
+  const segId = idx.segments.find((x) => x.kind === 'road')?.segmentId;
+  if (segId) s = { ...s, roadWearBySegment: { [segId]: 3_000_000 } };
+
+  // The check is documented as lag-tolerant, NOT lag-free: computeFlows()
+  // charges upkeep off the PRE-tick buildings while consistency.ts recomputes
+  // it off the POST-tick ones, so a building coming online (or being removed)
+  // mid-tick makes the two legitimately disagree — the check's own
+  // "(building removed? online status change?)" wording, pre-existing and
+  // nothing to do with wear. This fixture grows, so the pin asserts on every
+  // tick whose CHARGEABLE-UPKEEP BASIS is unchanged across the tick, which is
+  // exactly the set of ticks on which the repair fold is the only thing that
+  // can move the total. Proven non-vacuous below: repairs must land inside it.
+  const upkeepBasisOf = (st) =>
+    st.buildings
+      .filter((b) => isOnline(st, b) && SPECS[b.spec]?.upkeep)
+      .map((b) => `${b.spec}:${upkeepChargeableOf(b, SPECS[b.spec])}`)
+      .sort()
+      .join('|');
+
+  let chargedTicks = 0;
+  let maxCharge = 0;
+  let assertedTicks = 0;
+  for (let i = 0; i < 120; i++) {
+    const before = upkeepBasisOf(s);
+    s = reducer(s, { type: 'tick' });
+    const charged = s.lastFlows.roadRepairGbp ?? 0;
+    if (before !== upkeepBasisOf(s)) continue; // building churn tick — see above
+    assertedTicks++;
+    if (charged > 0) {
+      chargedTicks++;
+      if (charged > maxCharge) maxCharge = charged;
+    }
+    const rep = runConsistencyChecks(s);
+    const upkeep = rep.checks.find((c) => c.id === 'flows.upkeep-total-matches');
+    assert.ok(upkeep, `tick ${i}: flows.upkeep-total-matches must be present in the report`);
+    assert.ok(
+      upkeep.ok,
+      `tick ${i} (roadRepairGbp=${charged}): flows.upkeep-total-matches failed: ${upkeep.detail}`,
+    );
+  }
+  assert.ok(assertedTicks > 0, 'setup: at least one churn-free tick must have been asserted on');
+  // ANTI-VACUITY: if no repair were ever charged the loop above would pass
+  // against a zero fold and prove nothing. Both bounds are asserted.
+  assert.ok(
+    chargedTicks > 0,
+    'setup: at least one tick must actually CHARGE a repair (roadRepairGbp > 0) or this pin is vacuous',
+  );
+  assert.ok(maxCharge > 0, `setup: the largest charge seen must be positive, got ${maxCharge}`);
 });
 
 // ---------------------------------------------------------------------------

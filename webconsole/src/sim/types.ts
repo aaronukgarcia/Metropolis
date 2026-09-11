@@ -518,7 +518,20 @@ export interface SimState {
    * tolerance: consumers fall back to `s.population` when absent (mirrors BUG-414's
    * "checker recomputes against the same basis the engine used").
    */
-  lastFlows: { inflows: FlowItem[]; outflows: FlowItem[]; population?: number };
+  /** FEAT-2326609800 inc7 / BUG-9xx: `roadRepairGbp` is the PRE-policy road
+   * resurfacing charge computeFlows() folded into the 'Roads' upkeep bucket
+   * this tick (never its own outflow label — AC-5). It is recorded here for
+   * exactly the same reason `population` is (BUG-419): consistency.ts's
+   * `flows.upkeep-total-matches` recompute rebuilds the upkeep buckets from
+   * SPECS, which cannot re-derive a wear-triggered repair from the POST-tick
+   * state (the wear it was charged against has already been reset). Optional
+   * so saves recorded before this field existed fall back to 0. */
+  lastFlows: {
+    inflows: FlowItem[];
+    outflows: FlowItem[];
+    population?: number;
+    roadRepairGbp?: number;
+  };
   /**
    * TICK-BOUNDARY INVARIANT (FEAT-1972079890, BUG-406, Round-6): Conservation is checked
    * using tick snapshots, not working-tree funds. fundsAtTickStart is funds when
