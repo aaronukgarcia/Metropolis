@@ -106,6 +106,13 @@ test('BUG-446 AC-3/AC-8: parseGameSave throws MET-V850 for every malformed-shape
   // validation).
   const parsed = parseGameSave(JSON.stringify(goodObj));
   assert.equal(parsed.ok, true);
+  // r4 LEAD RULING (BUG-941 port amendment): r3's null-prototype sanitizer
+  // output briefly forced this pin to compare through a JSON round trip
+  // (prototype-invariant) instead of directly, since a null-proto map is
+  // never deepStrictEqual to a plain `JSON.parse` object even with
+  // identical content. r4 walked the sanitizers back to PLAIN objects
+  // (Object.fromEntries over validated entries), so the direct comparison
+  // is exact again — restored as the stronger assertion.
   assert.deepEqual(parsed.save, goodObj);
 });
 

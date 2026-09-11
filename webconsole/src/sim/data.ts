@@ -3622,15 +3622,28 @@ export const CONGESTION_CONSTANTS = {
  * false "more sustained than sustained" reading — the flag only ever needs
  * >= the ticks constant to fire).
  */
+// BUG-946 audit (lead amendment, BUG-941 r2) -> BUG-961 (r3) -> r4 LEAD
+// RULING (r3's null-prototype maps broke the delta-protocol clone-side pin:
+// structuredClone always produces a PLAIN-prototype result, so a
+// null-prototype worker-side map and its plain structuredClone differ by
+// prototype alone in attack-bug950-951-round.test.mjs's deepStrictEqual).
+// Every map-shaped sanitizer this module/trafficWellbeing.ts builds is a
+// PLAIN object again (prototype-stable across structuredClone/JSON/spread),
+// built with own-data-property semantics ONLY: collect validated [key,
+// value] entries and finish with `Object.fromEntries` (CreateDataProperty —
+// an own property even for the key "__proto__", never the inherited
+// setter) — no bracket assignment on these maps anywhere. Consumers keep
+// their own-key guards (Object.prototype.hasOwnProperty.call) from r3/r4 so
+// `in` / bare-read hazards on hazardous names stay closed regardless.
 export function sanitizeCongestionTicksBySpec(v: unknown): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) return out;
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return {};
+  const entries: Array<[string, number]> = [];
   for (const [spec, raw] of Object.entries(v as Record<string, unknown>)) {
     const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
     const clamped = Math.max(0, Math.min(CONGESTION_CONSTANTS.CONGESTION_SUSTAINED_TICKS, Math.floor(n)));
-    if (clamped > 0) out[spec] = clamped; // zero entries omitted — self-pruning (see types.ts doc)
+    if (clamped > 0) entries.push([spec, clamped]); // zero entries omitted — self-pruning (see types.ts doc)
   }
-  return out;
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -3648,14 +3661,14 @@ export function sanitizeCongestionTicksBySpec(v: unknown): Record<string, number
  * congestion-tick idiom.
  */
 export function sanitizeRoadWearBySegment(v: unknown): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) return out;
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return {};
+  const entries: Array<[string, number]> = [];
   for (const [segId, raw] of Object.entries(v as Record<string, unknown>)) {
     const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
     const clamped = Math.max(0, n);
-    if (clamped > 0) out[segId] = clamped;
+    if (clamped > 0) entries.push([segId, clamped]);
   }
-  return out;
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -3673,17 +3686,24 @@ export function advanceCongestionTicks(
   usages: LineUsage[]
 ): Record<string, number> {
   const { CONGESTION_PENALTY_THRESHOLD, CONGESTION_SUSTAINED_TICKS } = CONGESTION_CONSTANTS;
-  const out: Record<string, number> = {};
+  // r4 LEAD RULING (BUG-941 port amendment): PLAIN object, same shape as
+  // sanitizeCongestionTicksBySpec's own output — built via Object.fromEntries
+  // over validated entries (own-data-property semantics), never bracket
+  // assignment, so a fresh tick's congestionTicksBySpec/gridlockTicksBySegment
+  // and the same map after a save/decode/structuredClone round trip stay
+  // prototype-stable (a null-prototype map used to clone to plain and break
+  // the delta-protocol clone-side pin).
+  const entries: Array<[string, number]> = [];
   for (const u of usages) {
     if (u.kind !== 'road') continue;
-    const prev = prevTicks[u.spec] ?? 0;
+    const prev = Object.prototype.hasOwnProperty.call(prevTicks, u.spec) ? prevTicks[u.spec] : 0;
     const next =
       u.saturation >= CONGESTION_PENALTY_THRESHOLD
         ? Math.min(prev + 1, CONGESTION_SUSTAINED_TICKS)
         : 0; // RESET RULE (types.ts doc): hard reset the instant saturation drops below threshold.
-    if (next > 0) out[u.spec] = next;
+    if (next > 0) entries.push([u.spec, next]);
   }
-  return out;
+  return Object.fromEntries(entries);
 }
 
 /**

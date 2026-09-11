@@ -38,6 +38,17 @@ import { TRAFFIC_RECOMPUTE_TICKS } from '../src/sim/trafficWellbeing.ts';
 import { sanitizeRoadWearBySegment, lineSegmentIndexOf, SPECS } from '../src/sim/data.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
 
+// r4 LEAD RULING (port amendment, after the r3 ACCEPT failed at port against
+// BUG-951/BUG-966's delta protocol — a null-prototype map clones to PLAIN
+// through structuredClone, breaking attack-bug950-951-round.test.mjs's
+// clone-side deepStrictEqual pin by prototype alone): every sanitizer-built
+// map is a PLAIN object again, built via Object.fromEntries over validated
+// entries (own-data-property semantics, never bracket assignment). `plain`
+// (renamed from r3's `nullProto`) is now a trivial same-shape shallow copy —
+// kept as a named helper so every call site below reads as "the expected
+// map shape", not a bare object literal.
+const plain = (obj) => ({ ...obj });
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const readJson = (...p) => JSON.parse(readFileSync(path.join(repoRoot, ...p), 'utf8'));
@@ -329,9 +340,9 @@ test('AC8_DETERMINISM: three independent 120-tick runs are byte-identical in wea
 });
 
 test('GR16_SANITIZER: hostile stored wear is coerced, and the two coercers are pinned in the direction they actually fail', () => {
-  for (const bad of [undefined, null, 'x', 42, [1, 2]]) assert.deepEqual(sanitizeRoadWearBySegment(bad), {});
-  assert.deepEqual(sanitizeRoadWearBySegment({ a: NaN, b: Infinity, c: -Infinity, d: -5, e: '7', f: 0 }), {});
-  assert.deepEqual(sanitizeRoadWearBySegment({ g: 2.5 }), { g: 2.5 });
+  for (const bad of [undefined, null, 'x', 42, [1, 2]]) assert.deepEqual(sanitizeRoadWearBySegment(bad), plain({}));
+  assert.deepEqual(sanitizeRoadWearBySegment({ a: NaN, b: Infinity, c: -Infinity, d: -5, e: '7', f: 0 }), plain({}));
+  assert.deepEqual(sanitizeRoadWearBySegment({ g: 2.5 }), plain({ g: 2.5 }));
   // Recorded fail-open behaviour of the two coercers. Both are reachable only
   // through the sanitizer today, which is why these are pins and not failures
   // — but a future caller that skips the sanitizer inherits them.
@@ -536,15 +547,13 @@ test('R3_STALE_MONEY_BOUNDED: demolishing every road stops Fuel Duty within one 
   assert.equal(Object.keys(t.roadWearBySegment ?? {}).length, 0, 'wear entries for demolished segments must be pruned');
 });
 
-// R3 finding (recorded, not a regression gate): an all-invalid-but-PRESENT
-// wearSegments map sanitizes to `{}`, which is "present", so the bootstrap
-// fallback does NOT fire and roadWearStepFromSnapshot orphan-prunes EVERY
-// accumulated wear entry with ZERO repairEvents — a corrupt save silently
-// resurfaces the whole network for free. Pinned so the behaviour is at least
-// documented and a future fix (bootstrap on an EMPTY map, or repair-before-
-// prune) has a test to flip.
-test('R3_EMPTY_WEARSEGMENTS_FREE_WIPE: an empty cadence wear map drops all accumulated wear with no repair event', async () => {
-  const ta = await import('../src/sim/trafficAssignment.ts');
+// BUG-941 FIX (flipped from the R3 DEFECT pin): an all-invalid-but-PRESENT
+// wearSegments map is now DROPPED (treated as absent) by the sanitizer, not
+// sanitized to a present `{}` -- so engine.ts's bootstrap fallback fires and
+// roadWearStepOf recomputes wearSegmentInputsOf(s) fresh instead of
+// roadWearStepFromSnapshot's orphan-prune (BUG-917(b)) running over a
+// corrupt empty valid-set and free-wiping every accumulated wear entry.
+test('R3_EMPTY_WEARSEGMENTS_FREE_WIPE (FIXED, BUG-941): an all-invalid cadence wear map is dropped (absent), never sanitized to a trusted empty map', async () => {
   const tw = await import('../src/sim/trafficWellbeing.ts');
   const sanitized = tw.sanitizeTrafficSnapshot({
     tick: 5,
@@ -553,8 +562,580 @@ test('R3_EMPTY_WEARSEGMENTS_FREE_WIPE: an empty cadence wear map drops all accum
     coverageShare: 0.5,
     wearSegments: { a: { roadClassId: '', deltaEsalPerTick: NaN } },
   });
-  assert.deepEqual(sanitized.wearSegments, {}, 'an all-invalid wearSegments sanitizes to a PRESENT empty map (not dropped)');
-  const step = ta.roadWearStepFromSnapshot({ seg1: 5e9, seg2: 3 }, sanitized.wearSegments);
-  assert.deepEqual(step.repairEvents, [], 'documented: no repair event is raised for the wiped segments');
-  assert.deepEqual(step.nextWearBySegment, {}, 'documented: all accumulated wear is dropped with nothing booked');
+  assert.equal(sanitized.wearSegments, undefined, 'BUG-941: an all-invalid wearSegments must be DROPPED (absent), not sanitized to a trusted present {}');
+  // A genuinely empty raw map (the honest all-roads-demolished cadence
+  // reading) must still sanitize PRESENT so the orphan-prune keeps firing --
+  // this is the BUG-917(b) case this fix must not regress.
+  const genuinelyEmpty = tw.sanitizeTrafficSnapshot({
+    tick: 5,
+    medianCommuteMinutes: 10,
+    gridlockShare: 0.1,
+    coverageShare: 0.5,
+    wearSegments: {},
+  });
+  assert.deepEqual(genuinelyEmpty.wearSegments, plain({}), 'a genuinely empty {} (no roads this cadence window) must stay present, not be treated as absent');
+  // MUTANT: restore the old unconditional `out.wearSegments = wearSegments`
+  // assignment (drop the `if (!sawInvalidEntry)` guard) -- reds the first
+  // assertion (sanitized.wearSegments would be {} again, not undefined).
+});
+
+// ---------------------------------------------------------------------------
+// BUG-941 round 1 (opus-round-bug941, independent) — the fix's poison rule is
+// keyed on per-ENTRY validation, and there is exactly one raw key that never
+// reached the entry loop's accumulator: '__proto__'. `wearSegments[segId] =
+// {...}` with segId '__proto__' did NOT create an own property — it invoked
+// Object.prototype's __proto__ SETTER and re-parented the accumulator — so
+// `sawInvalidEntry` stayed FALSE, the field was assigned as a TRUSTED
+// present-and-empty map (Object.keys length 0), and roadWearStepFromSnapshot's
+// orphan-prune free-wiped EVERY accumulated wear entry with ZERO repairEvents:
+// the exact BUG-941 defect, unchanged, one key away.
+//
+// FIXED (BUG-946, r2): the accumulator became Object.create(null) (no
+// inherited __proto__ setter to hijack) PLUS a name-ban list rejecting
+// '__proto__'/'constructor'/'prototype' as invalid entries. BUG-961 (r3
+// LEAD RULING) found the name-ban half of that fix was the wrong shape —
+// it covered the names r2 thought of but nothing else ('toString' etc, see
+// the BUG-961 test above) — and replaced it with null-prototype structural
+// safety. r4 LEAD RULING (after the r3 ACCEPT failed at PORT: a
+// null-prototype map clones to PLAIN through structuredClone, breaking the
+// delta-protocol's clone-side pin) moved the structural fix one level
+// down again: the accumulator is a PLAIN object (Object.prototype, stable
+// across structuredClone/JSON/spread) built via Object.fromEntries over
+// validated [segId, value] entries — Object.fromEntries uses
+// CreateDataProperty internally, an OWN property even for the key
+// "__proto__", never the inherited setter that a bracket assignment
+// (`acc[segId] = value`) would invoke on a plain target. A '__proto__' key
+// with otherwise-VALID data is not banned by name — it is validated exactly
+// like any other segId and, being valid, is preserved as ordinary data.
+// This test asserts the CURRENT (r4) contract: no re-parenting, no
+// Object.prototype leak, EITHER WAY.
+test('BUG-946 REGRESSION: a `__proto__` key never re-parents the accumulator, whether it poisons or (post-r3/r4) survives as ordinary data', async () => {
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const tw = await import('../src/sim/trafficWellbeing.ts');
+  const base = { tick: 5, medianCommuteMinutes: 10, gridlockShare: 0.1, coverageShare: 0.5 };
+  // JSON.parse (the real save/debug-json route) produces an OWN '__proto__' key.
+  const raw = JSON.parse('{"__proto__":{"roadClassId":"motorway","deltaEsalPerTick":1}}');
+  const sanitized = tw.sanitizeTrafficSnapshot({ ...base, wearSegments: raw });
+  // r3/r4: a VALID entry under '__proto__' is ordinary data now, not poison —
+  // the original BUG-946 concern (the accumulator's OWN prototype getting
+  // hijacked) is proven by the assertion below regardless of this outcome.
+  assert.notEqual(sanitized.wearSegments, undefined, 'BUG-946/BUG-961: a VALID __proto__ entry must survive as ordinary data (r3 supersedes r2\'s name-ban)');
+  assert.deepEqual(sanitized.wearSegments, plain({ ['__proto__']: { roadClassId: 'motorway', deltaEsalPerTick: 1 } }), 'the __proto__-keyed entry itself must be preserved unpoisoned');
+  // Prove the accumulator was never re-parented (this is the assertion that
+  // caught the ORIGINAL bug: MUTANT — restore bracket assignment
+  // (`wearSegmentEntries[segId] = value` style, or building the map with
+  // `acc[segId] = value` instead of Object.fromEntries) and this goes RED
+  // because roadClassId leaks through the live global Object.prototype
+  // instead of landing as an own '__proto__' key).
+  assert.equal(({}).roadClassId, undefined, 'global Object.prototype must never be touched');
+  assert.equal(Object.getPrototypeOf(sanitized.wearSegments), Object.prototype, 'r4: the accumulator is an ordinary PLAIN object, never re-parented to the raw entry object and never null-prototype');
+  const step = ta.roadWearStepFromSnapshot({ seg1: 5e9, seg2: 3 }, tw.sanitizeTrafficSnapshot({ ...base, wearSegments: {} }).wearSegments);
+  assert.deepEqual(step.repairEvents, [], 'a genuinely empty cadence map still books nothing (unaffected control case)');
+});
+
+// BUG-941 round 1 — a roadClassId that was a valid non-empty STRING but named
+// no class in data/roads.json passed the sanitizer untouched, and the very
+// next repair that segment was due threw MET-V944 fail-closed from inside
+// advance(): a stale save naming a removed/renamed road class bricked the
+// tick loop rather than dropping the untrustworthy field and bootstrapping.
+//
+// FIXED (BUG-947, r2 LEAD RULING): an unresolvable roadClassId is now invalid
+// at sanitize time (validated against trafficAssignment.ts's exported
+// ROAD_CLASS_IDS, sourced from data/roads.json) and poisons the field,
+// converting the game-bricking throw into a graceful bootstrap recompute.
+// Flipped from a DEFECT pin to a REGRESSION pin.
+test('BUG-947 REGRESSION: an unknown-but-well-formed roadClassId is rejected as an invalid entry, never reaches advance()', async () => {
+  const tw = await import('../src/sim/trafficWellbeing.ts');
+  const sanitized = tw.sanitizeTrafficSnapshot({
+    tick: 5,
+    medianCommuteMinutes: 10,
+    gridlockShare: 0.1,
+    coverageShare: 0.5,
+    wearSegments: { a: { roadClassId: 'no_such_class_in_roads_json', deltaEsalPerTick: 1 } },
+  });
+  assert.equal(
+    sanitized.wearSegments,
+    undefined,
+    'BUG-947: an unknown road class must poison the field (dropped/absent) so engine.ts bootstraps fresh, instead of surviving to throw MET-V944 later',
+  );
+  // A KNOWN class (real data/roads.json entry) must still pass through — the
+  // fix must not reject every roadClassId wholesale.
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const [firstKnownClass] = [...ta.ROAD_CLASS_IDS];
+  const stillValid = tw.sanitizeTrafficSnapshot({
+    tick: 5,
+    medianCommuteMinutes: 10,
+    gridlockShare: 0.1,
+    coverageShare: 0.5,
+    wearSegments: { a: { roadClassId: firstKnownClass, deltaEsalPerTick: 1 } },
+  });
+  assert.deepEqual(stillValid.wearSegments, plain({ a: { roadClassId: firstKnownClass, deltaEsalPerTick: 1 } }), 'a genuinely known road class must still pass through unpoisoned');
+});
+
+// ===========================================================================
+// BUG-941 ROUND 2 (attacker: opus-reround-bug941) — the r2 fix closes the
+// three NAMED unsafe keys and the file-open/named-save load path, but the
+// BUG-941 free wipe is still reachable two other ways. Both pins below are
+// DEFECT pins: they document the CURRENT (still-broken) behaviour and are
+// GREEN as written, ready to flip to REGRESSION pins when fixed.
+// ===========================================================================
+
+// BUG-961 (P2, r2 REJECT) -> FIXED (r3 LEAD RULING): the r2 poison rule
+// banned exactly '__proto__'/'constructor'/'prototype' BY NAME, but EVERY
+// Object.prototype member name ('toString', 'hasOwnProperty', 'valueOf', …)
+// is an inherited key on a PLAIN-object map, and none of them were banned —
+// so a segment id of 'toString' with a fully VALID roadClassId/
+// deltaEsalPerTick used to reach `roadWearStepFromSnapshot`'s bracket reads
+// and silently corrupt them: `prevWear[segId] ?? 0` read the INHERITED
+// Object.prototype.toString FUNCTION (truthy, so `?? 0` never caught it),
+// turning a numeric wear value into a STRING via `function + number`
+// coercion, and `segId in wearSegments` (an inherited-key test) could
+// wrongly report true for names it never actually held as an own key.
+//
+// FIX (BUG-961, r3) -> r4 PORT AMENDMENT: r3 made every sanitizer-built map
+// a null-prototype object; r4 moved the SAME safety one level down (the
+// build discipline, not the target's own prototype) after r3's
+// null-prototype maps broke the delta-protocol's structuredClone-based
+// clone-side pin. The map is PLAIN again, but every write is
+// Object.fromEntries over validated entries (own-data-property semantics —
+// CreateDataProperty never invokes an inherited setter, regardless of the
+// target's prototype) — so 'toString' becomes a completely ordinary segment
+// id either way: a VALID entry under that name passes through unpoisoned
+// (it is not corruption, just an unusual but harmless string), and every
+// consumer read (`prevWear[segId]`, `wearSegments[segId]`, the orphan-prune
+// membership test) uses an own-key guard
+// (Object.prototype.hasOwnProperty.call) so a plain-object map can never
+// silently misread an inherited name.
+test('BUG-961 REGRESSION: an Object.prototype-named segId (toString) is an ordinary entry, never corrupts real accumulated wear, and Object.prototype stays untouched', async () => {
+  const tw = await import('../src/sim/trafficWellbeing.ts');
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const base = { tick: 5, medianCommuteMinutes: 10, gridlockShare: 0.1, coverageShare: 0.5 };
+  const [firstKnownClass] = [...ta.ROAD_CLASS_IDS];
+  // The current cadence map carries THREE segments: the two real ones
+  // (present with zero flow this window, the honest "exists but idle"
+  // reading — never simply absent, per wearSegmentInputsOf's own doc) plus
+  // the hazardous 'toString' segId carrying real flow.
+  const raw = {
+    'seg:real1': { roadClassId: firstKnownClass, deltaEsalPerTick: 0 },
+    'seg:real2': { roadClassId: firstKnownClass, deltaEsalPerTick: 0 },
+    toString: { roadClassId: firstKnownClass, deltaEsalPerTick: 5 },
+  };
+  const sanitized = tw.sanitizeTrafficSnapshot({ ...base, wearSegments: raw });
+  // (1) present, unpoisoned, null-prototype, and Object.prototype untouched.
+  assert.notEqual(sanitized.wearSegments, undefined, 'a VALID entry under an inherited-method name must pass through, never poison the field');
+  assert.equal(Object.getPrototypeOf(sanitized.wearSegments), Object.prototype, 'r4: the sanitized map must be an ordinary PLAIN object (Object.prototype), never null-prototype (would break the delta-protocol clone-side pin)');
+  assert.equal(typeof ({}).toString, 'function', 'BUG-961: global Object.prototype.toString must remain the native function, never overwritten');
+  assert.deepEqual(sanitized.wearSegments.toString, { roadClassId: firstKnownClass, deltaEsalPerTick: 5 }, 'the toString-keyed entry itself must survive as ordinary data, not the inherited function');
+
+  // (2) real accumulated wear on the two real segments (prior wear 5e9 /
+  // repair-due, and 3 / not due) is never silently free-wiped or corrupted
+  // to a string — 5e9 books a REAL repair event; 3 carries forward as a
+  // NUMBER, unchanged.
+  const step = ta.roadWearStepFromSnapshot({ 'seg:real1': 5e9, 'seg:real2': 3 }, sanitized.wearSegments);
+  assert.equal(step.repairEvents.length, 1, 'BUG-961: exactly one repair fires (seg:real1, past the trigger) — the wipe must book something, not nothing');
+  assert.equal(step.repairEvents[0].segmentId, 'seg:real1');
+  assert.equal(step.nextWearBySegment['seg:real1'], undefined, 'seg:real1 resets to 0 (self-pruning) BECAUSE it was actually repaired, not because it was free-wiped');
+  assert.equal(step.nextWearBySegment['seg:real2'], 3, 'seg:real2 (not yet due for repair) must survive UNCHANGED, never silently dropped');
+  assert.equal(typeof step.nextWearBySegment.toString, 'number', 'BUG-961: the toString-keyed entry accrues as a NUMBER (0 + 5), never the inherited-function-coerced STRING');
+  assert.equal(step.nextWearBySegment.toString, 5);
+  assert.equal(typeof ({}).toString, 'function', 'BUG-961: Object.prototype.toString must still be pristine after the whole step');
+});
+
+// BUG-962 (P1) — BUG-948's fix routes trafficSnapshot through
+// sanitizeTrafficSnapshot inside gamesave.ts's validateGameSaveObject, which
+// covers File->Open (parseGameSave) and Load->Saved cities (readNamedSave).
+// It does NOT cover the DEFAULT boot path: replay.ts's
+// restoreFromSavepoint / prepareRestoreForChunkedTail used to take
+// `sp.snapshot` straight out of decodeSavepointBytes (a bare JSON.parse +
+// coerceSnapshotBuildings), and store.tsx wrapped that in sanitizeTreasury
+// ONLY (store.tsx:921/950/1026/1437) — so the localStorage/IndexedDB
+// savepoint every session actually boots from was never sanitized: a
+// corrupt trafficSnapshot reached advance() verbatim.
+//
+// FIX (BUG-962): decodeSavepointBytes — the ONE shared decode boundary
+// (BUG-742 round F3) every one of those paths already funnels through — now
+// also runs sanitizeTrafficSnapshot (plus sanitizeCongestionTicksBySpec/
+// sanitizeRoadWearBySegment for the sibling maps) on `sp.snapshot` right
+// after the JSON.parse, before ANY caller (restoreFromSavepoint,
+// prepareRestoreForChunkedTail, store.tsx's decodeSavepointRaw hot-swap
+// path) ever sees it. gamesave.ts keeps its own separate call at the
+// File->Open / Load->Saved-cities boundary (BUG-948) since that path never
+// goes through decodeSavepointBytes at all.
+//
+// NOTE: with BUG-961's null-prototype fix, a hazardous key name
+// ('__proto__'/'toString') carrying otherwise-VALID data is no longer
+// poison on its own — it is validated exactly like any other segId. So this
+// pin uses an INVALID roadClassId (the actual corruption signal) under both
+// hazardous names, to isolate "did the decode boundary sanitize at all"
+// from the separate (already-covered) BUG-961 key-safety question.
+test('BUG-962 REGRESSION: the default savepoint boot path (restoreFromSavepoint) sanitizes trafficSnapshot at the decode boundary', async () => {
+  const { createSavepoint, persistSavepointForced, restoreFromSavepoint, prepareRestoreForChunkedTail } = await import('../src/sim/replay.ts');
+  const { initialState: init, reducer: red, sanitizeTreasury } = await import('../src/sim/engine.ts');
+  class Mem {
+    constructor() { this.m = new Map(); }
+    getItem(k) { return this.m.has(k) ? this.m.get(k) : null; }
+    setItem(k, v) { this.m.set(k, String(v)); }
+    removeItem(k) { this.m.delete(k); }
+    key(i) { return [...this.m.keys()][i] ?? null; }
+    get length() { return this.m.size; }
+  }
+  const s = { ...init(), roadWearBySegment: { 'seg:real1': 5e9, 'seg:real2': 3 } };
+  const corrupt = {
+    ...s,
+    trafficSnapshot: {
+      tick: s.tick, medianCommuteMinutes: 10, gridlockShare: 0.1, coverageShare: 0.5,
+      safeRoadScore: 1, integratedTransportScore: 0,
+      // INVALID data (empty/unknown roadClassId) under both hazardous names
+      // — must poison the whole field regardless of key-ban questions.
+      wearSegments: JSON.parse('{"__proto__":{"roadClassId":"","deltaEsalPerTick":1},"toString":{"roadClassId":"no_such_class_in_roads_json","deltaEsalPerTick":2}}'),
+    },
+  };
+  const storage = new Mem();
+  persistSavepointForced(storage, createSavepoint(corrupt, [], new Date(), 'test', null));
+  const restored = restoreFromSavepoint(storage);
+  assert.equal(restored.success, true, 'setup: the savepoint must restore');
+  const booted = sanitizeTreasury(restored.state); // exactly what store.tsx does at boot
+  // FIXED: the decode boundary already sanitized this before restoreFromSavepoint
+  // ever saw it — the corrupt field is dropped (absent), not carried through.
+  assert.equal(
+    booted.trafficSnapshot.wearSegments,
+    undefined,
+    'BUG-962: the decode boundary must sanitize trafficSnapshot before restoreFromSavepoint reads it, dropping the corrupt field',
+  );
+  const prepared = prepareRestoreForChunkedTail(storage);
+  assert.equal(prepared.state.trafficSnapshot.wearSegments, undefined, 'BUG-962: the chunked-tail boot variant shares the SAME decode boundary and must be sanitized identically');
+  assert.equal(typeof ({}).toString, 'function', 'BUG-962: Object.prototype must never be touched by any of this');
+  // One tick on the now-clean boot state must book normally: never throw
+  // (a stale unknown-class entry used to survive to MET-V944 inside
+  // advance() — BUG-947), and never leave a string-typed wear value.
+  assert.doesNotThrow(() => red(booted, { type: 'tick' }), 'BUG-962: a corrupt savepoint must never brick the first tick after boot');
+  const after = red(booted, { type: 'tick' });
+  for (const [segId, wear] of Object.entries(after.roadWearBySegment)) {
+    assert.equal(typeof wear, 'number', `BUG-962: roadWearBySegment.${segId} must stay numeric, never a corrupted string`);
+    assert.ok(Number.isFinite(wear), `BUG-962: roadWearBySegment.${segId} must stay finite`);
+  }
+  // MUTANT: comment out decodeSavepointBytes's three sanitize* calls -- reds
+  // both equal(...,undefined) assertions above (the corrupt field survives
+  // as a present object with '__proto__'/'toString' keys instead).
+});
+
+// ===========================================================================
+// BUG-941 ROUND 3 (attacker: opus-round3-bug941) — the r3 fix (null-prototype
+// maps + own-key consumer guards + the decodeSavepointBytes boundary) holds.
+// The pins below are the three properties nothing else in the tree kills,
+// plus one DEFECT pin (green as written) for the one map named in the r3
+// LEAD RULING whose LIVE producer was missed.
+// ===========================================================================
+
+// R3_PRUNE_OWNKEY_ON_A_PLAIN_MAP — the `segId in wearSegments` ->
+// Object.prototype.hasOwnProperty.call change in roadWearStepFromSnapshot's
+// BUG-917(b) orphan-prune is load-bearing on a REACHABLE shape: `in` walks
+// the prototype chain and would wrongly report TRUE for an
+// Object.prototype-named segId the map never held as an own key, leaving a
+// stale wear entry un-prunable forever. r4 makes this the ONLY line of
+// defence (the map itself is plain both before and after r3/r4, so this was
+// never contingent on prototype shape) — still pinned unchanged.
+test('R3/R4 (BUG-961): the orphan-prune uses an OWN-key test, so a stale Object.prototype-named wear entry is pruned even when wearSegments arrives PLAIN (the post-structuredClone worker shape)', async () => {
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const [known] = [...ta.ROAD_CLASS_IDS];
+  // A PLAIN object — exactly what a worker postMessage round trip delivers.
+  const wearSegments = { 'seg:a': { roadClassId: known, deltaEsalPerTick: 1 } };
+  assert.equal(Object.getPrototypeOf(wearSegments), Object.prototype, 'setup: this pin is specifically about the PLAIN-prototype input shape');
+  assert.equal(Object.prototype.hasOwnProperty.call(wearSegments, 'toString'), false, 'setup: toString is NOT an own key');
+  assert.equal('toString' in wearSegments, true, "setup: but `in` sees it — that is the whole hazard");
+  // 'toString' is an ORPHAN wear entry (its segment no longer exists).
+  const step = ta.roadWearStepFromSnapshot({ 'seg:a': 2, toString: 7 }, wearSegments);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(step.nextWearBySegment, 'toString'),
+    false,
+    'BUG-961/BUG-917(b): an orphan wear entry named after an Object.prototype member must be pruned — MUTANT: restore `if (!(segId in wearSegments))` and this entry survives forever',
+  );
+  assert.equal(step.nextWearBySegment['seg:a'], 3, 'the real segment still accrues normally (control)');
+});
+
+// R4 (supersedes r3's R3_NULLPROTO_DOES_NOT_CROSS_THE_WORKER_BOUNDARY) —
+// documents WHY r4 walked r3's null-prototype fix back to plain: a
+// null-prototype map's structuredClone/JSON/spread re-parents to
+// Object.prototype, so a null-proto ORIGINAL and its own clone differ by
+// prototype alone — exactly the asymmetry that broke
+// attack-bug950-951-round.test.mjs's clone-side deepStrictEqual pin (worker
+// state vs the receiver's structuredClone). A PLAIN map has no such
+// asymmetry: its clone is prototype-IDENTICAL to the original, not merely
+// coincidentally equal in content.
+test('R4 (BUG-961 port amendment): a PLAIN sanitizer-built map keeps an IDENTICAL prototype across structuredClone / JSON / spread — no clone-side asymmetry', () => {
+  const p = { toString: 1, 'seg:a': 2 };
+  assert.equal(Object.getPrototypeOf(p), Object.prototype, 'setup');
+  assert.equal(Object.getPrototypeOf(structuredClone(p)), Object.prototype, 'structuredClone (the worker postMessage path) keeps the SAME prototype');
+  assert.equal(Object.getPrototypeOf(JSON.parse(JSON.stringify(p))), Object.prototype, 'a JSON save round trip keeps the SAME prototype');
+  assert.equal(Object.getPrototypeOf({ ...p }), Object.prototype, 'an object spread keeps the SAME prototype');
+  assert.deepEqual(Object.keys(structuredClone(p)), ['toString', 'seg:a'], 'keys and their order survive too');
+  assert.deepStrictEqual(structuredClone(p), p, 'BUG-950/951: a plain map is byte-identical (deepStrictEqual, prototype included) to its own structuredClone — exactly the property the delta-protocol clone-side pin requires');
+});
+
+// BUG-973 REGRESSION (was a DEFECT pin as of the r3 ACCEPT) — the r3 LEAD
+// RULING named four maps needing the same own-key discipline: wearSegments,
+// congestionTicksBySpec, roadWearBySegment and gridlockTicksBySegment.
+// gridlockedSegmentsOf (the LIVE producer of gridlockTicksBySegment) was the
+// one map the r3 fix missed — a bare `prevGridlockTicks[segId] ?? 0`
+// inherited read and a bracket-assigned `{}` accumulator. Fixed in the r4
+// port pass alongside the wider plain-object rework: an own-key guard on
+// the prev-ticks read, and the accumulator built via Object.fromEntries
+// over validated entries (own-data-property semantics), matching every
+// other sanitizer/live-producer pair.
+test('BUG-973 REGRESSION: gridlockedSegmentsOf — the LIVE producer of gridlockTicksBySegment — now shares the same own-key discipline and PLAIN-object build as the other three maps', async () => {
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const d = await import('../src/sim/data.ts');
+  const tw = await import('../src/sim/trafficWellbeing.ts');
+  // All four maps (sanitize + live-compute directions) are PLAIN
+  // (Object.prototype) after r4 — consistent shape everywhere.
+  assert.equal(Object.getPrototypeOf(d.sanitizeCongestionTicksBySpec({ a: 1 })), Object.prototype);
+  assert.equal(Object.getPrototypeOf(d.sanitizeRoadWearBySegment({ a: 1 })), Object.prototype);
+  assert.equal(Object.getPrototypeOf(d.advanceCongestionTicks({}, [])), Object.prototype, 'the LIVE congestion-tick producer stays plain too');
+  const base = { tick: 5, medianCommuteMinutes: 10, gridlockShare: 0.1, coverageShare: 0.5 };
+  const [known] = [...ta.ROAD_CLASS_IDS];
+  assert.equal(Object.getPrototypeOf(tw.sanitizeTrafficSnapshot({ ...base, wearSegments: { 'seg:a': { roadClassId: known, deltaEsalPerTick: 0 } } }).wearSegments), Object.prototype);
+  // The fix itself: gridlockedSegmentsOf's `ticks` accumulator is built via
+  // Object.fromEntries now (source-level pin — the function needs a full
+  // SimState to invoke), and prevGridlockTicks reads go through an own-key
+  // guard, never a bare inherited lookup.
+  const fn = ta.gridlockedSegmentsOf.toString();
+  assert.match(fn, /Object\s*\.\s*fromEntries\s*\(\s*tickEntries\s*\)/, 'BUG-973: gridlockedSegmentsOf now builds its ticks map via Object.fromEntries (own-data-property semantics)');
+  assert.match(fn, /Object\s*\.\s*prototype\s*\.\s*hasOwnProperty\s*\.\s*call\s*\(\s*prevGridlockTicks/, 'BUG-973: and reads prevGridlockTicks through an own-key guard now, not a bare inherited lookup');
+  assert.doesNotMatch(fn, /const ticks\s*[^=]*=\s*\{\}/, 'MUTANT check: the old bracket-assigned plain accumulator must be gone');
+  assert.doesNotMatch(fn, /prevGridlockTicks\[segId\]\s*\?\?\s*0/, 'MUTANT check: the old bare inherited read must be gone');
+});
+
+// ===========================================================================
+// BUG-941 ROUND 4 (attacker: opus-round4-bug941) — the r4 PORT rework
+// (PLAIN maps built with own-data-property semantics + every r3 own-key
+// consumer guard kept) verified end to end against the REAL BUG-951/BUG-966
+// delta protocol that killed the r3 ACCEPT at port. These pins fix the
+// properties nothing else in the tree kills; each names its own mutant.
+// ===========================================================================
+
+// Hostile segIds carrying VALID entries — every Object.prototype member name
+// plus '__proto__'/'constructor'. Written as raw JSON text on purpose: an
+// object literal or a bracket assignment for '__proto__' would invoke the
+// inherited setter in the TEST itself and the fixture would silently never
+// carry the key at all (measured — the first draft of this pin did exactly
+// that). JSON.parse uses CreateDataProperty, so these are real own keys, and
+// a save / debug-json blob is exactly this shape.
+const R4_HOSTILE = ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'valueOf', '__defineGetter__', 'isPrototypeOf', 'propertyIsEnumerable'];
+const r4q = (k) => JSON.stringify(k);
+const r4WearJson = (cls) => '{' + R4_HOSTILE.map((k) => r4q(k) + ':{"roadClassId":"' + cls + '","deltaEsalPerTick":1.5}').join(',') + ',"seg:real1":{"roadClassId":"' + cls + '","deltaEsalPerTick":2}}';
+const r4PrevJson = '{' + R4_HOSTILE.map((k) => r4q(k) + ':3').join(',') + ',"seg:real1":5e9,"seg:real2":3}';
+const r4Snap = (tick, wear) => ({ tick, medianCommuteMinutes: 10, gridlockShare: 0.1, coverageShare: 0.5, safeRoadScore: 1, integratedTransportScore: 0, wearSegments: wear });
+const r4ProtoNames = () => Object.getOwnPropertyNames(Object.prototype).sort().join(',');
+
+// R4_OWN_DATA — the whole point of the r4 ruling: PLAIN objects, but every
+// key an OWN DATA property, for names that are inherited members of
+// Object.prototype. Proven at the descriptor level (not just `k in m`, which
+// an inherited member satisfies for free) and across every transport the
+// pipeline actually uses.
+test('R4_OWN_DATA (BUG-941 port ruling): hostile segIds with valid entries become OWN DATA properties of a PLAIN map, and stay own data through structuredClone / JSON / spread', async () => {
+  const tw = await import('../src/sim/trafficWellbeing.ts');
+  const d = await import('../src/sim/data.ts');
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const [cls] = [...ta.ROAD_CLASS_IDS];
+  const before = r4ProtoNames();
+  const san = tw.sanitizeTrafficSnapshot(JSON.parse('{"tick":5,"medianCommuteMinutes":20,"gridlockShare":0.1,"coverageShare":0.5,"wearSegments":' + r4WearJson(cls) + '}'));
+  const ws = san.wearSegments;
+  assert.notEqual(ws, undefined, 'setup: a VALID entry under a hazardous key is ordinary data post-r3, never poison');
+  assert.equal(Object.getPrototypeOf(ws), Object.prototype, 'r4: the map must be PLAIN — a null-prototype map clones to plain and breaks the delta protocol clone-side pin');
+  for (const k of [...R4_HOSTILE, 'seg:real1']) {
+    const desc = Object.getOwnPropertyDescriptor(ws, k);
+    assert.ok(desc, 'r4: ' + k + ' must be an OWN property — MUTANT: replace Object.fromEntries(wearSegmentEntries) with a bracket-assigned {} accumulator and __proto__ re-parents the map instead');
+    assert.ok('value' in desc && desc.writable && desc.enumerable && desc.configurable, 'r4: ' + k + ' must be an own DATA property, not an accessor');
+    assert.equal(typeof ws[k].deltaEsalPerTick, 'number', 'r4: ' + k + ' must read back as real numeric wear, never an inherited Object.prototype member');
+  }
+  const keys = Object.getOwnPropertyNames(ws).sort().join(',');
+  for (const [name, m] of [['structuredClone', structuredClone(ws)], ['json', JSON.parse(JSON.stringify(ws))], ['spread', { ...ws }]]) {
+    assert.equal(Object.getOwnPropertyNames(m).sort().join(','), keys, 'r4: ' + name + ' must preserve every own key');
+    assert.equal(Object.getPrototypeOf(m), Object.prototype, 'r4: ' + name + ' must preserve the prototype — the r3 ACCEPT died on exactly this asymmetry');
+  }
+  assert.deepStrictEqual(structuredClone(ws), ws, 'r4: worker state and the receiver-side structuredClone must be deepStrictEqual (BUG-950/951 clone-side pin)');
+  // The other two sanitizers take the identical treatment.
+  const numJson = JSON.parse('{' + R4_HOSTILE.map((k) => r4q(k) + ':4').join(',') + '}');
+  for (const [name, fn] of [['sanitizeCongestionTicksBySpec', d.sanitizeCongestionTicksBySpec], ['sanitizeRoadWearBySegment', d.sanitizeRoadWearBySegment]]) {
+    const o = fn(numJson);
+    assert.equal(Object.getPrototypeOf(o), Object.prototype, 'r4: ' + name + ' output must be plain');
+    for (const k of R4_HOSTILE) {
+      assert.ok(Object.prototype.hasOwnProperty.call(o, k), 'r4: ' + name + ' must make ' + k + ' an OWN key');
+      assert.equal(typeof o[k], 'number', 'r4: ' + name + '.' + k + ' must be numeric');
+    }
+  }
+  assert.equal(r4ProtoNames(), before, 'r4: Object.prototype must be byte-identical before and after — no global pollution on any path');
+});
+
+// R4_STEP_ACCRUAL — the consumer side. Every own-key guard r3 added is the
+// ONLY defence now that the maps are plain again, so this pin drives a real
+// roadWearStepFromSnapshot over hostile-key PRIOR wear and hostile-key
+// inputs: real accrual (never a silent drop), numeric everywhere (never an
+// inherited function coerced to a string), the orphan pruned, the due repair
+// booked exactly once.
+test('R4_STEP_ACCRUAL (BUG-941/BUG-961): roadWearStepFromSnapshot accrues hostile-key wear as numbers, prunes the orphan, and books the due repair once', async () => {
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const tw = await import('../src/sim/trafficWellbeing.ts');
+  const [cls] = [...ta.ROAD_CLASS_IDS];
+  const before = r4ProtoNames();
+  const ws = tw.sanitizeTrafficSnapshot(JSON.parse('{"tick":5,"medianCommuteMinutes":20,"gridlockShare":0.1,"coverageShare":0.5,"wearSegments":' + r4WearJson(cls) + '}')).wearSegments;
+  const step = ta.roadWearStepFromSnapshot(JSON.parse(r4PrevJson), ws);
+  assert.equal(Object.getPrototypeOf(step.nextWearBySegment), Object.prototype, 'r4: the step output must be a plain object (the Map -> fromEntries conversion)');
+  for (const k of Object.getOwnPropertyNames(step.nextWearBySegment)) {
+    const v = step.nextWearBySegment[k];
+    assert.equal(typeof v, 'number', 'r4/BUG-961: nextWear.' + k + ' must stay numeric — MUTANT: restore the bare prevWear[segId] ?? 0 read and an inherited member is string-concatenated in instead');
+    assert.ok(Number.isFinite(v), 'r4: nextWear.' + k + ' must be finite');
+  }
+  for (const k of R4_HOSTILE) {
+    assert.ok(Object.prototype.hasOwnProperty.call(step.nextWearBySegment, k), 'r4: ' + k + ' carried real wear in and must carry accrued wear out — a silent drop IS the BUG-941 free wipe');
+    assert.equal(step.nextWearBySegment[k], 3 + 1.5, 'r4: ' + k + ' must accrue prior 3 + delta 1.5 exactly');
+  }
+  assert.ok(!Object.prototype.hasOwnProperty.call(step.nextWearBySegment, 'seg:real2'), 'r4/BUG-917(b): an orphan (no cadence entry, under trigger) is still pruned');
+  const real1 = step.repairEvents.filter((e) => e.segmentId === 'seg:real1');
+  assert.equal(real1.length, 1, 'r4: the over-trigger segment books EXACTLY ONE repair event, never two');
+  assert.ok(!Object.prototype.hasOwnProperty.call(step.nextWearBySegment, 'seg:real1'), 'r4/AC-6: and its wear resets');
+  assert.equal(r4ProtoNames(), before, 'r4: Object.prototype untouched');
+});
+
+// R4_BOOT_PATHS — every load boundary at once (BUG-948 + BUG-962 carry-over),
+// on the shape r4 actually changed: VALID data under hazardous names. The
+// corrupt-data direction stays pinned by the BUG-962 REGRESSION test above;
+// this one proves the boundary does not EAT good data either.
+test('R4_BOOT_PATHS (BUG-948/BUG-962): restoreFromSavepoint, prepareRestoreForChunkedTail and parseGameSave all preserve hostile-key entries as own data, and the first tick books normally', async () => {
+  const { createSavepoint, persistSavepointForced, restoreFromSavepoint, prepareRestoreForChunkedTail } = await import('../src/sim/replay.ts');
+  const { buildGameSave, gameSaveText, parseGameSave } = await import('../src/sim/gamesave.ts');
+  const { initialState: init, reducer: red, sanitizeTreasury } = await import('../src/sim/engine.ts');
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const [cls] = [...ta.ROAD_CLASS_IDS];
+  class Mem {
+    constructor() { this.m = new Map(); }
+    getItem(k) { return this.m.has(k) ? this.m.get(k) : null; }
+    setItem(k, v) { this.m.set(k, String(v)); }
+    removeItem(k) { this.m.delete(k); }
+    key(i) { return [...this.m.keys()][i] ?? null; }
+    get length() { return this.m.size; }
+  }
+  const before = r4ProtoNames();
+  const base = init();
+  const mk = () => ({ ...base, roadWearBySegment: JSON.parse(r4PrevJson), trafficSnapshot: r4Snap(base.tick, JSON.parse(r4WearJson(cls))) });
+  const storage = new Mem();
+  persistSavepointForced(storage, createSavepoint(mk(), [], new Date(), 'test', null));
+  const restored = restoreFromSavepoint(storage);
+  assert.equal(restored.success, true, 'setup: the savepoint must restore');
+  const booted = sanitizeTreasury(restored.state);
+  const prepared = prepareRestoreForChunkedTail(storage);
+  const parsed = parseGameSave(gameSaveText(buildGameSave({ state: mk(), journal: { entries: [] }, journalTail: [], name: 'r4', buildVersion: 'test' })));
+  assert.equal(parsed.ok, true, 'setup: the game save must parse');
+  for (const [name, snap] of [['restoreFromSavepoint', booted], ['prepareRestoreForChunkedTail', prepared.state], ['parseGameSave', parsed.save.savepoint.snapshot]]) {
+    const ws = snap.trafficSnapshot && snap.trafficSnapshot.wearSegments;
+    assert.notEqual(ws, undefined, name + ': valid entries under hazardous names must SURVIVE the boundary, not be eaten');
+    assert.equal(Object.getPrototypeOf(ws), Object.prototype, name + ': and the map must be plain');
+    for (const k of R4_HOSTILE) assert.ok(Object.prototype.hasOwnProperty.call(ws, k), name + ': lost own key ' + k + ' at the load boundary');
+  }
+  // One real tick on the booted state: never throws, wear stays numeric and
+  // finite, and the over-trigger segment resurfaces (money booked, not wiped).
+  const after = red(booted, { type: 'tick' });
+  for (const k of Object.getOwnPropertyNames(after.roadWearBySegment)) {
+    assert.equal(typeof after.roadWearBySegment[k], 'number', 'r4: post-boot roadWearBySegment.' + k + ' must stay numeric');
+    assert.ok(Number.isFinite(after.roadWearBySegment[k]), 'r4: post-boot roadWearBySegment.' + k + ' must stay finite');
+  }
+  assert.ok(!Object.prototype.hasOwnProperty.call(after.roadWearBySegment, 'seg:real1'), 'r4: the over-trigger segment resurfaced on the first post-boot tick');
+  assert.ok((after.lastFlows && after.lastFlows.roadRepairGbp) > 0, 'r4: and the resurfacing was BOOKED (roadRepairGbp > 0), never a free wipe');
+  assert.equal(r4ProtoNames(), before, 'r4: Object.prototype untouched by any boot path');
+});
+
+// R4_DELTA_120 — the exact pin the r3 ACCEPT failed at port. Worker state
+// and a receiver that only ever sees structuredClone(diffSimState(...)) must
+// stay byte-identical for a long run booted from a savepoint whose wear maps
+// carry hostile keys, and every worker state must be deepStrictEqual to its
+// own structuredClone (the prototype-symmetry property the null-prototype r3
+// fix destroyed).
+test('R4_DELTA_120 (BUG-950/BUG-951/BUG-966 port): 120 ticks of worker -> structuredClone(delta) -> receiver stay byte-identical with hostile-key wear maps aboard', async () => {
+  const { initialState: init, reducer: red } = await import('../src/sim/engine.ts');
+  const { diffSimState, applyStateDelta } = await import('../src/sim/simWorkerDelta.ts');
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const [cls] = [...ta.ROAD_CLASS_IDS];
+  const before = r4ProtoNames();
+  const seed = init();
+  let s = { ...seed, roadWearBySegment: JSON.parse(r4PrevJson), trafficSnapshot: r4Snap(seed.tick, JSON.parse(r4WearJson(cls))) };
+  let ui = structuredClone(s);
+  for (let t = 0; t < 120; t++) {
+    const basis = s;
+    const next = red(s, { type: 'tick' });
+    ui = applyStateDelta(ui, structuredClone(diffSimState(basis, next)));
+    s = next;
+    assert.equal(JSON.stringify(ui), JSON.stringify(s), 'r4: receiver diverged from the worker at tick ' + t);
+    assert.deepStrictEqual(structuredClone(s), s, 'r4: worker state is not deepStrictEqual to its own structuredClone at tick ' + t + ' — MUTANT: rebuild any of these maps with Object.create(null) and this reds by prototype alone, which is exactly how the r3 ACCEPT died at port');
+  }
+  assert.equal(r4ProtoNames(), before, 'r4: 120 ticks of hostile-key state must never touch Object.prototype');
+});
+
+// R4_BUILD_SHAPE — a source-level backstop so the own-data-property build
+// cannot be quietly reverted to a bracket-assigned accumulator by a later
+// edit that happens not to be covered by a behavioural fixture. Every one of
+// these producers is named in the r4 ruling.
+test('R4_BUILD_SHAPE: every sanitizer / live producer of these maps finishes with Object.fromEntries and never bracket-assigns the accumulator', async () => {
+  const d = await import('../src/sim/data.ts');
+  const ta = await import('../src/sim/trafficAssignment.ts');
+  const producers = [
+    ['sanitizeCongestionTicksBySpec', d.sanitizeCongestionTicksBySpec.toString()],
+    ['sanitizeRoadWearBySegment', d.sanitizeRoadWearBySegment.toString()],
+    ['advanceCongestionTicks', d.advanceCongestionTicks.toString()],
+    ['roadWearStepFromSnapshot', ta.roadWearStepFromSnapshot.toString()],
+  ];
+  // Strip `//` comments first: each of these functions DOCUMENTS the banned
+  // shape in prose (e.g. "bracket assignment (`nextWear[segId] = ...`)"), so
+  // a raw source scan reds on the explanation rather than on real code — the
+  // exact false positive this pin hit when first written.
+  // (CRLF-safe: `.` and `$` both stop at a bare \r, so an anchored per-line
+  // strip silently does nothing on this repo's CRLF sources — BUG-port
+  // hygiene lesson, use an unanchored class that excludes both terminators.)
+  const stripComments = (src) => src.replace(/\/\/[^\n\r]*/g, '');
+  for (const [name, raw] of producers) {
+    const src = stripComments(raw);
+    assert.match(src, /Object\s*\.\s*fromEntries\s*\(/, name + ': must finish via Object.fromEntries (CreateDataProperty — an own key even for "__proto__")');
+    assert.doesNotMatch(src, /\b(out|entries|ticks|nextWear)\s*\[\s*(spec|segId|u\.spec|k|key)\s*\]\s*=[^=]/, name + ': must never bracket-assign its accumulator — that invokes the inherited __proto__ setter');
+  }
+  // advanceCongestionTicks' prev read is an own-key test too (its keys are
+  // spec ids today, so this is not reachable from live data — pinned anyway
+  // so the shape cannot drift back; a surviving mutant here was a RECORDED
+  // GAP of this round).
+  assert.match(producers[2][1], /Object\s*\.\s*prototype\s*\.\s*hasOwnProperty\s*\.\s*call\s*\(\s*prevTicks/, 'advanceCongestionTicks: prevTicks must be read through an own-key guard');
+});
+
+// R4_BUG974 (RECORDED GAP, green as written): the r4 rework did NOT change
+// decodeSavepointBytes' unconditional four-field assignment, so a pre-inc7
+// savepoint still gains four own keys (one of them trafficSnapshot:
+// undefined) at decode. Measured harmless — the pre-existing key ORDER is
+// untouched and 10 ticks are canonically identical to the same legacy state
+// fed straight to the reducer — but NOT byte-identical under
+// JSON.stringify, which is the whole content of BUG-974. Pinned in the
+// direction it actually behaves so the day BUG-974 is fixed this test fails
+// loudly and is flipped, rather than silently drifting.
+test('R4_BUG974 (RECORDED GAP): decodeSavepointBytes still adds four own keys to a pre-inc7 savepoint — value-safe, key-order-safe, not byte-identical', async () => {
+  const { createSavepoint, persistSavepointForced, restoreFromSavepoint } = await import('../src/sim/replay.ts');
+  const { initialState: init, reducer: red } = await import('../src/sim/engine.ts');
+  class Mem {
+    constructor() { this.m = new Map(); }
+    getItem(k) { return this.m.has(k) ? this.m.get(k) : null; }
+    setItem(k, v) { this.m.set(k, String(v)); }
+    removeItem(k) { this.m.delete(k); }
+    key(i) { return [...this.m.keys()][i] ?? null; }
+    get length() { return this.m.size; }
+  }
+  const legacy = { ...init() };
+  for (const f of ['trafficSnapshot', 'congestionTicksBySpec', 'roadWearBySegment', 'gridlockTicksBySegment']) delete legacy[f];
+  const beforeKeys = Object.keys(legacy);
+  const storage = new Mem();
+  persistSavepointForced(storage, createSavepoint(legacy, [], new Date(), 'test', null));
+  const restored = restoreFromSavepoint(storage);
+  assert.equal(restored.success, true, 'setup: the legacy savepoint must restore');
+  const afterKeys = Object.keys(restored.state);
+  assert.deepEqual(afterKeys.filter((k) => !beforeKeys.includes(k)), ['trafficSnapshot', 'congestionTicksBySpec', 'roadWearBySegment', 'gridlockTicksBySegment'], 'BUG-974 (unfixed): decode still invents these four own keys');
+  assert.ok(Object.prototype.hasOwnProperty.call(restored.state, 'trafficSnapshot') && restored.state.trafficSnapshot === undefined, 'BUG-974 (unfixed): including an own trafficSnapshot whose value is undefined');
+  assert.deepEqual(afterKeys.filter((k) => beforeKeys.includes(k)), beforeKeys, 'BUG-974 is bounded: the ORDER of every pre-existing key is untouched');
+  let a = restored.state, b = legacy;
+  for (let i = 0; i < 10; i++) { a = red(a, { type: 'tick' }); b = red(b, { type: 'tick' }); }
+  const canon = (o) => JSON.stringify(o, Object.keys(o).sort());
+  assert.equal(canon(a), canon(b), 'BUG-974 is value-safe: 10 ticks from a decoded legacy savepoint are canonically identical to the same state fed straight to the reducer');
 });

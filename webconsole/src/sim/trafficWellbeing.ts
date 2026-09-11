@@ -61,7 +61,7 @@
 
 import type { SimState } from './types.ts';
 import { memoOnState, wellbeingPartOf, earlyGameFactor, SPECS } from './data.ts';
-import { commuteTimeDistributionOf, gridlockedSegmentsOf, tilePathsOf, tileVehicleTripsOf, fuelLitresDemandedOf, vedAnnualGbpOf, wearSegmentInputsOf, segmentDelayOf } from './trafficAssignment.ts';
+import { commuteTimeDistributionOf, gridlockedSegmentsOf, tilePathsOf, tileVehicleTripsOf, fuelLitresDemandedOf, vedAnnualGbpOf, wearSegmentInputsOf, segmentDelayOf, ROAD_CLASS_IDS } from './trafficAssignment.ts';
 import type { WearSegmentInput } from './trafficAssignment.ts';
 import { emergencyCoverageOf } from './emergencyResponse.ts';
 import type { EmergencyService } from './emergencyResponse.ts';
@@ -412,16 +412,74 @@ export function sanitizeTrafficSnapshot(v: unknown): TrafficSnapshot | undefined
   const vedAnnualGbp = finiteNumber(o.vedAnnualGbp);
   if (vedAnnualGbp !== null && vedAnnualGbp >= 0) out.vedAnnualGbp = vedAnnualGbp;
   if (typeof o.wearSegments === 'object' && o.wearSegments !== null && !Array.isArray(o.wearSegments)) {
-    const wearSegments: Record<string, WearSegmentInput> = {};
-    for (const [segId, raw] of Object.entries(o.wearSegments as Record<string, unknown>)) {
-      if (typeof raw !== 'object' || raw === null) continue;
+    const rawEntries = Object.entries(o.wearSegments as Record<string, unknown>);
+    // BUG-946 (r1 REJECT) -> BUG-961 (r2 REJECT) -> r4 LEAD RULING (after the
+    // r3 ACCEPT failed at PORT against BUG-951/BUG-966's delta protocol: a
+    // null-prototype object clones to a PLAIN object through
+    // structuredClone, so attack-bug950-951-round.test.mjs's clone-side
+    // deepStrictEqual pin (worker state vs the receiver's structuredClone)
+    // fails on prototype alone even when every value is identical). A plain
+    // `{}` accumulator's bracket assignment `acc[segId] = value` invokes
+    // Object.prototype's inherited `__proto__` SETTER when segId is the
+    // literal string '__proto__' and value is an object -- it re-parents
+    // the accumulator instead of creating an own property (JSON.parse
+    // itself produces an OWN '__proto__' key via CreateDataProperty, so
+    // this is reachable from any save/debug-json blob). The r4 fix: stay
+    // PLAIN (so clone/JSON round trips are prototype-stable across the
+    // whole pipeline), but build via own-data-property semantics only --
+    // collect validated [segId, value] pairs and finish with
+    // `Object.fromEntries(entries)`, which uses CreateDataProperty
+    // internally (an own property even for the key "__proto__", never the
+    // inherited setter) -- NO bracket assignment on this map anywhere. Every
+    // consumer keeps its own-key guard (Object.prototype.hasOwnProperty.call)
+    // from r3/r4 so `in` / bare-read hazards on names like
+    // 'toString'/'hasOwnProperty'/'valueOf' stay closed even though the map
+    // itself is an ordinary plain object again.
+    const wearSegmentEntries: Array<[string, WearSegmentInput]> = [];
+    // BUG-941 (GR#16): a raw entry that fails validation is CORRUPTION, not
+    // a legitimate "this segment carries no flow" reading (a genuinely
+    // flow-less segment is still present in the cadence map with
+    // deltaEsalPerTick: 0 -- see wearSegmentInputsOf -- it never simply
+    // vanishes from the object). Track whether any raw entry was rejected
+    // so a corrupt/partial save can be told apart from an honestly empty
+    // `{}` (the ordinary all-roads-demolished case, which must still
+    // prune). Conservative choice: ANY invalid entry poisons the whole
+    // field (not just the entry itself) -- a save that is corrupt enough to
+    // fail validation on one segment is not trusted to be complete for the
+    // rest either, and the field is dropped so engine.ts's bootstrap
+    // fallback (roadWearStepOf) recomputes wearSegmentInputsOf(s) fresh
+    // instead of roadWearStepFromSnapshot's orphan-prune (BUG-917(b))
+    // running over a truncated valid-set and free-wiping every accumulated
+    // wear entry with nothing booked.
+    let sawInvalidEntry = false;
+    for (const [segId, raw] of rawEntries) {
+      if (typeof raw !== 'object' || raw === null) {
+        sawInvalidEntry = true;
+        continue;
+      }
       const r = raw as Record<string, unknown>;
       const roadClassId = typeof r.roadClassId === 'string' && r.roadClassId.length > 0 ? r.roadClassId : null;
       const deltaEsalPerTick = finiteNumber(r.deltaEsalPerTick);
-      if (roadClassId === null || deltaEsalPerTick === null || deltaEsalPerTick < 0) continue;
-      wearSegments[segId] = { roadClassId, deltaEsalPerTick };
+      // BUG-947 (LEAD RULING, r2 amendment): a well-formed-but-UNKNOWN
+      // roadClassId (one that names no class in data/roads.json, e.g. a
+      // stale save from before a class was removed/renamed) is invalid at
+      // sanitize time too -- it must poison the field and let engine.ts's
+      // bootstrap fallback recompute fresh, rather than surviving the
+      // sanitizer and later throwing MET-V944 fail-closed from inside
+      // advance() (a stale save must never brick the tick loop). MET-V944
+      // remains the guard for the LIVE-compute path (wearSegmentInputsOf),
+      // which can never itself name an unknown class.
+      if (roadClassId === null || deltaEsalPerTick === null || deltaEsalPerTick < 0 || !ROAD_CLASS_IDS.has(roadClassId)) {
+        sawInvalidEntry = true;
+        continue;
+      }
+      wearSegmentEntries.push([segId, { roadClassId, deltaEsalPerTick }]);
     }
-    out.wearSegments = wearSegments;
+    // A genuinely empty raw object (rawEntries.length === 0) is NOT
+    // corruption -- it is the honest "no segment carried flow this cadence
+    // window" reading, and must still be assigned so the orphan-prune
+    // (BUG-917(b)) fires on it as designed.
+    if (!sawInvalidEntry) out.wearSegments = Object.fromEntries(wearSegmentEntries);
   }
   return out;
 }

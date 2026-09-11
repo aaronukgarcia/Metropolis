@@ -103,6 +103,7 @@ import {
   FUEL_DUTY_RATE_PENCE_PER_LITRE,
   vedAnnualGbpOf,
   roadWearStepOf,
+  wearSegmentInputsOf,
   ROAD_MAINTENANCE_CONDITION_DECAY_PER_MONTH,
   ERR_BASE_COST_MISSING,
   registryError,
@@ -204,16 +205,23 @@ const roadRepairPaymentOf: (s: SimState) => RoadRepairPayment = memoOnState((s) 
   if (affordable) {
     return { roundedCost: Math.max(0, roundedCost), affordable: true, committedNextWearBySegment: step.nextWearBySegment, deferredSegmentIds: [] };
   }
-  const committedNextWearBySegment: Record<string, number> = { ...step.nextWearBySegment };
+  // r4 LEAD RULING (port amendment): step.nextWearBySegment is a PLAIN
+  // object now (r3's null-prototype maps broke the delta-protocol
+  // clone-side pin). A `{...}` spread AND Object.assign onto a plain target
+  // both invoke Object.prototype's inherited `__proto__` setter for a
+  // segId literally named '__proto__' — build the mutable copy as a Map
+  // (no such hazard for any key) and convert back to a plain object via
+  // Object.fromEntries (own-data-property semantics) only once, at the end.
+  const committedNextWearMap = new Map<string, number>(Object.entries(step.nextWearBySegment));
   const deferredSegmentIds: string[] = [];
   for (const ev of step.repairEvents) {
-    const persisted = step.prevWearBySegment[ev.segmentId] ?? 0;
-    if (persisted > 0) committedNextWearBySegment[ev.segmentId] = persisted;
-    else delete committedNextWearBySegment[ev.segmentId];
+    const persisted = Object.prototype.hasOwnProperty.call(step.prevWearBySegment, ev.segmentId) ? step.prevWearBySegment[ev.segmentId] : 0;
+    if (persisted > 0) committedNextWearMap.set(ev.segmentId, persisted);
+    else committedNextWearMap.delete(ev.segmentId);
     deferredSegmentIds.push(ev.segmentId);
   }
   deferredSegmentIds.sort();
-  return { roundedCost: 0, affordable: false, committedNextWearBySegment, deferredSegmentIds };
+  return { roundedCost: 0, affordable: false, committedNextWearBySegment: Object.fromEntries(committedNextWearMap), deferredSegmentIds };
 });
 // R3-D FIX (round-3 finding, LOW — "make the nextId self-heal loud"): a
 // DELIBERATE, NARROW exception to this file's own convention of zero
@@ -7650,6 +7658,22 @@ function advance(s: SimState): SimState {
     );
     gridlockTicksBySegment = result.gridlockTicksBySegment;
     trafficSnapshot = result.snapshot;
+  } else if (trafficSnapshot && trafficSnapshot.wearSegments === undefined) {
+    // BUG-949 fix (BUG-941 r1 finding, r2 LEAD AMENDMENT): a snapshot that IS
+    // present but whose wearSegments field is absent (BUG-941/946/947's
+    // sanitizer-side poison-drop of a corrupt/legacy entry, or any pre-inc7
+    // snapshot) sends roadWearStepOf(s) below into its wearSegmentInputsOf(s)
+    // bootstrap fallback EVERY tick until the next cadence boundary — measured
+    // 28 consecutive ticks, 2.28x-1.56x wall time, a live Dijkstra assignment
+    // on a non-cadence tick that the whole cadence design exists to avoid.
+    // Cache the SAME bootstrap result (memoOnState — calling wearSegmentInputsOf(s)
+    // here is a guaranteed cache hit against the identical call
+    // roadWearStepOf(s)/roadRepairPaymentOf(s) make below with this SAME `s`,
+    // zero extra assignment work THIS tick) onto `trafficSnapshot` so it
+    // becomes `next.trafficSnapshot` below: the NEXT tick reads a present
+    // wearSegments straight off state and never re-enters the bootstrap,
+    // bounding the live recompute to at most ONE tick per corrupt episode.
+    trafficSnapshot = { ...trafficSnapshot, wearSegments: wearSegmentInputsOf(s) };
   }
   // FEAT-2326609800 inc7 (AC-4/AC-6), BUG-915: roadRepairPaymentOf(s) is
   // memoOnState, so this is a cache hit against the SAME call computeFlows()

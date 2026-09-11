@@ -196,6 +196,17 @@ const ROADS_TABLE = rawRoads as unknown as {
 const ROADS = ROADS_TABLE.classes;
 const roadRowById = new Map<string, RoadClassRow>(ROADS.map((r) => [r.id, r]));
 
+/**
+ * BUG-947 (LEAD RULING, r2 amendment): the set of road class ids
+ * data/roads.json actually defines, exported so a SNAPSHOT-carried
+ * roadClassId (trafficWellbeing.ts's sanitizeTrafficSnapshot) can be
+ * validated at sanitize time rather than passing through as "any non-empty
+ * string" and only failing later, inside engine.ts's advance(), with a
+ * game-bricking MET-V944 throw when a stale save names a removed/renamed
+ * class. Single source of truth — never restated as a literal list.
+ */
+export const ROAD_CLASS_IDS: ReadonlySet<string> = new Set(ROADS.map((r) => r.id));
+
 /** FEAT-2326609800 inc7 (AC-5, GR#15) — reused (never restated) as the
  * per-tick repair-cost amortisation basis: roads.json's own age-based decay
  * RATE is the only per-tick-shaped fraction this data set carries, so this
@@ -1220,17 +1231,26 @@ export function gridlockedSegmentsOf(s: SimState, prevGridlockTicks: Record<stri
   const delay = segmentDelayOf(s);
   const consideredIds = new Set<string>([...delay.keys(), ...Object.keys(prevGridlockTicks)]);
   const sortedIds = [...consideredIds].sort();
-  const ticks: Record<string, number> = {};
+  // BUG-973 (r3 ACCEPT, non-blocking) -> folded into the r4 port: this is the
+  // LIVE producer of gridlockTicksBySegment, so it gets the same own-key
+  // discipline as the sanitizers -- a bare `prevGridlockTicks[segId]` is an
+  // INHERITED read on a plain object (would silently return a stale
+  // Object.prototype method for a hazardous segId instead of `undefined`),
+  // guarded via hasOwnProperty; the output map is built via
+  // Object.fromEntries over validated entries, never bracket assignment
+  // (own-data-property semantics, consistent with every other sanitizer/
+  // live-producer pair after the r4 ruling).
+  const tickEntries: Array<[string, number]> = [];
   const gridlocked: string[] = [];
   for (const segId of sortedIds) {
     const d = delay.get(segId);
     const vOverC = d ? d.vOverC : 0;
-    const prev = prevGridlockTicks[segId] ?? 0;
+    const prev = Object.prototype.hasOwnProperty.call(prevGridlockTicks, segId) ? prevGridlockTicks[segId] : 0;
     const next = vOverC >= CONGESTION_PENALTY_THRESHOLD ? Math.min(prev + 1, CONGESTION_SUSTAINED_TICKS) : 0;
-    if (next > 0) ticks[segId] = next;
+    if (next > 0) tickEntries.push([segId, next]);
     if (next >= CONGESTION_SUSTAINED_TICKS) gridlocked.push(segId);
   }
-  return { ticks, gridlocked };
+  return { ticks: Object.fromEntries(tickEntries), gridlocked };
 }
 
 // --- AC-9: structural scale bound helper (test-only export) ----------------
@@ -1463,7 +1483,17 @@ export const wearSegmentInputsOf: (s: SimState) => Record<string, WearSegmentInp
   const flowByClass = assignedFlowByClassOf(s);
   const km = segmentKmOf(s);
   const idx = lineSegmentIndexOf(s);
-  const out: Record<string, WearSegmentInput> = {};
+  // r4 LEAD RULING (round-trip consistency, PLAIN not null-prototype): a
+  // real segment id is geometry-derived and can never collide with an
+  // inherited name, but keeping this live-compute counterpart's SHAPE
+  // identical to the sanitizer's output means a fresh tick's
+  // trafficSnapshot and the SAME snapshot after a save/decode/
+  // structuredClone round trip through sanitizeTrafficSnapshot are
+  // byte-identical (deepStrictEqual, which compares [[Prototype]]) rather
+  // than differing only by accumulator shape — collect entries and finish
+  // with Object.fromEntries (own-data-property semantics), no bracket
+  // assignment.
+  const entries: Array<[string, WearSegmentInput]> = [];
   for (const seg of idx.segments) {
     if (seg.kind !== 'road') continue;
     const roadClassId = roadClassIdOfSegment(seg);
@@ -1476,9 +1506,9 @@ export const wearSegmentInputsOf: (s: SimState) => Record<string, WearSegmentInp
         delta += (flow * segKm * esalFactorFor(classId)) / 100;
       }
     }
-    out[seg.segmentId] = { roadClassId, deltaEsalPerTick: delta };
+    entries.push([seg.segmentId, { roadClassId, deltaEsalPerTick: delta }]);
   }
-  return out;
+  return Object.fromEntries(entries);
 });
 
 /**
@@ -1522,16 +1552,35 @@ export function roadWearStepFromSnapshot(
   wearSegments: Readonly<Record<string, WearSegmentInput>>,
 ): RoadWearStep {
   const prevWear = sanitizeRoadWearBySegment(prevWearRaw);
-  const nextWear: Record<string, number> = { ...prevWear };
+  // r4 LEAD RULING (port amendment): prevWear is a PLAIN object now (r3's
+  // null-prototype maps broke the delta-protocol clone-side pin). Both
+  // bracket assignment (`nextWear[segId] = ...`) AND Object.assign onto a
+  // plain target invoke Object.prototype's inherited `__proto__` SETTER for
+  // a segId literally named '__proto__' — r3's fix (Object.assign onto an
+  // Object.create(null) target) sidestepped this by giving the target no
+  // prototype at all, which is exactly the shape r4 rules out. A Map has no
+  // such hazard for ANY key (string or not) regardless of the target's own
+  // prototype, so nextWear is built and mutated as a Map throughout this
+  // function and converted to a plain object via Object.fromEntries
+  // (own-data-property semantics) only once, at the very end.
+  const nextWearMap = new Map<string, number>(Object.entries(prevWear));
   const repairEvents: RoadRepairEvent[] = [];
 
   const consideredSegIds = new Set<string>([...Object.keys(wearSegments), ...Object.keys(prevWear)]);
   const sortedSegIds = [...consideredSegIds].sort(); // deterministic, GR#21 — no map-range-with-break
 
   for (const segId of sortedSegIds) {
-    const prevSegWear = prevWear[segId] ?? 0;
+    // BUG-961 (r3 LEAD RULING): own-key test, not a bare `prevWear[segId]`
+    // read — a segId literally named 'toString'/'hasOwnProperty'/'valueOf'
+    // on a PLAIN accumulator would silently resolve to the inherited
+    // Object.prototype method (truthy, so `?? 0` never catches it) instead
+    // of the real numeric wear, corrupting the type the rest of this
+    // function assumes. prevWear is null-prototype now so this can no
+    // longer actually happen, but the own-key test is the correct shape
+    // regardless of what future caller hands this function a raw map.
+    const prevSegWear = Object.prototype.hasOwnProperty.call(prevWear, segId) ? prevWear[segId] : 0;
     const prevConditionIndex = conditionIndexOf(prevSegWear);
-    const input = wearSegments[segId];
+    const input = Object.prototype.hasOwnProperty.call(wearSegments, segId) ? wearSegments[segId] : undefined;
 
     if (prevConditionIndex < REPAIR_TRIGGER_CONDITION_INDEX) {
       if (input) {
@@ -1542,12 +1591,12 @@ export function roadWearStepFromSnapshot(
           multiplier: repairCostMultiplierOf(prevConditionIndex),
         });
       }
-      delete nextWear[segId]; // AC-6: resurfaced this tick, wear resets to 0 (self-pruning).
+      nextWearMap.delete(segId); // AC-6: resurfaced this tick, wear resets to 0 (self-pruning).
       continue;
     }
 
     if (!input) continue; // segment no longer in the cadence snapshot and not yet due for repair — wear unchanged.
-    if (input.deltaEsalPerTick > 0) nextWear[segId] = prevSegWear + input.deltaEsalPerTick;
+    if (input.deltaEsalPerTick > 0) nextWearMap.set(segId, prevSegWear + input.deltaEsalPerTick);
   }
 
   // BUG-917(b): orphan-wear growth bound. A segment id is geometry-derived
@@ -1561,11 +1610,16 @@ export function roadWearStepFromSnapshot(
   // identically, so every replay drops the exact same keys on the exact
   // same cadence-boundary tick (a bulldozed segment's wear entry survives
   // at most one cadence window before being dropped, never forever).
-  for (const segId of Object.keys(nextWear)) {
-    if (!(segId in wearSegments)) delete nextWear[segId];
+  for (const segId of [...nextWearMap.keys()]) {
+    // BUG-961: `in` walks the prototype chain (it would have wrongly
+    // reported true for e.g. segId 'toString' against a plain
+    // `wearSegments` object even with no such own entry) — the own-key test
+    // via hasOwnProperty is the own-key-only equivalent and stays correct
+    // regardless of wearSegments' own prototype shape.
+    if (!Object.prototype.hasOwnProperty.call(wearSegments, segId)) nextWearMap.delete(segId);
   }
 
-  return { nextWearBySegment: nextWear, repairEvents, prevWearBySegment: prevWear };
+  return { nextWearBySegment: Object.fromEntries(nextWearMap), repairEvents, prevWearBySegment: prevWear };
 }
 
 /**

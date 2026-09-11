@@ -6,6 +6,14 @@ import { createSavepoint } from './replay.ts';
 import { emptyJournal } from './journal.ts';
 import { gameDate } from './utils.ts';
 import { sanitizeTreasury } from './engine.ts';
+// BUG-948 (BUG-941 r2 LEAD AMENDMENT): sanitizeTrafficSnapshot's ONLY call
+// site was debugjson.ts's export direction — a save/named-save LOAD passed
+// s.trafficSnapshot straight through raw, so a corrupt cadence snapshot
+// (wearSegments poisoned by BUG-946's __proto__ shape, or any other
+// GR#16-invalid shape) never hit the sanitizer before the first advance()
+// read it. Applied at the SAME point sanitizeTreasury already sanitizes the
+// loaded snapshot, below.
+import { sanitizeTrafficSnapshot } from './trafficWellbeing.ts';
 import { codedError } from './backend.ts';
 import { coerceBuildingCapacityTier } from './data.ts';
 // FEAT-2326609790: grid.ts is a zero-import leaf — see its own header.
@@ -229,7 +237,18 @@ function validateGameSaveShape(parsed: unknown): {
  */
 export function validateGameSaveObject(parsed: unknown): GameSave {
   const { o, savepoint, journal } = validateGameSaveShape(parsed);
-  savepoint.snapshot = sanitizeTreasury(savepoint.snapshot);
+  const treasurySanitized = sanitizeTreasury(savepoint.snapshot);
+  // BUG-948 fix: route the loaded trafficSnapshot through the same GR#16
+  // sanitizer debugjson.ts's export direction already applies, BEFORE this
+  // save is ever handed to a live advance() — a corrupt/legacy snapshot
+  // (e.g. BUG-946's __proto__-poisoned or BUG-947's unknown-road-class
+  // wearSegments) is coerced/dropped here instead of reaching
+  // roadWearStepOf/fuelLitresDemandedFor/vedAnnualGbpFor raw. `undefined`
+  // in, `undefined` out (a pre-cadence save is unaffected).
+  savepoint.snapshot = {
+    ...treasurySanitized,
+    trafficSnapshot: sanitizeTrafficSnapshot(treasurySanitized.trafficSnapshot),
+  };
   return {
     format: GAME_SAVE_FORMAT,
     name: o.name as string,

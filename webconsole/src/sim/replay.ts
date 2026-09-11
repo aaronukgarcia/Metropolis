@@ -16,7 +16,8 @@ import { reducer, initialState as getInitialState, nextSafeBuildingId, computeFl
 import { runConsistencyChecks } from './consistency.ts';
 import type { ConsistencyReport, RecomputedFlowsOverride } from './consistency.ts';
 import type { ReplayProgress } from './genesisReplay.ts';
-import { SPECS, stampJobsGrandfather, stampJobsGrandfatherForce, needsJobsGrandfather, coerceSnapshotBuildings } from './data.ts';
+import { SPECS, stampJobsGrandfather, stampJobsGrandfatherForce, needsJobsGrandfather, coerceSnapshotBuildings, sanitizeCongestionTicksBySpec, sanitizeRoadWearBySegment } from './data.ts';
+import { sanitizeTrafficSnapshot } from './trafficWellbeing.ts';
 import { emptyJournal } from './journal.ts';
 import { safeSetItem } from './safeStorage.ts';
 import { encode, decode } from './saveCodec.ts';
@@ -281,12 +282,44 @@ export function savepointKey(slot: number, lineageId?: string): string {
  * coerceSnapshotBuildings itself never mutates in place (data.ts's own
  * contract) — so this is safe even though none of these callers could ever
  * hand in a shared/live reference in the first place.
+ *
+ * BUG-962 (BUG-941 r3 LEAD RULING, P1): this is also the ONE place every
+ * `trafficSnapshot`/`congestionTicksBySpec`/`roadWearBySegment`/
+ * `gridlockTicksBySegment` reaching restoreFromSavepoint /
+ * prepareRestoreForChunkedTail / store.tsx's savepoint & IndexedDB hot-swap
+ * paths gets GR#16-sanitized — those callers all route through readSlot ->
+ * decodeSavepointBytes (or store.tsx's own decodeSavepointRaw wrapper),
+ * never through gamesave.ts's validateGameSaveObject (which sanitizes the
+ * File->Open / Load->Saved-cities paths separately and keeps its own call —
+ * see gamesave.ts's BUG-948 comment). Before this fix, a corrupt/poisoned
+ * `wearSegments` map (BUG-941/946/947/961's own-key-poisoning shapes)
+ * survived untouched all the way into `snap` and the FIRST post-restore
+ * tick would either free-wipe accumulated wear or resurface a bracket-write
+ * hazard, because the savepoint boot path never called
+ * sanitizeTrafficSnapshot at all — only the debugjson.ts export call site
+ * and (as of r2) gamesave.ts's load path did. The other three maps are
+ * ALSO re-sanitized unconditionally on every live tick already
+ * (engine.ts's advanceCongestionTicks / roadWearStepFromSnapshot both call
+ * their own sanitizer on their input every tick, cadence or not), so this
+ * is defense-in-depth for them, not a wipe-closing fix the way it is for
+ * trafficSnapshot's wearSegments (which only refreshes on the cadence, so a
+ * corrupt snapshot restored on a NON-cadence tick could otherwise survive
+ * un-sanitized for up to TRAFFIC_RECOMPUTE_TICKS-1 ticks before the next
+ * live compute would have caught it).
  */
 export function decodeSavepointBytes(raw: string): Savepoint {
   const sp = JSON.parse(decode(raw)) as Savepoint;
-  const snap = sp?.snapshot as { buildings?: unknown[] } | undefined;
+  const snap = sp?.snapshot as
+    | { buildings?: unknown[]; trafficSnapshot?: unknown; congestionTicksBySpec?: unknown; roadWearBySegment?: unknown; gridlockTicksBySegment?: unknown }
+    | undefined;
   if (snap && Array.isArray(snap.buildings)) {
     snap.buildings = coerceSnapshotBuildings(snap.buildings) as unknown[];
+  }
+  if (snap) {
+    snap.trafficSnapshot = sanitizeTrafficSnapshot(snap.trafficSnapshot);
+    snap.congestionTicksBySpec = sanitizeCongestionTicksBySpec(snap.congestionTicksBySpec);
+    snap.roadWearBySegment = sanitizeRoadWearBySegment(snap.roadWearBySegment);
+    snap.gridlockTicksBySegment = sanitizeCongestionTicksBySpec(snap.gridlockTicksBySegment);
   }
   return sp;
 }
