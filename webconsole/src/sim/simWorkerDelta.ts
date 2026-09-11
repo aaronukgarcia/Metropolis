@@ -245,6 +245,25 @@ export interface SimStateDelta {
    *  reconstructed state stays byte-identical (proven by this feature's
    *  10-tick round-trip test against a real reducer chain). */
   rest: Partial<Omit<SimState, 'buildings' | 'roadConnectivity'>>;
+  /** BUG-966 / BUG-963: every top-level key the BASE state owns that the
+   *  NEXT state does NOT — i.e. a key that was DELETED this tick. Present
+   *  (and non-empty) only on the rare ticks where that actually happens;
+   *  omitted entirely otherwise, so it costs nothing on the hot path.
+   *
+   *  WHY IT IS LOAD-BEARING (not a nicety): `rest` is destructured from
+   *  `next`, so a key `next` does not own can never appear in it, and
+   *  applyStateDelta's `{ ...base, ...delta.rest }` spread can only ADD or
+   *  OVERWRITE — never remove. Without this list, applyStateDelta is not an
+   *  exact reconstruction of `next`: the receiver keeps a key `next` had
+   *  dropped. That was survivable while `rest` shipped every field in full
+   *  every tick (the very next delta re-stated every surviving field, so the
+   *  only lasting error was the stale extra key), but BUG-951's
+   *  reference-identity filter turned it into a permanent two-cache
+   *  divergence — see diffSimState's own comment for the exact sequence.
+   *  SimState has several optional fields (`crimeRatePreviousMonth`,
+   *  `trafficSnapshot`, ...) that are genuinely absent until some condition
+   *  first fires, so this is a real runtime shape, not a hypothetical. */
+  removedRestKeys?: string[];
   buildings: BuildingsDelta;
   /** Present only when the VALUE differs from the base (roadConnectivityEqual
    *  false) — omitted (undefined) means "unchanged, reuse the base's copy". */
@@ -273,16 +292,54 @@ export function diffSimState(base: SimState, next: SimState): SimStateDelta {
     if (Object.prototype.hasOwnProperty.call(baseRecord, key) && baseRecord[key] === nextValue) continue;
     (rest as Record<string, unknown>)[key] = nextValue;
   }
+  // BUG-966: the other half of an EXACT reconstruction — keys `base` owns and
+  // `next` does not. `rest` above can only ever describe keys `next` owns, so
+  // without this list applyStateDelta's spread would leave a deleted key
+  // behind and the receiver's state would not equal `next`.
+  //
+  // WHY THIS IS WHAT MAKES THE IDENTITY FILTER ABOVE SOUND (BUG-966 RCA):
+  // the filter's whole soundness argument is "an omitted field is served from
+  // the receiver's own copy of `base`, and that copy is the same value" —
+  // which holds only while the receiver's cache is an EXACT value
+  // reconstruction (key presence included) of the sender's base. The protocol
+  // does not otherwise guarantee that: the `baseTick` integrity check cannot
+  // distinguish two DISTINCT states that share a tick number (its own header
+  // says so), and a superseded/discarded reply produces exactly that — main
+  // stays at tick N while both caches advance to N+1, so the next request
+  // diffs a tick-N+1 belief down onto a tick-N state. Measured failure before
+  // this fix (attack-feat777-round.test.mjs, 400-building fixture): main's
+  // state did not own the optional `crimeRatePreviousMonth` (types.ts,
+  // assigned by advance() only on a month boundary) while the worker's cache
+  // held 0; the inbound delta could not say "drop it", so the worker's
+  // pre-tick reconstruction carried 0, the reducer left it at 0, the identity
+  // filter then omitted it from the reply as unchanged, and main — whose
+  // basis still lacked the key — never learned it. The two caches diverged at
+  // tick 54 and stayed diverged until the RESYNC_EVERY_TICKS bound.
+  // With deletion representable, applyStateDelta(b, diffSimState(b, n)) is
+  // exact again, the receiver's cache genuinely is the sender's base, and the
+  // filter is safe by construction. Cost: an empty-or-absent array on every
+  // normal tick — the BUG-951 payload win is untouched.
+  const removedRestKeys: string[] = [];
+  for (const key of Object.keys(baseRecord)) {
+    if (key === 'buildings' || key === 'roadConnectivity') continue;
+    if (!Object.prototype.hasOwnProperty.call(allRest as Record<string, unknown>, key)) {
+      removedRestKeys.push(key);
+    }
+  }
   const buildings = diffBuildings(base.buildings, nextBuildings);
   const roadConnectivity = roadConnectivityEqual(base.roadConnectivity, nextRoadConnectivity)
     ? undefined
     : nextRoadConnectivity;
-  return { baseTick: base.tick, rest, buildings, roadConnectivity };
+  const delta: SimStateDelta = { baseTick: base.tick, rest, buildings, roadConnectivity };
+  if (removedRestKeys.length > 0) delta.removedRestKeys = removedRestKeys;
+  return delta;
 }
 
 /** Pure reconstruction: the exact inverse of diffSimState —
  *  `applyStateDelta(base, diffSimState(base, next))` produces a SimState
- *  deep-equal to `next`. This is the ONLY function either side of the
+ *  deep-equal to `next`, KEY PRESENCE INCLUDED (BUG-966: that last clause is
+ *  load-bearing, not pedantry — it is the premise diffSimState's
+ *  reference-identity filter is sound under). This is the ONLY function either side of the
  *  thread boundary uses to turn a received delta back into a full SimState
  *  — no other reconstruction path exists (GR#21: one code path, shared by
  *  both store.tsx and simWorker.ts).
@@ -300,5 +357,16 @@ export function applyStateDelta(base: SimState, delta: SimStateDelta): SimState 
   }
   const buildings = applyBuildingsDelta(base.buildings, delta.buildings);
   const roadConnectivity = delta.roadConnectivity ?? base.roadConnectivity;
-  return { ...base, ...delta.rest, buildings, roadConnectivity } as SimState;
+  const out = { ...base, ...delta.rest, buildings, roadConnectivity } as unknown as Record<string, unknown>;
+  // BUG-966: the spread can only add/overwrite, so a key the sender's `next`
+  // had dropped must be removed explicitly. `buildings`/`roadConnectivity` are
+  // never in this list (diffSimState skips them) and are reinstated above
+  // regardless, so a malformed delta cannot delete them.
+  if (delta.removedRestKeys) {
+    for (const key of delta.removedRestKeys) {
+      if (key === 'buildings' || key === 'roadConnectivity') continue;
+      delete out[key];
+    }
+  }
+  return out as unknown as SimState;
 }

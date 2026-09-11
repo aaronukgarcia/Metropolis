@@ -363,3 +363,112 @@ describe('FEAT-2326609777 round follow-up: applyStateDelta refuses a mismatched 
     assert.ok(RESYNC_EVERY_TICKS > 0);
   });
 });
+
+// ===========================================================================
+// (6) BUG-966 REGRESSION PINS — a delta must be able to say "this top-level
+//     key is GONE", or BUG-951's reference-identity filter permanently
+//     desyncs the two caches on a superseded (discarded) reply.
+//
+// `rest` is destructured from `next`, so it can only ever describe keys
+// `next` OWNS, and applyStateDelta's `{ ...base, ...delta.rest }` spread can
+// only add or overwrite. A key present in `base` and absent from `next` was
+// therefore unrepresentable (the pre-existing BUG-963 gap). That was
+// survivable while `rest` shipped every field in full every tick — the next
+// delta re-stated everything the sender still had — but with BUG-951's
+// identity filter the receiver's stale extra key is never corrected and the
+// protocol's soundness premise ("the receiver's cache is an EXACT value
+// reconstruction of the sender's base") is false.
+//
+// MEASURED failure (attack-feat777-round.test.mjs "superseded replies ...
+// self-heal", 400-building fixture): diverged at tick 54 on
+// `crimeRatePreviousMonth` — OPTIONAL in types.ts, assigned by advance()
+// only on a month boundary, so genuinely absent early. main's basis did not
+// own it; the worker's cache held 0; the inbound delta could not say "drop
+// it"; the reducer left it at 0; the identity filter then omitted it from
+// the reply as "unchanged"; main never learned it. baseTick could not see
+// any of this — both states were at tick 29 (two DISTINCT states sharing a
+// tick is the exact hole RESYNC_EVERY_TICKS exists to bound).
+//
+// MUTANT (verified red, 2026-09-11): restore 7a662693's diffSimState body
+// (no removedRestKeys) -> BOTH tests below fail, as do
+// attack-feat777-round.test.mjs's self-heal and 200-tick protocol tests.
+// ===========================================================================
+
+describe('BUG-966: a deleted top-level key is representable, so the identity filter stays sound', () => {
+  test('diffSimState reports a key the base owns and next does not; applyStateDelta removes it (key presence exact)', () => {
+    const s = buildScaleFixture({ buildingCount: 200, targetPopulation: 5_000, settleTicks: 1 });
+    // A REAL optional SimState field (types.ts `crimeRatePreviousMonth?`),
+    // not an invented one — advance() writes it only on a month boundary.
+    const OPTIONAL_KEY = 'crimeRatePreviousMonth';
+    const withKey = { ...s, [OPTIONAL_KEY]: 0 };
+    const withoutKey = { ...s };
+    delete withoutKey[OPTIONAL_KEY];
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(withoutKey, OPTIONAL_KEY),
+      false,
+      'fixture guard: the "next" state must genuinely not own the key'
+    );
+
+    const delta = diffSimState(withKey, withoutKey);
+    assert.ok(
+      Array.isArray(delta.removedRestKeys) && delta.removedRestKeys.includes(OPTIONAL_KEY),
+      'the delta must name the dropped key'
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(delta.rest, OPTIONAL_KEY),
+      false,
+      '`rest` cannot carry a key `next` does not own'
+    );
+
+    const reconstructed = applyStateDelta(withKey, delta);
+    // deepEqual here is assert/strict's deepStrictEqual: it distinguishes an
+    // absent key from a key present-with-undefined, which is the whole point.
+    assert.deepEqual(reconstructed, withoutKey);
+    assert.equal(Object.prototype.hasOwnProperty.call(reconstructed, OPTIONAL_KEY), false);
+
+    // And the common case stays free: a tick that drops nothing must not pay
+    // for the field at all.
+    const plain = diffSimState(s, reducer(s, { type: 'tick' }));
+    assert.equal(plain.removedRestKeys, undefined, 'no dropped key => the field is omitted entirely');
+  });
+
+  test('a superseded reply cannot desync the two caches: the worker rebuilds main basis EXACTLY, key presence included', () => {
+    const s = buildScaleFixture({ buildingCount: 200, targetPopulation: 5_000, settleTicks: 1 });
+    const OPTIONAL_KEY = 'crimeRatePreviousMonth';
+
+    // The exact post-discard shape measured at tick 54. main never applied
+    // the previous reply, so it sits one tick behind and does NOT own the
+    // optional key; both caches advanced and DO own it.
+    const main = { ...s };
+    delete main[OPTIONAL_KEY];
+    const advanced = { ...s, tick: s.tick + 1, [OPTIONAL_KEY]: 0 };
+    const workerKnown = advanced; // main's belief about the worker's cache
+    const workerCache = structuredClone(advanced); // the worker's ACTUAL cache
+
+    // main -> worker: rewind the worker to main's (older, key-less) state.
+    const request = structuredClone(diffSimState(workerKnown, main));
+    const preTick = applyStateDelta(workerCache, request);
+    assert.deepEqual(
+      preTick,
+      main,
+      'the worker must reconstruct main\'s basis EXACTLY — a leftover key here is the BUG-966 divergence'
+    );
+
+    // worker -> main: a tick that does not touch the field at all, so the
+    // identity filter omits it (this is the step that made the divergence
+    // permanent rather than self-healing).
+    const nextState = { ...preTick, tick: preTick.tick + 1 };
+    const reply = structuredClone(diffSimState(preTick, nextState));
+    const resultState = applyStateDelta(main, reply);
+    assert.deepEqual(
+      resultState,
+      nextState,
+      'main\'s belief about the worker cache must equal the worker\'s actual cache'
+    );
+    assert.equal(
+      JSON.stringify(resultState),
+      JSON.stringify(nextState),
+      'the attack suite\'s own JSON-value comparison of the two caches must agree too'
+    );
+  });
+});
