@@ -15,7 +15,7 @@ import { sanitizeTreasury } from './engine.ts';
 // loaded snapshot, below.
 import { sanitizeTrafficSnapshot } from './trafficWellbeing.ts';
 import { codedError } from './backend.ts';
-import { coerceBuildingCapacityTier } from './data.ts';
+import { coerceBuildingCapacityTier, coerceBuildingJobsOverride } from './data.ts';
 // FEAT-2326609790: grid.ts is a zero-import leaf — see its own header.
 import { MAP_W, MAP_H } from './grid.ts';
 
@@ -76,8 +76,9 @@ function rejectSave(reason: string): never {
 }
 
 /**
- * BUG-742 round F3/E1: a thin, genuinely IN-PLACE wrapper over the shared,
- * non-mutating data.ts boundary helper (coerceBuildingCapacityTier). Safe
+ * BUG-742 round F3/E1 (extended by BUG-1020): a thin, genuinely IN-PLACE
+ * wrapper over the shared, non-mutating data.ts boundary helpers
+ * (coerceBuildingCapacityTier, coerceBuildingJobsOverride). Safe
  * to mutate `b` here ONLY because every call site below hands this a
  * FRESH shallow clone of the array element — never the original object,
  * which may be the exact same reference as a caller's own live SimState
@@ -88,6 +89,13 @@ function rejectSave(reason: string): never {
 function coerceCapacityTierInPlace(b: Record<string, unknown>, index: number): void {
   const coerced = coerceBuildingCapacityTier(b, index);
   if (coerced !== b) b.capacityTier = coerced.capacityTier;
+  // BUG-1020: same in-place wrapper convention, extended to jobsOverride —
+  // this file's own coercion call site was the ORIGINAL BUG-742-class hole
+  // (only gamesave.ts's validateBuildingElement/here ran a boundary
+  // coercion; the default boot path used coerceSnapshotBuildings instead,
+  // which now also carries this fix — see that function's own comment).
+  const jobsCoerced = coerceBuildingJobsOverride(b, index);
+  if (jobsCoerced !== b) b.jobsOverride = jobsCoerced.jobsOverride;
 }
 
 /**
@@ -128,6 +136,12 @@ function validateBuildingElement(value: unknown, index: number): void {
   }
   if (b.capacityTier !== undefined && typeof b.capacityTier !== 'number') {
     rejectSave(`Snapshot buildings[${index}] has a wrong-typed capacityTier`);
+  }
+  // BUG-1020: same wrong-TYPE-rejected/VALUE-coerced split as capacityTier
+  // just above — jobsOverride's value (fractional/non-finite/negative) is
+  // coerced, not rejected, via coerceSnapshotBuildings/coerceCapacityTierInPlace.
+  if (b.jobsOverride !== undefined && typeof b.jobsOverride !== 'number') {
+    rejectSave(`Snapshot buildings[${index}] has a wrong-typed jobsOverride`);
   }
   if (b.lastAutoScaleTick !== undefined && typeof b.lastAutoScaleTick !== 'number') {
     rejectSave(`Snapshot buildings[${index}] has a wrong-typed lastAutoScaleTick`);

@@ -6150,6 +6150,24 @@
       "module": "ui.webconsole",
       "message": "placeRoadPath action rejected -- a bend in the committed path is tighter than road tier %s minimum radius",
       "remedy": "reject the whole path with zero placement and zero fund movement (AC-5); the player retries with a wider curve"
+    },
+    "MET-V963": {
+      "severity": "warn",
+      "module": "ui.webconsole",
+      "message": "Save buildings[{index}] had a fractional/non-finite/negative jobsOverride ({raw}) -- coerced to {coerced}",
+      "remedy": "BUG-1020: a hand-edited or corrupted save carried a jobsOverride that is not a safe non-negative integer. The value was coerced (truncated, floored at 0) at the storage boundary so buildingJobsOf's integer-domain contract (which the sector-fold byte-identity proof depends on) holds. Re-export the save from a working session if this recurs."
+    },
+    "MET-V964": {
+      "severity": "fatal",
+      "module": "ui.webconsole",
+      "message": "Sector {key} produced a non-integer jobs aggregate ({jobs}) while folding sectorIndexOf",
+      "remedy": "BUG-1020/BUG-1019: buildingJobsOf's integer-domain contract (AC-16/AC-17) was violated, so the sector fold's byte-identity claim against the whole-city walk no longer holds for this state -- the partitioned path refuses to ship a possibly-diverged total instead of returning a silently wrong number. Fix the upstream data (coerceBuildingJobsOverride should have caught a persisted value; a live mutation means a reducer wrote a non-integer)."
+    },
+    "MET-V965": {
+      "severity": "fatal",
+      "module": "ui.webconsole",
+      "message": "sectorKeyOf received an out-of-bounds or non-integer tile ({x}, {y})",
+      "remedy": "BUG-1023: sectorKeyOf's grid bucketing is only defined for integer tiles inside [0, MAP_W) x [0, MAP_H) -- an off-map or fractional origin would otherwise silently ALIAS into a legitimate neighbouring sector's aggregate (or a NaN/negative key untouched by any structural gate) instead of failing loudly. Fix the caller that produced the out-of-range building coordinate."
     }
   }
 }

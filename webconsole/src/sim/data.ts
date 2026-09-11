@@ -27,6 +27,24 @@ import { wellbeingCoreOf } from './engine.ts';
 // invoked at either module's eval time, so the live ESM binding resolves
 // safely.
 import { familyKeyOf } from './consolidator.ts';
+// FEAT-2326609764 inc1 (BUG-1019 fix, lead ruling 2026-09-11): totalJobs()'s
+// flag branch dispatches to totalJobsPartitioned (sectorPartition.ts's own
+// exported fold entry point, memoOnState-wrapped there exactly like
+// totalJobsWholeCity below), which itself imports memoOnState/buildingJobsOf/
+// isOnline/SPECS from data.ts — the SAME function-only (call-time) cyclic
+// import pattern as familyKeyOf/specUnlocked above: every one of those
+// data.ts exports sectorPartition.ts uses is either a plain function
+// declaration (hoisted, so live before this module finishes evaluating) or,
+// in SPECS's case, read only from inside a function BODY (never at either
+// module's top-level eval time), so the live ESM binding resolves safely
+// regardless of which module's import graph is walked first.
+// PARTITIONED_DERIVATIONS is default OFF (see that file), so this import
+// changes zero runtime behaviour today. Note this file no longer imports
+// sectorIndexOf/foldCityJobs directly — BUG-1019's fix moved the fold's own
+// integer-domain guard (MET-V964) inside totalJobsPartitioned so it applies
+// uniformly to every caller (the dispatch below AND the differential
+// harness), not just the flag-gated branch.
+import { PARTITIONED_DERIVATIONS, totalJobsPartitioned } from './sectorPartition.ts';
 // FEAT-159: DEBUG-ONLY per-class fast-build override (off by default).
 import { scaleConstructionTicks } from './debugBuildSpeed.ts';
 // FEAT-2326609711 inc1: fiscal.ts is a leaf module (imports only ./types.ts),
@@ -615,25 +633,67 @@ export function coerceBuildingCapacityTier(b: Record<string, unknown>, index: nu
 }
 
 /**
+ * BUG-1020 (FEAT-2326609764 inc1 round finding, GR#16 safeX idiom, GR#3
+ * SSOT, mirrors coerceBuildingCapacityTier immediately above): the ONE
+ * shared storage-boundary coercion for a building's `jobsOverride`. The
+ * round proved that `buildingJobsOf`'s doc comment claim "always an
+ * integer" — the property the whole fold-vs-walk byte-identity argument
+ * rests on (integer addition is exactly associative; float addition is
+ * not) — was completely unenforced: `jobsOverride` is a persisted field
+ * (types.ts) that no save boundary ever validated, so a hand-edited or
+ * corrupt save carrying e.g. `jobsOverride: 0.1` reached buildingJobsOf
+ * verbatim and made totalJobsWholeCity/totalJobsPartitioned disagree by a
+ * few ULPs of float-accumulation drift (measured: 4000 such buildings gave
+ * 400.00000000002245 vs 399.9999999999999 — see BUG-1020 and the round's
+ * pinned attack-feat764-round.test.mjs).
+ *
+ * Clamps a `typeof number` jobsOverride to a safe non-negative integer
+ * (`Math.trunc`, floored at 0 — a negative job count is nonsensical
+ * regardless of fractional-ness). A wrong-TYPE value or `undefined` is left
+ * untouched, exactly like coerceBuildingCapacityTier — rejecting a wrong
+ * type outright is gamesave.ts's rejectSave's job, not this coercion's.
+ *
+ * NEVER mutates `b` — same never-mutate-in-place contract as
+ * coerceBuildingCapacityTier, for the identical reason (round finding E1:
+ * a caller may hand in a building object that is ALSO referenced by the
+ * caller's own live SimState).
+ */
+export function coerceBuildingJobsOverride(b: Record<string, unknown>, index: number): Record<string, unknown> {
+  if (b.jobsOverride === undefined || typeof b.jobsOverride !== 'number') return b;
+  const raw = b.jobsOverride;
+  let coerced = Number.isFinite(raw) ? Math.trunc(raw) : 0;
+  if (coerced < 0) coerced = 0;
+  // NaN !== NaN, so a non-finite raw always reports here too.
+  if (coerced === raw) return b;
+  recordError(
+    `Building[${index}]${typeof b.spec === 'string' ? ` (${b.spec})` : ''} had a fractional/non-finite/negative jobsOverride (${String(raw)}) -- coerced to ${coerced}`,
+    { type: 'app', action: 'storageBoundary', code: 'MET-V963' },
+  );
+  return { ...b, jobsOverride: coerced };
+}
+
+/**
  * Coerce every building in a decoded snapshot's `buildings` array via
- * coerceBuildingCapacityTier -- the shared entry point every storage reader
- * (gamesave.ts, replay.ts, store.tsx) calls on its OWN freshly-decoded copy
- * (round F3: "operate on the decoded copy, never the caller's live object
- * graph"). NEVER mutates `buildings` -- returns the SAME array reference
- * when nothing changed (so a caller doing `snap.buildings =
- * coerceSnapshotBuildings(snap.buildings)` never manufactures needless
- * churn for an already-clean save/savepoint), or a brand NEW array when at
- * least one element needed coercion. A non-object array element (garbage
- * that a structural validator elsewhere will reject) is passed through
- * untouched -- this function's only job is the ONE known-shape field.
+ * coerceBuildingCapacityTier AND coerceBuildingJobsOverride (BUG-1020) --
+ * the shared entry point every storage reader (gamesave.ts, replay.ts,
+ * store.tsx) calls on its OWN freshly-decoded copy (round F3: "operate on
+ * the decoded copy, never the caller's live object graph"). NEVER mutates
+ * `buildings` -- returns the SAME array reference when nothing changed (so
+ * a caller doing `snap.buildings = coerceSnapshotBuildings(snap.buildings)`
+ * never manufactures needless churn for an already-clean save/savepoint),
+ * or a brand NEW array when at least one element needed coercion. A
+ * non-object array element (garbage that a structural validator elsewhere
+ * will reject) is passed through untouched -- this function's only job is
+ * the TWO known-shape fields.
  */
 export function coerceSnapshotBuildings<T>(buildings: readonly T[]): readonly T[] {
   let changed = false;
   const out = buildings.map((b, i) => {
     if (!b || typeof b !== 'object' || Array.isArray(b)) return b;
-    const coerced = coerceBuildingCapacityTier(b as Record<string, unknown>, i) as unknown as T;
+    let coerced = coerceBuildingCapacityTier(b as Record<string, unknown>, i);
+    coerced = coerceBuildingJobsOverride(coerced, i);
     if (coerced !== b) changed = true;
-    return coerced;
+    return coerced as unknown as T;
   });
   return changed ? out : buildings;
 }
@@ -4384,17 +4444,69 @@ export function stampTunnelFootprintGrandfather(state: SimState): SimState {
 // (hea_teaching/uni/station_ashford) keep jobs FLAT via jobsAtTier(), and a
 // grandfathered pre-epoch building's jobsOverride wins via effectiveJobsOf()
 // — see those functions' own doc comments above.
-export const totalJobs: (s: SimState) => number = memoOnState((s) => {
+/**
+ * FEAT-2326609764 inc1 (GR#3 SSOT): the per-building jobs quantity totalJobs()
+ * sums, extracted to its own named function so the whole-city walk below and
+ * sectorPartition.ts's per-sector fold call the EXACT SAME arithmetic — two
+ * independent re-derivations of "how many jobs does this building have" is
+ * exactly the drift class GR#3 exists to prevent, and it is also what makes
+ * AC-18's differential harness a proof of byte-identity rather than "close
+ * enough". A plain `function` declaration (not `const`) so it is HOISTED —
+ * safe to import from sectorPartition.ts under the cyclic-import pattern
+ * documented on this file's `sectorPartition.ts` import above, regardless of
+ * which module's top-level evaluates first.
+ *
+ * Always an integer (AC-16/AC-17): `effectiveJobsOf` returns either
+ * `jobsOverride` (an integer set by grandfathering) or `jobsAtTier`'s
+ * `capacityTiers[i]` / flat `sp.jobs` (both integers in the live catalogue),
+ * and the two bare fallbacks below (12/18) are integer literals.
+ */
+export function buildingJobsOf(sp: Spec, b: { jobsOverride?: number; capacityTier?: number }): number {
+  if (sp.jobs) return effectiveJobsOf(sp, b);
+  if (sp.kind === 'commercial') return 12;
+  if (sp.kind === 'industrial') return 18;
+  return 0;
+}
+
+/**
+ * BUG-1019 FIX (round opus-round-feat764-inc1 REJECT, lead ruling
+ * 2026-09-11): the pre-existing whole-city walk, now exported under its OWN
+ * name and memoOnState-wrapped directly (rather than living only as an
+ * anonymous else-branch closure inside totalJobs) so a caller — the AC-18
+ * differential harness AND the round's attack suite's independent oracle —
+ * can call the walk WITHOUT going through totalJobs()'s flag dispatch below.
+ * Before this fix, test/partition-differential.mjs's `whole` row called
+ * `totalJobs(s)` itself, so the moment PARTITIONED_DERIVATIONS flips ON
+ * (inc6, or any local A/B) the harness compared the fold against ITSELF —
+ * proven vacuous by the round with a `- 1` per-building mutant that stayed
+ * GREEN across the entire 200-city corpus with the flag forced true. The
+ * fix's other half is sectorPartition.ts's equally-named-and-shaped
+ * totalJobsPartitioned; see this file's `sectorPartition.ts` import comment
+ * above for why the cyclic import between the two files is safe.
+ */
+export const totalJobsWholeCity: (s: SimState) => number = memoOnState((s) => {
   let jobs = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (!sp) continue;
-    if (sp.jobs) jobs += effectiveJobsOf(sp, b);
-    else if (sp.kind === 'commercial') jobs += 12;
-    else if (sp.kind === 'industrial') jobs += 18;
+    jobs += buildingJobsOf(sp, b);
   }
   return jobs;
+});
+
+export const totalJobs: (s: SimState) => number = memoOnState((s) => {
+  // FEAT-2326609764 inc1: PARTITIONED_DERIVATIONS is default OFF, so this
+  // branch is dead in every shipped build today — the sector-fold path
+  // exists only for test/partition-differential.mjs (AC-18) to exercise
+  // and prove byte-identical to totalJobsWholeCity above. Flipping the
+  // flag on is inc6's job (docs/planning/acceptance/FEAT-2326609764.md
+  // §10), not this commit's. BUG-1019 fix: both totalJobs() (here) AND
+  // the differential harness now call the SAME two named, flag-INDEPENDENT
+  // functions (totalJobsWholeCity / totalJobsPartitioned) — neither branch
+  // of this dispatch is, itself, the harness's oracle.
+  if (PARTITIONED_DERIVATIONS) return totalJobsPartitioned(s);
+  return totalJobsWholeCity(s);
 });
 
 /**
