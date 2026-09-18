@@ -259,16 +259,19 @@ jobs:
           # directory' with traffic routed to the failed revision. Create only if
           # missing, then VERIFY - a share that still does not exist FAILS the step.
           if ! az storage share-rm exists \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
             --storage-account "${{ env.STORAGE_ACCOUNT }}" \
             --name "${{ env.FILE_SHARE_NAME }}" \
             --query exists -o tsv 2>/dev/null | grep -q true; then
             az storage share-rm create \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
               --storage-account "${{ env.STORAGE_ACCOUNT }}" \
               --name "${{ env.FILE_SHARE_NAME }}" \
               --quota 5 \
               --output none
           fi
           az storage share-rm show \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
             --storage-account "${{ env.STORAGE_ACCOUNT }}" \
             --name "${{ env.FILE_SHARE_NAME }}" \
             --output none
