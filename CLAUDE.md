@@ -215,6 +215,8 @@ When you compact the conversation, you **must**:
 2. Run `node claude-sync.js read` to check coordination state
 3. Inform the user you are caught up with the instructions
 
+**Compact deliberately, not by accident (2026-09-18):** run `/compact <what comes next>` at phase boundaries — after a landing is pushed and CI seen, before the next dispatch burst, after a failed approach or a debugging run — never mid-port or mid-implementation, so the summary lands on a checkpointed state rather than on half-edited files.
+
 **Mid-cycle recovery (session death during dev-team work):** read `docs/planning/checkpoint.md` (the RM-maintained heavy checkpoint), `node claude-bow.js list --by-seq` + the in-progress items' comments, and `git log -10`. Reconstruct the team board from the checkpoint, re-dispatch in-flight work with fresh agents (old agent transcripts are gone — the checkpoint is written to be self-sufficient), never redo committed work. Standing orders from Aaron live in the checkpoint's "Standing orders" section.
 
 ---
