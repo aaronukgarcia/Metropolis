@@ -115,7 +115,9 @@ bill> Memory hygiene scan — YYYY-MM-DD
      X actions recommended. Apply all? (y/N)
 ```
 
-Wait for user confirmation before executing. Apply via `mcp__vestige__demote_memory`, `mcp__vestige__delete_memory`, or `mcp__vestige__smart_ingest` depending on action type.
+Wait for user confirmation before executing. Apply via `mcp__vestige__memory` (`action: demote|purge|edit`), `mcp__vestige__suppress`, or `mcp__vestige__smart_ingest` depending on action type (the old `demote_memory` / `delete_memory` tool names are gone since v2.6.0).
+
+**Purge and suppress are review-gated (v2.6.0, BUG-1100, 2026-09-18).** From an MCP session both return `*_pending_review` and open a Memory PR; the mutation does NOT apply, and every retry mints another PR. No `forget` verb is exposed to MCP. Approve in the dashboard (`VESTIGE_DASHBOARD_ENABLED`, port 3927) or via the HTTP transport's `/api/memory-prs` (`--http`, port 3928, bearer `VESTIGE_AUTH_TOKEN`). After any purge, call `memory(action: state)` on the id and report DONE only when the node is gone; otherwise report the PR ids. The same gate can quarantine ordinary `smart_ingest` writes as "sensitive topic", so a save is only durable when its response shows no `held: true`.
 
 Do NOT auto-delete `node_type: pattern` or `node_type: decision` memories — those are project knowledge regardless of date. Only `node_type: fact` is a candidate for demote/delete.
 
