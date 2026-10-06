@@ -10,7 +10,7 @@ When Aaron types `update` (or `/update`), it means: **check whether anything nee
 1. **Your BOW items only** — statuses current (done work flipped with refs? verdicts recorded? decisions from your chat captured as comments)? New work you discovered in YOUR lane gets an item.
 2. **Your worktree** — on your `lane/<name>` branch; fresh vs origin/main (`git fetch origin main` + rebase your OWN branch); everything committed + pushed (no local-only commits).
 3. **Your acceptance docs** — if reality in your modules drifted from `docs/planning/acceptance/engine.<name>.md`, update THOSE files (they're in your lane) and note it.
-4. **Everything else you noticed stale** (CLAUDE.md, skills, hooks, code.json, other lanes, shared tooling) — **REPORT it to Aaron/the lead; do NOT edit it.** No CLAUDE.md/skills/hooks/master-plan/code.json edits, no auto-memory/Vestige writes (those are Claude-lead surfaces your CLI may not even have), no broad staging — exact paths only, as always.
+4. **Everything else you noticed stale** (CLAUDE.md, skills, hooks, code.json, other lanes, shared tooling, the forge registry) — **REPORT it to Aaron/the lead; do NOT edit it.** No CLAUDE.md/skills/hooks/master-plan/code.json edits, no auto-memory/Vestige writes (those are Claude-lead surfaces your CLI may not even have), no broad staging — exact paths only, as always.
 
 ## Checklist (LEAD-ONLY) — assess each, update only where stale
 
@@ -21,7 +21,13 @@ When Aaron types `update` (or `/update`), it means: **check whether anything nee
 5. **Auto-memory** (`~/.claude/projects/E--git-Metropolis/memory/`) — MEMORY.md index + per-fact files current? New durable facts/preferences from this session captured? Stale facts corrected?
 6. **Vestige** — `mcp__vestige__smart_ingest` the session's durable decisions/events; verify a recall query surfaces them; correct any wrongly-superseded memories.
 7. **Planning SSOT** — master-plan / code.json / bow-import in sync (`node tools/plan/generate.js --check` + regenerate if the plan changed); sprint-plan / dev-team-process / acceptance docs reflecting current reality.
-8. **Git** — everything above that changed gets committed (policy: `[type]: description [mkey]`, no trailers) and pushed, with verification.
+8. **Forge registry** (the cross-project memory — `node E:\GoogleDrive\Tools\new\forge.js`, run from that folder; **LEAD-ONLY** — coders report drift per the scoped rule above, never edit the registry):
+   1. **Rules that moved.** Any GGR rule Aaron refined this session: `node forge.js rule set <no> --summary "..." --note "why" --from metropolis` (bumps `GGR<no>v<version>`, keeps history). Then regenerate **and** mark: `node forge.js ggr --out E:\git\Metropolis\GGR.md` then `node forge.js ggr-mark metropolis`. The mark is mandatory — `ggr --out` only writes the file, and without `ggr-mark` the drift check lists every rule as drift forever (the 2026-10-05 fix). Never hand-edit GGR.md.
+   2. **Assets that moved.** If a forge-sourced hook/skill/script changed here, or a new one is worth sharing: confirm `metropolis` in `E:\GoogleDrive\Tools\new\harvest.json`, then `node forge.js harvest --only metropolis` (version bumps show in `node forge.js list --project metropolis`).
+   3. **Lessons.** A cross-project lesson → `harvest\lessons.json` + `node forge.js import lessons ...`, or straight to a rule via `rule set`.
+   4. **Drift check.** `node forge.js upgrade metropolis` — anything moved in the registry since assembly? Apply mechanical drift with Aaron's yes; any GGR-wording that disagrees with Metropolis's own statements goes to Aaron for a decision, never self-resolved.
+   5. `node forge.js backup`.
+9. **Git** — everything above that changed gets committed (policy: `[type]: description [mkey]`, no trailers, noreply author) and pushed the same session, with the push verified.
 
 ## Output
 
