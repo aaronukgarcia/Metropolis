@@ -266,7 +266,7 @@ async function evaluateTags(db, bow, tags, mySessionId, myRepoRoot) {
 
 function dbUnreachableMessage(err, tags) {
   return (
-    `🛑 GIT VERDICT GUARD (GR#23, BUG-340/BUG-336): metro MariaDB is unreachable ` +
+    `🛑 GIT VERDICT GUARD (GR#23, BUG-340/BUG-336): the project's BOW database is unreachable ` +
     `(${err.message}) — cannot verify Destructive verdict(s) for [${tags.join('], [')}]. Denying ` +
     `(fail-closed; a DB outage is not proof a verdict exists).\n\n` +
     `Fix the DB connection and retry, OR bypass deliberately (operator-only, set BEFORE the shell ` +

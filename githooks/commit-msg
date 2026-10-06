@@ -287,12 +287,24 @@ function fail(reason) {
  * of the two checks in this hook slot fired, rather than a generic "commit
  * rejected" that leaves them guessing between an identity problem and a
  * GR#22 content problem. */
+// FEAT-024 AC REVISION: the placeholder label used to be hardcoded to
+// Metropolis's own reference title ("Blue"), which made this hook's message
+// wrong for every OTHER project that installs it as a forge asset. Read from
+// CLAUDE_CODENAME_LABEL (set per project, e.g. in .claude/settings.json's
+// env block) with a neutral, project-agnostic fallback — the SCAN patterns
+// themselves (claude-codename-patterns.js) are unaffected; only this
+// message's wording is parameterised.
+function codenameLabel() {
+  return process.env.CLAUDE_CODENAME_LABEL || 'the project reference title';
+}
+
 function failCodename(reason) {
+  const label = codenameLabel();
   process.stderr.write(
     `\n🛑 COMMIT-MSG CODENAME CONTENT SCAN (FEAT-046, GR#22) — commit REJECTED:\n\n${reason}\n\n` +
-      `The reference title is 'Blue', and only 'Blue'. Its real name, its ` +
-      `abbreviations and its numbered form must never enter git as staged ` +
-      `content. Rewrite to say 'Blue' or "the reference title" and re-stage.\n\n` +
+      `${label} must never enter git as staged content — not its real name, its ` +
+      `abbreviations, or its numbered form. Rewrite to use the neutral placeholder ` +
+      `("${label}") instead and re-stage.\n\n` +
       `This check cannot be bypassed except by git's own native ` +
       `\`git commit --no-verify\` escape hatch — see this file's header, ` +
       `AC-10/AC-11 (disclosed, uncovered gaps — not this escape hatch).\n`

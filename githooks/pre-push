@@ -261,13 +261,20 @@ function denyMessage(gateName, output) {
   return (
     `\n🛑 PRE-PUSH GATE (GR#28 floor, BUG-340/BUG-336) — push to main REJECTED:\n\n` +
     `"${gateName}" failed:\n\n${output}\n\n` +
-    `This is a FAST FLOOR only (gofmt -l / go build / go vet) — it does NOT replace /ci-green ` +
-    `(golangci-lint at CI's pinned version + FULL go test + the webconsole node-test glob), which ` +
-    `remains mandatory before every push per GR#28. Fix the failure above and retry.\n\n` +
+    `This is a FAST FLOOR only (gofmt -l / go build / go vet) — it does NOT replace the project's ` +
+    `full CI check (lint, the full test suite and any other CI jobs), which remains mandatory ` +
+    `before every push. Fix the failure above and retry.\n\n` +
     `Emergency bypass (operator-only, set BEFORE the shell starts — never inline in the push ` +
     `command): ${BYPASS_ENV}=1\n`
   );
 }
+
+/** True when the repository root (`cwd`) has a go.mod — the floor only applies to Go modules. */
+function repoHasGoMod(cwd) {
+  return require('fs').existsSync(require('path').join(cwd || process.cwd(), 'go.mod'));
+}
+
+const NO_GO_MOD_INFO = 'pre-push floor: no go.mod at the repository root, Go checks skipped';
 
 /** Full check, factored out from the CLI entry for direct unit testing.
  * `cwd` defaults to process.cwd() in production; tests override it to point
@@ -275,7 +282,10 @@ function denyMessage(gateName, output) {
  * gofmt/build/vet implementations without invoking a real Go toolchain.
  * Returns { ok: true } or { ok: false, reason }. */
 function checkPush(stdinText, cwd, runners) {
-  const { gofmt = runGofmtCheck, build = runGoBuild, vet = runGoVet, listGoFiles = listTrackedGoFiles } = runners || {};
+  // hasGoMod: production (no runners) checks the real filesystem; tests that inject fake Go runners
+  // against a fake cwd default to a Go repo unless they inject hasGoMod themselves.
+  const { gofmt = runGofmtCheck, build = runGoBuild, vet = runGoVet, listGoFiles = listTrackedGoFiles,
+    hasGoMod = runners ? () => true : repoHasGoMod } = runners || {};
 
   if (process.env[BYPASS_ENV] === '1') {
     return { ok: true, bypassed: true };
@@ -303,6 +313,12 @@ function checkPush(stdinText, cwd, runners) {
   const pushedRefs = parsePushedRefs(stdinText);
   if (!touchesMainPush(pushedRefs)) {
     return { ok: true, skipped: true };
+  }
+
+  // FEAT-024 r2: a repository with no go.mod is not a Go module — the Go floor does not apply.
+  // Skip cleanly (allow, one info line) so the hook never blocks pushes in non-Go projects.
+  if (!hasGoMod(cwd)) {
+    return { ok: true, skipped: true, info: NO_GO_MOD_INFO };
   }
 
   let goFiles;
@@ -347,6 +363,8 @@ module.exports = {
   runGoBuild,
   runGoVet,
   denyMessage,
+  repoHasGoMod,
+  NO_GO_MOD_INFO,
   checkPush,
 };
 
@@ -367,7 +385,7 @@ if (require.main === module) {
   } catch (err) {
     process.stderr.write(
       `\n🛑 PRE-PUSH GATE internal error: ${err && err.message ? err.message : err}\n\n` +
-        `Failing closed deliberately (GR#28 is a CI-safety rule). Bypass only if you have checked ` +
+        `Failing closed deliberately (the push floor is a CI-safety check). Bypass only if you have checked ` +
         `by hand (operator-only, set BEFORE the shell starts): ${BYPASS_ENV}=1\n`
     );
     process.exitCode = 1;
@@ -377,6 +395,7 @@ if (require.main === module) {
     process.stderr.write(result.reason);
     process.exitCode = 1;
   } else {
+    if (result.info) process.stderr.write(`${result.info}\n`);
     process.exitCode = 0;
   }
 }
