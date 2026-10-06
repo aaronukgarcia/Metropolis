@@ -19,6 +19,7 @@
 //      (MET-V873), never silently truncated.
 //   6. Road connectivity reaches the new east edge.
 
+import '../testsupport/freeze-clock.mjs'; // anti-rot: pin now (see helper header)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 

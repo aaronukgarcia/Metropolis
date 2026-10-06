@@ -24,6 +24,7 @@
 // the corresponding fix is reverted — RED/GREEN pairs proved with a scratch
 // cp/mv of engine.ts/fiscal.ts, never a git revert (GR#24).
 
+import '../testsupport/freeze-clock.mjs'; // anti-rot: pin now (see helper header)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {

@@ -133,24 +133,30 @@ test('P0 lineage fix: persistSavepointWithReason returns an explicit RejectReaso
   const lineageA = mintLineageId();
   const lineageB = mintLineageId();
 
+  // Anchor `now` to the fixtures' era so the ~30-day AUTOSAVE_RETENTION_MS
+  // purge-on-write never fires against them. Without this, the fixed 2026-09-04
+  // dates rot: once the real clock passes the retention window the slots are
+  // purged and the "stale" write lands in an emptied slot (the 2026-10 CI red).
+  const NOW = new Date(2026, 8, 4, 12);
+
   // Fill ALL of lineage A's rotation slots so the NEXT write must go through
   // the overwrite-protection comparison rather than simply landing in an
   // empty slot.
   for (let slot = 0; slot < SAVEPOINT_CAP; slot++) {
     const highTickA = { ...initialState(), tick: 900_000 + slot, lineageId: lineageA };
-    assert.ok(persistSavepoint(storage, createSavepoint(highTickA, [], new Date(2026, 8, 4, 10, slot), 'v', null, 1)));
+    assert.ok(persistSavepoint(storage, createSavepoint(highTickA, [], new Date(2026, 8, 4, 10, slot), 'v', null, 1), NOW));
   }
 
   // Lineage B's low-tick, low-seq savepoint must land — it is never even
   // compared against lineage A's, because the slots are physically separate.
   const lowTickB = { ...initialState(), tick: 5, lineageId: lineageB };
-  const resultB = persistSavepointWithReason(storage, createSavepoint(lowTickB, [], new Date(2026, 8, 4, 10), 'v', null, 1));
+  const resultB = persistSavepointWithReason(storage, createSavepoint(lowTickB, [], new Date(2026, 8, 4, 10), 'v', null, 1), NOW);
   assert.equal(resultB.ok, true, 'a brand-new, low-tick lineage must never be refused because of an unrelated lineage occupying its own slots');
   assert.equal(resultB.reason, undefined);
 
   // A genuinely STALE re-write WITHIN the same lineage is still refused, with a reason.
   const staleA = { ...initialState(), tick: 1, lineageId: lineageA };
-  const staleResult = persistSavepointWithReason(storage, createSavepoint(staleA, [], new Date(2020, 0, 1), 'v', null, 1));
+  const staleResult = persistSavepointWithReason(storage, createSavepoint(staleA, [], new Date(2020, 0, 1), 'v', null, 1), NOW);
   assert.equal(staleResult.ok, false);
   assert.equal(staleResult.reason, 'stale-overwrite');
 });

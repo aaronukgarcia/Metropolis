@@ -12,6 +12,7 @@
 // 5. Consistency checking: before/after replay
 // 6. Storage failure handling: quota, private mode → graceful degradation
 
+import '../testsupport/freeze-clock.mjs'; // anti-rot: pin now (see helper header)
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {

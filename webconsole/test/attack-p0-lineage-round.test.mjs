@@ -1,3 +1,4 @@
+import '../testsupport/freeze-clock.mjs'; // anti-rot: pin now (see helper header)
 // attack-p0-lineage-round.test.mjs — INDEPENDENT DESTRUCTIVE ROUND (GR#23)
 // against the combined BUG-687 (P0) + FEAT-2326609780 lineage-identity estate.
 // Attacker is NOT the author.

@@ -18,6 +18,8 @@
 // controlled outcome, through the REAL production entry point
 // (`mirrorAfterPersist`).
 
+import '../testsupport/freeze-clock.mjs'; // anti-rot: pin now (see helper header)
+const FREEZE_IMPORT = new URL('../testsupport/freeze-clock.mjs', import.meta.url).href; // freeze mutant children too
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { runWithMutant, runBaselineProbe } from '../testsupport/mutant.mjs';
@@ -152,7 +154,7 @@ describe('BUG-704 re-round 2 (P3 items 2 + 3): store.tsx records an ACCURATE mes
     const baseline = runBaselineProbe({
       targetRelPath: 'sim/store.tsx',
       childBody: childBody(),
-      extraArgs: ['--import', 'tsx/esm'],
+      extraArgs: ['--import', 'tsx/esm', '--import', FREEZE_IMPORT],
       timeoutMs: 60000,
     });
     assert.match(baseline, /DONE/, `probe must complete: ${baseline}`);
@@ -164,7 +166,7 @@ describe('BUG-704 re-round 2 (P3 items 2 + 3): store.tsx records an ACCURATE mes
       targetRelPath: 'sim/store.tsx',
       mutate: (src) => mutateCallSite(src, `Promise.resolve({ ok: false, reason: 'storage-error', error: 'INJECTED-QUOTA-EXCEEDED' })`),
       childBody: childBody(),
-      extraArgs: ['--import', 'tsx/esm'],
+      extraArgs: ['--import', 'tsx/esm', '--import', FREEZE_IMPORT],
       timeoutMs: 60000,
     });
     assert.match(output, /DONE/, `probe must complete: ${output}`);
@@ -179,7 +181,7 @@ describe('BUG-704 re-round 2 (P3 items 2 + 3): store.tsx records an ACCURATE mes
       targetRelPath: 'sim/store.tsx',
       mutate: (src) => mutateCallSite(src, `Promise.resolve({ ok: false, reason: 'stale', error: 'refused: INJECTED-STALE-REFUSAL' })`),
       childBody: childBody(),
-      extraArgs: ['--import', 'tsx/esm'],
+      extraArgs: ['--import', 'tsx/esm', '--import', FREEZE_IMPORT],
       timeoutMs: 60000,
     });
     assert.match(output, /DONE/, `probe must complete: ${output}`);
@@ -193,7 +195,7 @@ describe('BUG-704 re-round 2 (P3 items 2 + 3): store.tsx records an ACCURATE mes
       targetRelPath: 'sim/store.tsx',
       mutate: (src) => mutateCallSite(src, `Promise.reject(new Error('INJECTED-REJECTION'))`),
       childBody: childBody(),
-      extraArgs: ['--import', 'tsx/esm'],
+      extraArgs: ['--import', 'tsx/esm', '--import', FREEZE_IMPORT],
       timeoutMs: 60000,
     });
     assert.match(output, /DONE/, `probe must complete: ${output}`);
@@ -209,7 +211,7 @@ describe('BUG-704 re-round 2 (P3 items 2 + 3): store.tsx records an ACCURATE mes
         return stripCatch(withInjectedRejection);
       },
       childBody: childBody(),
-      extraArgs: ['--import', 'tsx/esm'],
+      extraArgs: ['--import', 'tsx/esm', '--import', FREEZE_IMPORT],
       timeoutMs: 60000,
     });
     assert.match(

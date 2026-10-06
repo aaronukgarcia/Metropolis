@@ -17,6 +17,8 @@
 // mutates `localSavepointBaselines` to `return [];` and proves this test then
 // goes red — the wiring gap the round found, closed.
 
+import '../testsupport/freeze-clock.mjs'; // anti-rot: pin now (see helper header)
+const FREEZE_IMPORT = new URL('../testsupport/freeze-clock.mjs', import.meta.url).href; // freeze mutant children too
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { runWithMutant, runBaselineProbe } from '../testsupport/mutant.mjs';
@@ -94,7 +96,7 @@ describe('BUG-704 round REJECT (P1): the REAL store.tsx wiring (localSavepointBa
     const output = runBaselineProbe({
       targetRelPath: 'sim/store.tsx',
       childBody: PROBE_CHILD_BODY,
-      extraArgs: ['--import', 'tsx/esm'],
+      extraArgs: ['--import', 'tsx/esm', '--import', FREEZE_IMPORT],
       timeoutMs: 60000,
     });
     assert.doesNotMatch(output, /SETUP-BROKEN/, `probe setup must not be broken: ${output}`);
@@ -130,7 +132,7 @@ describe('BUG-704 round REJECT (P1): the REAL store.tsx wiring (localSavepointBa
         return before + ' return []; ' + after;
       },
       childBody: PROBE_CHILD_BODY,
-      extraArgs: ['--import', 'tsx/esm'],
+      extraArgs: ['--import', 'tsx/esm', '--import', FREEZE_IMPORT],
       timeoutMs: 60000,
     });
     assert.doesNotMatch(mutantOutput, /SETUP-BROKEN/, `mutant probe setup must not be broken: ${mutantOutput}`);

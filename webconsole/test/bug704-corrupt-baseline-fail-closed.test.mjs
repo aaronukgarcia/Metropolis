@@ -27,6 +27,8 @@
 //      (GR#17) — covers any other route corrupt bytes could reach the
 //      durable gate through, independent of fix #1.
 
+import '../testsupport/freeze-clock.mjs'; // anti-rot: pin now (see helper header)
+const FREEZE_IMPORT = new URL('../testsupport/freeze-clock.mjs', import.meta.url).href; // freeze mutant children too
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -102,11 +104,12 @@ describe('BUG-704 re-round 2 (P3 item 1): readSlot and the durable gate share ON
   });
 
   test('RED-PROOF: reverting the fail-closed guard reproduces the exact repro — the stale savepoint lands in the overflow slot unopposed', () => {
-    const baseline = runBaselineProbe({ targetRelPath: 'sim/saveStore.ts', childBody: PROBE_CHILD_BODY });
+    const baseline = runBaselineProbe({ extraArgs: ['--import', FREEZE_IMPORT], targetRelPath: 'sim/saveStore.ts', childBody: PROBE_CHILD_BODY });
     assert.doesNotMatch(baseline, /SETUP-BROKEN/, `probe setup must not be broken: ${baseline}`);
     assert.match(baseline, /PASSED-FAIL-CLOSED/, `baseline (unmutated) sanity: the fixed code must fail closed: ${baseline}`);
 
     const mutantOutput = runWithMutant({
+      extraArgs: ['--import', FREEZE_IMPORT],
       targetRelPath: 'sim/saveStore.ts',
       mutate: (src) => {
         const needle = 'if (providedExtras.length > 0 && unparsableExtras === providedExtras.length && newestExisting === null) {';

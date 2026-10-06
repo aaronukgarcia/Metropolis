@@ -1,3 +1,4 @@
+import '../testsupport/freeze-clock.mjs'; // anti-rot: pin now (see helper header)
 // attack-p0-lineage-round2.test.mjs — INDEPENDENT DESTRUCTIVE ROUND 2 against
 // the FIXES for round 1's F1..F4. Attacker is NOT the author.
 //

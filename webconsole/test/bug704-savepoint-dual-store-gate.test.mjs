@@ -26,6 +26,8 @@
 // disagree. Ordering itself is unchanged: saveSeq primary, tick+savedAt
 // fallback, exactly BUG-687's (lineageId, saveSeq) rule.
 
+import '../testsupport/freeze-clock.mjs'; // anti-rot: pin now (see helper header)
+const FREEZE_IMPORT = new URL('../testsupport/freeze-clock.mjs', import.meta.url).href; // freeze mutant children too
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -160,6 +162,7 @@ describe('BUG-704: guardedSavepointSetItem is a single ordering gate shared by l
 
   test('RED-PROOF: with the shared gate bypassed (extraExistingRaw ignored), the durable store accepts the stale write', () => {
     const baseline = runBaselineProbe({
+      extraArgs: ['--import', FREEZE_IMPORT],
       targetRelPath: 'sim/saveStore.ts',
       childBody: PROBE_CHILD_BODY,
     });
@@ -167,6 +170,7 @@ describe('BUG-704: guardedSavepointSetItem is a single ordering gate shared by l
     assert.doesNotMatch(baseline, /WRONGLY-ACCEPTED/, 'baseline (unmutated) sanity: the fixed code must refuse the stale write');
 
     const mutantOutput = runWithMutant({
+      extraArgs: ['--import', FREEZE_IMPORT],
       targetRelPath: 'sim/saveStore.ts',
       mutate: (src) => {
         const needle = 'for (const raw of providedExtras) {';
