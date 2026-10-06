@@ -54,7 +54,7 @@ Same protocol as Prix Six (Bill/Bob/Ben slots, 5-min TTL permits, wake recovery,
 
 `claude-startup.js` runs `node claude-sync.js checkin` automatically and prints your identity **plus the METROPOLIS STARTUP SUMMARY**: the Book of Work state (which doubles as the metro MariaDB health check — if the BOW summary printed, the DB answered), a Vestige availability check, and the git sync state (dirty files, ahead/behind origin).
 
-Your first response must confirm all of it — identity, hooks, BOW summary, Vestige (live `mcp__vestige__search` worked), and git sync:
+Your first response must confirm all of it — identity, hooks, BOW summary, Vestige (live `mcp__vestige__session_start` worked; recall is handle-based find-then-pull on 4.x Strata, GGR67), and git sync:
 
 ```
 bill> Good morning, I'm Bill on branch main. BOW: 3 open (1 P1). Vestige live. Git synced. No conflicts detected.

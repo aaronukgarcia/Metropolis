@@ -40,7 +40,7 @@ It is a **static** reminder: the script has no MCP access and deliberately does 
 
 ## Out of scope (stated, not silently absent)
 
-- Actually querying Vestige / returning recalled memory — this hook only *nudges*; the recall itself is the model's job via the `mcp__vestige__search` tool (and via `/commit`/`/deploy` GATE 0 for those flows). ASM-728 records that this is by design (the script has no MCP access), not an unfinished feature.
+- Actually querying Vestige / returning recalled memory — this hook only *nudges*; the recall itself is the model's job via find-then-pull (`harness/vestige-pointer.js find` → `mcp__vestige__recall { handle }`, GGR67; and via `/commit`/`/deploy` GATE 0 for those flows). ASM-728 records that this is by design (the script has no MCP access), not an unfinished feature. (The 4.x-removed `mcp__vestige__search` tool was the pre-GGR67 recall path here.)
 - De-duplicating or rate-limiting the reminder across prompts — the reminder is emitted on *every* prompt by design (the header calls it "short to minimise noise"); any suppression beyond `CLAUDE_DISABLE_MEMORY_REMINDER=1` is future work.
 - Editing the reminder copy to stay current with the `/commit`/`/deploy` skill internals — if those skills change their GATE 0 behaviour, this string is a second place that must be updated by hand (a mild GR#3 duplication, acknowledged here rather than silently ignored).
 
