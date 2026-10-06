@@ -4025,10 +4025,10 @@ function printVestigeCheck() {
     if (!entry) { console.log('Vestige: NOT CONFIGURED in ~/.claude.json — memory recall unavailable!'); return; }
     const exeOk = entry.command ? fs.existsSync(entry.command) : false;
     console.log(exeOk
-      ? `Vestige: configured, binary present (${path.basename(entry.command)}) — confirm live with mcp__vestige__search`
+      ? `Vestige: configured, binary present (${path.basename(entry.command)}) — confirm live with mcp__vestige__session_start (4.x Strata: recall is by handle, find-then-pull via harness/vestige-pointer.js; the old free-text search tool is gone)`
       : `Vestige: configured BUT binary missing at ${entry.command} — memory recall will fail!`);
   } catch (err) {
-    console.log(`Vestige: check failed (${err.message}) — verify manually with mcp__vestige__search`);
+    console.log(`Vestige: check failed (${err.message}) — verify manually with mcp__vestige__session_start`);
   }
 }
 

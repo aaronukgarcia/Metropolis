@@ -61,12 +61,13 @@ try {
   // The reminder. Kept short to minimise noise on every prompt.
   const reminder = prefixLine + [
     'GR#14 reminder — before composing commit messages, deploy commands, or',
-    'security-sensitive code, query Vestige (mcp__vestige__search) for project-',
-    'specific rules. The /commit and /deploy skills GATE 0 already handle this',
-    'for those flows; for ad-hoc requests, do it manually. Common queries:',
-    '  "metropolis commit style attribution"',
-    '  "metropolis deploy verification"',
-    '  "metropolis <feature-area> rule"',
+    'security-sensitive code, recall project rules from Vestige. On 4.x Strata',
+    'recall is by EXACT HANDLE (GGR67), so find-then-pull — the old free-text',
+    'search tool is gone and free-text recall returns similarity_disabled. The',
+    '/commit and /deploy skills GATE 0 already handle those flows; ad-hoc:',
+    '  1. node harness/vestige-pointer.js find "<intent>" --scope metropolis',
+    '  2. mcp__vestige__recall { handle: "<mem_id-or-exact-tag>" }   (from a hit)',
+    'Startup bulk recall: mcp__vestige__session_start.',
   ].join('\n');
 
   process.stdout.write(reminder);

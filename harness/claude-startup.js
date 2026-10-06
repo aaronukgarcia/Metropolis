@@ -250,10 +250,10 @@ function printSessionSummary(name, checkinOutput, committhookRepoRoot) {
 
   console.log(``);
   console.log(`MANDATORY STARTUP SEQUENCE — DO ALL OF THESE BEFORE YOUR FIRST RESPONSE:`);
-  console.log(`1. Use the mcp__vestige__search tool NOW with query "who am I, identity, session startup" to load memory.`);
+  console.log(`1. Load memory NOW: call mcp__vestige__session_start for startup context. For a specific recall, find-then-pull (GGR67, Vestige 4.x Strata): node harness/vestige-pointer.js find "<intent>" --scope metropolis, then mcp__vestige__recall { handle: "<mem_id-or-exact-tag>" }. (The old free-text search tool was removed in 4.x; free-text recall returns similarity_disabled.)`);
   console.log(`2. Read CLAUDE.md for full Golden Rules.`);
   console.log(`3. Run 'node claude-sync.js read' to check coordination state.`);
-  console.log(`4. Your first response to the user must confirm: identity, hooks status, the BOW summary above (metro DB health), Vestige status (live search worked), git sync state, and git identity status.`);
+  console.log(`4. Your first response to the user must confirm: identity, hooks status, the BOW summary above (metro DB health), Vestige status (session_start worked), git sync state, and git identity status.`);
   // FEAT-070 (AC-6): a fresh, non-stale standing /loop spec becomes step 5 of
   // the SAME mandatory numbered block — not a separate, skippable aside. The
   // exact spec text is relayed verbatim from claude-sync.js's own arm check

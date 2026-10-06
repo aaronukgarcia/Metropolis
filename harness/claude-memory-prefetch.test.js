@@ -19,7 +19,7 @@
  * Covers docs/planning/acceptance/tool.memoryprefetch.md:
  *   AC-9  (ASM-729) — this file existing at all closes the "RED by absence" gap.
  *   AC-10 — default run: reminder emitted, exit 0, three content substrings
- *           (GR#14, mcp__vestige__search, /commit) independently asserted.
+ *           (GR#14, the find-then-pull recall flow, /commit) independently asserted.
  *   AC-11 — disable path: CLAUDE_DISABLE_MEMORY_REMINDER=1 -> empty stdout, exit 0;
  *           a non-"1" value does NOT disable (strict === '1' comparison).
  *   AC-12 — staticness: source text has no require()/child_process/fetch/https
@@ -72,7 +72,9 @@ test('AC-10: default run (no disable flag) emits the reminder and exits 0', () =
 test('AC-10: reminder carries all three load-bearing substrings independently', () => {
   const r = runHook();
   assert.match(r.stdout, /GR#14/, 'must name the rule');
-  assert.match(r.stdout, /mcp__vestige__search/, 'must point at the exact MCP tool name');
+  assert.match(r.stdout, /vestige-pointer\.js find/, 'must point at the find-then-pull finder (step 1)');
+  assert.match(r.stdout, /mcp__vestige__recall/, 'must name the recall tool for the pull (step 2)');
+  assert.doesNotMatch(r.stdout, /mcp__vestige__search/, 'the 4.x-removed search tool must not be named (GGR67)');
   assert.match(r.stdout, /\/commit/, 'must state /commit already handles GATE 0');
 });
 
