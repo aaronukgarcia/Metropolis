@@ -11,6 +11,26 @@
 
 'use strict';
 
+// Anti-rot deterministic clock (BUG-1104): this suite inserts audit fixtures
+// dated 2026-09-04, and upsertAuditEntry inserts-then-prunes on a 31-day
+// RETENTION_DAYS window (server.js). Once real time passed 31 days the prune
+// wiped the fixtures and queryAuditEntries returned [] (node-test shard-3 red,
+// 2026-10-06). Pin now to 2026-09-07 (3 days after the fixtures, well inside
+// the window). This disables NO test — the fake store still runs the real
+// prune/query logic against the frozen clock; genuinely-old rows still prune.
+(() => {
+  const FIXED_MS = new Date(2026, 8, 7, 12, 0, 0).getTime();
+  const RealDate = Date;
+  globalThis.Date = class extends RealDate {
+    constructor(...args) {
+      super(...(args.length ? args : [FIXED_MS]));
+    }
+    static now() {
+      return FIXED_MS;
+    }
+  };
+})();
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
