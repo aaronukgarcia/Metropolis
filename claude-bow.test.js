@@ -1952,10 +1952,11 @@ test('BUG-061 AC: `redact` with no matching item exits non-zero with a clear mes
 test('BUG-151 AC-1: redact refuses an overflowing title redaction with a clear GR#22-still-present error, not a raw DB error, and writes nothing', async () => {
   const guid = await insertItem({ code: 'FEAT-9110' });
   // A 253-char title (within 15 of the 255 cap) containing the numbered-
-  // abbreviation phrase near the end. Its match ("CS2") is far shorter than
-  // the 16-char [REDACTED-GR22] marker, so redacting it grows the title
+  // abbreviation phrase near the end. Its match (the two-letter-plus-digit
+  // token) is far shorter than the 16-char [REDACTED-GR22] marker, so
+  // redacting it grows the title
   // past the column limit.
-  const phrase = buildNumberedAbbrevPhrase(); // "see the CS2 comparison doc"
+  const phrase = buildNumberedAbbrevPhrase(); // the numbered-abbreviation phrase
   const pad = 'a'.repeat(253 - phrase.length);
   const overlongTitle = pad + phrase;
   assert.equal(overlongTitle.length, 253, 'test setup: title must be 253 chars, within 15 of the 255 cap');
