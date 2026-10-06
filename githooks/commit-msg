@@ -210,8 +210,11 @@ const path = require('path');
  * only holds for one of the two cases. */
 function resolveIdentityModulePath() {
   const candidates = [
-    path.join(__dirname, '..', '..', 'claude-author-identity.js'), // installed
-    path.join(__dirname, '..', 'claude-author-identity.js'), // tracked source, required directly
+    // FEAT-2326609811 (repo-root tidy): the real modules moved to harness/.
+    path.join(__dirname, '..', '..', 'harness', 'claude-author-identity.js'), // installed, harness/
+    path.join(__dirname, '..', 'harness', 'claude-author-identity.js'), // tracked source, harness/
+    path.join(__dirname, '..', '..', 'claude-author-identity.js'), // legacy pre-tidy: installed at root
+    path.join(__dirname, '..', 'claude-author-identity.js'), // legacy pre-tidy: tracked source at root
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;
@@ -229,8 +232,11 @@ function resolveIdentityModulePath() {
  * unchanged. */
 function resolveCodenameScanModulePath() {
   const candidates = [
-    path.join(__dirname, '..', '..', 'claude-codename-content-scan.js'), // installed
-    path.join(__dirname, '..', 'claude-codename-content-scan.js'), // tracked source, required directly
+    // FEAT-2326609811 (repo-root tidy): the real modules moved to harness/.
+    path.join(__dirname, '..', '..', 'harness', 'claude-codename-content-scan.js'), // installed, harness/
+    path.join(__dirname, '..', 'harness', 'claude-codename-content-scan.js'), // tracked source, harness/
+    path.join(__dirname, '..', '..', 'claude-codename-content-scan.js'), // legacy pre-tidy: installed at root
+    path.join(__dirname, '..', 'claude-codename-content-scan.js'), // legacy pre-tidy: tracked source at root
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;

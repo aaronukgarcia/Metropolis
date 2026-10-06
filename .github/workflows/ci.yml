@@ -279,7 +279,7 @@ jobs:
       # suite), so an author/codename-guarded commit-msg hook sitting in
       # THIS repo's .git/hooks has nothing of this job's own to intercept.
       - name: Install git hooks (commit-msg identity + codename guard)
-        run: node claude-committhook-install.js install
+        run: node harness/claude-committhook-install.js install
 
       - name: npm ci
         run: npm ci

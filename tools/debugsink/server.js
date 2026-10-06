@@ -106,7 +106,7 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024; // 32MB
  */
 function defaultConnect() {
   // eslint-disable-next-line global-require
-  const { connect } = require(path.join('..', '..', 'claude-db.js'));
+  const { connect } = require(path.join('..', '..', 'harness', 'claude-db.js'));
   return connect();
 }
 

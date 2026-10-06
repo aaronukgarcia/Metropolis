@@ -27,58 +27,58 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-version-guard.js",
+            "command": "node harness/claude-version-guard.js",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "node claude-pre-commit-check.js",
+            "command": "node harness/claude-pre-commit-check.js",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node claude-plan-guard.js",
+            "command": "node harness/claude-plan-guard.js",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "node claude-secret-guard.js",
+            "command": "node harness/claude-secret-guard.js",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "node claude-bow-ref-check.js",
+            "command": "node harness/claude-bow-ref-check.js",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "node claude-pre-push-check.js",
+            "command": "node harness/claude-pre-push-check.js",
             "timeout": 6
           },
           {
             "type": "command",
-            "command": "node claude-codename-guard.js"
+            "command": "node harness/claude-codename-guard.js"
           },
           {
             "type": "command",
-            "command": "node claude-author-guard.js"
+            "command": "node harness/claude-author-guard.js"
           },
           {
             "type": "command",
-            "command": "node claude-destructive-guard.js"
+            "command": "node harness/claude-destructive-guard.js"
           },
           {
             "type": "command",
-            "command": "node claude-worktree-guard.js"
+            "command": "node harness/claude-worktree-guard.js"
           },
           {
             "type": "command",
-            "command": "node claude-checkin-pipe-guard.js",
+            "command": "node harness/claude-checkin-pipe-guard.js",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node claude-test-scope-guard.js",
+            "command": "node harness/claude-test-scope-guard.js",
             "timeout": 3
           }
         ]
@@ -88,58 +88,58 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-version-guard.js",
+            "command": "node harness/claude-version-guard.js",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "node claude-pre-commit-check.js",
+            "command": "node harness/claude-pre-commit-check.js",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node claude-plan-guard.js",
+            "command": "node harness/claude-plan-guard.js",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "node claude-secret-guard.js",
+            "command": "node harness/claude-secret-guard.js",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "node claude-bow-ref-check.js",
+            "command": "node harness/claude-bow-ref-check.js",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "node claude-pre-push-check.js",
+            "command": "node harness/claude-pre-push-check.js",
             "timeout": 6
           },
           {
             "type": "command",
-            "command": "node claude-codename-guard.js"
+            "command": "node harness/claude-codename-guard.js"
           },
           {
             "type": "command",
-            "command": "node claude-author-guard.js"
+            "command": "node harness/claude-author-guard.js"
           },
           {
             "type": "command",
-            "command": "node claude-destructive-guard.js"
+            "command": "node harness/claude-destructive-guard.js"
           },
           {
             "type": "command",
-            "command": "node claude-worktree-guard.js"
+            "command": "node harness/claude-worktree-guard.js"
           },
           {
             "type": "command",
-            "command": "node claude-checkin-pipe-guard.js",
+            "command": "node harness/claude-checkin-pipe-guard.js",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node claude-test-scope-guard.js",
+            "command": "node harness/claude-test-scope-guard.js",
             "timeout": 3
           }
         ]
@@ -149,7 +149,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-dispatch-guard.js"
+            "command": "node harness/claude-dispatch-guard.js"
           }
         ]
       },
@@ -158,7 +158,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-file-claim-guard.js",
+            "command": "node harness/claude-file-claim-guard.js",
             "timeout": 10
           }
         ]
@@ -169,7 +169,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-memory-prefetch.js",
+            "command": "node harness/claude-memory-prefetch.js",
             "timeout": 2
           }
         ]
@@ -180,7 +180,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-startup.js"
+            "command": "node harness/claude-startup.js"
           }
         ]
       }
@@ -200,7 +200,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-ping-check.js"
+            "command": "node harness/claude-ping-check.js"
           }
         ]
       },
@@ -209,17 +209,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-bow-autoref.js",
+            "command": "node harness/claude-bow-autoref.js",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "node claude-reflection.js",
+            "command": "node harness/claude-reflection.js",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node claude-push-ci-check.js",
+            "command": "node harness/claude-push-ci-check.js",
             "timeout": 3
           }
         ]
@@ -229,17 +229,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-bow-autoref.js",
+            "command": "node harness/claude-bow-autoref.js",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "node claude-reflection.js",
+            "command": "node harness/claude-reflection.js",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node claude-push-ci-check.js",
+            "command": "node harness/claude-push-ci-check.js",
             "timeout": 3
           }
         ]
@@ -249,7 +249,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-agent-stop.js",
+            "command": "node harness/claude-agent-stop.js",
             "timeout": 5
           }
         ]
@@ -260,7 +260,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node claude-agent-stop.js",
+            "command": "node harness/claude-agent-stop.js",
             "timeout": 5
           }
         ]
@@ -269,6 +269,6 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "node claude-statusline.js"
+    "command": "node harness/claude-statusline.js"
   }
 }

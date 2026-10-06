@@ -223,7 +223,7 @@ async function fetchRows(limit) {
   // Lazily required so `require('./backfill-rulings.js')` from a test
   // never needs mysql2/the DB to be present (buildReviewEntries etc. are
   // pure and directly testable against hand-built row fixtures).
-  const { connect } = require(path.join('..', '..', 'claude-db.js'));
+  const { connect } = require(path.join('..', '..', 'harness', 'claude-db.js'));
   const db = await connect({ connectTimeout: 8000 });
   try {
     const sql = `

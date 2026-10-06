@@ -23,7 +23,7 @@ const { spawnSync } = require('child_process');
 const mysql = require('mysql2/promise');
 
 const vg = require('./verdict-guard.js');
-const bow = require('../claude-bow.js');
+const bow = require('../harness/claude-bow.js');
 const { recordDestructiveVerdict } = bow;
 
 function connectDb() {

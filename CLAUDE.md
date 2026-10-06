@@ -139,7 +139,7 @@ A **deterministic city-simulation game in Go** with a tcell TUI: persistent indi
 
 ## Hooks (inherited from Prix Six)
 
-Configured in `.claude/settings.json`; scripts live in the project root:
+Configured in `.claude/settings.json`; the hook/CLI scripts live in **`harness/`** (FEAT-2326609811 repo-root tidy, 2026-10-06), with thin root `claude-bow.js` / `claude-sync.js` shims so documented `node claude-bow.js …` / `node claude-sync.js …` invocations keep working unchanged. The table below names each by basename; its settings.json command is `node harness/<name>`:
 
 | Hook | Script | Purpose |
 |------|--------|---------|

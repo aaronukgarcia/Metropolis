@@ -91,8 +91,14 @@ const BYPASS_ENV = 'CLAUDE_DISABLE_GIT_VERDICT_GUARD';
  * guessed. */
 function resolveSiblingModulePath(filename) {
   const candidates = [
-    path.join(__dirname, '..', filename), // tracked source, required from githooks/
-    path.join(__dirname, '..', '..', filename), // installed, required from .git/hooks/
+    // FEAT-2326609811 (repo-root tidy): the real claude-* modules now live in
+    // harness/. These MUST be tried FIRST — the repo root still has a thin
+    // claude-bow.js *shim* (CLI re-exec, no module exports), so a root-first
+    // search would load the shim and fail the module-shape check.
+    path.join(__dirname, '..', 'harness', filename), // tracked source, required from githooks/
+    path.join(__dirname, '..', '..', 'harness', filename), // installed, required from .git/hooks/
+    path.join(__dirname, '..', filename), // legacy pre-tidy: tracked source at repo root
+    path.join(__dirname, '..', '..', filename), // legacy pre-tidy: installed at repo root
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;
