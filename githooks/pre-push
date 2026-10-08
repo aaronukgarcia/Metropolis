@@ -15,7 +15,10 @@
  * test, the webconsole node-test glob) and remains the thing to run before
  * every push — but nothing MECHANICALLY enforced that before this file: a
  * session could simply forget. This hook is a FLOOR, not a replacement: a
- * fast, synchronous subset (gofmt -l, go build ./..., go vet ./...) that
+ * fast, synchronous subset (gofmt -l, go build, go vet — all over the
+ * git-TRACKED package set only; never `./...`, which would descend into the
+ * git-ignored per-session temp/ scratch GGR66 guarantees and red the floor
+ * on code that is not the project — BUG-1109) that
  * catches the cheapest, most common CI-red causes (a stray unformatted file,
  * a build break, an obvious vet finding) for free, at push time, for EVERY
  * tool that pushes (not just a Claude Code session that remembers to run
@@ -233,28 +236,86 @@ function runGofmtCheck(cwd, files) {
   return { ok: combined.length === 0, output: combined };
 }
 
-/** Runs `go build ./...` from `cwd`. Returns { ok, output } — output is
- * stdout+stderr on failure (go's build errors go to stderr), empty on
- * success. */
-function runGoBuild(cwd) {
-  try {
-    execFileSync('go', ['build', './...'], { cwd, encoding: 'utf8', timeout: GATE_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] });
-    return { ok: true, output: '' };
-  } catch (err) {
-    const out = [err.stdout, err.stderr].filter(Boolean).join('\n') || err.message;
-    return { ok: false, output: out };
+/** The `go`-ready RECURSIVE package patterns covering every TRACKED .go file:
+ * one `./<topdir>/...` per top-level directory that contains tracked Go code,
+ * plus `.` when a .go file is tracked at the repo root. Derived from
+ * listTrackedGoFiles' git-ls-files output, so git-ignored top-level trees are
+ * NEVER built or vetted.
+ *
+ * BUG-1109: the old `go build ./...` / `go vet ./...` descended into EVERY
+ * directory under the module root, .gitignore and all. GGR66 guarantees every
+ * checkout has a per-session top-level `temp/` (scratch worktrees, rescued
+ * code, housekeep backups) — a single broken/incomplete scratch package there
+ * (e.g. a rescued `cmd/metroserve` with no `main`) would red this floor and
+ * block EVERY push to main, for every tool, over code that is not even part of
+ * the project. CI never sees it (a clean checkout has no ignored/untracked
+ * .go), so the floor was stricter than CI in the one direction that only ever
+ * produces false denials.
+ *
+ * WHY TOP-LEVEL `/...` AND NOT EACH LEAF PACKAGE DIR: `go build ./...`
+ * silently SKIPS a directory whose Go files are all excluded by build
+ * constraints (e.g. a `//go:build ignore` codegen helper like
+ * internal/harness/replay/gen), but naming that package EXPLICITLY makes go
+ * error "build constraints exclude all Go files". Recursive `./<topdir>/...`
+ * patterns reproduce `./...`'s own skip-the-unbuildable behaviour exactly,
+ * while the top-level grouping is precisely what excludes the ignored
+ * `<root>/temp` tree. Patterns are normalised to forward slashes so `go`
+ * treats them as relative package patterns (never import paths) on every OS.
+ *
+ * KNOWN LIMITATION (fail-closed, never a false negative): the exclusion is
+ * top-level only. A broken git-IGNORED package NESTED under a tracked
+ * top-level dir (e.g. an ignored internal/scratch/ with an uncompilable .go)
+ * is still reached by `./internal/...`, because `go` does not consult
+ * .gitignore. That can only ever OVER-reject (block a push the project is
+ * fine), never let a real failure through — and it does not arise under a
+ * GGR66-compliant checkout, which funnels all per-session scratch to the
+ * single top-level `temp/` this function already excludes. */
+function trackedGoPackageDirs(files) {
+  const patterns = new Set();
+  for (const f of files) {
+    const norm = String(f).replace(/\\/g, '/').replace(/^\.\//, '');
+    const slash = norm.indexOf('/');
+    if (slash === -1) patterns.add('.');
+    else patterns.add(`./${norm.slice(0, slash)}/...`);
   }
+  return [...patterns];
 }
 
-/** Runs `go vet ./...` from `cwd`. Same shape as runGoBuild. */
-function runGoVet(cwd) {
-  try {
-    execFileSync('go', ['vet', './...'], { cwd, encoding: 'utf8', timeout: GATE_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] });
-    return { ok: true, output: '' };
-  } catch (err) {
-    const out = [err.stdout, err.stderr].filter(Boolean).join('\n') || err.message;
-    return { ok: false, output: out };
+/** Runs a go subcommand (`build`/`vet`) over an explicit package-pattern list
+ * in argv-safe CHUNKS (same Windows-argv reasoning as runGofmtCheck — the dir
+ * list is far shorter than the file list, but a large monorepo can still
+ * approach the limit). An empty list means "nothing tracked to check" →
+ * ok:true WITHOUT invoking go (mirrors runGofmtCheck's empty short-circuit);
+ * this never silently skips in production because checkPush always passes the
+ * real tracked-package set. A chunk that fails denies the whole gate
+ * (fail-closed), its combined stdout+stderr returned as output. */
+function runGoToolOverPackages(subcommand, cwd, pkgDirs) {
+  const pkgs = Array.isArray(pkgDirs) ? pkgDirs : [];
+  if (!pkgs.length) return { ok: true, output: '' };
+  const chunks = chunkFilesByArgvBytes(pkgs, GOFMT_ARGV_CHUNK_BYTES);
+  const problems = [];
+  for (const chunk of chunks) {
+    try {
+      execFileSync('go', [subcommand, ...chunk], { cwd, encoding: 'utf8', timeout: GATE_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      const out = [err.stdout, err.stderr].filter(Boolean).join('\n') || err.message;
+      problems.push(out);
+    }
   }
+  const combined = problems.join('\n');
+  return { ok: combined.length === 0, output: combined };
+}
+
+/** Runs `go build` over the TRACKED Go package set (see trackedGoPackageDirs —
+ * the git-ignored `temp/` exclusion that BUG-1109 is about). Returns
+ * { ok, output } — output is stdout+stderr on failure, empty on success. */
+function runGoBuild(cwd, pkgDirs) {
+  return runGoToolOverPackages('build', cwd, pkgDirs);
+}
+
+/** Runs `go vet` over the TRACKED Go package set. Same shape as runGoBuild. */
+function runGoVet(cwd, pkgDirs) {
+  return runGoToolOverPackages('vet', cwd, pkgDirs);
 }
 
 function denyMessage(gateName, output) {
@@ -336,14 +397,19 @@ function checkPush(stdinText, cwd, runners) {
     };
   }
 
-  const buildResult = build(cwd);
+  // BUG-1109: build/vet the TRACKED package set, never `./...` — see
+  // trackedGoPackageDirs for why (git-ignored temp/ scratch must not red the
+  // floor). goFiles is already the git-ls-files tracked list used by gofmt.
+  const pkgDirs = trackedGoPackageDirs(goFiles);
+
+  const buildResult = build(cwd, pkgDirs);
   if (!buildResult.ok) {
-    return { ok: false, reason: denyMessage('go build ./...', buildResult.output) };
+    return { ok: false, reason: denyMessage('go build (tracked packages)', buildResult.output) };
   }
 
-  const vetResult = vet(cwd);
+  const vetResult = vet(cwd, pkgDirs);
   if (!vetResult.ok) {
-    return { ok: false, reason: denyMessage('go vet ./...', vetResult.output) };
+    return { ok: false, reason: denyMessage('go vet (tracked packages)', vetResult.output) };
   }
 
   return { ok: true };
@@ -360,6 +426,8 @@ module.exports = {
   chunkFilesByArgvBytes,
   GOFMT_ARGV_CHUNK_BYTES,
   runGofmtCheck,
+  trackedGoPackageDirs,
+  runGoToolOverPackages,
   runGoBuild,
   runGoVet,
   denyMessage,

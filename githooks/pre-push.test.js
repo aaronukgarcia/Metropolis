@@ -211,6 +211,55 @@ test('listTrackedGoFiles(): returns tracked .go files from a real throwaway repo
 });
 
 // ---------------------------------------------------------------------------
+// trackedGoPackageDirs() + the tracked-package build/vet scoping (BUG-1109)
+// ---------------------------------------------------------------------------
+
+test('trackedGoPackageDirs(): one recursive ./<topdir>/... per tracked top-level dir, root .go as "."', () => {
+  const dirs = pp.trackedGoPackageDirs([
+    'main.go',
+    'internal/engine/world.go',
+    'internal/engine/world_test.go',
+    'internal/season/season.go',
+    'tools/plan/add-error.go',
+  ]);
+  // Deduped to top-level recursive patterns — internal/engine and
+  // internal/season both collapse to ./internal/... (same ./... skip-the-
+  // unbuildable semantics, which per-leaf-dir naming would have broken).
+  assert.deepEqual(dirs.sort(), ['.', './internal/...', './tools/...'].sort());
+});
+
+test('trackedGoPackageDirs(): normalises backslash paths (Windows git output) to forward-slash patterns', () => {
+  const dirs = pp.trackedGoPackageDirs(['internal\\engine\\world.go']);
+  assert.deepEqual(dirs, ['./internal/...']);
+});
+
+test('runGoToolOverPackages(): an empty package list is ok:true WITHOUT invoking go (no toolchain needed)', () => {
+  assert.deepEqual(pp.runGoToolOverPackages('build', '/fake/cwd', []), { ok: true, output: '' });
+  assert.deepEqual(pp.runGoToolOverPackages('vet', '/fake/cwd', undefined), { ok: true, output: '' });
+});
+
+test('BUG-1109 REGRESSION: a broken .go under a git-ignored temp/ never enters the tracked package set, so the floor cannot be red by it', () => {
+  withTempRepo((dir) => {
+    // A valid tracked package, plus a .gitignore'd temp/ holding a broken Go
+    // file (the exact shape that bricked pushes: an incomplete scratch pkg).
+    fs.writeFileSync(path.join(dir, 'main.go'), 'package main\n\nfunc main() {}\n', 'utf8');
+    fs.writeFileSync(path.join(dir, '.gitignore'), '/temp/\n', 'utf8');
+    fs.mkdirSync(path.join(dir, 'temp', 'broken', 'cmd', 'metroserve'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'temp', 'broken', 'cmd', 'metroserve', 'bad.go'),
+      'package main\n\n// deliberately no func main — would break `go build ./...`\n', 'utf8');
+    git(dir, ['add', '-A']);          // temp/ is ignored → not staged
+    git(dir, ['commit', '-m', 'seed']);
+
+    const tracked = pp.listTrackedGoFiles(dir);
+    assert.deepEqual(tracked, ['main.go'], 'the ignored temp/ .go must not be tracked');
+
+    const pkgs = pp.trackedGoPackageDirs(tracked);
+    assert.deepEqual(pkgs, ['.'], 'only the real root package — never ./temp/...');
+    assert.ok(!pkgs.some((p) => p.includes('temp')), 'no temp/ package may reach go build/vet');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // CLI entry — real subprocess, fake stdin, no real Go toolchain dependency
 // (a non-main push exits 0 without ever invoking go/gofmt)
 // ---------------------------------------------------------------------------
