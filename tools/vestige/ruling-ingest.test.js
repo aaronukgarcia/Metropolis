@@ -63,7 +63,13 @@ test('buildRulingPayload with supersedes carries explicit supersedesHint/topic/i
   assert.equal(payload.supersedesHint, 'MET-E021 swallow-and-continue ruling');
   assert.equal(typeof payload.topic, 'string');
   assert.ok(payload.topic.length > 0);
-  assert.match(payload.supersedeInstruction, /mcp__vestige__recall/);
+  // GGR67 / Vestige 4.x Strata: the instruction must drive find-then-pull,
+  // never the removed free-text recall. Step 1 FIND via the pointer finder,
+  // step 2 PULL via recall-by-handle.
+  assert.match(payload.supersedeInstruction, /vestige-pointer\.js find/);
+  assert.match(payload.supersedeInstruction, /mcp__vestige__recall \{ handle:/);
+  assert.doesNotMatch(payload.supersedeInstruction, /mcp__vestige__search/);
+  assert.doesNotMatch(payload.supersedeInstruction, /plain topic search/);
   assert.match(payload.supersedeInstruction, /validUntil to "2026-09-01"/);
   assert.match(payload.supersedeInstruction, /forceCreate/);
   // The instruction never assumes an unconfirmed update API is the only

@@ -29,9 +29,12 @@
  * update/supersede call. Rather than assume an unconfirmed API, when
  * `supersedes` is given the payload carries EXPLICIT, self-describing
  * fields (`supersedesHint`, `topic`, `supersedeInstruction`) so the
- * RECORDING SESSION — which does hold live MCP tools — can `recall` the
- * prior node by topic, and then either update its `validUntil` (if
- * `mcp__vestige__memory` exposes an update path) or delete + forceCreate
+ * RECORDING SESSION — which does hold live MCP tools — can locate the
+ * prior node by FIND-THEN-PULL (GGR67, Vestige 4.x Strata: find a handle
+ * with `harness/vestige-pointer.js find`, then `mcp__vestige__recall` by
+ * that exact handle — the old free-text recall was removed in 4.x and now
+ * returns `similarity_disabled`), and then either update its `validUntil`
+ * (if `mcp__vestige__memory` exposes an update path) or delete + forceCreate
  * per the 2026-08-02 storage policy ("corrections need delete + forceCreate
  * because smart_ingest reinforces near-duplicates >= ~0.96"). This module
  * never calls an MCP tool itself and never assumes one beyond
@@ -43,7 +46,8 @@
  *     sim/project STATE never goes into Vestige from here);
  *   - exactly one canonical project tag, `metropolis`;
  *   - every payload also carries `aaron-ruling` + the mkey/item-code, so a
- *     later `recall mode=contradictions topic=<x>` can filter precisely.
+ *     later find-then-pull (`vestige-pointer.js find` on the topic, scoped
+ *     to these tags) can locate the node precisely.
  *
  * Pure module: requiring this file has NO side effects (no file writes, no
  * network, no DB, no process.exit at module scope). The CLI wrapper (if
@@ -164,13 +168,16 @@ function buildRulingPayload(fields) {
     payload.supersedesHint = f.supersedes.trim();
     payload.topic = topic;
     payload.supersedeInstruction =
-      `Before ingesting this node, run mcp__vestige__recall (mode=contradictions or a plain ` +
-      `topic search) for topic "${topic}" to locate the prior decision node described by ` +
-      `supersedesHint. If found, set its validUntil to "${date}" via mcp__vestige__memory's ` +
-      `update path if one exists; otherwise delete it and forceCreate this node instead of a ` +
-      `plain smart_ingest call, per the 2026-08-02 storage policy (smart_ingest reinforces ` +
-      `near-duplicates >= ~0.96 instead of correcting them). Then ingest THIS payload as a new ` +
-      `decision node regardless of whether the old node was found.`;
+      `Before ingesting this node, locate the prior decision node described by supersedesHint ` +
+      `via find-then-pull (GGR67, Vestige 4.x Strata): (1) FIND it — ` +
+      `node harness/vestige-pointer.js find "${topic}" --scope metropolis — to get a pointer ` +
+      `hit (mem_id / exact tag); (2) PULL it to confirm — ` +
+      `mcp__vestige__recall { handle: "<mem_id-or-exact-tag>" }. If found, set its validUntil ` +
+      `to "${date}" via mcp__vestige__memory's update path if one exists; otherwise delete it ` +
+      `and forceCreate this node instead of a plain smart_ingest call, per the 2026-08-02 ` +
+      `storage policy (smart_ingest reinforces near-duplicates >= ~0.96 instead of correcting ` +
+      `them). Then ingest THIS payload as a new decision node regardless of whether the old ` +
+      `node was found.`;
   }
 
   return payload;
