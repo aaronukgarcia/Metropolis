@@ -242,34 +242,35 @@ function runGofmtCheck(cwd, files) {
  * listTrackedGoFiles' git-ls-files output, so git-ignored top-level trees are
  * NEVER built or vetted.
  *
- * BUG-1109: the old `go build ./...` / `go vet ./...` descended into EVERY
- * directory under the module root, .gitignore and all. GGR66 guarantees every
- * checkout has a per-session top-level `temp/` (scratch worktrees, rescued
- * code, housekeep backups) — a single broken/incomplete scratch package there
- * (e.g. a rescued `cmd/metroserve` with no `main`) would red this floor and
- * block EVERY push to main, for every tool, over code that is not even part of
- * the project. CI never sees it (a clean checkout has no ignored/untracked
- * .go), so the floor was stricter than CI in the one direction that only ever
- * produces false denials.
+ * WHY TRACKED-ONLY: the obvious `go build ./...` / `go vet ./...` descends
+ * into EVERY directory under the module root, .gitignore and all. A project
+ * that keeps a git-ignored top-level scratch dir (e.g. `temp/` for
+ * per-session work — scratch worktrees, rescued code, backups) can hold a
+ * broken/incomplete package there (say a scratch `cmd/` package with no
+ * `main`); `./...` would compile it, red this floor, and block EVERY push to
+ * main, for every tool, over code that is not even part of the project. CI
+ * never sees it (a clean checkout has no ignored/untracked .go), so `./...`
+ * is stricter than CI in the one direction that only ever produces false
+ * denials. Building just the tracked set keeps the floor in step with CI.
  *
  * WHY TOP-LEVEL `/...` AND NOT EACH LEAF PACKAGE DIR: `go build ./...`
  * silently SKIPS a directory whose Go files are all excluded by build
- * constraints (e.g. a `//go:build ignore` codegen helper like
- * internal/harness/replay/gen), but naming that package EXPLICITLY makes go
- * error "build constraints exclude all Go files". Recursive `./<topdir>/...`
- * patterns reproduce `./...`'s own skip-the-unbuildable behaviour exactly,
- * while the top-level grouping is precisely what excludes the ignored
- * `<root>/temp` tree. Patterns are normalised to forward slashes so `go`
- * treats them as relative package patterns (never import paths) on every OS.
+ * constraints (e.g. a `//go:build`-gated codegen helper package), but naming
+ * that package EXPLICITLY makes go error "build constraints exclude all Go
+ * files". Recursive `./<topdir>/...` patterns reproduce `./...`'s own
+ * skip-the-unbuildable behaviour exactly, while the top-level grouping is
+ * precisely what excludes an ignored top-level scratch tree. Patterns are
+ * normalised to forward slashes so `go` treats them as relative package
+ * patterns (never import paths) on every OS.
  *
  * KNOWN LIMITATION (fail-closed, never a false negative): the exclusion is
  * top-level only. A broken git-IGNORED package NESTED under a tracked
- * top-level dir (e.g. an ignored internal/scratch/ with an uncompilable .go)
- * is still reached by `./internal/...`, because `go` does not consult
+ * top-level dir (an ignored scratch dir several levels down) is still reached
+ * by that dir's `./<topdir>/...` pattern, because `go` does not consult
  * .gitignore. That can only ever OVER-reject (block a push the project is
- * fine), never let a real failure through — and it does not arise under a
- * GGR66-compliant checkout, which funnels all per-session scratch to the
- * single top-level `temp/` this function already excludes. */
+ * fine), never let a real failure through — and it does not arise in a layout
+ * that funnels all per-session scratch to a single git-ignored top-level dir,
+ * which is exactly what this function excludes. */
 function trackedGoPackageDirs(files) {
   const patterns = new Set();
   for (const f of files) {
@@ -307,8 +308,8 @@ function runGoToolOverPackages(subcommand, cwd, pkgDirs) {
 }
 
 /** Runs `go build` over the TRACKED Go package set (see trackedGoPackageDirs —
- * the git-ignored `temp/` exclusion that BUG-1109 is about). Returns
- * { ok, output } — output is stdout+stderr on failure, empty on success. */
+ * the git-ignored top-level scratch exclusion). Returns { ok, output } —
+ * output is stdout+stderr on failure, empty on success. */
 function runGoBuild(cwd, pkgDirs) {
   return runGoToolOverPackages('build', cwd, pkgDirs);
 }
