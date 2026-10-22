@@ -234,3 +234,13 @@ test('no remaining "Bob" literal in claude-startup.js source outside historical/
     .filter(({ line }) => !/^\s*\/\//.test(line.trim()) && !/^\s*\*/.test(line.trim()));
   assert.deepEqual(offendingLines, [], `unexpected non-comment "bob" literal(s): ${JSON.stringify(offendingLines)}`);
 });
+
+test('slotOfIdentity: <Project>-<Name> resolves to the slot; a bare or odd name passes through (Metro-Bev checkin failure, 2026-10-22)', () => {
+  const { slotOfIdentity } = require('./claude-sync.js');
+  assert.equal(slotOfIdentity('Metro-Bev'), 'Bev');
+  assert.equal(slotOfIdentity('Prix6-Bill'), 'Bill');
+  assert.equal(slotOfIdentity('Bev'), 'Bev');
+  assert.equal(slotOfIdentity(''), null);
+  assert.equal(slotOfIdentity(undefined), null);
+  assert.equal(slotOfIdentity('Bob-X-Y'), 'Bob-X-Y');
+});

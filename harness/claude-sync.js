@@ -119,6 +119,17 @@ const crypto = require('crypto');
 const { connectCLI } = require('./claude-db.js');
 
 const NAMES = ['Bill', 'Ben', 'Bev', 'Bro'];
+
+/**
+ * The launcher sets CLAUDE_IDENTITY to `<Project>-<Name>` (forge IDENTITY.md,
+ * 2026-10-20), e.g. `Metro-Bev`; the slot is the part after the hyphen. A bare
+ * slot name passes through unchanged. Applied to the AMBIENT identity only: an
+ * explicit `--name` stays strict so a typo still fails loudly.
+ */
+function slotOfIdentity(identity) {
+  const m = /^[A-Za-z0-9]+-([A-Za-z0-9]+)$/.exec(String(identity || ''));
+  return m ? m[1] : (identity || null);
+}
 // Bro added 2026-08-20 (Aaron-directed): fourth worker slot. Seeded into
 // sync_permits on the next checkin like every NAMES entry (seedSlots).
 // Bob was retired permanently (Aaron, 2026-08-18) but the slot row/history
@@ -898,7 +909,7 @@ async function cmdCheckin(db) {
   // CLAUDE_IDENTITY env (metro.bat's preference) is NOT authoritative — it
   // only guides a FRESH acquisition, never forces an identity swap.
   const requested = flags.name || null;
-  const envPref = (!flags.any && process.env.CLAUDE_IDENTITY) || null;
+  const envPref = (!flags.any && slotOfIdentity(process.env.CLAUDE_IDENTITY)) || null;
   const preferred = requested || envPref || null;
 
   // Validate an explicit --name up front so a bad instruction fails loudly
@@ -1208,9 +1219,9 @@ async function cmdCheckin(db) {
   // retired name in that env must still fail closed with the RETIRED
   // rejection — not silently land on the next live slot. isRetired is
   // otherwise only consulted when !flags.any (envPref / --name).
-  if (!preferred && process.env.CLAUDE_IDENTITY && isRetired(process.env.CLAUDE_IDENTITY)) {
+  if (!preferred && process.env.CLAUDE_IDENTITY && isRetired(slotOfIdentity(process.env.CLAUDE_IDENTITY))) {
     await db.rollback();
-    console.error(retiredMessage(process.env.CLAUDE_IDENTITY));
+    console.error(retiredMessage(slotOfIdentity(process.env.CLAUDE_IDENTITY)));
     process.exit(1);
   }
 
@@ -2018,7 +2029,7 @@ async function runCli() {
 }
 
 module.exports = {
-  NAMES, RETIRED, PARKED, isRetired, isParked, isUnusable, retiredMessage, parkedMessage,
+  NAMES, slotOfIdentity, RETIRED, PARKED, isRetired, isParked, isUnusable, retiredMessage, parkedMessage,
   unusableMessage, liveNames,
   connect, ensureSchema, findMine, findMineBySessionSecret, slotState, deliverUnread, printUnread,
   sessionKeyPath, readSessionKey,

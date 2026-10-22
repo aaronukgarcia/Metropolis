@@ -30,7 +30,7 @@ const identity = require('./claude-author-identity.js');
 // would have treated a Bro-assigned startup checkin as a failure. claude-sync
 // only loads mysql2/claude-db at require time (no DB connection until a
 // command runs), so this is cheap and stops the two files from drifting.
-const { NAMES, isUnusable, readSessionKey } = require('./claude-sync.js');
+const { NAMES, isUnusable, readSessionKey, slotOfIdentity } = require('./claude-sync.js');
 const VALID_NAMES = NAMES.map(n => n.toLowerCase());
 // Live (occupiable) slot names, capitalised — parked/retired excluded — for
 // the all-full and fallback messaging, so Ben (PARKED) and Bob (RETIRED) never
@@ -366,7 +366,8 @@ function handleAllFull(stderr) {
 
 function runStartup() {
 
-const requestedIdentity = process.env.CLAUDE_IDENTITY || null;
+// CLAUDE_IDENTITY is `<Project>-<Name>` since the forge launcher template; the slot is the <Name> part.
+const requestedIdentity = slotOfIdentity(process.env.CLAUDE_IDENTITY);
 
 if (requestedIdentity) {
   // Step 1: Try to claim the specifically-requested identity

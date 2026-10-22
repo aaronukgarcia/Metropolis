@@ -2120,3 +2120,81 @@ test('BUG-356 (false-positive tightening): checkin-dashboard spec does NOT false
   assert.match(msgRes.stdout, /Message sent to Bill/);
   assert.doesNotMatch(msgRes.stdout, /⚠ WARNING/, 'checkin-dashboard skill should NOT trigger the warning (no false positive)');
 });
+
+// ─── BUG-1114 r1 attacker tests: the CALL SITES of slotOfIdentity ────────────
+// The helper-only test in claude-startup.test.js stays green when any of the
+// three call sites (claude-sync envPref, the BUG-344 --any retired check,
+// claude-startup's requestedIdentity) is reverted to the raw env value —
+// proven by mutation in round r1. These drive the real CLIs against this
+// suite's throwaway TEST_DB so each wiring is pinned.
+function runWithIdentity(args, sessionId, identity) {
+  // acquire() writes a per-window .identity-<sid> marker into the checkout's
+  // .claude dir; remove it so this block leaves no marker behind.
+  const marker = path.join(ROOT, '.claude', `.identity-${sessionId}`);
+  try {
+    return runWithIdentityRaw(args, sessionId, identity);
+  } finally {
+    try { fs.unlinkSync(marker); } catch { /* absent */ }
+  }
+}
+
+function runWithIdentityRaw(args, sessionId, identity) {
+  return spawnSync(process.execPath, ['claude-sync.js', ...args], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD,
+      METRO_DB_NAME: TEST_DB,
+      CLAUDE_CODE_SESSION_ID: sessionId,
+      CLAUDE_SESSION_ID: '',
+      CLAUDE_IDENTITY: identity,
+    },
+  });
+}
+
+test('BUG-1114 call site (envPref): plain checkin with CLAUDE_IDENTITY=Metro-Bro lands on Bro, not "Unknown slot name"', () => {
+  const res = runWithIdentity(['checkin'], 'bug1114-envpref', 'Metro-Bro');
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /YOU ARE:\s*Bro\b/);
+});
+
+test('BUG-1114 call site (envPref, retired): CLAUDE_IDENTITY=Metro-Bob is the RETIRED rejection, not "Unknown slot name"', () => {
+  const res = runWithIdentity(['checkin'], 'bug1114-envpref-bob', 'Metro-Bob');
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /Bob is retired \(Aaron, 2026-08-18\)/);
+});
+
+test('BUG-1114 call site (BUG-344 --any): CLAUDE_IDENTITY=Metro-Bob with --any is still the RETIRED rejection, never a live slot', async () => {
+  const res = runWithIdentity(['checkin', '--any'], 'bug1114-any-bob', 'Metro-Bob');
+  assert.notEqual(res.status, 0, '--any must not skip the retired-name rejection for a <Project>-Bob identity');
+  assert.match(res.stderr, /Bob is retired \(Aaron, 2026-08-18\)/);
+  assert.doesNotMatch(res.stdout, /YOU ARE:/);
+  const [rows] = await db.query('SELECT window_id FROM sync_permits WHERE window_id=?', ['bug1114-any-bob']);
+  assert.equal(rows.length, 0);
+});
+
+test('BUG-1114 call site (claude-startup requestedIdentity): the SessionStart hook with CLAUDE_IDENTITY=Metro-Bro claims Bro', () => {
+  const sid = 'bug1114-startup';
+  const marker = path.join(ROOT, '.claude', `.identity-${sid}`);
+  try {
+    const res = spawnSync(process.execPath, [path.join(__dirname, 'claude-startup.js')], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: 90000,
+      input: JSON.stringify({ session_id: sid }),
+      env: {
+        ...process.env,
+        METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD,
+        METRO_DB_NAME: TEST_DB,
+        CLAUDE_CODE_SESSION_ID: sid,
+        CLAUDE_SESSION_ID: '',
+        CLAUDE_IDENTITY: 'Metro-Bro',
+      },
+    });
+    assert.match(res.stdout, /IDENTITY: bro>/i, res.stdout + res.stderr);
+    assert.doesNotMatch(res.stdout + res.stderr, /Unknown slot name/);
+  } finally {
+    try { fs.unlinkSync(marker); } catch { /* absent */ }
+  }
+});
