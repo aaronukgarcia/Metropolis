@@ -209,6 +209,15 @@ test('checkStagedCommit(): a code-bearing staged set with NO tag is denied (PROV
   });
 });
 
+test('SAFE-338/448: a non-ASCII filename under internal/ (git core.quotepath default: true) is still denied with NO tag', async () => {
+  await withTempRepo(async (dir) => {
+    stageFile(dir, 'internal/café.go', 'package foo\n');
+    const result = await runCheck(dir, 'fix: something with no tag');
+    assert.equal(result.ok, false, 'a quote-wrapped non-ASCII staged name must not defeat the enforced-dir check shared with claude-destructive-guard.js');
+    assert.match(result.reason, /BOW tag/i);
+  });
+});
+
 test('checkStagedCommit(): an unresolvable tag on a code-bearing commit is denied and named', async () => {
   await withTempRepo(async (dir) => {
     stageFile(dir, 'internal/foo.go', 'package foo\n');

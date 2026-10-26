@@ -1658,6 +1658,26 @@ test('BUG-332 (6) CONTROL: the same four bypass spellings with a real BOW code c
   }
 });
 
+test('SAFE-338/448: a non-ASCII filename staged under harness/ (git core.quotepath default: true) is DENIED, not silently exempt', () => {
+  // Reproduces the SAFE-338 finding: with core.quotepath=true (git's default), a staged
+  // name with a non-ASCII character is reported by `--name-only` wrapped in a leading
+  // double quote with octal escapes. Before the -z fix, that leading quote defeated
+  // ENFORCED_DIR_RE/isGuardOrHookPath (the quote, not "harness", is the first character),
+  // so a harness/ source file with an accented name could commit with zero verdict.
+  withTempRepo((dir) => {
+    stageFile(dir, 'harness/café.js', 'module.exports = {};\n');
+    const r = runGuard(dir, 'git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'a quote-wrapped non-ASCII staged name must not defeat the enforced-dir check');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('SAFE-338/448 unit: isEnforcedDirPath fails closed on a still-quoted name (core.quotepath leak from any future caller)', () => {
+  assert.equal(isEnforcedDirPath('"harness/caf\\303\\251.js"'), true, 'a leading quote is treated as code-bearing, not parsed as a literal filename');
+  assert.equal(isEnforcedDirPath('harness/plain.js'), true, 'the ordinary case is unaffected');
+  assert.equal(isEnforcedDirPath('docs/notes.md'), false);
+});
+
 test('BUG-332 (7) CONTROL: a genuinely non-code-bearing docs/ path with a leading ./ is still silently ALLOWED (no over-block)', () => {
   withTempRepo((dir) => {
     fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });

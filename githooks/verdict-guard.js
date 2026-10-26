@@ -201,8 +201,11 @@ function loadDependencies() {
 // (delete + add) as two separate entries, so the deleted code-bearing path
 // is classified on its own merits.
 function getStagedFiles(dg, cwd) {
-  const raw = execFileSync('git', ['diff', '--cached', '--no-renames', '--name-only'], { cwd, encoding: 'utf8' });
-  return raw.split('\n').map((f) => f.trim()).filter(Boolean).map(dg.normalizeGitPath);
+  // SAFE-338/448: -c core.quotepath=false -z (NUL-terminated, never quoted) closes the same
+  // non-ASCII bypass fixed in claude-destructive-guard.js's own staged-file reads - a quoted,
+  // octal-escaped name otherwise defeats dg.isEnforcedDirPath/isGuardOrHookPath downstream.
+  const raw = execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--cached', '--no-renames', '--name-only', '-z'], { cwd, encoding: 'utf8' });
+  return raw.split('\0').map((f) => f.trim()).filter(Boolean).map(dg.normalizeGitPath);
 }
 
 /** True when `files` (already normalised) touch an enforced directory, a

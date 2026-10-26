@@ -702,7 +702,12 @@ function deriveRootGuardScripts() {
  * forward or back slashes) sits under an enforced directory prefix. Never
  * needs settings.json — see isRootLevel() for the half that does. */
 function isEnforcedDirPath(filePath) {
-  return ENFORCED_DIR_RE.test(filePath.replace(/\\/g, '/'));
+  const p = filePath.replace(/\\/g, '/');
+  // SAFE-338/448: a name that still arrives quote-wrapped (a core.quotepath leak the -z
+  // reads above should now prevent, or any future staged-name source that forgets -z) is
+  // fail-closed code-bearing - its real decoded path is unknown, so it is never exempt.
+  if (p.startsWith('"')) return true;
+  return ENFORCED_DIR_RE.test(p);
 }
 
 /** True if `filePath` has no directory component at all (a root-level file
@@ -1274,12 +1279,16 @@ function isSameRepository(targetDir, baseRepoRoot) {
  * code-bearing file to a docs/test-exempt name silently classifies the whole
  * commit as exempt. Both sides of a rename must be visible for classification. */
 function getStagedFilesFromDir(targetDir) {
-  const stagedRaw = execSync('git diff --cached --no-renames --name-only', {
+  // SAFE-338/448: -c core.quotepath=false -z makes git emit NUL-terminated, never-quoted
+  // names regardless of core.quotepath or non-ASCII content, so a staged name with an
+  // accented character can no longer arrive wrapped in a leading/trailing quote that
+  // defeats ENFORCED_DIR_RE / isGuardOrHookPath downstream.
+  const stagedRaw = execSync('git -c core.quotepath=false diff --cached --no-renames --name-only -z', {
     cwd: targetDir,
     encoding: 'utf8',
     timeout: 5000,
   });
-  return stagedRaw.split('\n').map(f => f.trim()).filter(Boolean).map(normalizeGitPath);
+  return stagedRaw.split('\0').map(f => f.trim()).filter(Boolean).map(normalizeGitPath);
 }
 
 /** Finds every `git add` invocation (any spelling GIT_TOKEN_FOR_ADD_RE
@@ -2249,7 +2258,9 @@ async function main() {
 
   let stagedRaw;
   try {
-    stagedRaw = execSync('git diff --cached --no-renames --name-only', {
+    // SAFE-338/448: see getStagedFilesFromDir's comment - NUL-delimited names are never
+    // quote-wrapped, closing the non-ASCII bypass that otherwise defeats the dir/hook checks.
+    stagedRaw = execSync('git -c core.quotepath=false diff --cached --no-renames --name-only -z', {
       cwd: stagedFilesDir,
       encoding: 'utf8',
       timeout: 5000,
@@ -2267,7 +2278,7 @@ async function main() {
   // BUG-332: normalise every staged path — git reports repo-relative paths so
   // a leading `./`/`../` is unusual here, but uniform canonicalisation keeps
   // every classification input on the same footing.
-  const stagedFiles = stagedRaw.split('\n').map(f => f.trim()).filter(Boolean).map(normalizeGitPath);
+  const stagedFiles = stagedRaw.split('\0').map(f => f.trim()).filter(Boolean).map(normalizeGitPath);
 
   // BUG-224: `git diff --cached` above reflects the index BEFORE this same
   // command's own `git add` (if any) has run — see the BUG-224 block above
@@ -2316,12 +2327,13 @@ async function main() {
   // BUG-386: if -C was specified, query the working-tree diff from that
   // directory, not from the hook's rootDir().
   if (argClass.allFlag) {
-    const wtRaw = execSync('git diff --no-renames --name-only', {
+    // SAFE-338/448: same NUL-delimited read as the --cached queries above.
+    const wtRaw = execSync('git -c core.quotepath=false diff --no-renames --name-only -z', {
       cwd: stagedFilesDir,
       encoding: 'utf8',
       timeout: 5000,
     });
-    const wtFiles = wtRaw.split('\n').map(f => f.trim()).filter(Boolean);
+    const wtFiles = wtRaw.split('\0').map(f => f.trim()).filter(Boolean);
     classificationFiles = Array.from(new Set([...classificationFiles, ...wtFiles.map(normalizeGitPath)]));
   }
 
