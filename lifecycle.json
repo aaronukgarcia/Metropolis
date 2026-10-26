@@ -1,0 +1,54 @@
+{
+  "mode": "lifecycle",
+  "mode_source": "default",
+  "answer": null,
+  "default_branch": "main",
+  "classes": {
+    "source": [
+      "src/**",
+      "lib/**",
+      "harness/**",
+      "tools/**",
+      "*.js",
+      "*.mjs",
+      "*.py",
+      "*.go",
+      "*.cpp",
+      "*.h",
+      "*.cs"
+    ],
+    "unit_tests": [
+      "tests/**",
+      "**/*.test.*"
+    ],
+    "acceptance_tests": [
+      "tests/acceptance/**"
+    ],
+    "ac": [
+      "docs/ac/**"
+    ],
+    "exclude": [
+      ".claude/commands/health-check.md",
+      ".claude/commands/lifecycle.md",
+      ".claude/commands/rca.md",
+      "docs/forge/COST_GATE_GUIDE.md",
+      "docs/forge/IDENTITY.md",
+      "docs/forge/KIT-INVARIANTS.md",
+      "docs/forge/dev-lifecycle-PROPOSAL.md",
+      "docs/forge/lifecycle-BRIEF-TEMPLATE.md",
+      "docs/forge/lifecycle-PLAN-TEMPLATE.md",
+      "harness/claude-secret-guard.allow.json",
+      "read_this_now_claude.md",
+      "schema/lifecycle.sql",
+      "tools/bow-summary.js",
+      "tools/session-ledger.js",
+      "vestige-pointer.js",
+      "*.config.*",
+      "claude-*.js",
+      "tools/bow-summary.js",
+      "tools/session-ledger.js",
+      "tools/lifecycle-*.js",
+      "tools/test/**"
+    ]
+  }
+}

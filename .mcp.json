@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "safe-nats": {
+      "command": "node",
+      "args": [
+        "E:/projects/63-SAFE/tools/nats/channel/server.js"
+      ]
+    }
+  }
+}
