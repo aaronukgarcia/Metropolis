@@ -3,6 +3,27 @@
 > **Last updated:** 2026-09-19 (**Global Golden Rules port** — the GR table is replaced by GGR.md rendered from the forge registry, with a GR#→GGR alias table; rules are versioned GGR<no>v<version>. 2026-09-11: lead port hygiene note in Dev-Team standing rules: lanes cut from current main, bounded gate in a fresh gate worktree, converge-fixture regen, code-range collisions. 2026-08-31: **GR#28 Verify Against CI added** — a commit is green only when CI is green, not when local gates pass; go vet ≠ golangci-lint; run /ci-green before every push and `gh run view` after; know the never-green-CI baseline. GR#27 Capture Before Wipe added 2026-08-27** — no sim/map wipe without a prior fail-closed debug capture; enforcement BUG-420, pairs with the hard-reset-replay epic FEAT-1972079897. GR#26 Converge Early added 2026-08-22. Four slots Bill/Ben/Bev/Bro — Bob retired permanently 2026-08-18, Bro added 2026-08-20, Ben PARKED 2026-08-19; GR#25 graph-driven specification added 2026-08-17. GR#23 remains MECHANICAL: claude-destructive-guard.js blocks code-bearing commits without an accepted verdict in bow_destructive_verdicts — record via `node claude-bow.js destructive <code> --verdict accept|reject ...`. Perf gate live+required per-push. Commit-ready-list protocol + oversight/worker loops in force — see Dev-Team Process below)
 > **Read this entire file at the start of every session.**
 
+## Global Golden Rules
+
+<!-- forge:tier1 -->
+## Invariants (tier 1, gated; the full text is docs/forge/KIT-INVARIANTS.md)
+I1  No money is spent without a token Aaron minted for that pattern (gate.py cost set, fail-closed).
+I2  No secret is committed, pushed or left loose (pre-push gitleaks; .gitleaksignore change needs a token; roots swept nightly).
+I3  No file is created outside a project boundary; scratch goes to %TEMP% (boundary.js).
+I4  Nothing outside the project temp or E:\SAFE\drill is deleted without a token, the SAFE quarantine included (gate.py destructive set, fail-closed).
+I5  No AI attribution reaches git: no Co-Authored-By Claude, no "Generated with Claude Code", no Claude-Session trailer (commit-msg).
+I6  Every backup stream has a passed restore drill inside its window (safe-drill.js).
+I7  The nightly ran and every archive is proven, or ALERT.md exists (safe-backup.js, safe-status).
+I8  A hook never blocks a call because it crashed, except the money, secret and deletion gates, which fail closed with a logged disable variable.
+I9  This window is <identity> and writes only to its own database (launcher, claude-db.js).
+I10 This project runs the current required kit and the kit's files do not change without a trace (forge drift, kit hash).
+I11 Nothing executes from a cloud-synced folder (safe-status path check).
+I12 Every change to the kit, the rules or the registry carries its project, session and identity (forge event, CHECK constraints).
+Practices (tier 2, per profile) and lessons (tier 3): `GGR.md` (generated, never hand-edited; labels `GGR<no>v<version>`); lessons by topic: `node vestige-pointer.js find <topic>`.
+GGR58 (practice, every project that dispatches agents): Every agent dispatch names its model by role (Haiku/Sonnet clerical, Sonnet developer, Opus hostile review/second bounce) and a BUDGET line; the dispatch guard refuses an inherited model.
+<!-- /forge:tier1 -->
+
+
 ---
 
 ## 🚀 HOW TO START A SESSION (do this before anything else)
@@ -25,19 +46,21 @@ The `SessionStart` hook then runs checkin automatically and tells you your ident
 
 ## ⚠️ GLOBAL GOLDEN RULES (GGR) — INVIOLABLE, NON-NEGOTIABLE
 
-**Since 2026-09-19 the rules are one set, identical in every project (Aaron's ruling), held in the `forge` registry and rendered here as `GGR.md`.** Read `GGR.md` in full at the start of every session; it replaces the per-project table that used to live here. Each rule is labelled `GGR<no>v<version>` and keeps developing: refine one from inside this project with `node E:\GoogleDrive\Tools\new\forge.js rule set <no> --summary "..." --note "why" --from metropolis`, then re-render with `node E:\GoogleDrive\Tools\new\forge.js ggr --out GGR.md`. Never hand-edit `GGR.md`. Rules with an *applies when* clause are dormant until the condition holds but are still the rule.
+**Since 2026-09-19 the rules are one set, identical in every project (Aaron's ruling), held in the `forge` registry and rendered here as `GGR.md`.** Read `GGR.md` in full at the start of every session; it replaces the per-project table that used to live here. Each rule is labelled `GGR<no>v<version>` and keeps developing: refine one from inside this project with `node E:\git\forge\forge.js rule set <no> --summary "..." --note "why" --from metropolis`, then re-render with `node E:\git\forge\forge.js ggr --out GGR.md` (forge moved from `E:\GoogleDrive\Tools\new` on 2026-10-20, SAFE-195). Never hand-edit `GGR.md`. Rules with an *applies when* clause are dormant until the condition holds but are still the rule.
 
 **Alias table — the old Metropolis GR numbers still appear in hook messages, BOW comments, memory and commit history. Read them as:**
 
+Since the 2026-10-20 tier merge (SAFE `docs/forge/GGR-MERGE.md`) most old GGR numbers were folded into consolidated rules GGR77–89; the column below gives the rule to read today (pre-merge number in brackets).
+
 | Old | GGR | Old | GGR | Old | GGR | Old | GGR |
 |-----|-----|-----|-----|-----|-----|-----|-----|
-| GR#1 error trapping | GGR1 | GR#8 identity enforcement | GGR7 | GR#15 validators from data | GGR30 | GR#22 codename | GGR50 |
-| GR#2 version discipline | GGR43 | GR#9 shell preference | GGR25 | GR#16 type-safe storage | GGR29 | GR#23 un-attacked | GGR15 |
-| GR#3 SSOT | GGR6 | GR#10 dependency updates | GGR18 | GR#17 silent failures | GGR3 | GR#24 no code left behind | GGR12 |
-| GR#4 identity prefix | GGR7 | GR#11 security review | GGR17 | GR#18 dead-code audit | GGR32 | GR#25 graph-driven spec | GGR51 |
-| GR#5 verbose confirmations | GGR8 | GR#12 completeness | GGR11 + GGR35 | GR#19 deploy bundling | GGR45 | GR#26 converge early | GGR13 |
-| GR#6 GUID documentation | GGR22 | GR#13 complete all N | GGR10 | GR#20 contract-first | GGR48 | GR#27 capture before wipe | GGR52 |
-| GR#7 registry errors | GGR5 | GR#14 memory recall | GGR9 | GR#21 determinism gate | GGR49 | GR#28 verify against CI | GGR14 |
+| GR#1 error trapping | GGR80 (1) | GR#8 identity enforcement | GGR7 (I9) | GR#15 validators from data | GGR85 (30) | GR#22 codename | GGR50 |
+| GR#2 version discipline | GGR82 (43) | GR#9 shell preference | GGR25 (lesson, retired) | GR#16 type-safe storage | GGR85 (29) | GR#23 un-attacked | GGR83 (15) |
+| GR#3 SSOT | GGR81 (6) | GR#10 dependency updates | GGR84 (18) | GR#17 silent failures | GGR3 (I7) | GR#24 no code left behind | GGR34 (I4; was 12) |
+| GR#4 identity prefix | GGR7 (I9) | GR#11 security review | GGR83 (17) | GR#18 dead-code audit | GGR85 (32) | GR#25 graph-driven spec | GGR86 (51) |
+| GR#5 verbose confirmations | GGR78 (8) | GR#12 completeness | GGR78 + GGR35 (I6) (11, 35) | GR#19 deploy bundling | GGR82 (45) | GR#26 converge early | GGR82 (13) |
+| GR#6 GUID documentation | GGR81 (22) | GR#13 complete all N | GGR78 (10) | GR#20 contract-first | GGR86 (48) | GR#27 capture before wipe | GGR86 (52) |
+| GR#7 registry errors | GGR80 (5) | GR#14 memory recall | GGR77 (9) | GR#21 determinism gate | GGR86 (49) | GR#28 verify against CI | GGR82 (14) |
 
 New since the port: **GGR16 cost gate** (user-scope `cost_gate.py` hook + `/cost-gate` skill; never mint a token without Aaron's Authorise), **GGR53 code.json always present**, **GGR62 launcher dry-run before handover** (`launcher_guard.js`), **GGR63 nothing executes from a synced folder**, **GGR64 no AI attribution in git**, **GGR65 separation-of-duties dev lifecycle unless Aaron calls it a lash-up**, **GGR66 nothing outside a project's boundary (per-project temp folder)**, **GGR67 Vestige recall is by handle; a pointer index gives free-text findability (4.x Strata)**, **GGR68 a hook must never be able to block a prompt (route through `safe_hook.py`, absolute paths, fail to exit 0)**, **GGR69 confirm which file before you process it (path + size + mtime when a bare name is ambiguous or could be stale)**, **GGR70 no project is 'assembled' until `forge.js doctor <slug>` is green**, plus the AI-Rules ERR/REL/DATA/SEC families and the BIAS_GUARD assessment rules now binding here too. The registry now holds **72 rules** (GGR3/16/46/58/70 are at v02; GGR71v02 shared assets ship neutral and inert, GGR72 answer from the source not the index); GGR.md is regenerated from forge (2026-10-16, `forge.js ggr` + `ggr-mark metropolis`). GGR65's lifecycle and Metropolis's own Dev-Team Process are being converged into one best-of-both process (BOW-tracked); until that lands, the Dev-Team Process section below governs.
 

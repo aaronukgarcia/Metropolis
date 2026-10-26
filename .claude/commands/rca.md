@@ -155,7 +155,7 @@ State clearly:
 6. **Fix direction:** either build the consumer, or bypass the queue and call the real service directly
 
 ```
-bill> 🔴 RCA: [Symptom]
+<prefix> 🔴 RCA: [Symptom]
 
 Root cause: [file:line] writes to [collection/service] which has no consumer.
   - [Evidence A: firebase.json check]
@@ -242,6 +242,29 @@ gcloud logging read 'resource.type="cloud_run_revision" AND textPayload:"non-fat
 grep -rn "(async () => {" app/src/app/api --include="*.ts" -A2 | grep -B2 "})();"
 ```
 Any unawaited IIFE doing more than milliseconds of work before the route returns is this bug waiting for a quiet Monday.
+
+---
+
+## The THIRD failure class: the job that succeeds at nothing (BUG-SCHED-SYNC-001, 2026-10-03)
+
+Neither a missing consumer nor an abandoned producer: the job runs to completion every day, returns 200, and has never done any work.
+
+**Report:** "the pit lane closed 1 hour early." The stored qualifying time was a provisional guess that the daily OpenF1 sync was supposed to correct. The sync matched sessions on `session.meeting_name` — a field the endpoint does not return — skipped every session, and answered `{ success: true, updated: 0 }` for seven months.
+
+**The tell-tale signature:**
+1. A scheduled job with clean 200s in the request log and nothing in `error_logs`
+2. The data it is meant to maintain still carries its seed values
+
+**The check that found it — look for the job's fingerprint in the data, not its status code:**
+- Is there a field ONLY this job writes? (`raceEndTime` — absent on all 24 docs)
+- Does `updatedAt` on the docs match the job's schedule, or an unrelated manual edit?
+- Does the stored format match what the job would write? (seeded `…:00Z` vs `toISOString()`'s `…:00.000Z`)
+
+If the fingerprint is missing everywhere, the job has never worked — stop looking for a recent regression.
+
+**Then verify the external contract directly.** Fetch one real record from the upstream API and list its fields before reading any more code. One call showed `meeting_name` was not there.
+
+**Fix pattern (v3.25.4):** when work is expected and nothing matches, return an error. "Zero updated" is only a success when there was genuinely nothing to do.
 
 ---
 
