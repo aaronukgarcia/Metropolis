@@ -3,7 +3,7 @@
     "safe-nats": {
       "command": "node",
       "args": [
-        "E:/projects/63-SAFE/tools/nats/channel/server.js"
+        ".claude/hooks/safe-nats-channel.js"
       ]
     }
   }
