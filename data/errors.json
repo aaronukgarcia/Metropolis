@@ -162,7 +162,9 @@
       "V940-V949": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\"; FEAT-2326609800 inc7 renumbers here per r3 lead amendment)",
       "V883-V883": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V950-V959": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V960-V969": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-11 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V960-V969": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-11 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "G5480-G5489": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")"
+    
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -6168,6 +6170,36 @@
       "module": "ui.webconsole",
       "message": "sectorKeyOf received an out-of-bounds or non-integer tile ({x}, {y})",
       "remedy": "BUG-1023: sectorKeyOf's grid bucketing is only defined for integer tiles inside [0, MAP_W) x [0, MAP_H) -- an off-map or fractional origin would otherwise silently ALIAS into a legitimate neighbouring sector's aggregate (or a NaN/negative key untouched by any structural gate) instead of failing loudly. Fix the caller that produced the out-of-range building coordinate."
+    },
+    "MET-G5480": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "coastal {category} cost of {amountMicropounds} micropounds could not be posted to the ledger for month {month} (cause: {cause}); carried forward as owed",
+      "remedy": "fund the treasury; the owed amount is retried at the next coastal month"
+    },
+    "MET-G5481": {
+      "severity": "warn",
+      "module": "feat.compositionroot",
+      "message": "coastal rescue service id {serviceID} is not registered with engine.services (distinct from a registered service with zero capacity): treated as unresourced",
+      "remedy": "add the id to data/services.json baselineServices or repoint data/coastal.json rescue ids"
+    },
+    "MET-G5482": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "coastal monthly advance failed for month {month}: {cause}",
+      "remedy": "inspect the cause; the month is retried at the next tick"
+    },
+    "MET-G5483": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "coastal granted-citizen id {id} collides with a reserved citizen id namespace (limit {limit})",
+      "remedy": "the compose citizen id allocator reached a reserved range; reduce the seed ranges"
+    },
+    "MET-G5484": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "coastal saved state is invalid: {cause}",
+      "remedy": "the save is corrupt or from an incompatible version; restore an earlier save"
     }
   }
 }

@@ -250,3 +250,30 @@ const (
 	// Reclaim, not necessarily a defect.
 	ErrCitizenPagingClaimOwnershipMismatch = "MET-G821"
 )
+
+// FEAT-2326609833 (wire engine.coastal): codes MET-G5480..G5484, claimed via
+// tools/plan/add-error.js claim-range feat.compositionroot --layer G.
+const (
+	// ErrCoastalCostUnposted: a coastal monthly cost (hotels, departures,
+	// processing or integration opex) could not be posted to the one-money
+	// ledger. The amount stays owed and is retried next coastal month --
+	// never silently dropped (GR#17).
+	ErrCoastalCostUnposted = "MET-G5480"
+
+	// ErrCoastalRescueServiceUnregistered: a rescue service id named by
+	// data/coastal.json is not registered with engine.services -- distinct
+	// from a registered service with zero capacity ("no stations built").
+	ErrCoastalRescueServiceUnregistered = "MET-G5481"
+
+	// ErrCoastalAdvanceFailed: engine.coastal's monthly Advance returned an
+	// error.
+	ErrCoastalAdvanceFailed = "MET-G5482"
+
+	// ErrCoastalCitizenIDCollision: the compose citizen id allocator, asked
+	// for a granted-case citizen id, reached a reserved id namespace.
+	ErrCoastalCitizenIDCollision = "MET-G5483"
+
+	// ErrCoastalStateInvalid: a coastal save record failed validation on
+	// restore.
+	ErrCoastalStateInvalid = "MET-G5484"
+)

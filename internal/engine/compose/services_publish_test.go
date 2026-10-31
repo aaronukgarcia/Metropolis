@@ -161,8 +161,10 @@ func TestServicesView_EndToEnd_DeltaMatchesLiveState(t *testing.T) {
 		t.Fatal("patch.CapacityDemand = nil, want a non-nil (possibly empty) slice — buildServicesCapacityDemandPatch always sets this field")
 	}
 	cd := *patch.CapacityDemand
-	if len(cd) != 1 {
-		t.Fatalf("len(capacityDemand) = %d, want 1 (clinic-1)", len(cd))
+	// clinic-1 plus the two data/services.json baseline rescue services
+	// (coastguard, lifeboat; FEAT-2326609833), sorted by id.
+	if len(cd) != 1+baselineServiceCount {
+		t.Fatalf("len(capacityDemand) = %d, want %d (clinic-1 + baseline coastguard, lifeboat)", len(cd), 1+baselineServiceCount)
 	}
 	if cd[0].ServiceID != "clinic-1" {
 		t.Errorf("capacityDemand[0].ServiceID = %q, want %q", cd[0].ServiceID, "clinic-1")

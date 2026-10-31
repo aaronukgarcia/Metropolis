@@ -25,6 +25,9 @@ type ServicesFile struct {
 	WagePerStaffPerMonthMicropounds int64          `json:"wagePerStaffPerMonthMicropounds"`
 	StaffingPools                   []StaffingPool `json:"staffingPools"`
 	Pie                             PieFile        `json:"pie"`
+	// BaselineServices are standing service instances present from tick 0
+	// (coastguard/lifeboat for engine.coastal). Optional.
+	BaselineServices []BaselineServiceFile `json:"baselineServices,omitempty"`
 }
 
 // StaffingPool is one data/services.json staffingPools entry (§26): a named
@@ -123,6 +126,27 @@ func (s *ServicesFile) Validate() error {
 		}
 	}
 
+	baseIDs := make(map[string]bool, len(s.BaselineServices))
+	for i, b := range s.BaselineServices {
+		prefix := fmt.Sprintf("baselineServices[%d]", i)
+		if b.ID == "" {
+			return &data.FieldError{Field: prefix + ".id", Rule: "required, must be non-empty"}
+		}
+		if baseIDs[b.ID] {
+			return &data.FieldError{Field: prefix + ".id", Rule: fmt.Sprintf("duplicate baseline service id %q", b.ID)}
+		}
+		baseIDs[b.ID] = true
+		if b.Kind == "" {
+			return &data.FieldError{Field: prefix + ".kind", Rule: "required, must be non-empty"}
+		}
+		if CapacityFromRaw(b.CapacityRaw) <= 0 {
+			return &data.FieldError{Field: prefix + ".capacityRaw", Rule: "must lead with a positive number"}
+		}
+		if b.Milestone < 0 {
+			return &data.FieldError{Field: prefix + ".milestone", Rule: "must be >= 0"}
+		}
+	}
+
 	if s.Pie.SeverityHalfPointPopulation <= 0 {
 		return &data.FieldError{Field: "pie.severityHalfPointPopulation", Rule: "must be positive"}
 	}
@@ -152,4 +176,44 @@ func (s *ServicesFile) Validate() error {
 	}
 
 	return nil
+}
+
+// BaselineServiceFile is one data/services.json baselineServices row
+// (FEAT-2326609833, GR#15 data-first): a service instance that exists from
+// the first tick without a player build -- the standing coastguard and
+// lifeboat cover that engine.coastal's rescue response reads by id. Kind must
+// be a registered ServiceKind; CapacityRaw is the verbatim capacity string
+// parsed by [CapacityFromRaw] (placeholder figures pending the balance pass).
+type BaselineServiceFile struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	CapacityRaw string `json:"capacityRaw"`
+	Milestone   int    `json:"milestone"`
+	SpecRef     string `json:"specRef"`
+}
+
+// LoadBaselineServiceSpecs returns data/services.json's baselineServices as
+// registration-ready [ServiceSpec]s, in file order. The composition root
+// registers them idempotently (ErrDuplicateService is a no-op for it).
+func LoadBaselineServiceSpecs(correlationID string) ([]ServiceSpec, error) {
+	dir, err := data.ResolveDataDir(correlationID)
+	if err != nil {
+		return nil, err
+	}
+	f, err := LoadServices(dir, correlationID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ServiceSpec, 0, len(f.BaselineServices))
+	for _, b := range f.BaselineServices {
+		step := UpgradeStep{BuildingID: b.ID, Name: b.ID, Milestone: b.Milestone, CapacityCeiling: CapacityFromRaw(b.CapacityRaw)}
+		out = append(out, ServiceSpec{
+			ID:          ServiceID(b.ID),
+			Kind:        ServiceKind(b.Kind),
+			CapacityRaw: b.CapacityRaw,
+			Milestone:   b.Milestone,
+			UpgradePath: []UpgradeStep{step},
+		})
+	}
+	return out, nil
 }

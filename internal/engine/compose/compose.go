@@ -10,6 +10,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/coastal"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
@@ -363,6 +364,11 @@ type Deps struct {
 	// §11's end-to-end unblock test).
 	ExtCommute *extcommute.ExtCommuteAPI
 
+	// Coastal overrides construction of the MOD-044 engine.coastal module
+	// (default: coastal.LoadDefault). nil is the common boot case; the test seam
+	// lets a caller inject a pre-configured instance (FEAT-2326609833).
+	Coastal *coastal.CoastalAPI
+
 	// Services overrides construction of the FEAT-167-completion
 	// ServiceCoverage source module (default: services.LoadDefault). nil
 	// is the common boot case; the test seam lets a caller inject a
@@ -607,6 +613,9 @@ var registrationOrder = []moduleRegistration{
 	// relative to them carries no ordering meaning (mirrors deathservices'
 	// own doc comment on this point).
 	{name: "wellbeing", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &wellbeingHook{st: st} }},
+	// FEAT-2326609833 (engine.coastal, coastal_wire.go): monthly boat arrivals,
+	// case pipeline and ledger cost posting, after wellbeing on the same slot.
+	{name: "coastal", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &coastalHook{st: st} }},
 	{name: "invariant", phase: core.PhaseDailyTick, hook: nil},
 }
 
@@ -673,6 +682,8 @@ var viewRegistrationOrder = []viewRegistration{
 	// today.
 	{name: chromeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildChromeTopBarPatch }},
 	{name: viewportViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildViewportPatch }},
+	// FEAT-2326609833: "f4.coastal" (coastal_publish.go).
+	{name: coastalViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildCoastalPatch }},
 }
 
 // RegisteredViewNames returns a defensive copy of the fixed view
@@ -1493,7 +1504,13 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		}
 	}
 
+	coastalW, cwErr := newCoastalWiring(deps.Coastal, e.WorldSeed(), cid, servicesAPI)
+	if cwErr != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, cwErr, map[string]any{"module": "coastal"})
+	}
+
 	st := &simState{
+		coastalW:                   coastalW,
 		e:                          e,
 		cid:                        cid,
 		seed:                       e.WorldSeed(),
@@ -1690,6 +1707,10 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	st.journaler = journaler
 	if err := e.SetCommandJournaler(journaler); err != nil {
 		return nil, wrapSeal(cid, err, "journaler")
+	}
+
+	if err := coastalW.bind(st); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "coastal"})
 	}
 
 	// Register in the fixed, documented order (AC-2). The slice order IS
@@ -1943,6 +1964,9 @@ type simState struct {
 	wellbeingAPI    *wellbeing.WellbeingAPI
 	wellbeingSeams  []wellbeingSeamStatus
 	wellbeingStatus WellbeingStatus
+
+	// coastalW is the FEAT-2326609833 engine.coastal wiring (coastal_wire.go).
+	coastalW *coastalWiring
 
 	// deathServiceCemeteryIDs / deathServiceCrematoriumIDs (BUG-720) remain
 	// EXACTLY the Wire-time stopgap roster the original doc described:

@@ -42,6 +42,12 @@ type CoastalAPI struct {
 	news     *news.NewsAPI
 	shore    ShoreSource
 
+	// idAlloc, when set (SetCitizenIDAllocator), mints the citizen ID of a
+	// granted case instead of reusing the case ID (FEAT-2326609833: the
+	// composition root owns the one citizen ID space, so a raw case ID can
+	// never collide with a compose-assigned citizen).
+	idAlloc func() (uint64, error)
+
 	// World-state inputs, pushed by the tick/composition root (AC-3).
 	eraTier         int
 	seasonIndex     int
@@ -181,6 +187,63 @@ func (c *CoastalAPI) SetNews(n *news.NewsAPI) error {
 	defer c.mu.Unlock()
 	c.news = n
 	return nil
+}
+
+// SetCitizenIDAllocator wires the composition root's citizen ID allocator.
+// Once set, every granted case is minted with an ID returned by alloc (called
+// outside the module lock, once per granted case, in deterministic case
+// order) rather than the raw case ID. A nil alloc restores the legacy
+// case-ID-as-citizen-ID behaviour.
+func (c *CoastalAPI) SetCitizenIDAllocator(alloc func() (uint64, error)) error {
+	if err := c.checkNotCopied("SetCitizenIDAllocator"); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.idAlloc = alloc
+	return nil
+}
+
+// Counts is the pipeline-stage census used by read-only views: cases still
+// processing, of which InHotels are awaiting a caseworker (the hotel-
+// requisition overflow), plus the terminal granted / not-granted totals.
+type Counts struct {
+	Arrivals    int   // arrival events so far
+	People      int64 // cases (people) created so far
+	Processing  int64 // cases not yet resolved
+	InHotels    int64 // cases awaiting a caseworker (= backlog)
+	Granted     int64
+	NotGranted  int64
+	Shortfalls  int   // arrival events whose rescue was under-resourced
+	ShortfallPP int64 // people the rescue capacity could not cover, summed
+}
+
+// Counts returns the current pipeline census.
+func (c *CoastalAPI) Counts() Counts {
+	if err := c.checkNotCopied("Counts"); err != nil {
+		return Counts{}
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := Counts{Arrivals: len(c.arrivals), InHotels: int64(len(c.backlog))}
+	for _, ev := range c.arrivals {
+		if ev.Rescue.CapacityShortfall {
+			out.Shortfalls++
+			out.ShortfallPP = num.SatAdd(out.ShortfallPP, ev.Rescue.ShortfallPeople)
+		}
+	}
+	for _, id := range c.caseOrder {
+		out.People++
+		switch c.cases[id].Stage {
+		case CaseGranted:
+			out.Granted++
+		case CaseNotGranted:
+			out.NotGranted++
+		default:
+			out.Processing++
+		}
+	}
+	return out
 }
 
 // SetShore wires the shore-cell membership source (engine.world's geography

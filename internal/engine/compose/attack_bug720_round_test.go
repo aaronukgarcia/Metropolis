@@ -106,6 +106,7 @@ func abWire(t *testing.T, seed uint64, pool int, crematoria []string, cemeteries
 	e := core.NewEngine(core.WithWorldSeed(seed), core.WithPoolSize(pool))
 	comp, err := Wire(e, &Deps{
 		Citizens:               api,
+		Coastal:                quietCoastal(t),
 		DeathServiceCrematoria: crematoria,
 		DeathServiceCemeteries: cemeteries,
 	})

@@ -81,7 +81,7 @@ func runMonths(t *testing.T, e *core.Engine, months int) {
 func bugComposition(t *testing.T, poolSize int) (*core.Engine, *Composition) {
 	t.Helper()
 	e := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(poolSize))
-	comp, err := Wire(e, nil)
+	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire (pool %d): %v", poolSize, err)
 	}

@@ -23,7 +23,7 @@ const mod034ReroundSeed = uint64(34034)
 // leave id gaps) are all exercised.
 func TestAttackMOD034_LiveResidentIDsStrictlyIncreasing(t *testing.T) {
 	e := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	comp, err := Wire(e, nil)
+	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestAttackMOD034_LiveResidentIDsStrictlyIncreasing(t *testing.T) {
 // reconstruction of the id union must not reorder the namespaces.
 func TestAttackMOD034_LiveResidentIDsMonotoneAfterLoad(t *testing.T) {
 	eA := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	compA, err := Wire(eA, nil)
+	compA, err := Wire(eA, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire A: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestAttackMOD034_LiveResidentIDsMonotoneAfterLoad(t *testing.T) {
 	}
 
 	eB := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	compB, err := Wire(eB, nil)
+	compB, err := Wire(eB, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire B: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestAttackMOD034_LiveResidentIDsMonotoneAfterLoad(t *testing.T) {
 // sample tracks growth (not pinned at the seed count).
 func TestAttackMOD034_SampleSizeIsExactlyTheCappedLiveCount(t *testing.T) {
 	e := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	comp, err := Wire(e, nil)
+	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestAttackMOD034_SampleSizeIsExactlyTheCappedLiveCount(t *testing.T) {
 // the CitizenAt !ok skip produces.
 func TestAttackMOD034_MidRunEmptyCohortFlipsBackToNoData(t *testing.T) {
 	e := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	comp, err := Wire(e, nil)
+	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestAttackMOD034_MidRunEmptyCohortFlipsBackToNoData(t *testing.T) {
 // composition. Also asserts each call returns a distinct backing array.
 func TestAttackMOD034_SeamsCloneSurvivesLengthAbuse(t *testing.T) {
 	e := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	comp, err := Wire(e, nil)
+	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestAttackMOD034_SeamsCloneSurvivesLengthAbuse(t *testing.T) {
 // that is a compose-level save/restore issue outside MOD-034's read-only path.
 func TestAttackMOD034_LoadVsContinuedStatusEquality(t *testing.T) {
 	eA := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	compA, err := Wire(eA, nil)
+	compA, err := Wire(eA, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire A: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestAttackMOD034_LoadVsContinuedStatusEquality(t *testing.T) {
 	savedStatus := compA.WellbeingStatus()
 
 	eB := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	compB, err := Wire(eB, nil)
+	compB, err := Wire(eB, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire B: %v", err)
 	}

@@ -10,6 +10,10 @@
       "specRef": "§26: elder care and home-care draw from the same staffing pool as hospitals — a nurse shortage is one shortage everywhere"
     }
   ],
+  "baselineServices": [
+    { "id": "coastguard", "kind": "disasters-lite", "capacityRaw": "20 people/month", "milestone": 0, "specRef": "§30 rescue + sea incidents: standing coastguard cover read by engine.coastal's rescue response (placeholder capacity, balance pass); the coastguard_station building (data/buildings.json) raises it when built" },
+    { "id": "lifeboat", "kind": "disasters-lite", "capacityRaw": "15 people/month", "milestone": 0, "specRef": "§30 rescue: standing lifeboat cover (RNLI-style) read by engine.coastal's rescue response (placeholder capacity, balance pass)" }
+  ],
   "pie": {
     "specRef": "§54: the default Public Service Pie — per-1,000-population benchmark staffing ratios (police officers ~2.4, teachers per pupil, nurses & GPs, dentists & opticians, firefighters, social workers, refuse crews, council officers). These are default benchmarks, NOT hard requirements: the whole point is the player deviates and feels the consequence (mild at village scale, systemic at city scale).",
     "severityHalfPointPopulation": 100000,

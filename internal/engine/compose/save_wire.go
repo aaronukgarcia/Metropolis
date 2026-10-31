@@ -146,6 +146,8 @@ func (c *Composition) Participants() []save.Participant {
 		// under a new id because its old firm no longer existed to find.
 		firms.NewSaveParticipant(st.firms),
 		newComposeLedgerParticipant(st),
+		// FEAT-2326609833: engine.coastal module snapshot + compose posting state.
+		newCoastalParticipant(st),
 	}
 }
 

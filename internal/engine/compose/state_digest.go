@@ -162,6 +162,11 @@ func (c *Composition) StateDigest() [32]byte {
 	digestInt64(h, st.moneyOpening)
 	digestInt64(h, st.moneyDelta)
 
+	// 6. engine.coastal (FEAT-2326609833).
+	if st.coastalW != nil {
+		st.coastalW.digestInto(h)
+	}
+
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out

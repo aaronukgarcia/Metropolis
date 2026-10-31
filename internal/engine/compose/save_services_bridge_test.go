@@ -84,14 +84,14 @@ func TestServicesBridge_RewindDropsPhantomInLiveComposition(t *testing.T) {
 	if err := comp.Save(earlyDir); err != nil {
 		t.Fatalf("early Save: %v", err)
 	}
-	if cs, err := comp.state.services.CoverageSummary(); err != nil || cs.ServiceCount != 0 {
+	if cs, err := comp.state.services.CoverageSummary(); err != nil || cs.ServiceCount != baselineServiceCount {
 		t.Fatalf("test setup: expected zero services before build, got %+v err=%v", cs, err)
 	}
 
 	// Complete a clinic AFTER the early save -- this is the service that
 	// must NOT survive a rewind to the early save.
 	buildAndCompleteClinic(t, e, comp, protocol.CellRef{X: 0, Y: 0})
-	if cs, err := comp.state.services.CoverageSummary(); err != nil || cs.ServiceCount != 1 {
+	if cs, err := comp.state.services.CoverageSummary(); err != nil || cs.ServiceCount != baselineServiceCount+1 {
 		t.Fatalf("test setup: expected exactly one service after the clinic completes, got %+v err=%v", cs, err)
 	}
 
@@ -104,10 +104,10 @@ func TestServicesBridge_RewindDropsPhantomInLiveComposition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CoverageSummary after rewind: %v", err)
 	}
-	if cs.ServiceCount != 0 {
+	if cs.ServiceCount != baselineServiceCount {
 		t.Fatalf("PHANTOM INSTANCE: %d service(s) survived a rewind to a save taken before they were built -- CoverageSummary=%+v", cs.ServiceCount, cs)
 	}
-	if cs.TotalCapacity != 0 {
+	if cs.TotalCapacity != baselineServiceCapacity {
 		t.Fatalf("PHANTOM CAPACITY: %v capacity survived a rewind -- CoverageSummary=%+v", cs.TotalCapacity, cs)
 	}
 }
@@ -121,7 +121,7 @@ func TestServicesBridge_RewindDropsPhantomInLiveComposition(t *testing.T) {
 func TestServicesBridge_OldSaveWithoutServicesShard_SweepRebuilds(t *testing.T) {
 	e, comp := buildComposition2(t, servicesBridgeSeed+1)
 	buildAndCompleteClinic(t, e, comp, protocol.CellRef{X: 0, Y: 0})
-	if cs, err := comp.state.services.CoverageSummary(); err != nil || cs.ServiceCount != 1 {
+	if cs, err := comp.state.services.CoverageSummary(); err != nil || cs.ServiceCount != baselineServiceCount+1 {
 		t.Fatalf("test setup: expected exactly one service after the clinic completes, got %+v err=%v", cs, err)
 	}
 
@@ -167,10 +167,18 @@ func TestServicesBridge_OldSaveWithoutServicesShard_SweepRebuilds(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CoverageSummary after old-format load: %v", err)
 	}
-	if cs.ServiceCount != 1 {
+	if cs.ServiceCount != baselineServiceCount+1 {
 		t.Fatalf("migration path broken: old-format save (no services shard) did not have its clinic rebuilt by the sweep -- CoverageSummary=%+v", cs)
 	}
 }
+
+// FEAT-2326609833: data/services.json baselineServices (coastguard 20 +
+// lifeboat 15 people/month) are registered at Wire, so a fresh composition is
+// no longer service-empty. Expected counts/capacity are offset by them.
+const (
+	baselineServiceCount    = 2
+	baselineServiceCapacity = 35.0
+)
 
 // buildComposition2 is buildComposition (save_roundtrip_test.go) with an
 // explicit seed parameter, so this file's two tests can each use their own

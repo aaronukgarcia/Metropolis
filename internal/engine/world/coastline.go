@@ -150,3 +150,13 @@ func ComputeLandSea36() LandSeaSplit36 {
 	}
 	return result
 }
+
+// IsLandTile reports whether tile c's centre is on land under the coastline
+// model -- a PURE function of the tile coordinate (the same classifier that
+// seeds each tile's onLand flag), exported so the composition root can derive
+// shore tiles for engine.coastal without forcing the lazy generation of all 900
+// tiles through TileAt (FEAT-2326609833). A tile outside the 30x30 extent is
+// not land.
+func IsLandTile(c TileCoord) bool {
+	return c.InExtent() && classifyLandSea(c)
+}
