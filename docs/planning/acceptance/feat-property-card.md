@@ -62,9 +62,11 @@ Clicking any building in the running webconsole opens a type-coloured, closable 
 
 ---
 
-## Open questions for Aaron (the pack is dispatchable once these are ruled; interims are stated above)
+## Aaron's rulings (interview, 2026-10-31 — the pack is FULLY RULED and dispatchable)
 
-1. **Picture source (the big one).** No building art exists in the repo. Options: (a) deterministic generated SVG motifs per kind/colour (zero assets, ships now — the interim AC-3 fallback IS this); (b) a commissioned/AI-generated sprite set checked into `webconsole/public/art/` (needs your sign-off on provenance and style, ~90 specs); (c) your own art later, fallback until then. Recommend (a) now + (c) slot.
-2. **Building value model.** Interim = resale (`BULLDOZE_REFUND_FRACTION` of placement cost). Alternatives: depreciating value by age, land-value-linked (engine.landvalue exists Go-side only), or market value once a property market exists. Which figure should the card call "value"?
-3. **Maturity ladder.** Interim = Under construction → Operational → Consolidated tier N. Did you mean something richer (age bands, upgrade levels, the unlock era it belongs to)? Name the ladder and the card will render it.
-4. **Scope of "every building":** roads/pipes/network pieces too, or zoned+service buildings only? (Interim: everything selectable gets a card; network pieces get the slim variant — band, name, cost, wear where tracked.)
+1. **Picture source: BOTH, merged.** Deterministic generated SVG motifs ship first as the guaranteed never-empty plate, AND an AI-generated sprite set (~90 specs, one consistent style) lands into `webconsole/public/art/`, replacing motifs per spec as it arrives. **Auto-approved** — no style sign-off gate; the lane generates and lands the art directly, with a provenance note in the art folder README.
+2. **Building value = resale**: `BULLDOZE_REFUND_FRACTION` × placement cost, labelled "resale".
+3. **Maturity = the construction ladder**: Under construction (day countdown) → Operational → Consolidated tier N.
+4. **Scope = everything selectable**: full card for zoned + service buildings; slim variant (band, name, cost, wear where tracked) for network pieces.
+
+Companion feature from the same interview: the citizen dummy-passport — see `feat-citizen-passport.md` (FEAT-2326609842).
