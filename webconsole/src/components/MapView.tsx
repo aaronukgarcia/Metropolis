@@ -30,6 +30,7 @@ import {
   isRoadSpec,
   isRailSpec,
   computeFailedGates,
+  buildingByIdOf,
   AUTO_BUILD_DEMAND_PERCENT,
   footprintOf,
   occupiedColumnsOf,
@@ -62,6 +63,7 @@ import { applyStashedCameraToView } from '../sim/cameraApply';
 import { buildingRef, buildingRefLabel } from '../sim/refs';
 import { useBusy } from './Busy';
 import { HelpOverlay } from './HelpOverlay';
+import { PropertyCard, PropertyCardGone } from './PropertyCard';
 import { AffordabilityConfirm } from './AffordabilityConfirm';
 import { NewsFeed } from './NewsFeed';
 import { evaluatePlacementBatch, type PendingBatchPlacement } from './placementGate';
@@ -2180,7 +2182,7 @@ function Compass() {
 // whole map canvas — mirrors constructionQueueOf's export-for-testability idiom
 // in ConstructionQueue.tsx.
 export function BuildingCard({
-  building,
+  building: selectedSnapshot,
   connected,
   showRefs,
   onClose,
@@ -2192,8 +2194,18 @@ export function BuildingCard({
 }) {
   const { state } = useSim();
   const [copied, setCopied] = useState(false);
+  // FEAT-2326609841 AC-7: `selected` in MapView is a snapshot taken at click
+  // time; resolve the LIVE instance by id every render (memoised id index) so
+  // the countdown / coverage / brownout facts track the ticks while the card
+  // stays open. A building that no longer exists falls back to the snapshot
+  // (the map closes the card on bulldoze).
+  const liveBuilding = buildingByIdOf(state.buildings).get(selectedSnapshot.id);
+  const building = liveBuilding ?? selectedSnapshot;
   const sp = SPECS[building.spec];
   if (!sp) return null;
+  // F6: removed by a non-bulldoze path (consolidation ...) -> explicit gone
+  // state, never the stale click-time copy rendered as Operational.
+  if (!liveBuilding) return <PropertyCardGone name={sp.name} onClose={onClose} />;
   const util = utilisationOf(state, building);
   // Q100092 (Aaron, confirmed design, BUG-569 display half): while a building
   // fails the 'construction' gate it must show CONSTRUCTION PROGRESS, never
@@ -2251,21 +2263,20 @@ export function BuildingCard({
   }
 
   return (
-    <div className="building-card">
-      <header>
-        <span className="swatch big" style={{ background: sp.color }} />
-        <b>
-          {sp.name}
-          <span className="mono"> · class {classLabel}</span>
-          {refLabel && <span className="mono"> · {refLabel}</span>}
-        </b>
+    <PropertyCard
+      state={state}
+      building={building}
+      onClose={onClose}
+      headerActions={
         <button className="btn tiny" title="Copy this building's data as JSON" onClick={copyJson}>
           {copied ? 'Copied' : 'Copy'}
         </button>
-        <button className="btn tiny" onClick={onClose}>
-          Close
-        </button>
-      </header>
+      }
+    >
+      <p className="mono">
+        class {classLabel}
+        {refLabel && ` · ${refLabel}`}
+      </p>
       {(() => {
         // F5 (independent round REJECT, 2026-09-03): the label must read the
         // building's REAL current footprint (footprintOf), not the spec's
@@ -2370,7 +2381,7 @@ export function BuildingCard({
           );
         })()}
       <BuildingProfileView spec={sp} taxRates={state.taxRates} hideProduces={underConstruction} />
-    </div>
+    </PropertyCard>
   );
 }
 

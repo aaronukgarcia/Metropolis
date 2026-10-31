@@ -4110,6 +4110,22 @@ export const buildingDisplayStates: (s: SimState) => ReadonlyMap<number, Buildin
     return out;
   });
 
+/**
+ * FEAT-2326609841 (property card, round r1 F2): the SINGLE SOURCE for the
+ * power-draw constants computePowerStats used to hard-code. computePowerStats
+ * reads exactly these (same arithmetic order, so powerStats is byte-identical
+ * to before) and the property card's power row reads the same table, so the
+ * card and the sim cannot disagree. PLACEHOLDER-balance, unchanged values.
+ * MW per ONLINE consumer building of the kind; residential demand is
+ * population-scaled (POWER_DRAW_MW_PER_CITIZEN per person).
+ */
+export const POWER_DRAW_MW_BY_KIND: { industrial: number; office: number; mine: number } = {
+  industrial: 6,
+  office: 4,
+  mine: 8,
+};
+export const POWER_DRAW_MW_PER_CITIZEN = 0.012;
+
 export const powerStats: (s: SimState) => { need: number; cap: number } = memoOnState(
   (s) => computePowerStats(s)
 );
@@ -4154,7 +4170,12 @@ function computePowerStats(s: SimState): { need: number; cap: number } {
     else if (sp.kind === 'mine') mine++;
   }
   return {
-    need: Math.round(s.population * 0.012 + industrial * 6 + office * 4 + mine * 8),
+    need: Math.round(
+      s.population * POWER_DRAW_MW_PER_CITIZEN +
+        industrial * POWER_DRAW_MW_BY_KIND.industrial +
+        office * POWER_DRAW_MW_BY_KIND.office +
+        mine * POWER_DRAW_MW_BY_KIND.mine,
+    ),
     // FEAT-1972079906 inc2: Energy-from-Waste plants add THROUGHPUT-based MW to grid
     // capacity (efwPowerOf) — it feeds the same surplus/Grid-Export path as any power
     // plant. Cannot double-count: the EfW spec carries no `mw`, so it is absent from the
