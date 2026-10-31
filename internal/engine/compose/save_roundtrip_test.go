@@ -128,7 +128,8 @@ func TestSaveRoundTrip_PerModuleStateIsByteIdentical(t *testing.T) {
 
 	// Sanity: the driven composition is genuinely non-trivial (some module
 	// state moved off its post-Wire default), so an all-empty "round trip"
-	// cannot pass vacuously. Fifteen participants as of BUG-752: the
+	// cannot pass vacuously. Sixteen participants as of FEAT-2326609832
+	// (policies joined the list; fifteen as of BUG-752): the
 	// seven stateful modules + crime + the stateless market/consumption
 	// scaffolds (empty-but-conformant, Aaron 2026-09-01) + attract (closes
 	// the LoadAt cross-month-boundary gap, FEAT-1972079947) + services
@@ -137,8 +138,8 @@ func TestSaveRoundTrip_PerModuleStateIsByteIdentical(t *testing.T) {
 	// cursor participant) + firms (BUG-752's own registry/founder-history/
 	// culture-window/lifecycle-event participant) + the compose-owned
 	// ledger participant.
-	if len(streamsA) != 15 {
-		t.Fatalf("expected 15 participants, got %d", len(streamsA))
+	if len(streamsA) != 16 {
+		t.Fatalf("expected 16 participants, got %d", len(streamsA))
 	}
 
 	dir := t.TempDir()

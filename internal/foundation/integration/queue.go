@@ -139,6 +139,8 @@ var kindClass = map[protocol.Kind]Class{
 	protocol.KindBuild:         ClassT1Batchable,
 	protocol.KindDemolish:      ClassT1Batchable,
 	protocol.KindSetFunding:    ClassT1Batchable,
+	protocol.KindEnactPolicy:   ClassT1Batchable,
+	protocol.KindRepealPolicy:  ClassT1Batchable,
 }
 
 // classOfDefault is the Class an unrecognised Kind falls back to — see

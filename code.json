@@ -5263,6 +5263,21 @@
             "key": "engine.spiral",
             "moduleGuid": "3a339420-be56-4126-bae7-086e7d20fdb8",
             "inboundGuid": "839b5566-8881-4322-adc8-461381e039ad"
+          },
+          {
+            "key": "engine.policies",
+            "moduleGuid": "c364533c-6d39-45c5-b7a7-9abfb0459681",
+            "inboundGuid": "09d0d31a-a860-4a7d-aaf3-868ec16894e2"
+          },
+          {
+            "key": "engine.tax",
+            "moduleGuid": "0b7ec47b-a0bc-4ead-b39e-296c9fb39142",
+            "inboundGuid": "ce583be9-355d-4989-be63-cf08a3395f14"
+          },
+          {
+            "key": "engine.projections",
+            "moduleGuid": "56d13d82-76bd-4919-8b73-b796b4e37bf5",
+            "inboundGuid": "4d6f5619-e6e2-4a10-9f77-71192d1299c4"
           }
         ]
       },
@@ -5397,6 +5412,10 @@
           {
             "key": "engine.spiral",
             "outboundGuid": "bed174ed-42bc-4b19-9381-939b51985b3b"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "feat.extraction",
@@ -8488,6 +8507,10 @@
             "outboundGuid": "651073d5-281f-45c8-aa76-2ccc1c7ba6da"
           },
           {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
             "key": "ui.screen.districts",
             "outboundGuid": "30ce8c12-6843-4876-8405-756280e23988"
           },
@@ -9465,6 +9488,10 @@
           {
             "key": "engine.worklife",
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "ui.screen.districts",

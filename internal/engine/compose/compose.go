@@ -554,6 +554,9 @@ var registrationOrder = []moduleRegistration{
 	{name: "market", phase: core.PhaseConsumptionShortfall, hook: func(st *simState) core.PhaseHook { return noopHook{name: "market", st: st} }},
 	{name: "consumption", phase: core.PhaseConsumptionShortfall, hook: func(st *simState) core.PhaseHook { return &consumptionHook{st: st} }},
 	{name: "finance", phase: core.PhaseFinance, hook: func(st *simState) core.PhaseHook { return &financeHook{st: st} }},
+	// FEAT-2326609832: engine.policies' monthly AdvanceMonth, after finance
+	// so BeginMonth has opened the month's tick log its opex lines land in.
+	{name: "policies", phase: core.PhaseFinance, hook: func(st *simState) core.PhaseHook { return &policiesHook{st: st} }},
 	// BUG-268: build was wired against the monthly PhaseLandValueDecay slot,
 	// so BuildAPI.Tick's one-simulation-DAY-per-call cadence (build.go's
 	// daysPerTick) only ever fired once per simulation MONTH — a 45-day
@@ -673,6 +676,9 @@ var viewRegistrationOrder = []viewRegistration{
 	// today.
 	{name: chromeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildChromeTopBarPatch }},
 	{name: viewportViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildViewportPatch }},
+	// FEAT-2326609832: "f7.policies" - the policy library, active enactments,
+	// conflicts, drift events and stored at-enact series (policies_publish.go).
+	{name: policiesViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildPoliciesPatch }},
 }
 
 // RegisteredViewNames returns a defensive copy of the fixed view
@@ -1493,7 +1499,13 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		}
 	}
 
+	polState, err := buildPolicies(cid, financeAPI)
+	if err != nil {
+		return nil, err
+	}
+
 	st := &simState{
+		pol:                        polState,
 		e:                          e,
 		cid:                        cid,
 		seed:                       e.WorldSeed(),
@@ -1565,9 +1577,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	if err := c.SetMortalityModifier(func() float64 { return st.wellbeingStatus.MortalityModifier }, cid); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "citizens", "step": "SetMortalityModifier"})
 	}
-	if err := attractAPI.SetWellbeingModifiers(func() (float64, float64) {
-		return st.wellbeingStatus.SatisfactionModifier, st.wellbeingStatus.EmigrationModifier
-	}); err != nil {
+	if err := attractAPI.SetWellbeingModifiers(st.attractWellbeing); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract", "step": "SetWellbeingModifiers"})
 	}
 	if err := firmsAPI.SetProductivityModifier(func() float64 { return st.wellbeingStatus.ProductivityModifier }); err != nil {
@@ -1813,6 +1823,9 @@ func idNamespaceRangesDisjoint(fertilityChildIDBase, migrantIDBase uint64) bool 
 // simulation ever reads it) and it cannot drift, because st.treasury is
 // never assigned outside setTreasury.
 type simState struct {
+	// pol is the FEAT-2326609832 engine.policies bundle (policies_wire.go).
+	pol *policiesState
+
 	e    *core.Engine
 	cid  string
 	seed uint64
@@ -2383,7 +2396,11 @@ func (h *coldPassHook) ApplyEffect(eff core.Effect) {
 func (h *coldPassHook) SingleShard() bool { return true }
 
 // financeEffect is the monthly finance stub's tick marker.
-type financeEffect struct{}
+type financeEffect struct {
+	// wageEffect is economy.wage.level's combined citywide effect, read in
+	// RunShard (never in ApplyEffect) per the RunShard/ApplyEffect split.
+	wageEffect float64
+}
 
 // financeHook is the baseline-one finance stub: a budget-closing wage/tax
 // transfer. Wages move treasury -> citizen wealth; tax moves citizen
@@ -2397,11 +2414,12 @@ func (h *financeHook) RunShard(shard int) ([]core.Effect, error) {
 	if shard != 0 {
 		return nil, nil
 	}
-	return []core.Effect{{Sequence: 0, Payload: financeEffect{}}}, nil
+	return []core.Effect{{Sequence: 0, Payload: financeEffect{wageEffect: h.st.policyWageEffect()}}}, nil
 }
 
 func (h *financeHook) ApplyEffect(eff core.Effect) {
-	if _, ok := eff.Payload.(financeEffect); !ok {
+	fe, ok := eff.Payload.(financeEffect)
+	if !ok {
 		return
 	}
 	st := h.st
@@ -2633,6 +2651,20 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 			// report a phantom failure for a month that had nothing to
 			// fail).
 			st.finance.RecordPayrollShortfall(clock.Month(), 0)
+		}
+
+		// FEAT-2326609832: engine.policies' economy.wage.level lever. The
+		// extra wage (basis-point scaled, integer) is a separate visible
+		// treasury -> households PostWages leg AFTER the floor top-up, so the
+		// floor logic above is untouched and the ledger stays double-entry.
+		if fe.wageEffect != 0 {
+			if extra := scaleWageBill(wagePosted, fe.wageEffect) - wagePosted; extra > 0 {
+				if posted, err := st.finance.PostWages(finance.Money(extra)); err == nil {
+					wagePosted = num.SatAdd(wagePosted, int64(posted))
+				} else {
+					_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "PostWages.policyWageLevel", "cause": err.Error()})
+				}
+			}
 		}
 
 		if wagePosted > 0 {
@@ -4157,6 +4189,8 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		// *errs.E directly, exactly the same shape Zone/Build/Demolish's
 		// own pass-through errors already take above.
 		return st.services.SetFunding(services.ServiceID(p.ServiceID), p.Level)
+	case protocol.KindEnactPolicy, protocol.KindRepealPolicy:
+		return st.handlePolicyCommand(cmd)
 	default:
 		return st.gameplayReject(cmd.Kind, "unhandled gameplay kind")
 	}

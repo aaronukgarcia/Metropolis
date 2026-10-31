@@ -162,6 +162,9 @@ func (c *Composition) StateDigest() [32]byte {
 	digestInt64(h, st.moneyOpening)
 	digestInt64(h, st.moneyDelta)
 
+	// FEAT-2326609832: engine.policies state (only once a player used it).
+	st.digestPolicies(h)
+
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out

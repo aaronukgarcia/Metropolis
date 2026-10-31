@@ -162,7 +162,8 @@
       "V940-V949": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\"; FEAT-2326609800 inc7 renumbers here per r3 lead amendment)",
       "V883-V883": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-09 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V950-V959": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-10 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V960-V969": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-11 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V960-V969": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-11 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "G5500-G5599": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -6168,6 +6169,12 @@
       "module": "ui.webconsole",
       "message": "sectorKeyOf received an out-of-bounds or non-integer tile ({x}, {y})",
       "remedy": "BUG-1023: sectorKeyOf's grid bucketing is only defined for integer tiles inside [0, MAP_W) x [0, MAP_H) -- an off-map or fractional origin would otherwise silently ALIAS into a legitimate neighbouring sector's aggregate (or a NaN/negative key untouched by any structural gate) instead of failing loudly. Fix the caller that produced the out-of-range building coordinate."
+    },
+    "MET-G5500": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "Policy command {kind} rejected: {cause}",
+      "remedy": "Send a well-formed EnactPolicy or RepealPolicy command: a non-empty policy or enactment id of at most 64 characters, a scope kind of citywide, district or road, and district or road ids of at most 64 characters."
     }
   }
 }
