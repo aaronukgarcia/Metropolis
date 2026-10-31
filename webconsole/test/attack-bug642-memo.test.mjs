@@ -165,7 +165,10 @@ test('ATTACK (b): engine.ts contains no in-place mutation of buildings/builtTick
     /\bstate\.buildings\s*\[[^\]]*\]\s*=/, // state.buildings[i] = ...
     /\bstate\.buildings\.push\(/, // state.buildings.push(...)
     /\bstate\.buildings\s*=\s*(?!\[\.\.\.|\[$)/, // state.buildings = <not a fresh array literal>
-    /\bb\.builtTick\s*=/, // b.builtTick = ... (mutating a building object)
+    // (?![=~<>]) keeps this an ASSIGNMENT detector: `b.builtTick == null`
+    // (a comparison, FEAT-2326609764 inc2's schedule diff) must not match —
+    // the regex originally matched the first `=` of `==` (2026-10-31).
+    /\bb\.builtTick\s*=(?![=~<>])/, // b.builtTick = ... (mutating a building object)
     /\bstate\.pipeTier\s*\[[^\]]*\]\s*=/, // state.pipeTier[id] = ... (not a spread)
   ];
   for (const pattern of dangerousPatterns) {
