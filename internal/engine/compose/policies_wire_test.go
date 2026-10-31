@@ -365,7 +365,10 @@ func TestPoliciesWire_AC9_SaveLoadAndDeterminism(t *testing.T) {
 		advanceMonths(t, e, 2)
 		return comp.StateDigest()
 	}
-	if run() != run() {
+	// Two independent same-seed runs (run wires a fresh engine per call).
+	first := run()
+	second := run()
+	if first != second {
 		t.Fatal("two same-seed runs produced different digests")
 	}
 

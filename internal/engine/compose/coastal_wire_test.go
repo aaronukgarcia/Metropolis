@@ -196,7 +196,7 @@ func TestCoastalWire_AC2_ArrivalsDeterministicAndConditionsDirectional(t *testin
 	// Directional (lead ruling: basePerMonth=1.0 means cond=0 still arrives).
 	lo := runCoastalScenario(t, coastalTestSeed, 24, func(c *coastal.CoastalAPI) { _ = c.SetWorldConditions(0) })
 	hi := runCoastalScenario(t, coastalTestSeed, 24, func(c *coastal.CoastalAPI) { _ = c.SetWorldConditions(1) })
-	if !(ci(hi.comp).Arrivals > ci(lo.comp).Arrivals) {
+	if ci(hi.comp).Arrivals <= ci(lo.comp).Arrivals {
 		t.Fatalf("arrivals(cond=1)=%d not > arrivals(cond=0)=%d: driver not read live", ci(hi.comp).Arrivals, ci(lo.comp).Arrivals)
 	}
 }
@@ -389,12 +389,12 @@ func TestCoastalWire_AC6_ProcessingFundingMovesBacklogAndSpend(t *testing.T) {
 		_ = c.SetProcessingFunding(0.0)
 	})
 	bA, bB := hiFund.comp.state.coastalW.api.Backlog(), loFund.comp.state.coastalW.api.Backlog()
-	if !(bA < bB) {
+	if bA >= bB {
 		t.Fatalf("backlog A(high funding)=%d not < B(low funding)=%d", bA, bB)
 	}
 	pA := hiFund.comp.CoastalPostedMicropounds()["processing"]
 	pB := loFund.comp.CoastalPostedMicropounds()["processing"]
-	if !(pA > pB) {
+	if pA <= pB {
 		t.Fatalf("processing spend on ledger A=%d not > B=%d", pA, pB)
 	}
 }
@@ -407,6 +407,7 @@ func TestCoastalWire_AC7_MigrationInflowCountsCoastalOnce(t *testing.T) {
 		t.Fatalf("nil coastal wiring: inflow %d, want 7", got)
 	}
 	st.coastalW = &coastalWiring{lastGranted: 3}
+	st.coastalW.self.Store(st.coastalW) // as newCoastalWiring does; a bare literal is rejected as a copy
 	if got := st.migrationInflow(7); got != 10 {
 		t.Fatalf("inflow = %d, want attract 7 + coastal 3 = 10 (each once)", got)
 	}
