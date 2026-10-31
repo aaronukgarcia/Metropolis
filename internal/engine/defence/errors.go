@@ -77,4 +77,13 @@ const (
 	// a FacilityID that was never built (AC-9/AC-11). Never a zero-value
 	// figure returned as if a real facility stood there.
 	ErrNoFacility = "MET-G3810"
+
+	// ErrBidCapReached: a second grant bid for the same pot in the same
+	// calendar month (r2 of FEAT-2326609836: bids are free, so they are capped
+	// at one per pot per month; otherwise repeated bids mint unlimited money).
+	ErrBidCapReached = "MET-G3811"
+
+	// ErrBidUnaffordable: the bid's match funding exceeds the current treasury
+	// balance. The match is a commitment that must be affordable at bid time.
+	ErrBidUnaffordable = "MET-G3812"
 )

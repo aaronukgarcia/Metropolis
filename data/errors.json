@@ -4197,6 +4197,18 @@
       "message": "facility query referenced an unknown or closed facility {facility}",
       "remedy": "Facility IDs are minted only when a mandate is accepted (GR#20). A payroll/procurement/closure query against an ID outside the built-facility set is rejected rather than returning a fabricated zero-value figure (AC-9/AC-11)."
     },
+    "MET-G3811": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "grant bid for pot {pot} refused: a bid for this pot was already made in month {month}",
+      "remedy": "Grant bids are free, so each pot accepts at most one bid per calendar month; bid again next month."
+    },
+    "MET-G3812": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "grant bid for pot {pot} refused: match funding {matchFunding} exceeds the treasury balance {treasury}",
+      "remedy": "Bid with a match funding the treasury can currently afford; nothing was drawn or posted."
+    },
     "MET-G3900": {
       "severity": "error",
       "module": "engine.roads",
@@ -6232,6 +6244,36 @@
       "module": "feat.compositionroot",
       "message": "funding cut on social service {serviceId} refused over the command seam: {cause}",
       "remedy": "a social funding cut is a Slow-Fuse decision and needs a projected consequence; the plain command can only raise funding"
+    },
+    "MET-G5495": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "mandate {mandate} cannot be answered: population {population} has not reached its threshold",
+      "remedy": "A defence mandate can only be accepted or refused once the city population reaches its data/defence.json populationThreshold; check the f4.defence pendingMandates list."
+    },
+    "MET-G5496": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "defence command {kind} rejected: {cause}",
+      "remedy": "Check the payload shape and that engine.defence is wired into the composition."
+    },
+    "MET-G5497": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "defence save record is invalid: {cause}",
+      "remedy": "The defence save record failed validation on load; restore from an earlier save."
+    },
+    "MET-G5498": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "defence personnel citizen id allocator exhausted or colliding at id {id} (limit {limit})",
+      "remedy": "The compose citizen id allocator reached the migrant id namespace or the seeded resident range; personnel cannot be minted."
+    },
+    "MET-G5499": {
+      "severity": "warn",
+      "module": "feat.compositionroot",
+      "message": "defence facility {line} for month {month} was not posted to the ledger (amount {amountMicropounds}): {cause}",
+      "remedy": "The monthly defence payroll or procurement ledger posting was rejected; see the logged cause. The month is not retried."
     }
   }
 }

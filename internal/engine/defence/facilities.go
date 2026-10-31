@@ -301,6 +301,11 @@ func (d *DefenceAPI) personnelRecord(facilityID FacilityID, index int64, child b
 // the world seed — a pure function, so two settlements of the same facility
 // produce the same IDs and no shared counter can collide (AC-8/AC-13).
 func (d *DefenceAPI) personnelID(facilityID FacilityID, index int64) uint64 {
+	// FEAT-2326609836: ids drawn from the composition's allocator are stored on
+	// the facility; the hash derivation is the standalone fallback.
+	if f, ok := d.facilities[facilityID]; ok && index >= 0 && index < int64(len(f.ids)) {
+		return f.ids[index]
+	}
 	stream := det.NewStream(d.worldSeed, uint64(facilityID), index, personnelPurpose)
 	return stream.At(0)
 }

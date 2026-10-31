@@ -278,8 +278,12 @@ const (
 	ErrCoastalStateInvalid = "MET-G5484"
 )
 
-// FEAT-2326609834 (wire engine.social): codes MET-G5490..G5493, claimed via
-// tools/plan/add-error.js claim-range feat.compositionroot --layer G.
+// FEAT-2326609834 (wire engine.social): codes MET-G5490..G5493 and
+// FEAT-2326609836 (wire engine.defence): codes MET-G5495..G5499, both under
+// the G5490-G5499 feat.compositionroot reservation (tools/plan/add-error.js
+// claim-range). The two lanes claimed the same block in parallel; the lead
+// renumbered defence to the upper half at port (the documented
+// parallel-lane claim-range collision, 2026-10-31).
 const (
 	// ErrSocialAdvanceFailed: engine.social's monthly AdvanceMonth (or the
 	// driver gather feeding it) returned an error.
@@ -296,4 +300,24 @@ const (
 	// plain SetFunding command seam (a Slow-Fuse decision needing a projected
 	// consequence that the seam cannot carry).
 	ErrSocialFundingCutRefused = "MET-G5493"
+
+	// ErrDefenceMandateNotPending: a mandate response named a mandate whose
+	// population threshold the city has not reached.
+	ErrDefenceMandateNotPending = "MET-G5495"
+
+	// ErrDefenceCommandInvalid: a defence protocol command was malformed or
+	// engine.defence is not wired.
+	ErrDefenceCommandInvalid = "MET-G5496"
+
+	// ErrDefenceStateInvalid: a defence save record failed validation on
+	// restore.
+	ErrDefenceStateInvalid = "MET-G5497"
+
+	// ErrDefenceCitizenIDCollision: the compose citizen id allocator, asked
+	// for a defence-personnel citizen id, reached a reserved id namespace.
+	ErrDefenceCitizenIDCollision = "MET-G5498"
+
+	// ErrDefenceFacilityUnposted: a monthly facility payroll or procurement
+	// line was rejected by the ledger (logged, not retried).
+	ErrDefenceFacilityUnposted = "MET-G5499"
 )

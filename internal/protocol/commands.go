@@ -71,6 +71,14 @@ const (
 	// enactment by id. Added per the additive extension rule above.
 	KindEnactPolicy  Kind = "EnactPolicy"
 	KindRepealPolicy Kind = "RepealPolicy"
+
+	// KindBidForGrant / KindRespondToMandate are the defence wiring's command
+	// vocabulary (wire engine.defence, FEAT-2326609836): bid for a
+	// competitive central-government grant pot, and accept (siting a facility)
+	// or refuse a population-threshold defence mandate. Added per the
+	// additive extension rule above.
+	KindBidForGrant      Kind = "BidForGrant"
+	KindRespondToMandate Kind = "RespondToMandate"
 )
 
 // AdvanceTicksPayload requests the engine advance the simulation by N
@@ -273,6 +281,29 @@ type RepealPolicyPayload struct {
 
 func (RepealPolicyPayload) commandKind() Kind { return KindRepealPolicy }
 
+// BidForGrantPayload requests a competitive grant bid. Pot is the data-
+// authored pot id (data/defence.json); MatchFundingMicropounds is the match
+// funding committed. All validation (unknown pot, negative match, refusal in
+// effect) is the engine's (compose.handleGameplay -> engine.defence).
+type BidForGrantPayload struct {
+	Pot                     string `json:"pot"`
+	MatchFundingMicropounds int64  `json:"matchFundingMicropounds"`
+}
+
+func (BidForGrantPayload) commandKind() Kind { return KindBidForGrant }
+
+// RespondToMandatePayload answers a pending defence mandate: Refuse=true
+// records a priced refusal; otherwise Choice names one compliant choice and
+// Cell the site to build it on.
+type RespondToMandatePayload struct {
+	MandateID string  `json:"mandateId"`
+	Refuse    bool    `json:"refuse"`
+	Choice    string  `json:"choice,omitempty"`
+	Cell      CellRef `json:"cell"`
+}
+
+func (RespondToMandatePayload) commandKind() Kind { return KindRespondToMandate }
+
 // commandRegistry maps every known Kind to a factory that returns a
 // fresh, zero-valued pointer to that Kind's payload type. codec.go uses
 // it to make decoding table-driven: an unrecognized Kind is a typed
@@ -299,6 +330,9 @@ var commandRegistry = map[Kind]func() CommandPayload{
 	KindSetFunding:    func() CommandPayload { return &SetFundingPayload{} },
 	KindEnactPolicy:   func() CommandPayload { return &EnactPolicyPayload{} },
 	KindRepealPolicy:  func() CommandPayload { return &RepealPolicyPayload{} },
+
+	KindBidForGrant:      func() CommandPayload { return &BidForGrantPayload{} },
+	KindRespondToMandate: func() CommandPayload { return &RespondToMandatePayload{} },
 }
 
 // KnownKinds returns the registered command Kinds, for diagnostics and

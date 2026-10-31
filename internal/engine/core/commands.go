@@ -269,7 +269,7 @@ func (e *Engine) dispatchCommand(cmd protocol.Command) protocol.CommandResult {
 		return e.handleInspectEntity(cmd)
 	case protocol.KindDebug:
 		return e.handleDebug(cmd)
-	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish, protocol.KindSetFunding, protocol.KindEnactPolicy, protocol.KindRepealPolicy:
+	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish, protocol.KindSetFunding, protocol.KindEnactPolicy, protocol.KindRepealPolicy, protocol.KindBidForGrant, protocol.KindRespondToMandate:
 		return e.handleGameplay(cmd, correlationID)
 	default:
 		return e.reject(cmd, errs.New(ErrUnhandledCommandKind, correlationID, map[string]any{"kind": string(cmd.Kind)}))

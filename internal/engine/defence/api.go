@@ -55,6 +55,17 @@ type DefenceAPI struct {
 	// deterministic draw (det.NewStream(worldSeed, bidSeq, month, purpose)).
 	bidSeq uint64
 
+	// lastBidMonth is the per-pot cap state (r2 of FEAT-2326609836): the
+	// calendar month of the most recent accepted bid for each pot. One bid per
+	// pot per month; saved by Snapshot/Restore and folded into the digest.
+	lastBidMonth map[string]int64
+
+	// allocID, when set (FEAT-2326609836), is the composition's citizen id
+	// allocator: facility personnel and children take their ids from it so
+	// they can never collide with another settlement path. nil keeps the
+	// standalone deterministic hash ids (personnelID).
+	allocID func() (uint64, error)
+
 	// self is the SEC-020 copy guard (atomic.Pointer), stored exactly once in
 	// New before the value is returned to any caller.
 	self atomic.Pointer[DefenceAPI]
@@ -76,6 +87,23 @@ type facility struct {
 	schoolPlaces    int64
 	procurement     finance.Money
 	closed          bool
+	// ids are the citizen ids settled for this facility, in roster order:
+	// personnel first (index 0..personnel-1) then forces-families children.
+	ids []uint64
+}
+
+// SetCitizenIDAllocator wires the composition's citizen id allocator
+// (FEAT-2326609836). With it set, RespondToMandate draws every personnel and
+// child id from it BEFORE any mutation, so a failing allocator leaves no
+// half-applied response.
+func (d *DefenceAPI) SetCitizenIDAllocator(alloc func() (uint64, error)) error {
+	if err := d.checkNotCopied("SetCitizenIDAllocator"); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.allocID = alloc
+	return nil
 }
 
 // New constructs a ready-to-wire DefenceAPI from a validated Config.
@@ -98,6 +126,7 @@ func New(cfg Config, worldSeed uint64, correlationID string) (*DefenceAPI, error
 		wageBillFactor:  1,
 		responses:       make(map[string]MandateResult),
 		refusedMandates: make(map[string]bool),
+		lastBidMonth:    make(map[string]int64),
 		facilities:      make(map[FacilityID]*facility),
 		nextFacilityID:  1,
 	}

@@ -30,7 +30,7 @@ func TestConcurrentBids_DeterministicLedgerTotal(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			for i := 0; i < perWriter; i++ {
-				r, err := d.BidForGrant(GrantBid{Pot: "transport", MatchFunding: 100_000_000, Month: int64(i)})
+				r, err := d.BidForGrant(GrantBid{Pot: "transport", MatchFunding: 0, Month: int64(g*perWriter + i)})
 				if err != nil {
 					errCh <- err
 					return

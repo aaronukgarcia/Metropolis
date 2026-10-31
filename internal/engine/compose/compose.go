@@ -15,6 +15,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/deathservices"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/defence"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/extcommute"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
@@ -380,6 +381,11 @@ type Deps struct {
 	// services offset by socialServiceCount). Default false = real social.
 	SocialQuiet bool
 
+	// Defence overrides construction of the MOD-067 engine.defence module
+	// (default: defence.LoadDefault). nil is the common boot case; the test
+	// seam lets a caller inject a pre-configured instance (FEAT-2326609836).
+	Defence *defence.DefenceAPI
+
 	// Services overrides construction of the FEAT-167-completion
 	// ServiceCoverage source module (default: services.LoadDefault). nil
 	// is the common boot case; the test seam lets a caller inject a
@@ -580,6 +586,12 @@ var registrationOrder = []moduleRegistration{
 	// lever's posting lands before benefits are sized (same-phase slice order,
 	// GR#21).
 	{name: "fiscal", phase: core.PhaseFinance, hook: func(st *simState) core.PhaseHook { return &fiscalHook{st: st} }},
+	// FEAT-2326609836: engine.defence's monthly facility payroll/procurement
+	// posting (defence_wire.go), AFTER fiscal on PhaseFinance so it posts into
+	// the month finance opened (BeginMonth) and the month-window ledger reads
+	// are safe (BUG-1141); a grant won earlier in the month is already in the
+	// same tick log.
+	{name: "defence", phase: core.PhaseFinance, hook: func(st *simState) core.PhaseHook { return &defenceHook{st: st} }},
 	// BUG-268: build was wired against the monthly PhaseLandValueDecay slot,
 	// so BuildAPI.Tick's one-simulation-DAY-per-call cadence (build.go's
 	// daysPerTick) only ever fired once per simulation MONTH — a 45-day
@@ -718,6 +730,8 @@ var viewRegistrationOrder = []viewRegistration{
 	// FEAT-2326609833: "f4.coastal" (coastal_publish.go).
 	{name: coastalViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildCoastalPatch }},
 	{name: socialViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildSocialPatch }},
+	// FEAT-2326609836: "f4.defence" (defence_publish.go).
+	{name: defenceViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildDefencePatch }},
 }
 
 // RegisteredViewNames returns a defensive copy of the fixed view
@@ -1554,9 +1568,15 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, cwErr, map[string]any{"module": "coastal"})
 	}
 
+	defenceW, dwErr := newDefenceWiring(deps.Defence, e.WorldSeed(), cid)
+	if dwErr != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, dwErr, map[string]any{"module": "defence"})
+	}
+
 	st := &simState{
 		pol:                        polState,
 		coastalW:                   coastalW,
+		defenceW:                   defenceW,
 		e:                          e,
 		cid:                        cid,
 		seed:                       e.WorldSeed(),
@@ -1756,6 +1776,9 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 
 	if err := coastalW.bind(st); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "coastal"})
+	}
+	if err := defenceW.bind(st); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "defence"})
 	}
 
 	// FEAT-2326609834: engine.social (social_wire.go), built once st exists so it
@@ -2028,6 +2051,9 @@ type simState struct {
 	coastalW *coastalWiring
 	// socialW is the FEAT-2326609834 engine.social wiring (social_wire.go).
 	socialW *socialWiring
+
+	// defenceW is the FEAT-2326609836 engine.defence wiring (defence_wire.go).
+	defenceW *defenceWiring
 
 	// deathServiceCemeteryIDs / deathServiceCrematoriumIDs (BUG-720) remain
 	// EXACTLY the Wire-time stopgap roster the original doc described:
@@ -4269,6 +4295,8 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		return st.services.SetFunding(services.ServiceID(p.ServiceID), p.Level)
 	case protocol.KindEnactPolicy, protocol.KindRepealPolicy:
 		return st.handlePolicyCommand(cmd)
+	case protocol.KindBidForGrant, protocol.KindRespondToMandate:
+		return st.handleDefenceCommand(cmd)
 	default:
 		return st.gameplayReject(cmd.Kind, "unhandled gameplay kind")
 	}

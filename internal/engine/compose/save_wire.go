@@ -155,6 +155,8 @@ func (c *Composition) Participants() []save.Participant {
 		newCoastalParticipant(st),
 		// FEAT-2326609834: engine.social case ledger + compose posting state.
 		newSocialParticipant(st),
+		// FEAT-2326609836: engine.defence snapshot + compose posting state.
+		newDefenceParticipant(st),
 	}
 }
 
