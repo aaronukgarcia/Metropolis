@@ -153,6 +153,8 @@ func (c *Composition) Participants() []save.Participant {
 		newPoliciesParticipant(st),
 		// FEAT-2326609833: engine.coastal module snapshot + compose posting state.
 		newCoastalParticipant(st),
+		// FEAT-2326609834: engine.social case ledger + compose posting state.
+		newSocialParticipant(st),
 	}
 }
 
@@ -326,6 +328,9 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	}
 	if err := c.state.resetPoliciesIfNoShard(shardKinds); err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "policies", "step": "reset-for-load"})
+	}
+	if err := c.state.resetSocialIfNoShard(shardKinds); err != nil {
+		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "social", "step": "reset-for-load"})
 	}
 	// FEAT-1972079943 — recompute the DERIVED compose-owned ledgers from the
 	// now-restored modules. treasury/citizenWealth are publish-mirrors of the

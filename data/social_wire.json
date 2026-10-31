@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "comment": "FEAT-2326609834 composition-root constants for engine.social (placeholders, Aaron's balance pass; GR#15: no hidden Go literals).",
+  "deprivation": 0.3,
+  "deprivationComment": "Area deprivation index [0,1] fed to social every month: no deprivation model exists in the engine yet, so this is a documented citywide placeholder.",
+  "nightlifeDensity": 0.2,
+  "nightlifeDensityComment": "Nightlife density [0,1]: no nightlife model exists yet; documented placeholder.",
+  "citywidePersonsPerRoom": 0.8,
+  "citywideRentBurden": 0.3,
+  "familyStressComment": "Citywide persons-per-room and rent-burden handed to engine.wellbeing's real Crowding/FinancialStress drivers (no per-citizen housing figure reaches compose yet).",
+  "unemploymentScaleMonths": 60,
+  "unemploymentMonthsComment": "UnemploymentMonths driver = round(unemployed share of the live labour force x this); the mean long-term-unemployment months equivalent of the real unemployment rate.",
+  "caseMonthsFunded": 3,
+  "caseMonthsUnfunded": 12,
+  "caseDurationComment": "An open case is resolved after a duration interpolated linearly on the category's funding level: funded prevention/hostels/housing-first close cases faster, so a funded net makes the caseload shallower.",
+  "initialFunding": 0.5,
+  "initialFundingComment": "Funding level [0,1] each social category starts a new city at (engine.services registers every service unfunded; the player raises or cuts it afterwards).",
+  "supportPerOpenCaseMicropounds": 1000000,
+  "supportComment": "Monthly support transfer per open case, scaled by the category's funding level (treasury -> households). RESCALED 2026-10-31 (r2 rework) from 200000000 to 1000000 = GBP 1/case/month to sit in the fiscal money regime (fiscal benefit is 600000/person); PLACEHOLDER flagged for Aaron's balance pass (ASM-284 / BUG-355 class). Validation caps it at 100x this value."
+}

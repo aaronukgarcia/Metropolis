@@ -277,3 +277,23 @@ const (
 	// restore.
 	ErrCoastalStateInvalid = "MET-G5484"
 )
+
+// FEAT-2326609834 (wire engine.social): codes MET-G5490..G5493, claimed via
+// tools/plan/add-error.js claim-range feat.compositionroot --layer G.
+const (
+	// ErrSocialAdvanceFailed: engine.social's monthly AdvanceMonth (or the
+	// driver gather feeding it) returned an error.
+	ErrSocialAdvanceFailed = "MET-G5490"
+
+	// ErrSocialSupportUnposted: the month's social support transfer could not
+	// be posted to the one-money ledger.
+	ErrSocialSupportUnposted = "MET-G5491"
+
+	// ErrSocialStateInvalid: a social save record failed validation on restore.
+	ErrSocialStateInvalid = "MET-G5492"
+
+	// ErrSocialFundingCutRefused: a funding cut on a social service over the
+	// plain SetFunding command seam (a Slow-Fuse decision needing a projected
+	// consequence that the seam cannot carry).
+	ErrSocialFundingCutRefused = "MET-G5493"
+)

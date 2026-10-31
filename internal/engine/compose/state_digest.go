@@ -168,6 +168,10 @@ func (c *Composition) StateDigest() [32]byte {
 	if st.coastalW != nil {
 		st.coastalW.digestInto(h)
 	}
+	// 7. engine.social (FEAT-2326609834).
+	if st.socialW != nil {
+		st.socialW.digestInto(h)
+	}
 
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
