@@ -1,0 +1,434 @@
+{
+ "schema": "converge-population-journal-v1",
+ "description": "Population natural-change journal (FEAT-1972079936 Phase 3). Shared by internal/converge/population_domain.go and webconsole/test/converge-fixture-emit-population.mjs. seed: cohort of count citizens aged ageYears; advance: days day-ticks (1 tick = 1 Go day-tick, 30 per month); sample: record births/deaths since the last sample plus population. Migration is held at zero on both sides.",
+ "entries": [
+  {
+   "tick": 0,
+   "op": "seed",
+   "args": {
+    "count": 1200,
+    "ageYears": 28
+   }
+  },
+  {
+   "tick": 0,
+   "op": "seed",
+   "args": {
+    "count": 400,
+    "ageYears": 8
+   }
+  },
+  {
+   "tick": 0,
+   "op": "seed",
+   "args": {
+    "count": 300,
+    "ageYears": 55
+   }
+  },
+  {
+   "tick": 0,
+   "op": "seed",
+   "args": {
+    "count": 300,
+    "ageYears": 82
+   }
+  },
+  {
+   "tick": 30,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 30,
+   "op": "sample"
+  },
+  {
+   "tick": 60,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 60,
+   "op": "sample"
+  },
+  {
+   "tick": 90,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 90,
+   "op": "sample"
+  },
+  {
+   "tick": 120,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 120,
+   "op": "sample"
+  },
+  {
+   "tick": 150,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 150,
+   "op": "sample"
+  },
+  {
+   "tick": 180,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 180,
+   "op": "sample"
+  },
+  {
+   "tick": 210,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 210,
+   "op": "sample"
+  },
+  {
+   "tick": 240,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 240,
+   "op": "sample"
+  },
+  {
+   "tick": 270,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 270,
+   "op": "sample"
+  },
+  {
+   "tick": 300,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 300,
+   "op": "sample"
+  },
+  {
+   "tick": 330,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 330,
+   "op": "sample"
+  },
+  {
+   "tick": 360,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 360,
+   "op": "sample"
+  },
+  {
+   "tick": 390,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 390,
+   "op": "sample"
+  },
+  {
+   "tick": 420,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 420,
+   "op": "sample"
+  },
+  {
+   "tick": 450,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 450,
+   "op": "sample"
+  },
+  {
+   "tick": 480,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 480,
+   "op": "sample"
+  },
+  {
+   "tick": 510,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 510,
+   "op": "sample"
+  },
+  {
+   "tick": 540,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 540,
+   "op": "sample"
+  },
+  {
+   "tick": 570,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 570,
+   "op": "sample"
+  },
+  {
+   "tick": 600,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 600,
+   "op": "sample"
+  },
+  {
+   "tick": 630,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 630,
+   "op": "sample"
+  },
+  {
+   "tick": 660,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 660,
+   "op": "sample"
+  },
+  {
+   "tick": 690,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 690,
+   "op": "sample"
+  },
+  {
+   "tick": 720,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 720,
+   "op": "sample"
+  },
+  {
+   "tick": 750,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 750,
+   "op": "sample"
+  },
+  {
+   "tick": 780,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 780,
+   "op": "sample"
+  },
+  {
+   "tick": 810,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 810,
+   "op": "sample"
+  },
+  {
+   "tick": 840,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 840,
+   "op": "sample"
+  },
+  {
+   "tick": 870,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 870,
+   "op": "sample"
+  },
+  {
+   "tick": 900,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 900,
+   "op": "sample"
+  },
+  {
+   "tick": 930,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 930,
+   "op": "sample"
+  },
+  {
+   "tick": 960,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 960,
+   "op": "sample"
+  },
+  {
+   "tick": 990,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 990,
+   "op": "sample"
+  },
+  {
+   "tick": 1020,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 1020,
+   "op": "sample"
+  },
+  {
+   "tick": 1050,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 1050,
+   "op": "sample"
+  },
+  {
+   "tick": 1080,
+   "op": "advance",
+   "args": {
+    "days": 30
+   }
+  },
+  {
+   "tick": 1080,
+   "op": "sample"
+  }
+ ]
+}

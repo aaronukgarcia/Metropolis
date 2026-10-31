@@ -101,3 +101,21 @@ const (
 	// units, not single digits.
 	ServicesCoverageEpsilon = 2
 )
+
+// FEAT-1972079936 Phase 3 population domain (population_domain.go). All
+// values are BALANCE PLACEHOLDERS pending Aaron's balance pass (balance
+// number regime): they are asserted directionally only (a 2x-births
+// candidate must fail, an identical one must pass).
+const (
+	// PopulationDistWindow is the TierDistribution trailing-sample window:
+	// 12 samples = one simulated year at monthly sampling.
+	PopulationDistWindow = 12
+
+	// PopulationBandPct is the relative band on the trailing-window mean for
+	// population/births/deaths (0.25 = within 25% of the reference mean).
+	PopulationBandPct = 0.25
+
+	// PopulationWorldSeed is the fixed world seed the Go reference run uses
+	// (GR#21: a named constant, never wall-clock derived).
+	PopulationWorldSeed = uint64(0x504F50554C415431) // "POPULAT1"
+)

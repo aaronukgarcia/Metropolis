@@ -1,0 +1,329 @@
+{
+  "domain": "population",
+  "samples": [
+    {
+      "tick": 30,
+      "values": {
+        "population": 2230,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 60,
+      "values": {
+        "population": 2260,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 90,
+      "values": {
+        "population": 2290,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 120,
+      "values": {
+        "population": 2320,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 150,
+      "values": {
+        "population": 2350,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 180,
+      "values": {
+        "population": 2380,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 210,
+      "values": {
+        "population": 2410,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 240,
+      "values": {
+        "population": 2440,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 270,
+      "values": {
+        "population": 2470,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 300,
+      "values": {
+        "population": 2500,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 330,
+      "values": {
+        "population": 2530,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 360,
+      "values": {
+        "population": 2560,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 390,
+      "values": {
+        "population": 2590,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 420,
+      "values": {
+        "population": 2620,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 450,
+      "values": {
+        "population": 2650,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 480,
+      "values": {
+        "population": 2680,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 510,
+      "values": {
+        "population": 2710,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 540,
+      "values": {
+        "population": 2740,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 570,
+      "values": {
+        "population": 2770,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 600,
+      "values": {
+        "population": 2800,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 630,
+      "values": {
+        "population": 2830,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 660,
+      "values": {
+        "population": 2860,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 690,
+      "values": {
+        "population": 2890,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 720,
+      "values": {
+        "population": 2920,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 750,
+      "values": {
+        "population": 2950,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 780,
+      "values": {
+        "population": 2980,
+        "births": 60,
+        "deaths": 30,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 810,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 40,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 840,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 60,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 870,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 60,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 900,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 60,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 930,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 60,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 960,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 60,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 990,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 60,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 1020,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 60,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 1050,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 60,
+        "seed_headcount": 2200
+      }
+    },
+    {
+      "tick": 1080,
+      "values": {
+        "population": 3000,
+        "births": 60,
+        "deaths": 60,
+        "seed_headcount": 2200
+      }
+    }
+  ]
+}
