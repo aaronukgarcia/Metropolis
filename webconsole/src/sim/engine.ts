@@ -95,6 +95,25 @@ import {
   wellbeingPartOf,
 } from './data.ts';
 import type { Spec, RoadTier, DemandFixPlanItem } from './data.ts';
+// FEAT-2326609764 inc2 (AC-6/AC-7/AC-8/AC-10): the dirty-sector side-band —
+// see sectorPartition.ts's §7/§8 header comments for the full design. Every
+// call site below is documented against the acceptance doc's AC-8 trigger
+// table; sectorKeyOf is imported here too so a case can compute a building's
+// own sector key without a second `SECTOR_TILES`-derived constant existing
+// in this file (GR#3 — sectorPartition.ts stays the one place the sector
+// grid is defined).
+import {
+  sectorKeyOf,
+  resetPendingDirtySectors,
+  markSectorsDirty,
+  markAllSectorsDirty,
+  commitPendingDirtySectors,
+  scheduleSectorCompletion,
+  rescheduleSectorCompletion,
+  sectorsCompletingAtTick,
+  rebuildCompletionScheduleFromScratch,
+  PARTITIONED_DERIVATIONS,
+} from './sectorPartition.ts';
 // BUG-880 fix — re-export the single shared coverage->wellbeing-part
 // transform (defined in data.ts to avoid a new import cycle) so callers can
 // consume it as `engine.ts`'s wellbeing-part idiom, matching every other
@@ -2066,6 +2085,16 @@ interface BuildingScaleResult {
   cost: number;
   /** number of buildings scaled this pass */
   upgraded: number;
+  /**
+   * FEAT-2326609764 inc2 (AC-8 "Auto-scale tier change" row): the sector
+   * key of EVERY building whose capacityTier actually changed this pass —
+   * gathered here, INSIDE the same loop that already knows exactly which
+   * buildings stepped (`stepById`), so the caller (advance()) never needs
+   * to diff `buildings` against its input to find out. A tier upgrade never
+   * moves a building's origin (x, y) — only its footprint grows OUT — so
+   * this building's ORIGINAL x/y is still its correct sector.
+   */
+  upgradedSectorKeys: number[];
 }
 
 /**
@@ -2217,6 +2246,8 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
   const removeMonitorIds = new Set<number>();
   let cost = 0;
   let upgraded = 0;
+  // FEAT-2326609764 inc2 (AC-8): see BuildingScaleResult.upgradedSectorKeys' doc comment.
+  const upgradedSectorKeys: number[] = [];
 
   // F1 (independent round REJECT, 2026-09-03): ONE shared occupied-tile set,
   // cloned from occupiedSet(s) (never mutate the cached Set it returns) and
@@ -2319,6 +2350,7 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
     }
 
     stepById.set(building.id, { tier: step.newTier, height: step.newHeight, w: step.newW, h: step.newH, locked: step.locked });
+    upgradedSectorKeys.push(sectorKeyOf(building.x, building.y));
     if (step.locked) removeMonitorIds.add(building.id);
     // F1: if this step grew the footprint, claim the new tiles in the SHARED
     // set immediately — before the next monitor in this pass is evaluated —
@@ -2364,7 +2396,7 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
 
   const monitors = removeMonitorIds.size === 0 ? active : active.filter((m) => !removeMonitorIds.has(m.buildingId));
 
-  return { buildings, monitors, cost, upgraded };
+  return { buildings, monitors, cost, upgraded, upgradedSectorKeys };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -6756,6 +6788,13 @@ function undoLastConsolidatorPass(state: SimState): SimState {
   };
 }
 
+/** BUG-1137 (r4): content equality of two sorted connectedRoadTiles lists; absent `before` is never equal. */
+function sameConnectedTiles(before: readonly string[] | undefined, now: readonly string[]): boolean {
+  if (!before || before.length !== now.length) return false;
+  for (let i = 0; i < now.length; i++) if (before[i] !== now[i]) return false;
+  return true;
+}
+
 function advance(s: SimState): SimState {
   // FEAT-1972079923 inc4 (AC-11): the FINAL DECLINE screen is a HARD STOP —
   // once declineState is set, the clock never advances again (no further
@@ -6766,6 +6805,37 @@ function advance(s: SimState): SimState {
   // TICK-BOUNDARY INVARIANT (Round-6): Record funds at tick start for conservation checking.
   const fundsAtTickStart = s.funds;
   const tick = s.tick + 1;
+
+  // FEAT-2326609764 inc2 (AC-10): consume THIS tick's precomputed completion
+  // schedule entry FIRST — before any other mutation below has a chance to
+  // ALSO mark something, so every one of this tick's dirty sectors ends up
+  // in the SAME accumulator regardless of order. Returns `[]`, never `null`,
+  // on a quiet tick.
+  //
+  // BUG-1067 FIX (round finding, lead ruling point 3): the STALENESS was
+  // never this call's promotion of an empty completion list into a real
+  // (empty) dirty Set — that promotion is exactly what AC-10's own "100
+  // ticks with no completions marks zero sectors dirty" requirement needs
+  // (sectorDirty.test.mjs's AC-24.5 test asserts a genuine `.size === 0`
+  // Set, not `null`, on an ordinary quiet tick). The actual bug was that
+  // `reset`/`hydrate` — which wholesale-replace `s.buildings` — had NOTHING
+  // ELSE escalating THEIR OWN transition, so THIS call's harmless empty
+  // mark was left standing in as a false "precisely nothing changed"
+  // signal. Fixed at the source: `rebuildCompletionScheduleFromScratch`
+  // (called by 'reset'/'hydrate' only) now escalates `pendingDirty` to
+  // `'FULL'` itself, before this call ever runs — see that function's own
+  // BUG-1067 doc comment. `'FULL'` is sticky, so this call becomes a
+  // guaranteed no-op on THOSE dispatches regardless of what it is passed,
+  // while an ordinary quiet 'tick' dispatch (which never touches
+  // `rebuildCompletionScheduleFromScratch`) still gets the real, cheap,
+  // informative empty Set it always did.
+  markSectorsDirty(sectorsCompletingAtTick(tick));
+  // BUG-1068 FIX (round finding, lead ruling point 4): captured here so a
+  // check just after the consolidator block below can tell whether ANY
+  // building-introducing pass this tick (road auto-scale, building
+  // auto-scale, sweepOrphanConnects, the consolidator ladder itself) needs
+  // its schedule rebuilt from scratch — see that check's own comment.
+  const buildingsAtAdvanceStart = s.buildings;
 
   // FEAT-1972079907 inc2: MONTHLY road traffic monitoring + auto-scale. Runs on the
   // existing monthly aggregate boundary (no new per-tick hot path). This happens
@@ -6788,6 +6858,15 @@ function advance(s: SimState): SimState {
     roadMonitors = roadScale.monitors;
     autoScaleCost = roadScale.cost;
     autoScaleCount = roadScale.upgraded;
+    // FEAT-2326609764 inc2: a road-tier auto-scale upgrade is NOT an AC-8
+    // table row on its own (a road spec swap keeps the same tiles, and no
+    // road spec carries `jobs`, so inc2's {buildingCount, jobs} aggregate is
+    // provably unaffected) — but it is monthly-cadence and cheap to be
+    // maximally safe about, so escalate via the naive rule rather than
+    // assert an invariant this file cannot enforce if a future road spec
+    // ever gained a jobs/served field. See sectorPartition.ts's NOT_TRACKED
+    // list — this is deliberately TRACKED (full), not NOT_TRACKED.
+    if (roadScale.upgraded > 0) markAllSectorsDirty();
 
     // FEAT-1972079878 inc1: MONTHLY building demand monitoring + auto-scale.
     // Run AFTER road scale so buildings read upgraded road network. BUG: this
@@ -6802,6 +6881,9 @@ function advance(s: SimState): SimState {
     buildingMonitors = buildingScale.monitors;
     buildingAutoScaleCost = buildingScale.cost;
     buildingAutoScaleCount = buildingScale.upgraded;
+    // FEAT-2326609764 inc2 (AC-8 "Auto-scale tier change" row): precise —
+    // exactly the sectors of the buildings that stepped this pass.
+    markSectorsDirty(buildingScale.upgradedSectorKeys);
 
     // Re-bind s to the post-upgrade buildings AND the filtered monitor list for the
     // remainder of the tick. BUG-440: the monitors must ride along too — the sweep
@@ -6814,18 +6896,34 @@ function advance(s: SimState): SimState {
   let orphanConnectCost = 0;
   if (tick % (2 * TICKS_PER_MONTH) === 0) {
     const beforeFunds = s.funds;
+    const beforeBuildings = s.buildings;
     s = sweepOrphanConnects(s);
     orphanConnectCost = beforeFunds - s.funds;
     s = { ...s, funds: beforeFunds };
     scaledBuildings = s.buildings;
     roadMonitors = s.roadMonitors;
+    // FEAT-2326609764 inc2 (AC-8 "autoConnect / sweepOrphanConnects
+    // synthesised roads" row, R3 naive rule): sweepOrphanConnects lays new
+    // connector tiles anywhere orphaned buildings are found — citywide by
+    // construction, so the naive rule applies unconditionally whenever it
+    // actually changed anything.
+    if (s.buildings !== beforeBuildings) markAllSectorsDirty();
   }
 
   // FEAT-1972079891 inc1 (AC-1/AC-12): recompute the connected road network at the
   // START of the tick, AFTER any monthly road auto-scale, so every gate check this
   // tick (computeFlows → isOnline, capacity, consistency) reads the SAME frame's
   // connectivity graph. Pure/deterministic; no Date/random.
-  s = { ...s, roadConnectivity: computeRoadConnectivity(s) };
+  {
+    // BUG-1137 (r4): a carried roadConnectivity that was stale/stripped (un-banded entry state
+    // followed by a non-road first action keeps the stale graph) flips isOnline for gated
+    // buildings here without any precise dirty key naming them. Whenever the recomputed graph
+    // differs from the one carried in, the naive rule applies (commit FULL). Flag OFF: no-op.
+    const connBefore = s.roadConnectivity?.connectedRoadTiles;
+    const connNow = computeRoadConnectivity(s);
+    if (PARTITIONED_DERIVATIONS && !sameConnectedTiles(connBefore, connNow.connectedRoadTiles)) markAllSectorsDirty();
+    s = { ...s, roadConnectivity: connNow };
+  }
 
   // FEAT-2326609761 (CONSOLIDATOR, AC-36): monthly pass, gated on
   // consolidatorEnabled, running right after the auto-scale block above (this
@@ -6857,6 +6955,11 @@ function advance(s: SimState): SimState {
   // SAME day (glide window + month-12 whole-map) always get distinct,
   // correctly-ordered ids.
   const consolidatorPriorLogId = (s.consolidatorLog ?? [])[0]?.id ?? 0;
+  // FEAT-2326609764 inc2: not itself an AC-8 row (the consolidator demolishes
+  // AND builds, potentially citywide, across sections the pass's own
+  // scoring picked — not a single known building/tile), captured here so the
+  // block below can detect whether it actually changed anything.
+  const buildingsBeforeConsolidator = s.buildings;
   if (s.consolidatorEnabled ?? false) {
     const mode = s.consolidatorMode ?? CONSOLIDATOR_MODE_DEFAULT;
     // AC-6/ruling 7's monthly-twelfth rotation already treats month 12 as a
@@ -6928,6 +7031,53 @@ function advance(s: SimState): SimState {
       // inflows just below), not trusted bare off the pass's own state.
       s = { ...afterConsolidator, ledger: preLedger, nextLedgerId: preLedgerId, funds: preFunds };
       scaledBuildings = s.buildings;
+    }
+  }
+  // FEAT-2326609764 inc2 (R3 naive rule): the consolidator pass (either
+  // loop iteration above) demolished and/or built — citywide by
+  // construction (see the doc comment on `buildingsBeforeConsolidator`).
+  if (s.buildings !== buildingsBeforeConsolidator) markAllSectorsDirty();
+
+  // BUG-1068 FIX (round finding, lead ruling point 4, P2): every
+  // building-introducing pass ABOVE this point this tick (road auto-scale,
+  // building auto-scale, sweepOrphanConnects' synthesised connectors, the
+  // consolidator ladder's own builds) escalates the DIRTY tracking for
+  // TODAY'S sector aggregates (markAllSectorsDirty/markSectorsDirty, each
+  // block's own call above) — but none of them registered a §8 COMPLETION
+  // SCHEDULE entry for any brand-new under-construction building they
+  // introduced, so a long-`constructionTicks` tier (com_hypermarket ct=60,
+  // ind_estate ct=120, off_tower_canary ct=472, ...) completing weeks later
+  // on an otherwise-quiet tick would never mark its own sector — the exact
+  // "nothing to dirty its sector" gap the round's BUG-1068 finding named.
+  // Fixed here, ONCE, for every one of those paths at once: diff
+  // `s.buildings` against `buildingsAtAdvanceStart` (captured at the very
+  // top of this function) by id, and `scheduleSectorCompletion` every
+  // NEWLY-PRESENT, still-under-construction building found. Deliberately
+  // uses `scheduleSectorCompletion` (an incremental ADD), never
+  // `rebuildCompletionScheduleFromScratch` — the latter also escalates
+  // `pendingDirty` to `'FULL'` (correct for reset/hydrate's WHOLESALE
+  // replacement, see that function's own doc comment) which would needlessly
+  // demote `evaluateBuildingMonitors`' precise `upgradedSectorKeys` mark
+  // back into a full recompute for today's aggregates even though only the
+  // FUTURE completion bookkeeping had a gap.
+  // Guarded on the flag itself (mirrors every function in sectorPartition.ts
+  // §7/§8 — BUG-1069's "zero work with the flag OFF" requirement): with
+  // PARTITIONED_DERIVATIONS off, scheduleSectorCompletion is already a
+  // no-op, but the id-Set diff below would still cost O(buildings) on every
+  // monthly consolidator/auto-scale/sweep pass for nothing — measured
+  // regression on the 49k-building glide-perf suite (consolidator-glide-perf
+  // .test.mjs) before this guard was added.
+  if (PARTITIONED_DERIVATIONS && s.buildings !== buildingsAtAdvanceStart) {
+    const priorBuildingIds = new Set(buildingsAtAdvanceStart.map((b) => b.id));
+    for (const b of s.buildings) {
+      if (priorBuildingIds.has(b.id)) continue; // pre-existing building — already scheduled (or intentionally not) when it was first placed
+      if (b.builtTick == null) continue;
+      const sp = SPECS[b.spec];
+      if (!sp) continue;
+      const ticksToComplete = constructionTicks(sp);
+      if (tick - b.builtTick < ticksToComplete) {
+        scheduleSectorCompletion(b.builtTick + ticksToComplete, sectorKeyOf(b.x, b.y));
+      }
     }
   }
 
@@ -9659,6 +9809,24 @@ function reduceCore(
         placeNotice: null,
         ...logEvent(state, `Started ${sp.name}`, -cost),
       };
+      // FEAT-2326609764 inc2 (AC-8 row "Place / placeMany / stampRegion"):
+      // mark this building's OWN origin sector dirty — known directly from
+      // placedBuilding.x/y, never inferred by diffing. If this placement
+      // also lays a road connector/branch rail run (below) or is itself a
+      // road/trunk spec, that gets escalated to markAllSectorsDirty() at the
+      // SAME point roadTopologyMayHaveChanged is decided (BUG b2d31bc7 FIX 2,
+      // just below) — the naive road rule (R3) is layered on TOP of this
+      // precise mark, not instead of it, since markSectorsDirty is a no-op
+      // once a dispatch has escalated to 'FULL' (see sectorPartition.ts §7).
+      markSectorsDirty([sectorKeyOf(placedBuilding.x, placedBuilding.y)]);
+      // AC-10: register this building's completion tick now, at placement
+      // time — the ONLY correct time, since advance() must never scan
+      // s.buildings to ask "who finishes this tick" (see sectorPartition.ts
+      // §8). A spec with 0-tick construction (constructionTicks(sp) === 0,
+      // e.g. a free zone) schedules a same-tick "completion" that
+      // sectorsCompletingAtTick will consume and redundantly re-mark a
+      // sector already dirty from the line above — harmless (Set union).
+      scheduleSectorCompletion(state.tick + constructionTicks(sp), sectorKeyOf(placedBuilding.x, placedBuilding.y));
       // FEAT-1972079907 inc1: auto-wire the building to the road network (lay a
       // fitting connector to the nearest road + upgrade-on-connect), or surface a
       // "no road access" notice. Deterministic; connectors journal via replay.
@@ -9743,6 +9911,13 @@ function reduceCore(
         updated.buildings.length === placedState.buildings.length
       ) {
         roadTopologyMayHaveChanged = false;
+      } else {
+        // FEAT-2326609764 inc2 (R3, naive road rule): the placed spec is
+        // itself road/trunk kind, or autoConnect/autoBranchRail laid extra
+        // connector/branch tiles — same condition BUG b2d31bc7 FIX 2 uses to
+        // decide roadTopologyMayHaveChanged, reused here so the two never
+        // disagree about what counts as "the road graph might have moved".
+        markAllSectorsDirty();
       }
 
       // FEAT-1972079878 inc1 (AC-6): Create a building monitor for scalable specs.
@@ -10100,6 +10275,13 @@ function reduceCore(
       const sp = SPECS[action.spec];
       if (!canEnterSim(sp)) return state;
       if (!specUnlocked(state, sp)) return state;
+      // FEAT-2326609764 inc2 (AC-8 "Road-topology change" row, R3 naive
+      // rule): this whole case either places/converts road tiles or is a
+      // no-op (every remaining early return below is `return state`, never
+      // committed — see commitPendingDirtySectors's next===prev skip), so
+      // it is safe to escalate unconditionally here rather than tracing
+      // every one of this case's several return points individually.
+      markAllSectorsDirty();
 
       // Build maps of existing tile types and their building references.
       // AC-6/7/8: when new road crosses existing road/rail/motorway, convert in place.
@@ -10432,6 +10614,13 @@ function reduceCore(
       // it isn't road/trunk kind, the road graph provably can't have changed.
       if (!isRoadOrTrunkSpec(def)) {
         roadTopologyMayHaveChanged = false;
+        // FEAT-2326609764 inc2 (AC-8 "Bulldoze" row): precise mark, the
+        // target's own origin sector — known directly, no diff.
+        markSectorsDirty([sectorKeyOf(target.x, target.y)]);
+      } else {
+        // FEAT-2326609764 inc2 (R3 naive road rule): a road/trunk building
+        // was removed — the connectivity graph may have changed.
+        markAllSectorsDirty();
       }
       // Refund BULLDOZE_REFUND_FRACTION of what was actually PAID — a free
       // zone refunds nothing, so place-then-bulldoze cannot mint money.
@@ -10551,6 +10740,34 @@ function reduceCore(
         !fits(occupiedSet(state, moving.id), moveW, moveH, action.x, action.y)
       )
         return state;
+      // FEAT-2326609764 inc2 (AC-8 "Relocate / move" row): both the OLD and
+      // the NEW sector, known directly from `moving`'s current x/y and
+      // `action`'s target x/y — never a diff. A relocated road/trunk
+      // building (if ever reachable — 'pickup'/'relocate' are UI-driven and
+      // roads normally move via placeRoadPath, but the reducer does not
+      // itself forbid it) escalates via the naive road rule instead.
+      if (isRoadOrTrunkSpec(sp)) {
+        markAllSectorsDirty();
+      } else {
+        markSectorsDirty([sectorKeyOf(moving.x, moving.y), sectorKeyOf(action.x, action.y)]);
+      }
+      // BUG-1064 fix: relocate PRESERVES builtTick (see the return below —
+      // only x/y change), so a building still under construction completes
+      // at the SAME tick it always would have. If that completion was
+      // registered against the OLD sector (scheduleSectorCompletion, called
+      // at placement time), it must move to the NEW sector or the old
+      // sector goes on being marked dirty at completion while the sector
+      // the building actually lives in now never learns it came online.
+      if (moving.builtTick != null) {
+        const ticksToComplete = constructionTicks(sp);
+        if (state.tick - moving.builtTick < ticksToComplete) {
+          rescheduleSectorCompletion(
+            moving.builtTick + ticksToComplete,
+            sectorKeyOf(moving.x, moving.y),
+            sectorKeyOf(action.x, action.y),
+          );
+        }
+      }
       // FEAT-dynamic-bailout: MOVE_COST is deliberately EXCLUDED from
       // cumulativeCapexSpent — it is a flat UI-convenience repositioning fee
       // for an ALREADY-owned building (no new capital asset is built), not a
@@ -10631,11 +10848,24 @@ function reduceCore(
       }
 
       // Calculate total refund and new buildings array.
+      // FEAT-2326609764 inc2 (AC-8 "Place / placeMany / stampRegion" +
+      // "Bulldoze"): stampRegion is a flatten-then-place — its own removed
+      // AND newly-placed buildings both need marking, and unlike 'place'/
+      // 'placeMany' this case never recurses through reduceCore('place',...)
+      // (it builds `newBuildings` directly), so nothing else marks these
+      // sectors for it. Collect removed-building sector keys here, WHILE
+      // the positions are still known, rather than re-deriving them later.
+      let removedRoadOrTrunk = false;
+      const removedSectorKeys: number[] = [];
       let refundTotal = 0;
       let newBuildings = state.buildings.filter((b) => {
         if (toRemove.has(b.id)) {
           const sp = SPECS[b.spec];
-          if (sp) refundTotal += Math.round(placementCost(sp) * BULLDOZE_REFUND_FRACTION);
+          if (sp) {
+            refundTotal += Math.round(placementCost(sp) * BULLDOZE_REFUND_FRACTION);
+            if (isRoadOrTrunkSpec(sp)) removedRoadOrTrunk = true;
+          }
+          removedSectorKeys.push(sectorKeyOf(b.x, b.y));
           return false;
         }
         return true;
@@ -10676,6 +10906,11 @@ function reduceCore(
 
       // Place all items.
       let nextId = state.nextId;
+      // FEAT-2326609764 inc2: placed-item sector keys + road-kind flag,
+      // gathered in the SAME loop that already knows each item's real
+      // position and spec — never re-derived by a second pass or a diff.
+      let placedRoadOrTrunk = false;
+      const placedSectorKeys: number[] = [];
       for (const item of action.clipboard.items) {
         const sp = SPECS[item.spec];
         if (!sp) continue;
@@ -10688,6 +10923,19 @@ function reduceCore(
           y: ay,
           builtTick: state.tick,
         });
+        placedSectorKeys.push(sectorKeyOf(ax, ay));
+        if (isRoadOrTrunkSpec(sp)) placedRoadOrTrunk = true;
+        scheduleSectorCompletion(state.tick + constructionTicks(sp), sectorKeyOf(ax, ay));
+      }
+      // FEAT-2326609764 inc2 (AC-8 + R3): any road/trunk item removed OR
+      // placed by this stamp escalates to the naive road rule; otherwise
+      // mark exactly the removed + placed sectors (a stamp with zero road
+      // involvement never touches connectivity, per AC-9's own reasoning).
+      if (removedRoadOrTrunk || placedRoadOrTrunk) {
+        markAllSectorsDirty();
+      } else {
+        markSectorsDirty(removedSectorKeys);
+        markSectorsDirty(placedSectorKeys);
       }
 
       // Compute XP: 4 XP per placed item (same as place action).
@@ -10737,6 +10985,15 @@ function reduceCore(
       if (tier >= PIPE_TIERS.length - 1) return state;
       const cost = PIPE_TIERS[tier + 1].upgradeCost;
       if (state.funds < cost) return state;
+      // FEAT-2326609764 inc2 (AC-8 "Pipe-tier upgrade" row): marked for
+      // AC-8 completeness even though inc2's SectorAggregate ({buildingCount,
+      // jobs}, unchanged from inc1) has NO field pipeTier affects — this is
+      // a no-op on today's fold content (a future increment's
+      // waterCleanCap/waterWasteCap fields are what actually need it) and
+      // `s.buildings` is not even touched by this case. Kept anyway so the
+      // trigger table matches the doc exactly rather than silently omitting
+      // a row because "it doesn't matter yet".
+      markSectorsDirty([sectorKeyOf(b.x, b.y)]);
       return {
         ...state,
         funds: state.funds - cost,
@@ -10966,6 +11223,12 @@ function reduceCore(
       // carries none (an old journal entry, or a caller that intentionally
       // wants the reserved 'legacy' lineage).
       if (action.lineageId) s.lineageId = action.lineageId;
+      // FEAT-2326609764 inc2 (AC-10/AC-7): a fresh city has no
+      // under-construction buildings carried over from whatever the
+      // completion schedule held for the PREVIOUS city — clear+rebuild
+      // (trivially empty here) so no stale tick-number entry from before
+      // this reset can fire against the new city's own tick counter.
+      rebuildCompletionScheduleFromScratch(s);
       return advance(s);
     }
 
@@ -11057,8 +11320,21 @@ function reduceCore(
           `Removed ${surplus.length} surplus ${sp.name} — cap is ${sp.maxPerCity} per city; ${fmtMoney(specCredit)} scrap credited`,
         );
       }
-      if (notices.length === 0) return hydrated;
-      return {
+      // FEAT-2326609764 inc2 (AC-10/AC-7): a REAL load (this point is only
+      // reached when action.source !== 'tick', per the early return above)
+      // brings in under-construction buildings this session's completion
+      // schedule has never seen — rebuild it from scratch, O(buildings)
+      // once, against whichever buildings array is actually being returned
+      // (purged, if the surplus sweep above ran; hydrated.buildings
+      // otherwise). Deliberately NOT done for the dirty side-band itself:
+      // this case never calls markSectorsDirty, so it commits `null` (AC-7's
+      // own full-recompute fail-safe) for the returned state, exactly as a
+      // loaded/hand-built state should.
+      if (notices.length === 0) {
+        rebuildCompletionScheduleFromScratch(hydrated);
+        return hydrated;
+      }
+      const purgedResult = {
         ...hydrated,
         buildings: purged,
         funds: hydrated.funds + creditTotal,
@@ -11068,6 +11344,8 @@ function reduceCore(
         nextLedgerId,
         placeNotice: notices.join(' '),
       };
+      rebuildCompletionScheduleFromScratch(purgedResult);
+      return purgedResult;
     }
 
     // FEAT-2326609723 (Play Mode) — the ONE-WAY sandbox escape hatch offered
@@ -11346,15 +11624,30 @@ export function reducer(state: SimState, action: Action): SimState {
   // handlers (currently 'place' and 'bulldoze') flip it to false only when
   // THEY can prove the road/trunk graph is untouched.
   roadTopologyMayHaveChanged = true;
+  // FEAT-2326609764 inc2 (AC-6/AC-7): reset the dirty-sector accumulator
+  // BEFORE reduceCore runs, mirroring roadTopologyMayHaveChanged immediately
+  // above — the SAME single-dispatch scope, for the SAME reason (a prior
+  // action's dirty keys must never leak into this one).
+  resetPendingDirtySectors(s);
   const next = reduceCore(s, action);
   if (isReplaying) return next; // BUG-460 FIX A — see setReplayMode doc above.
+  // FEAT-2326609764 inc2 (AC-6): commit whatever this dispatch accumulated
+  // against the FINAL object handed back below — never `next` itself, since
+  // every branch past this point may still wrap `next` in one more `{...next,
+  // roadConnectivity: ...}` spread that produces a THIRD, distinct object
+  // identity. commitPendingDirtySectors is itself a no-op when the branch
+  // below returns `next` unchanged (a true no-op dispatch), so it is safe to
+  // call once here and let every branch's own return value flow through it.
+  let final: SimState;
   if (!next.roadConnectivity) {
-    return { ...next, roadConnectivity: computeRoadConnectivity(next) };
+    final = { ...next, roadConnectivity: computeRoadConnectivity(next) };
+  } else if (next.buildings !== s.buildings && roadTopologyMayHaveChanged) {
+    final = { ...next, roadConnectivity: computeRoadConnectivity(next) };
+  } else {
+    final = next;
   }
-  if (next.buildings !== s.buildings && roadTopologyMayHaveChanged) {
-    return { ...next, roadConnectivity: computeRoadConnectivity(next) };
-  }
-  return next;
+  commitPendingDirtySectors(final, s);
+  return final;
 }
 
 // BUG-519 round r1 F2 (P1 perf): approvalOf() rebuilds serviceCoverageOf()'s
