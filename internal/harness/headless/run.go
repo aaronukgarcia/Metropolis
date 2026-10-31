@@ -230,6 +230,12 @@ type Result struct {
 	PopulationHash [32]byte
 }
 
+// preTickHook is a test seam (FEAT-2326609830): when non-nil it is called
+// once, after seed + Wire and immediately before the tick loop, so a
+// complexity gate can zero its operation counters and measure the tick
+// phase only. Always nil in production.
+var preTickHook func()
+
 // Run drives one headless simulation run to completion: constructs a
 // real *core.Engine over a real *protocol.InProcTransport, executes any
 // scenario script (AC-4), advances Months*DailyTicksPerMonth ticks
@@ -473,6 +479,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	// BUG-665: timed strictly around driveTicks (not Wire/seed/shutdown/
 	// snapshot-write) so Result.TickWallTime is the tick loop's own cost
 	// in isolation — see TickWallTime's doc comment.
+	if preTickHook != nil {
+		preTickHook() // test seam (FEAT-2326609830): nil in production
+	}
 	ticksStart := time.Now()
 	ticksAdvanced, err := driveTicks(transport, cfg.Months, correlationID)
 	tickWallTime := time.Since(ticksStart)

@@ -1069,12 +1069,14 @@ jobs:
   # worse: ~1.3-1.4 s/tick on this dev box (fertility's O(N^2/7680) term
   # plus moneycirc's four O(N^2/256) monthly terms, both now executing
   # for real against citizens.CitizensAPI.ColdShard's un-indexed rowOf
-  # linear scan -- BUG-666's id->row index has not landed on main yet).
-  # popPerfGateTickBoundPerTick/popPerfGateAllocBytesPerCitizenBound were
-  # re-derived against THIS number, not the earlier vacuous one -- see
-  # that test file's own "ROUND-2 FINDING" doc comment for the full
-  # story and the BUG-666 re-measurement this gate still owes once that
-  # index lands.
+  # linear scan -- that was the pre-BUG-666 state).
+  # FEAT-2326609830 UPDATE: BUG-666's id->row index HAS landed (7f8dc73).
+  # The wall-clock tick bound (popPerfGateTickBoundPerTick) is retired as
+  # a pass/fail condition; the gate now asserts rowOf probes/lookup == 1
+  # (an operation COUNT) and per-tick wall time is logged only, for
+  # humans. The scaling-ratio gate lives in
+  # bug666_rowof_complexity_gate_test.go. See the test file's own doc
+  # comments for the history and the measured re-measurement.
   #
   # NOT required (yet): unlike perf-1m-probe, this job does not (yet)
   # appear on branch protection's required-checks list -- see BUG-665's
