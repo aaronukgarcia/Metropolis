@@ -60,8 +60,8 @@ From a running composed engine, the player opens a citizen's passport (via a rul
 
 ---
 
-## Open questions for Aaron (interims stated; dispatchable for the engine+protocol half immediately)
+## Aaron's rulings (second interview, 2026-10-31 — FULLY RULED and dispatchable)
 
-1. **Surface first:** (a) TUI census screen (revives the parked package, and recommends settling the F6 owner ruling as "census takes F6"); (b) webconsole live-engine mode (the prettier card, but only works connected to the Go engine — the local sim honestly shows none); (c) both, TUI first. **Recommend (c)**: the protocol query is shared; TUI proves it; the webconsole card follows.
-2. **Entry point:** building card → "Residents…" list (needs a residents-of-building index — cheap via Home CellRef), a census browse, or a "random citizen" button? Interim: residents list from the property card + a random-citizen draw on the census screen.
-3. **Name generator flavour:** plain British name tables (Kent setting) or broader? Interim: deterministic British-style tables, ~2k first × 2k last names.
+1. **Surface: TUI census screen first, webconsole live-engine card second.** This also settles the parked F6 owner question: **census owns F6**; demo stays parked and renumbers if ever wired. The protocol query is shared by both surfaces.
+2. **Entry points: the Residents list on home property cards AND Workplace staff lists** (one index, keyed on `Home` and `Workplace`; paged and capped per AC-7). The random-citizen draw was considered and NOT chosen.
+3. **Names: whimsical/game-flavoured** — alliterative / occupational-pun generated names, still deterministic per ID (AC-2 unchanged; the whimsy lives in the tables, not in randomness).
