@@ -175,9 +175,16 @@ func TestServicesBridge_OldSaveWithoutServicesShard_SweepRebuilds(t *testing.T) 
 // FEAT-2326609833: data/services.json baselineServices (coastguard 20 +
 // lifeboat 15 people/month) are registered at Wire, so a fresh composition is
 // no longer service-empty. Expected counts/capacity are offset by them.
+//
+// FEAT-2326609834: engine.social registers its five categories at Wire
+// (socialServiceCount), also part of the fresh-composition baseline.
 const (
-	baselineServiceCount    = 2
-	baselineServiceCapacity = 35.0
+	socialServiceCount   = 5
+	baselineServiceCount = 2 + socialServiceCount
+	// socialServiceCapacity is the summed capacity of the five social
+	// categories (hostel + foster ceilings + 1 each), read from the shipped data.
+	socialServiceCapacity   = 53.0
+	baselineServiceCapacity = 35.0 + socialServiceCapacity
 )
 
 // buildComposition2 is buildComposition (save_roundtrip_test.go) with an

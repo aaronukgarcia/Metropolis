@@ -370,6 +370,16 @@ type Deps struct {
 	// lets a caller inject a pre-configured instance (FEAT-2326609833).
 	Coastal *coastal.CoastalAPI
 
+	// SocialQuiet is the test seam for fixtures of OTHER modules that assert
+	// exact money / population / migration figures (FEAT-2326609834): it zeroes
+	// the engine.social wire data's caseload drivers (deprivation, nightlife,
+	// unemployment months, citywide housing figures), the per-case support
+	// amount and every category's initial funding, so social posts no support
+	// and costs no service opex. The five social service categories are still
+	// registered (the real wiring path, AC-1, stays intact; fixtures that count
+	// services offset by socialServiceCount). Default false = real social.
+	SocialQuiet bool
+
 	// Services overrides construction of the FEAT-167-completion
 	// ServiceCoverage source module (default: services.LoadDefault). nil
 	// is the common boot case; the test seam lets a caller inject a
@@ -626,6 +636,14 @@ var registrationOrder = []moduleRegistration{
 	// FEAT-2326609833 (engine.coastal, coastal_wire.go): monthly boat arrivals,
 	// case pipeline and ledger cost posting, after wellbeing on the same slot.
 	{name: "coastal", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &coastalHook{st: st} }},
+	// FEAT-2326609834 (engine.social, social_wire.go): monthly caseload, funding-
+	// dependent case closure and the social.support ledger transfer. Placed
+	// after wellbeing (fresh drivers) and AFTER coastal (so coastal stays
+	// directly after wellbeing, its pinned invariant): the census RunShard
+	// reads is taken before any hook of the tick applies, so the order carries
+	// no correctness dependency; last keeps the new money posting furthest
+	// from the population hooks that fold peopleDelta.
+	{name: "social", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &socialHook{st: st} }},
 	{name: "invariant", phase: core.PhaseDailyTick, hook: nil},
 }
 
@@ -699,6 +717,7 @@ var viewRegistrationOrder = []viewRegistration{
 	{name: buildViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildF3Patch }},
 	// FEAT-2326609833: "f4.coastal" (coastal_publish.go).
 	{name: coastalViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildCoastalPatch }},
+	{name: socialViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildSocialPatch }},
 }
 
 // RegisteredViewNames returns a defensive copy of the fixed view
@@ -1739,6 +1758,14 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "coastal"})
 	}
 
+	// FEAT-2326609834: engine.social (social_wire.go), built once st exists so it
+	// can REUSE st.pol.proj (the projections instance buildPolicies constructed).
+	socialW, err := newSocialWiring(cid, st, deps.SocialQuiet)
+	if err != nil {
+		return nil, err
+	}
+	st.socialW = socialW
+
 	// Register in the fixed, documented order (AC-2). The slice order IS
 	// the contract — nothing here ranges over a map.
 	for _, reg := range registrationOrder {
@@ -1999,6 +2026,8 @@ type simState struct {
 
 	// coastalW is the FEAT-2326609833 engine.coastal wiring (coastal_wire.go).
 	coastalW *coastalWiring
+	// socialW is the FEAT-2326609834 engine.social wiring (social_wire.go).
+	socialW *socialWiring
 
 	// deathServiceCemeteryIDs / deathServiceCrematoriumIDs (BUG-720) remain
 	// EXACTLY the Wire-time stopgap roster the original doc described:
@@ -4231,6 +4260,12 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		// CommandResult — core/commands.go's toErrorRef type-asserts
 		// *errs.E directly, exactly the same shape Zone/Build/Demolish's
 		// own pass-through errors already take above.
+		// FEAT-2326609834: a social service id goes through the social gate
+		// (a cut is a Slow-Fuse decision and is refused here), never the raw
+		// services seam.
+		if st.socialW != nil && isSocialService(p.ServiceID) {
+			return st.handleSocialFunding(p.ServiceID, p.Level)
+		}
 		return st.services.SetFunding(services.ServiceID(p.ServiceID), p.Level)
 	case protocol.KindEnactPolicy, protocol.KindRepealPolicy:
 		return st.handlePolicyCommand(cmd)
