@@ -858,15 +858,17 @@ function parseAddedLines(diffText) {
 function runScan() {
   const { allowedPaths, allowedPatterns } = loadAllowlist();
 
-  const nameResult = spawnSync('git', ['diff', '--cached', '--name-only'], { cwd: ROOT, encoding: 'utf8' });
+  const nameResult = spawnSync('git', ['-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '-z'], { cwd: ROOT, encoding: 'utf8' });
   if (nameResult.error || nameResult.status !== 0) {
     const details = nameResult.error ? nameResult.error.message
       : [nameResult.stdout, nameResult.stderr].filter(Boolean).join('\n').trim();
     throw new Error(`git diff --cached --name-only failed: ${details}`);
   }
-  const stagedFiles = nameResult.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+  // BUG-1118 (sibling of SAFE-338/448): -c core.quotepath=false -z => NUL-terminated, never-quoted
+  // names, so a non-ASCII name cannot arrive quote-wrapped and dodge the extension check below.
+  const stagedFiles = nameResult.stdout.split('\0').map(s => s.trim()).filter(Boolean);
 
-  const diffResult = spawnSync('git', ['diff', '--cached', '-U0', '--', '.'], {
+  const diffResult = spawnSync('git', ['-c', 'core.quotepath=false', 'diff', '--cached', '-U0', '--', '.'], {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -880,6 +882,12 @@ function runScan() {
   const findings = [];
 
   for (const file of stagedFiles) {
+    // BUG-1118 fail-closed backstop: a name still quote-wrapped cannot be extension-checked,
+    // so it is a finding, never a skip.
+    if (file.startsWith('"')) {
+      findings.push({ file, line: 'N/A', category: 'certificate-file', evidence: 'staged file name arrived quote-wrapped (unparseable) - treated as sensitive, fail-closed' });
+      continue;
+    }
     if (isAllowlistedPath(file, allowedPaths)) continue;
     const ext = path.extname(file).toLowerCase();
     if (SENSITIVE_FILE_EXTENSIONS.includes(ext)) {
