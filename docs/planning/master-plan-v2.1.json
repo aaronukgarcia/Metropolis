@@ -1843,7 +1843,9 @@
         "engine.tax",
         "engine.projections",
         "engine.fiscal",
-        "engine.coastal"
+        "engine.coastal",
+        "engine.social",
+        "engine.defence"
       ],
       "calls": [
         "engine.core",
@@ -1889,7 +1891,9 @@
         "engine.tax",
         "engine.projections",
         "engine.fiscal",
-        "engine.coastal"
+        "engine.coastal",
+        "engine.social",
+        "engine.defence"
       ],
       "sprint": 6
     },

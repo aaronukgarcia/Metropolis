@@ -5308,6 +5308,16 @@
             "key": "engine.coastal",
             "moduleGuid": "8634ea26-2d71-48c2-94a3-49c68f11a6b4",
             "inboundGuid": "aa2f1db7-481e-468a-be1c-63cdebf2b0e9"
+          },
+          {
+            "key": "engine.social",
+            "moduleGuid": "b31dcdb1-b4f7-4d12-abec-9279e74412db",
+            "inboundGuid": "5f18ec56-65bd-45a8-a48d-ea42e07228e3"
+          },
+          {
+            "key": "engine.defence",
+            "moduleGuid": "38f3829b-91df-43da-89b3-8cedd390054c",
+            "inboundGuid": "417393b9-920b-4818-95c0-6313411c692a"
           }
         ]
       },
@@ -8610,6 +8620,10 @@
         "pattern": "caseload generation decomposed; Slow-Fuse projections on cuts",
         "consumers": [
           {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
             "key": "feat.faith",
             "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           }
@@ -9708,7 +9722,12 @@
         "name": "DefenceAPI",
         "format": "Go package API + deltas",
         "pattern": "mandate events from external_world.json era script",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          }
+        ]
       },
       "outbound": {
         "guid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d",

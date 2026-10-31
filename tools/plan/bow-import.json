@@ -950,7 +950,9 @@
         "engine.tax",
         "engine.projections",
         "engine.fiscal",
-        "engine.coastal"
+        "engine.coastal",
+        "engine.social",
+        "engine.defence"
       ]
     },
     {
