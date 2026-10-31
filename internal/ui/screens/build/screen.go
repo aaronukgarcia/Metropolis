@@ -56,6 +56,11 @@ type Screen struct {
 	// haveData is false until the first "f3.build" patch has been applied.
 	haveData bool
 
+	// rejectedReason is the engine's Display text for the most recent
+	// rejected build-screen command (ApplyResult, result.go); "" when the
+	// last result was an accept or none has arrived.
+	rejectedReason string
+
 	// Per-sub-surface state. Each sub-surface is independent: a patch that
 	// carries zones but omits the queue updates zones and marks the queue
 	// unavailable (haveQueue=false) — SF-7's "data that has become

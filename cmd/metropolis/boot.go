@@ -16,6 +16,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/keys"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/router"
+	buildscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/build"
 	chromescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/chrome"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/screens/devmode"
 	financescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/finance"
@@ -309,6 +310,9 @@ type skeletonWiring struct {
 	// benign default a never-seen subscription reports.
 	mapSubID protocol.SubscriptionID
 
+	// extra holds the F3/F10/F12 screens (boot_screens.go).
+	extra *extraScreens
+
 	// statusBar is BUG-322's on-screen proof that time is moving: the
 	// live "engine.status" figures (tick, month, speed, paused), primed
 	// and router-bound exactly like financeScreen/servicesScreen, drawn
@@ -598,6 +602,7 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 	servicesCorrID := errs.NewCorrelationID()
 	w.financeScreen = financescreen.New(financeCorrID)
 	w.servicesScreen = servicesscreen.New(servicesCorrID)
+	w.extra = newExtraScreens(w) // F3/F10/F12 (boot_screens.go)
 
 	// BUG-324: the global chrome. Its own correlation ID for the same
 	// reason finance/services mint theirs — primeScreenSubscription
@@ -713,6 +718,23 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.finance.Subscribe",
+		})
+	}
+	// ui.screen.build (F3): "f3.build" is a real compose view
+	// (compose/build_publish.go), primed and bound like finance/services.
+	if err := primeScreenSubscription(transport, w.router, primed, w.extra.buildCorrID, buildscreen.ViewSubscriptionName,
+		func() error { return w.extra.build.Subscribe(transport.SendCommand) },
+		func(id protocol.SubscriptionID) {
+			w.extra.subID.Store(id)
+			w.extra.build.BindSubscription(id)
+		},
+		w.extra.build.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.build.Subscribe",
 		})
 	}
 	// BUG-323: F1 ("f1.viewport") is primed and bound the SAME way, now
@@ -934,6 +956,15 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 		w.wg.Wait()
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F4"})
+	}
+
+	// F3 build / F10 menu / F12 debug (boot_screens.go), on the same
+	// chrome global grammar as F1/F2/F4.
+	if err := registerExtraScreens(w, transport); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, err
 	}
 
 	// BUG-322: the player's clock controls. Registered on the SAME chrome

@@ -158,6 +158,19 @@ type Snapshot struct {
 	Events []string
 }
 
+// DebugOn reports the debug flag alone, without collecting a snapshot (no
+// clock or memstats reads), so a render path can gate Collect on it (BUG-602).
+// A copied Screen reports false, matching Collect's degrade-to-empty posture.
+func (s *Screen) DebugOn() bool {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "DebugOn"}); err != nil {
+		return false
+	}
+	s.mu.Lock()
+	debugFlag := s.debugFlag
+	s.mu.Unlock()
+	return debugFlag != nil && debugFlag()
+}
+
 // Collect gathers a fresh Snapshot from every configured source. It is
 // the one place in this package's request path that reads live/external
 // state (registry, error tail, runtime provider, BoW source) — Render

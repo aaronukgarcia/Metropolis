@@ -673,6 +673,8 @@ var viewRegistrationOrder = []viewRegistration{
 	// today.
 	{name: chromeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildChromeTopBarPatch }},
 	{name: viewportViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildViewportPatch }},
+	// ui.screen.build (F3): build_publish.go.
+	{name: buildViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildF3Patch }},
 }
 
 // RegisteredViewNames returns a defensive copy of the fixed view
