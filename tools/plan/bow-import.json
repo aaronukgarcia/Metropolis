@@ -945,7 +945,10 @@
         "int.persist",
         "feat.saveux",
         "engine.unlocks",
-        "int.serializer"
+        "int.serializer",
+        "engine.policies",
+        "engine.tax",
+        "engine.projections"
       ]
     },
     {

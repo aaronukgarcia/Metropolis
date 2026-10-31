@@ -192,7 +192,7 @@ func (a *PoliciesAPI) commitEnactLocked(id EnactmentID, def *policyDef, scope Sc
 
 	// 4. Infallible local commit — nothing below can fail.
 	a.previews[id] = preview
-	a.active[id] = &enactment{id: id, policyID: def.ID, scope: scope}
+	a.active[id] = &enactment{id: id, policyID: def.ID, scope: scope, month: a.currentMonth}
 	a.nextEnactmentID++
 	if err := a.raiseConflictWarningsLocked(def, scope); err != nil {
 		return err

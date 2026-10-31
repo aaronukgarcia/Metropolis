@@ -105,6 +105,10 @@ type enactment struct {
 	id       EnactmentID
 	policyID PolicyID
 	scope    Scope
+	// month is the policies clock month the enactment committed at (the
+	// projection decisions' CompletionMonth); persisted so a restore
+	// re-enqueues the identical steps.
+	month int64
 }
 
 // storedPreview is the AC-7 persisted preview snapshot: the coefficient-

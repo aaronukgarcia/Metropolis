@@ -64,6 +64,13 @@ const (
 	// Buy/Zone/Build/Demolish do. Added per the additive extension rule
 	// above — a new Kind, not a repurposed one.
 	KindSetFunding Kind = "SetFunding"
+
+	// KindEnactPolicy / KindRepealPolicy are the policies screen's command
+	// vocabulary (wire engine.policies, FEAT-2326609832): enact one of the
+	// data-defined library policies in a scope, and repeal an active
+	// enactment by id. Added per the additive extension rule above.
+	KindEnactPolicy  Kind = "EnactPolicy"
+	KindRepealPolicy Kind = "RepealPolicy"
 )
 
 // AdvanceTicksPayload requests the engine advance the simulation by N
@@ -242,6 +249,30 @@ type SetFundingPayload struct {
 
 func (SetFundingPayload) commandKind() Kind { return KindSetFunding }
 
+// EnactPolicyPayload requests enactment of one library policy. PolicyID is
+// the data-authored key (data/policies.json); ScopeKind is "citywide",
+// "district" or "road"; District/Road name the target for the matching
+// scope kind. Strings, not enums: this neutral package never learns the
+// policy catalogue (mirrors ZonePayload.ZoneType). All validation —
+// unknown id, scope mismatch, unaffordable cost, id-length bounds — is the
+// engine's (compose.handleGameplay -> engine.policies).
+type EnactPolicyPayload struct {
+	PolicyID  string `json:"policyId"`
+	ScopeKind string `json:"scopeKind"`
+	District  string `json:"district,omitempty"`
+	Road      string `json:"road,omitempty"`
+}
+
+func (EnactPolicyPayload) commandKind() Kind { return KindEnactPolicy }
+
+// RepealPolicyPayload requests repeal of one active enactment by its
+// engine-assigned enactment id.
+type RepealPolicyPayload struct {
+	EnactmentID string `json:"enactmentId"`
+}
+
+func (RepealPolicyPayload) commandKind() Kind { return KindRepealPolicy }
+
 // commandRegistry maps every known Kind to a factory that returns a
 // fresh, zero-valued pointer to that Kind's payload type. codec.go uses
 // it to make decoding table-driven: an unrecognized Kind is a typed
@@ -266,6 +297,8 @@ var commandRegistry = map[Kind]func() CommandPayload{
 	KindBuild:         func() CommandPayload { return &BuildPayload{} },
 	KindDemolish:      func() CommandPayload { return &DemolishPayload{} },
 	KindSetFunding:    func() CommandPayload { return &SetFundingPayload{} },
+	KindEnactPolicy:   func() CommandPayload { return &EnactPolicyPayload{} },
+	KindRepealPolicy:  func() CommandPayload { return &RepealPolicyPayload{} },
 }
 
 // KnownKinds returns the registered command Kinds, for diagnostics and

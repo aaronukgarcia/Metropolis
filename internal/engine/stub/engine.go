@@ -361,7 +361,7 @@ func (s *StubEngine) handle(cmd protocol.Command) {
 		result = s.handleInspectEntity(cmd)
 	case protocol.KindDebug:
 		result = s.handleDebug(cmd)
-	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish, protocol.KindSetFunding:
+	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish, protocol.KindSetFunding, protocol.KindEnactPolicy, protocol.KindRepealPolicy:
 		result = s.handleGameplay(cmd)
 	default:
 		// Defensive: see codes.go's codeUnknownKind doc. Every Kind that

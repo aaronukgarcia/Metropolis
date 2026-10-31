@@ -146,6 +146,8 @@ func (c *Composition) Participants() []save.Participant {
 		// under a new id because its old firm no longer existed to find.
 		firms.NewSaveParticipant(st.firms),
 		newComposeLedgerParticipant(st),
+		newPoliciesParticipant(st),
+		// FEAT-2326609832: engine.policies' enactments / districts / drift events.
 	}
 }
 
@@ -312,6 +314,14 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	// this at all -- it leaves deathservices untouched, so forcing a
 	// recheck would be wasted, though harmless).
 	c.state.handoffCursorCheckDone = false
+	// FEAT-2326609832: a bundle with no policies shard (every older save) means clean policies.
+	shardKinds := make([]string, 0, len(header.ShardIndex))
+	for _, sm := range header.ShardIndex {
+		shardKinds = append(shardKinds, sm.Kind)
+	}
+	if err := c.state.resetPoliciesIfNoShard(shardKinds); err != nil {
+		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "policies", "step": "reset-for-load"})
+	}
 	// FEAT-1972079943 — recompute the DERIVED compose-owned ledgers from the
 	// now-restored modules. treasury/citizenWealth are publish-mirrors of the
 	// finance ledger (AcctTreasury / AcctHouseholds); the compose ledger

@@ -110,6 +110,20 @@ func fixtureCommands(t *testing.T) map[Kind]Command {
 			Kind:            KindSetFunding,
 			Payload:         SetFundingPayload{ServiceID: "clinic-1", Level: 0.5},
 		},
+		KindEnactPolicy: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    111,
+			Kind:            KindEnactPolicy,
+			Payload:         EnactPolicyPayload{PolicyID: "nationalMinimumWage", ScopeKind: "citywide"},
+		},
+		KindRepealPolicy: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    112,
+			Kind:            KindRepealPolicy,
+			Payload:         RepealPolicyPayload{EnactmentID: "enactment-1"},
+		},
 	}
 }
 

@@ -1835,7 +1835,10 @@
         "int.persist",
         "feat.saveux",
         "engine.unlocks",
-        "int.serializer"
+        "int.serializer",
+        "engine.policies",
+        "engine.tax",
+        "engine.projections"
       ],
       "calls": [
         "engine.core",
@@ -1876,7 +1879,10 @@
         "engine.deathservices",
         "engine.wellbeing",
         "feat.gameinit",
-        "engine.spiral"
+        "engine.spiral",
+        "engine.policies",
+        "engine.tax",
+        "engine.projections"
       ],
       "sprint": 6
     },
