@@ -7,6 +7,7 @@ import (
 	"hash"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/coastal"
@@ -139,6 +140,12 @@ type coastalWiring struct {
 	baseline []services.ServiceSpec
 
 	mu sync.RWMutex
+	// self holds the address newCoastalWiring gave this value (stored once,
+	// before the pointer is shared). A struct copy of *coastalWiring would get
+	// its own independent mu while still aliasing api/svc, so every
+	// lock-taking entry point rejects a copy BEFORE touching mu (SEC-020
+	// family, same shape as errs.Logger; see checkNotCopied).
+	self atomic.Pointer[coastalWiring]
 	// lastMonth is the last month Advance ran for (-1 = never): the replay guard
 	// that stops a load-then-advance or a re-fired hook posting a month twice.
 	lastMonth int64
@@ -152,6 +159,22 @@ type coastalWiring struct {
 	unregistered []string
 	// failedMonths counts months whose Advance or ledger posting errored.
 	failedMonths int64
+}
+
+// checkNotCopied reports whether the receiver is the value newCoastalWiring
+// constructed rather than a struct copy (SEC-020 family; mirrors
+// errs.Logger.checkNotCopied). Lock-free (one atomic.Pointer.Load) so it is
+// safe to run BEFORE mu is touched -- a copy taken while mu was held would
+// capture it "locked" and could park forever (SEC-016). A bare literal that
+// never went through newCoastalWiring has a nil self and is rejected the same
+// way.
+func (w *coastalWiring) checkNotCopied() bool {
+	return w.self.Load() == w
+}
+
+// errCoastalCopied is the registry-sourced rejection for a copied receiver.
+func errCoastalCopied(cid, entry string) error {
+	return errs.New(ErrCoastalStateInvalid, cid, map[string]any{"cause": "struct-copied coastalWiring", "entry": entry})
 }
 
 // newCoastalWiring builds the module (the injected instance, or one loaded
@@ -172,6 +195,7 @@ func newCoastalWiring(injected *coastal.CoastalAPI, seed uint64, cid string, svc
 		return nil, err
 	}
 	w := &coastalWiring{api: api, svc: svc, baseline: baseline, lastMonth: -1}
+	w.self.Store(w) // once, before w is shared with any other goroutine
 	if err := w.ensureBaselineServices(); err != nil {
 		return nil, err
 	}
@@ -188,6 +212,9 @@ func newCoastalWiring(injected *coastal.CoastalAPI, seed uint64, cid string, svc
 // ErrDuplicateService is a no-op (RegisterService only inserts, so restored
 // funding/upgrade state is never overwritten).
 func (w *coastalWiring) ensureBaselineServices() error {
+	if !w.checkNotCopied() {
+		return errCoastalCopied("", "ensureBaselineServices")
+	}
 	for _, spec := range w.baseline {
 		if err := w.svc.RegisterService(spec); err != nil {
 			var e *errs.E
@@ -202,6 +229,9 @@ func (w *coastalWiring) ensureBaselineServices() error {
 
 // bind wires the citizens dependency and the compose citizen id allocator.
 func (w *coastalWiring) bind(st *simState) error {
+	if !w.checkNotCopied() {
+		return errCoastalCopied(st.cid, "bind")
+	}
 	if err := w.api.SetCitizens(st.citizens); err != nil {
 		return err
 	}
@@ -277,6 +307,10 @@ func (st *simState) runCoastal(month int64) {
 	if w == nil || st.citizens == nil {
 		return
 	}
+	if !st.coastalW.checkNotCopied() { // pre-lock copy guard (fail closed: no month is run)
+		_ = errCoastalCopied(st.cid, "runCoastal")
+		return
+	}
 	w.mu.RLock()
 	last := w.lastMonth
 	w.mu.RUnlock()
@@ -331,6 +365,10 @@ func (st *simState) postCoastalCosts(month int64) bool {
 	if st.finance == nil {
 		return true
 	}
+	if !st.coastalW.checkNotCopied() { // pre-lock copy guard (fail closed: nothing posted, month reported failed)
+		_ = errCoastalCopied(st.cid, "postCoastalCosts")
+		return false
+	}
 	ok := true
 	for i, line := range coastalCostLines {
 		total := line.get(w.api)
@@ -375,6 +413,10 @@ func (st *simState) migrationInflow(attractInflow int64) int64 {
 	if st.coastalW == nil {
 		return attractInflow
 	}
+	if !st.coastalW.checkNotCopied() { // pre-lock copy guard (fail closed: attract's inflow alone)
+		_ = errCoastalCopied(st.cid, "migrationInflow")
+		return attractInflow
+	}
 	st.coastalW.mu.RLock()
 	defer st.coastalW.mu.RUnlock()
 	return num.SatAdd(attractInflow, st.coastalW.lastGranted)
@@ -398,6 +440,10 @@ func (c *Composition) CoastalPostedMicropounds() map[string]int64 {
 	if w == nil {
 		return out
 	}
+	if !w.checkNotCopied() {
+		_ = errCoastalCopied(c.state.cid, "CoastalPostedMicropounds")
+		return out
+	}
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	for i, line := range coastalCostLines {
@@ -411,6 +457,10 @@ func (c *Composition) CoastalPostedMicropounds() map[string]int64 {
 func (c *Composition) CoastalLastGranted() int64 {
 	w := c.state.coastalW
 	if w == nil {
+		return 0
+	}
+	if !w.checkNotCopied() {
+		_ = errCoastalCopied(c.state.cid, "CoastalLastGranted")
 		return 0
 	}
 	w.mu.RLock()
@@ -445,6 +495,10 @@ func (p *coastalParticipant) Kind() string { return kindComposeCoastal }
 func (p *coastalParticipant) Source() serialize.RecordSource {
 	w := p.st.coastalW
 	var wire coastalWire
+	if w != nil && !w.checkNotCopied() {
+		_ = errCoastalCopied(p.st.cid, "Source")
+		w = nil // fail closed: emit no record rather than a copy's state
+	}
 	if w != nil {
 		w.mu.RLock()
 		wire = coastalWire{
@@ -476,6 +530,9 @@ func (p *coastalParticipant) Handler() serialize.RecordHandler {
 		if w == nil {
 			return nil
 		}
+		if !w.checkNotCopied() {
+			return errCoastalCopied(p.st.cid, "Handler")
+		}
 		var wire coastalWire
 		if err := json.Unmarshal(rec.Data, &wire); err != nil {
 			return fmt.Errorf("compose: decoding %s record: %w", rec.Kind, err)
@@ -503,6 +560,10 @@ func (p *coastalParticipant) Handler() serialize.RecordHandler {
 
 // digestInto folds the coastal observables into the composition state digest.
 func (w *coastalWiring) digestInto(h hash.Hash) {
+	if !w.checkNotCopied() {
+		_ = errCoastalCopied("", "digestInto")
+		return
+	}
 	s := w.api.Snapshot()
 	w.mu.RLock()
 	defer w.mu.RUnlock()

@@ -49,7 +49,9 @@ type coastalWirePatch struct {
 // simState) yields the honest all-zero patch, never an error.
 func (st *simState) buildCoastalPatch() (json.RawMessage, error) {
 	p := coastalWirePatch{SchemaVersion: coastalWireSchemaVersion, RescueUnregistered: []string{}}
-	if w := st.coastalW; w != nil {
+	if w := st.coastalW; w != nil && !st.coastalW.checkNotCopied() {
+		_ = errCoastalCopied(st.cid, "buildCoastalPatch") // fail closed: honest all-zero patch
+	} else if w != nil {
 		c := w.api.Counts()
 		w.mu.RLock()
 		p.Month = w.lastMonth

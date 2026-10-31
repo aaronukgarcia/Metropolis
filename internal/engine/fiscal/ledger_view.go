@@ -106,6 +106,9 @@ func (f *FiscalAPI) LedgerBudgetBalance() (finance.Money, error) {
 // figures add up (moneyIn = moneyOut + otherOutflows + balance) without
 // fabricating anything: it is a pure difference of ledger aggregates.
 func (f *FiscalAPI) LedgerOtherOutflows() (finance.Money, error) {
+	if err := f.checkNotCopied("LedgerOtherOutflows"); err != nil {
+		return 0, err
+	}
 	in, err := f.LedgerMoneyIn()
 	if err != nil {
 		return 0, err
