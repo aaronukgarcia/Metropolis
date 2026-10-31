@@ -16,6 +16,10 @@
     "corruptionThreshold": 0.3,
     "corruptionMax": 0.5
   },
+  "benefits": {
+    "unemploymentSupportPerMonthMicroPounds": 600000,
+    "comment": "derived placeholder (no external anchor): GBP 0.60 per unemployed person per month, about 29% of the composition's monthlyWageGrossPerEmployedMicropounds (2,100,000) so the benefit is wage-scale coherent and cannot starve the treasury's public-wage leg (a GBP 500 first draft drained the opening treasury in month 1 and broke the BUG-548 treasury-wage tests); pending Aaron's balance pass (ASM-284)"
+  },
   "childcare": {
     "subsidyPerPlacePerMonthMicroPounds": 300000000,
     "secondEarnerUpliftPerPlace": 0.8,

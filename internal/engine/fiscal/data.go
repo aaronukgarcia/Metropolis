@@ -22,6 +22,9 @@ type Config struct {
 	Version      int                `json:"version"`
 	Municipality MunicipalityConfig `json:"municipality"`
 	Childcare    ChildcareConfig    `json:"childcare"`
+
+	// Benefits is the benefit-posting data (FEAT-2326609835, placeholder).
+	Benefits BenefitsConfig `json:"benefits"`
 	// Meta is data/fiscal.json's documentation block (module/spec prose).
 	// Declared explicitly — never consumed — because the BUG-281 r2 strict
 	// loader rejects undeclared fields and only strips $-prefixed keys at
@@ -114,6 +117,10 @@ func (c *Config) Validate() error {
 		return &data.FieldError{Field: "municipality.corruptionMax", Rule: "must be finite and in [0,1]"}
 	}
 
+	if c.Benefits.UnemploymentSupportPerMonthMicroPounds <= 0 {
+		return &data.FieldError{Field: "benefits.unemploymentSupportPerMonthMicroPounds", Rule: "must be positive"}
+	}
+
 	cc := c.Childcare
 	if cc.SubsidyPerPlacePerMonthMicroPounds <= 0 {
 		return &data.FieldError{Field: "childcare.subsidyPerPlacePerMonthMicroPounds", Rule: "must be positive"}
@@ -172,4 +179,15 @@ func LoadDefault(correlationID string) (*FiscalAPI, error) {
 		return nil, err
 	}
 	return Load(dir, correlationID)
+}
+
+// BenefitsConfig carries the monthly benefit amounts the composition benefits
+// hook multiplies by a caseload (placeholder; Aaron balance pass).
+type BenefitsConfig struct {
+	// UnemploymentSupportPerMonthMicroPounds is the monthly support per
+	// unemployed person, int64 micro-pounds.
+	UnemploymentSupportPerMonthMicroPounds int64 `json:"unemploymentSupportPerMonthMicroPounds"`
+
+	// Comment is the placeholder-provenance note carried in the data file.
+	Comment string `json:"comment,omitempty"`
 }

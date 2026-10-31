@@ -230,6 +230,9 @@ func (st *simState) accrueAndSettleConstruction(dayTick int64) error {
 
 	if delta > 0 {
 		cost, _ := num.SafeMul(delta, constructionMaterialLedgerPriceMicropoundsPerTonne)
+		// FEAT-2326609835 AC-6: the municipality's planning-funding-driven
+		// build-cost error rate (fiscal_wire.go); a no-op at full funding.
+		cost = st.applyBuildCostError(cost)
 		if st.hasBuildersMerchant() {
 			st.constructionAccrualLocal = num.SatAdd(st.constructionAccrualLocal, cost)
 		} else {

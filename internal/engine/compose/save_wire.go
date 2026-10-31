@@ -145,6 +145,9 @@ func (c *Composition) Participants() []save.Participant {
 		// BuildersMerchantFirmID field, registered just below) re-founded
 		// under a new id because its old firm no longer existed to find.
 		firms.NewSaveParticipant(st.firms),
+		// FEAT-2326609835 (A5): engine.fiscal's non-ledger-derivable inputs
+		// (planning funding, childcare places, civil-service bill).
+		newFiscalParticipant(st),
 		newComposeLedgerParticipant(st),
 		newPoliciesParticipant(st),
 		// FEAT-2326609832: engine.policies' enactments / districts / drift events.

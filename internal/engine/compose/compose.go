@@ -17,6 +17,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/extcommute"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/fiscal"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/gameinit"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/households"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
@@ -557,6 +558,12 @@ var registrationOrder = []moduleRegistration{
 	// FEAT-2326609832: engine.policies' monthly AdvanceMonth, after finance
 	// so BeginMonth has opened the month's tick log its opex lines land in.
 	{name: "policies", phase: core.PhaseFinance, hook: func(st *simState) core.PhaseHook { return &policiesHook{st: st} }},
+	// FEAT-2326609835: engine.fiscal's monthly hook (benefits + civil-service
+	// bill, fiscal_wire.go), AFTER finance on PhaseFinance so it posts into the
+	// month finance just opened (BeginMonth); after policies so the wage
+	// lever's posting lands before benefits are sized (same-phase slice order,
+	// GR#21).
+	{name: "fiscal", phase: core.PhaseFinance, hook: func(st *simState) core.PhaseHook { return &fiscalHook{st: st} }},
 	// BUG-268: build was wired against the monthly PhaseLandValueDecay slot,
 	// so BuildAPI.Tick's one-simulation-DAY-per-call cadence (build.go's
 	// daysPerTick) only ever fired once per simulation MONTH — a 45-day
@@ -1489,6 +1496,12 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, err
 	}
 
+	// FEAT-2326609835: engine.fiscal (fiscal_wire.go).
+	fiscalAPI, err := wireFiscal(financeAPI, cid)
+	if err != nil {
+		return nil, err
+	}
+
 	invReg := invariant.NewRegistry()
 	for _, inv := range []invariant.Invariant{
 		invariant.NewPeopleInvariant(),
@@ -1528,6 +1541,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		leisure:                    leisureAPI,
 		refuse:                     refuseAPI,
 		services:                   servicesAPI,
+		fiscal:                     fiscalAPI,
 		firms:                      firmsAPI,
 		deathServices:              deathServicesAPI,
 		deathServiceCemeteryIDs:    deathServiceCemeteryIDs,
@@ -1906,7 +1920,10 @@ type simState struct {
 	// §11 term source modules, constructed in Wire alongside
 	// crime/leisure/refuse above.
 	services *services.ServicesAPI
-	firms    *firms.FirmsAPI
+	// fiscal is engine.fiscal (FEAT-2326609835, fiscal_wire.go): ledger-sourced
+	// Sankey + civil-service view, benefits driver, municipality consumer.
+	fiscal *fiscal.FiscalAPI
+	firms  *firms.FirmsAPI
 
 	// deathServices is BUG-689's engine.deathservices instance (the
 	// registered feat.compositionroot -> engine.deathservices edge,
