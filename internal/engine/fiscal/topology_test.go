@@ -370,6 +370,7 @@ func validTestConfig() Config {
 			CorruptionThreshold:              0.3,
 			CorruptionMax:                    0.5,
 		},
+		Benefits: BenefitsConfig{UnemploymentSupportPerMonthMicroPounds: 500000000},
 		Childcare: ChildcareConfig{
 			SubsidyPerPlacePerMonthMicroPounds:     300000000,
 			SecondEarnerUpliftPerPlace:             0.8,

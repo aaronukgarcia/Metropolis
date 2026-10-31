@@ -40,7 +40,7 @@ func newTestEngine(t *testing.T, seed uint64, opts ...invariant.HookOption) (*co
 // --- AC-2: deterministic, documented registration order ---
 
 func TestRegistrationOrder_MatchesDocumented(t *testing.T) {
-	want := []string{"world", "traffic", "citizens", "market", "consumption", "finance", "build", "deathservices-run", "attract", "deathservices", "wellbeing", "invariant"}
+	want := []string{"world", "traffic", "citizens", "market", "consumption", "finance", "fiscal", "build", "deathservices-run", "attract", "deathservices", "wellbeing", "invariant"}
 	got := RegistrationOrder()
 	if len(got) != len(want) {
 		t.Fatalf("RegistrationOrder() = %v, want %v", got, want)
@@ -184,7 +184,7 @@ func TestRequiredModules_CoversFullBaselineOne(t *testing.T) {
 	// a module silently absent from it would be a quiet N-1 success (AC-4).
 	want := map[string]bool{
 		"world": true, "traffic": true, "citizens": true, "market": true, "consumption": true,
-		"finance": true, "build": true, "deathservices-run": true, "attract": true, "deathservices": true, "wellbeing": true, "invariant": true,
+		"finance": true, "fiscal": true, "build": true, "deathservices-run": true, "attract": true, "deathservices": true, "wellbeing": true, "invariant": true,
 	}
 	got := RegistrationOrder()
 	if len(got) != len(want) {
@@ -411,7 +411,11 @@ func TestBUG355_PartialPost_TaxRejectionStillMirrorsLedger(t *testing.T) {
 	// clawback — households keep the net (72%) of the wage bill instead
 	// of the whole pair cancelling out.
 	incomeTax := wageBill * incomeNITaxRateBp / 10_000
-	wantHH := int64(wageBill - 1 + wageBill - incomeTax - spend - councilTax)
+	// FEAT-2326609835: the fiscal hook (after finance, PhaseFinance) pays
+	// unemployment support treasury -> households for the live unemployed
+	// headcount. Derived from state and data (GR#15), never a constant.
+	benefits := st0UnemployedBenefits(comp)
+	wantHH := int64(wageBill - 1 + wageBill - incomeTax - spend - councilTax + benefits)
 	if led, st := ledgerBalance(comp.state.finance, finance.AcctHouseholds), comp.CitizenWealth(); led != st || led != wantHH {
 		t.Fatalf("month end: FinanceAPI households = %d, Composition.CitizenWealth = %d, want both %d", led, st, wantHH)
 	}
@@ -439,7 +443,7 @@ func TestBUG355_PartialPost_TaxRejectionStillMirrorsLedger(t *testing.T) {
 	}
 	commercial := spend * commercialTaxRateBp / 10_000
 	industrial := spend * industrialTaxRateBp / 10_000
-	wantTr := testInitialTreasury(t) - publicWageDebit + commercial + industrial + councilTax + incomeTax
+	wantTr := testInitialTreasury(t) - publicWageDebit + commercial + industrial + councilTax + incomeTax - benefits
 	if led, st := ledgerBalance(comp.state.finance, finance.AcctTreasury), comp.Treasury(); led != st || led != wantTr {
 		t.Fatalf("month end: FinanceAPI treasury = %d, Composition.Treasury = %d, want both %d", led, st, wantTr)
 	}

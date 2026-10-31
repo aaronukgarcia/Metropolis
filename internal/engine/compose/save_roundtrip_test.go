@@ -136,9 +136,10 @@ func TestSaveRoundTrip_PerModuleStateIsByteIdentical(t *testing.T) {
 	// deathservices (BUG-689's bodies/plots/budgets/dispensation/handoff-
 	// cursor participant) + firms (BUG-752's own registry/founder-history/
 	// culture-window/lifecycle-event participant) + the compose-owned
-	// ledger participant.
-	if len(streamsA) != 15 {
-		t.Fatalf("expected 15 participants, got %d", len(streamsA))
+	// ledger participant + fiscal (FEAT-2326609835, A5: planning funding,
+	// childcare places and the civil-service wage bill) = sixteen.
+	if len(streamsA) != 16 {
+		t.Fatalf("expected 16 participants, got %d", len(streamsA))
 	}
 
 	dir := t.TempDir()

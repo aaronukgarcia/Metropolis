@@ -159,6 +159,12 @@ type financeBalanceSheetWirePatch struct {
 	// ONLY on the same st.finance.Valid() copy-guard path as CreditRating/
 	// Insolvent above (unreachable in production).
 	InsolvencyVerdict *string `json:"insolvencyVerdict,omitempty"`
+
+	// Sankey/PublicPayroll are FEAT-2326609835's engine.fiscal sub-views
+	// (fiscal_wire.go): ledger-sourced, additive (omitted when fiscal is
+	// unwired); balanceSheet above is unchanged.
+	Sankey        *financeSankeyView        `json:"sankey,omitempty"`
+	PublicPayroll *financePublicPayrollView `json:"publicPayroll,omitempty"`
 }
 
 // financePayrollShortfallView mirrors internal/ui/screens/finance/wire.go's
@@ -337,8 +343,11 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 		}
 	}
 
+	sankey, publicPayroll := st.buildFiscalSections()
 	patch := financeBalanceSheetWirePatch{
 		SchemaVersion:     financeWireSchemaVersion,
+		Sankey:            sankey,
+		PublicPayroll:     publicPayroll,
 		UnlimitedMoney:    unlimitedMoney,
 		PayrollShortfall:  payrollShortfall,
 		CreditRating:      creditRating,
