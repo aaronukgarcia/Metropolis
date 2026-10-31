@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 )
 
 // BUG-665 — THE REAL POPULATION PERF GATE
@@ -34,7 +36,16 @@ import (
 // doc comment). It also does not prove turbo-speed (160ms/tick); only
 // the normal-play 1000ms/tick budget from Q100100.
 //
-// # Bound provenance — GENEROUS ON PURPOSE, first pass
+// # FEAT-2326609830 UPDATE (2026-10-31): the index has landed
+//
+// The text below is the HISTORICAL pre-BUG-666 story (rowOf was a linear
+// scan then; it is now a map hit, ColdShard.index). The wall-clock tick
+// bound it describes is RETIRED: pass/fail is now rowOf probes/lookup == 1
+// (counter) here, plus the scaling ratios in
+// bug666_rowof_complexity_gate_test.go. The "BUG-666 re-measurement this
+// gate still owes" has been done; numbers are in the const block below.
+//
+// # Bound provenance (historical) — GENEROUS ON PURPOSE, first pass
 //
 // docs/planning/go-engine-100m-proving-plan.md §1.2 measured 17.63 ms/
 // day-tick for 1,000,000 citizens on a Windows dev box, via a throwaway
@@ -119,24 +130,20 @@ const (
 	// cheaper, see generateSeedPopulation's doc comment).
 	popPerfGateMonths = 3
 
-	// popPerfGateTickBoundPerTick is the FIRST-PASS, deliberately
-	// generous per-tick ceiling: ~3x the 1.317 s/tick measured on one
-	// Windows dev box for a population that is FINALLY visible to both
-	// fertility and moneycirc (see this file's package doc comment,
-	// "ROUND-2 FINDING", for why that number is so much larger than the
-	// isolated-cold-pass 17.63 ms/tick the proving plan's own throwaway
-	// harness measured), rounded up to a clean number and left generous
-	// rather than tight. TIGHTENING PLAN (recorded here, not guessed at):
-	// (1) after this job has run on CI at least once, read the ACTUAL
-	// median TickWallTime/TicksAdvanced this test logs from the Actions
-	// log and tighten this constant toward that CI-measured figure; (2)
-	// once BUG-666's ColdShard id->row index lands on main, RE-MEASURE —
-	// the prediction is a collapse toward something much closer to
-	// 17.63 ms/tick plus a smaller moneycirc overhead, but that is
-	// unverified until BUG-666 actually lands and this gate is re-run
-	// against it. Never tighten below a CI-observed figure at either
-	// step.
-	popPerfGateTickBoundPerTick = 4 * time.Second
+	// FEAT-2326609830: the former wall-clock constant
+	// popPerfGateTickBoundPerTick (4 s/tick) is RETIRED as a pass/fail
+	// condition. At 1M it could not detect a regression back to O(N^2)
+	// (a quadratic rowOf would still land inside 4 s) and a wall-clock
+	// bound is forbidden as a CI bound by the verification standards.
+	// The counters here record operation counts and scaling shape: this
+	// test asserts rowOf probes/lookup == 1 on the real 1M live composition
+	// and bug666_rowof_complexity_gate_test.go asserts the lookup-count and
+	// allocation scaling ratios. The probe is 1 per call by construction,
+	// so scan-regression detection is the index-only oracle
+	// (citizens.TestAttackFEAT830RowOfIsIndexOnly) and attack_bug666_round_test.go. Per-tick wall time is still LOGGED
+	// every run for humans, never asserted. BUG-666 re-measurement
+	// (2026-10-31, dev box, 1M live composition, 90 ticks): 20,169,032
+	// rowOf lookups, 1.000 probes/lookup, 100k->1M lookups x9.991.
 
 	// popPerfGateAllocBytesPerCitizenBound is the OTHER half of this
 	// item's report ask ("assert B/citizen against the documented
@@ -211,6 +218,11 @@ func TestPopulationPerfGate1M(t *testing.T) {
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 
+	preTickHook = func() { citizens.EnableRowOfProbe(true) }
+	defer func() {
+		preTickHook = nil
+		citizens.EnableRowOfProbe(false)
+	}()
 	result, err := Run(context.Background(), Config{
 		Seed:             1,
 		Months:           popPerfGateMonths,
@@ -248,12 +260,19 @@ func TestPopulationPerfGate1M(t *testing.T) {
 	// behind -v — Go always shows Logf output for a failing test, and a
 	// PASSING run's log is still visible via `go test -v`, which the CI
 	// step below runs deliberately for exactly this reason).
-	t.Logf("BUG-665 population perf gate: citizens=%d ticksAdvanced=%d tickWallTime=%s perTick=%s (bound=%s) totalAlloc=%d bytes (%.1f B/citizen, bound=%d) finalPopulation=%d births=%d deaths=%d",
-		popPerfGateCitizenCount, result.TicksAdvanced, result.TickWallTime, perTick, popPerfGateTickBoundPerTick,
+	t.Logf("BUG-665 population perf gate: citizens=%d ticksAdvanced=%d tickWallTime=%s perTick=%s (informational, not asserted) totalAlloc=%d bytes (%.1f B/citizen, bound=%d) finalPopulation=%d births=%d deaths=%d",
+		popPerfGateCitizenCount, result.TicksAdvanced, result.TickWallTime, perTick,
 		allocBytes, allocBytesPerCitizen, popPerfGateAllocBytesPerCitizenBound, result.Population, result.Births, result.Deaths)
 
-	if perTick > popPerfGateTickBoundPerTick {
-		t.Errorf("perTick = %s, want <= %s (generous first-pass bound, see popPerfGateTickBoundPerTick's doc comment for the tightening plan)", perTick, popPerfGateTickBoundPerTick)
+	// FEAT-2326609830 AC-3: the pass/fail condition on the tick path is a
+	// COUNT, not a time. Every rowOf lookup must be exactly one index probe.
+	probe := citizens.ReadRowOfProbe()
+	t.Logf("BUG-666 rowOf counters (tick phase): lookups=%d probes=%d maxProbesPerCall=%d", probe.Calls, probe.Probes, probe.MaxPerCall)
+	if probe.Calls == 0 {
+		t.Errorf("no rowOf lookups counted -- the probe is not wired to the real tick path")
+	}
+	if probe.Probes != probe.Calls || probe.MaxPerCall > 1 {
+		t.Errorf("rowOf probes/lookup != 1 (lookups=%d probes=%d max=%d) -- rowOf regressed from an index probe", probe.Calls, probe.Probes, probe.MaxPerCall)
 	}
 	if allocBytesPerCitizen > popPerfGateAllocBytesPerCitizenBound {
 		t.Errorf("cumulative allocation = %.1f B/citizen, want <= %d B/citizen (see popPerfGateAllocBytesPerCitizenBound's doc comment)", allocBytesPerCitizen, popPerfGateAllocBytesPerCitizenBound)

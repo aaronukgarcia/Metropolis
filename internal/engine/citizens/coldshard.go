@@ -272,6 +272,9 @@ func (s *ColdShard) removeAt(i int) {
 // behaves exactly as an empty index: every lookup misses, matching the old
 // linear scan's behaviour over an empty ids slice.
 func (s *ColdShard) rowOf(id uint64) int {
+	if rowOfProbeOn.Load() {
+		noteRowOf(1) // one map lookup = one probe step (hit or miss)
+	}
 	if row, ok := s.index[id]; ok {
 		return int(row)
 	}

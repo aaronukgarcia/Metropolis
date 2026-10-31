@@ -44,7 +44,12 @@
 //     back-of-envelope estimate in
 //     docs/planning/go-engine-100m-proving-plan.md §3.8 — Go's runtime hash
 //     map has real per-entry overhead (bucketing, tophash bytes, load-factor
-//     slack) well beyond the naive key+value sum. bytesPerCitizen()'s total
+//     slack) well beyond the naive key+value sum. FEAT-2326609830 MEASURED
+//     (TestRowOfScale_AC8_IndexBytesPerEntry, post-GC HeapAlloc with vs
+//     without the index): 37.78 B/entry at 2M, 30.27 B/entry at 10M
+//     (256 shards of ~39k entries) => ~3.0-3.8 GB of index at 100M, a
+//     measured index-only figure (the 10 GB landing-message
+//     number is not index-only arithmetic at 24-38 B/entry). bytesPerCitizen()'s total
 //     (columns + index) is therefore ~113B/citizen ⇒ 100M ≈ 11.3GB,
 //     OUTSIDE the original 60-100B / 6-10GB bands. This is reported
 //     honestly here and in the updated test ceilings (TestColdShardBytesPerCitizen,
