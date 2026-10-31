@@ -30,6 +30,7 @@
 import { reducer } from './engine.ts';
 import type { SimState } from './types.ts';
 import type { SimStateDelta } from './simWorkerDelta.ts';
+import type { PartitionAuditReport } from './sectorPartition.ts';
 
 /** Main -> worker. */
 export type MainToWorkerMessage =
@@ -62,14 +63,14 @@ export type WorkerToMainMessage =
    *  now holds `state` cached and will accept a `runTickDelta` request
    *  diffed against it — see simWorkerDelta.ts's "BACKWARD COMPATIBILITY"
    *  section for why this is opt-in rather than assumed. */
-  | { type: 'tickResult'; state: SimState; requestId: number; deltaCapable?: boolean }
+  | { type: 'tickResult'; state: SimState; requestId: number; deltaCapable?: boolean; partitionAudit?: PartitionAuditReport }
   /** FEAT-2326609777 — the delta-mode counterpart of `tickResult`: `delta`
    *  describes the change from the sender's PREVIOUS cached state (the one
    *  the matching `runTickDelta`/`tickResult` request was diffed against)
    *  to the state this tick produced. The receiver reconstructs the full
    *  post-tick state via `applyStateDelta(basisState, delta)` — see
    *  store.tsx's worker.onmessage. */
-  | { type: 'tickResultDelta'; requestId: number; delta: SimStateDelta }
+  | { type: 'tickResultDelta'; requestId: number; delta: SimStateDelta; partitionAudit?: PartitionAuditReport }
   /**
    * FEAT-2326609777 round follow-up (opus-round-feat777, 2026-09-06) — the
    * worker detected that a `runTickDelta` request's `delta.baseTick` did not

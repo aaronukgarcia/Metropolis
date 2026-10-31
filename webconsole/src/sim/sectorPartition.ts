@@ -64,7 +64,7 @@ import { codedError } from './backend.ts';
 // evaluation order) or, for SPECS, read only from inside a function BODY
 // (buildSectorIndex, never at this module's own top-level), so the cycle
 // resolves safely under ESM's live-binding semantics.
-import { memoOnState, buildingJobsOf, isOnline, SPECS, constructionTicks } from './data.ts';
+import { memoOnState, buildingJobsOf, isOnline, SPECS, constructionTicks, totalJobsWholeCity } from './data.ts';
 
 // ---------------------------------------------------------------------------
 // §1 Sector geometry — AC-1/AC-2/AC-4 (as amended by lead ruling R1 above)
@@ -976,4 +976,215 @@ export function sectorIndexOf(s: SimState): ReadonlyMap<number, SectorAggregate>
   const result = dirty !== null && band?.baseIndex ? rebuildDirtySectors(s, band.baseIndex, dirty) : buildSectorIndex(s);
   indexResultCache.set(s, result);
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// §10 Production self-audit — inc3a (design AC-13, flip gate EG-3)
+//
+// Every SECTOR_AUDIT_INTERVAL_TICKS ticks, WHEN the flag is ON and the
+// fallback is not yet engaged, the partitioned totalJobs is compared against
+// the whole-city fold of the SAME state. BUG-1019 class: the oracle is
+// `totalJobsWholeCity` (the named, flag-INDEPENDENT, memoOnState-wrapped
+// walk), NEVER `totalJobs()` (which dispatches on the flag and would compare
+// the fold against itself). The partitioned side is `totalJobsPartitioned`
+// directly, for the same reason.
+//
+// The audit runs inside the pure reducer, so it follows the OUTBOX pattern
+// newsFeed.ts uses (GR#21/BUG-602): it never calls backend.recordError (wall
+// clock + storage). It queues an event here; store.tsx drains the queue after
+// each state change and records the registry error (MET-V970 mismatch,
+// MET-V971 audit-failed-to-run, GR#17). Tick-counted, no clock, no storage.
+// It compares and NEVER mutates aggregates or SimState (SimState gains no
+// field; the session-sticky fallback is module state).
+//
+// WORKER (F1): with the Web Worker offload ON (the default) the reducer, and
+// so this audit, runs in simWorker's module instance. The worker attaches
+// `takePartitionAuditReport()` to its tick reply ONLY when an audit actually
+// ran (so flag OFF adds zero postMessage payload); the main thread feeds it to
+// `applyWorkerPartitionAuditReport()`, which queues the events for the main
+// thread's own drain, engages the MAIN thread's own fallback, and keeps the
+// worker's counters for debug.json.
+//
+// On mismatch OR failure: the partitioned path is switched OFF for the rest of
+// the session via `engagePartitionFallback` below — the ONE sanctioned
+// non-seam write to the flag (BUG-1019 pin, Bev ruling 2026-10-31). Only the
+// production-unreachable test seam can clear it. HONEST LIMIT: totalJobs
+// memos already populated for the in-flight state keep the partitioned value;
+// every later state is whole-city.
+// ---------------------------------------------------------------------------
+
+/** AC-13 placeholder: ~10 game months. One extra whole-city fold per this many ticks. */
+export const SECTOR_AUDIT_INTERVAL_TICKS = 300;
+
+export interface PartitionAuditEvent {
+  kind: 'mismatch' | 'failure';
+  tick: number;
+  partitioned: number | null;
+  wholeCity: number | null;
+  /** MET-V970 for a mismatch, MET-V971 when the audit could not run. */
+  code: 'MET-V970' | 'MET-V971';
+  /** Failure text for a 'failure' event; empty for a mismatch. */
+  detail: string;
+}
+
+export interface PartitionAuditStatus {
+  intervalTicks: number;
+  flagOn: boolean;
+  fallbackEngaged: boolean;
+  /** DIAGNOSTIC-ONLY counter (one per distinct audited tick; not an audit-quality signal). */
+  runs: number;
+  mismatches: number;
+  failures: number;
+  lastRunTick: number | null;
+  events: PartitionAuditEvent[];
+  /** True when runs/mismatches/events describe the Web Worker's audit, relayed over the tick reply. */
+  fromWorker: boolean;
+}
+
+/** What the worker relays to the main thread. Plain structured-clone data. */
+export interface PartitionAuditReport {
+  status: PartitionAuditStatus;
+  /** Events not yet relayed (mismatch/failure). */
+  events: PartitionAuditEvent[];
+}
+
+const PARTITION_AUDIT_HISTORY_CAP = 8;
+let partitionFallbackEngaged = false;
+let partitionAuditRuns = 0;
+let partitionAuditMismatches = 0;
+let partitionAuditFailures = 0;
+let partitionAuditLastTick: number | null = null;
+const partitionAuditHistory: PartitionAuditEvent[] = [];
+let partitionAuditPending: PartitionAuditEvent[] = [];
+/** Set when an audit ran since the last worker report; keeps flag-OFF replies free of audit payload. */
+let partitionAuditReportDue = false;
+/** The worker's relayed status, when this module instance is the main thread receiving one. */
+let remoteAuditStatus: PartitionAuditStatus | null = null;
+
+/** The single sanctioned fallback write (see header). */
+function engagePartitionFallback(): void {
+  partitionFallbackEngaged = true;
+  PARTITIONED_DERIVATIONS = false; // BUG-1019-SANCTIONED-ROUTE: audit fallback (Bev ruling 2026-10-31)
+}
+
+function recordAuditEvent(ev: PartitionAuditEvent): void {
+  partitionAuditPending.push(ev);
+  partitionAuditHistory.push(ev);
+  if (partitionAuditHistory.length > PARTITION_AUDIT_HISTORY_CAP) partitionAuditHistory.shift();
+}
+
+/**
+ * Called once per reducer dispatch with the FINAL state. Flag OFF (or fallback
+ * engaged, which also turns the flag off): a boolean check and nothing else.
+ * Returns true when this call ran the audit and it MISMATCHED or FAILED.
+ */
+export function runPartitionAudit(s: SimState, prevTick: number): boolean {
+  if (!PARTITIONED_DERIVATIONS) return false;
+  if (s.tick === prevTick || s.tick <= 0 || s.tick % SECTOR_AUDIT_INTERVAL_TICKS !== 0) return false;
+  if (s.tick === partitionAuditLastTick) return false; // idempotent per tick (StrictMode-style double invoke)
+  partitionAuditRuns += 1;
+  partitionAuditLastTick = s.tick;
+  partitionAuditReportDue = true;
+  try {
+    const partitioned = totalJobsPartitioned(s);
+    const wholeCity = totalJobsWholeCity(s);
+    if (partitioned === wholeCity) return false;
+    partitionAuditMismatches += 1;
+    engagePartitionFallback();
+    recordAuditEvent({ kind: 'mismatch', tick: s.tick, partitioned, wholeCity, code: 'MET-V970', detail: '' });
+    return true;
+  } catch (e) {
+    // GR#17: an audit that cannot evaluate must not leave the partitioned path live, and must be loud.
+    partitionAuditFailures += 1;
+    engagePartitionFallback();
+    recordAuditEvent({ kind: 'failure', tick: s.tick, partitioned: null, wholeCity: null, code: 'MET-V971', detail: e instanceof Error ? e.message : String(e) });
+    return true;
+  }
+}
+
+/** Hands the queued events to the render-side observer (store.tsx) exactly once. */
+export function drainPartitionAuditEvents(): PartitionAuditEvent[] {
+  if (partitionAuditPending.length === 0) return partitionAuditPending;
+  const out = partitionAuditPending;
+  partitionAuditPending = [];
+  return out;
+}
+
+/** Local (this module instance's own) status. */
+function localAuditStatus(): PartitionAuditStatus {
+  return {
+    intervalTicks: SECTOR_AUDIT_INTERVAL_TICKS,
+    flagOn: PARTITIONED_DERIVATIONS,
+    fallbackEngaged: partitionFallbackEngaged,
+    runs: partitionAuditRuns,
+    mismatches: partitionAuditMismatches,
+    failures: partitionAuditFailures,
+    lastRunTick: partitionAuditLastTick,
+    events: partitionAuditHistory.slice(),
+    fromWorker: false,
+  };
+}
+
+/**
+ * Status for debug.json. On the main thread with a worker, this is the WORKER's
+ * counters and events (the audit runs there) with the MAIN thread's own flag and
+ * fallback state. Plain data, no clock.
+ */
+export function partitionAuditStatus(): PartitionAuditStatus {
+  const local = localAuditStatus();
+  if (!remoteAuditStatus) return local;
+  return {
+    ...remoteAuditStatus,
+    flagOn: local.flagOn,
+    fallbackEngaged: local.fallbackEngaged || remoteAuditStatus.fallbackEngaged,
+    fromWorker: true,
+  };
+}
+
+/**
+ * WORKER SIDE: the payload to attach to the tick reply, or undefined when no
+ * audit ran since the last report (flag OFF: always undefined, zero traffic).
+ */
+export function takePartitionAuditReport(): PartitionAuditReport | undefined {
+  if (!partitionAuditReportDue) return undefined;
+  partitionAuditReportDue = false;
+  return { status: localAuditStatus(), events: drainPartitionAuditEvents().slice() };
+}
+
+/**
+ * MAIN SIDE: apply a worker's report. Queues its events for this thread's
+ * drain (so MET-V970/V971 are recorded here), engages this thread's OWN
+ * fallback when the worker's did, and keeps the worker's counters for debug.json.
+ */
+export function applyWorkerPartitionAuditReport(report: PartitionAuditReport): void {
+  remoteAuditStatus = report.status;
+  for (const ev of report.events) partitionAuditPending.push(ev);
+  if (report.status.fallbackEngaged) engagePartitionFallback();
+}
+
+/** TEST SEAM — clears the audit state (and the sticky fallback). NODE_TEST_CONTEXT-guarded. */
+export function __resetPartitionAuditForTest(): void {
+  if (typeof process === 'undefined' || !process.env?.NODE_TEST_CONTEXT) {
+    throw new Error('__resetPartitionAuditForTest may only be called under NODE_TEST_CONTEXT (node --test)');
+  }
+  partitionFallbackEngaged = false;
+  partitionAuditRuns = 0;
+  partitionAuditMismatches = 0;
+  partitionAuditFailures = 0;
+  partitionAuditLastTick = null;
+  partitionAuditHistory.length = 0;
+  partitionAuditPending = [];
+  partitionAuditReportDue = false;
+  remoteAuditStatus = null;
+}
+
+/** TEST SEAM — poisons the cached aggregate of `sectorKey` in `s`'s index (injected stale aggregate). Returns false if the sector is absent. */
+export function __poisonSectorAggregateForTest(s: SimState, sectorKey: number, delta: number): boolean {
+  if (typeof process === 'undefined' || !process.env?.NODE_TEST_CONTEXT) {
+    throw new Error('__poisonSectorAggregateForTest may only be called under NODE_TEST_CONTEXT (node --test)');
+  }
+  const agg = sectorIndexOf(s).get(sectorKey);
+  if (!agg) return false;
+  agg.jobs += delta;
+  return true;
 }

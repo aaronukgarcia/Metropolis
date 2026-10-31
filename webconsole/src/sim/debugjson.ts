@@ -30,6 +30,7 @@ import rawTrafficConfigForGrid from './traffic-data/traffic.json' with { type: '
 const WEBCONSOLE_TILE_METRES: number = (rawTrafficConfigForGrid as { webconsoleMetresPerTile: number })
   .webconsoleMetresPerTile;
 
+import { partitionAuditStatus } from './sectorPartition.ts';
 import type {
   ArrivalsByMode,
   BailoutOrigin,
@@ -244,6 +245,8 @@ export interface ConsistencyReportJson {
 }
 
 export interface DebugJson {
+  /** FEAT-2326609764 inc3a: spatial-partition self-audit status (AC-13) — module state, not SimState. */
+  partitionAudit: ReturnType<typeof partitionAuditStatus>;
   meta: {
     format: string;
     /** Freshest LIVE version (matches the badge). Diverges from buildVersion
@@ -996,6 +999,7 @@ export function buildDebugJson(
     }));
 
   return {
+    partitionAudit: partitionAuditStatus(),
     meta: {
       format: DEBUG_JSON_FORMAT,
       // BUG-424: appVersion reflects the freshest LIVE version (the badge),

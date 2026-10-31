@@ -17,6 +17,7 @@ import { runTick } from './simWorkerProtocol.ts';
 import type { MainToWorkerMessage, WorkerToMainMessage } from './simWorkerProtocol.ts';
 import { applyStateDelta, diffSimState, DeltaBasisMismatchError } from './simWorkerDelta.ts';
 import type { SimState } from './types.ts';
+import { takePartitionAuditReport } from './sectorPartition.ts';
 
 // FEAT-2326609777 (2026-09-06) — this worker's own persistent cache of the
 // last full SimState it is known to hold, i.e. the exact state store.tsx's
@@ -30,6 +31,12 @@ import type { SimState } from './types.ts';
 // received proof, via `deltaCapable`, that THIS worker instance holds one).
 let cachedState: SimState | null = null;
 
+/** FEAT-2326609764 inc3a (F1): the worker's partition self-audit report, attached ONLY when an audit ran since the last reply (flag OFF: {} => zero added payload). */
+function auditField(): { partitionAudit?: ReturnType<typeof takePartitionAuditReport> } {
+  const r = takePartitionAuditReport();
+  return r ? { partitionAudit: r } : {};
+}
+
 self.onmessage = (ev: MessageEvent<MainToWorkerMessage>) => {
   const msg = ev.data;
   if (msg.type === 'runTick') {
@@ -41,6 +48,8 @@ self.onmessage = (ev: MessageEvent<MainToWorkerMessage>) => {
       state: nextState,
       requestId: msg.requestId,
       deltaCapable: true,
+      // FEAT-2326609764 inc3a (F1): undefined (key omitted by the spread below) unless an audit ran.
+      ...auditField(),
     };
     (self as unknown as Worker).postMessage(reply);
     return;
@@ -78,7 +87,7 @@ self.onmessage = (ev: MessageEvent<MainToWorkerMessage>) => {
       const nextState = runTick(preTick);
       const delta = diffSimState(preTick, nextState);
       cachedState = nextState;
-      const reply: WorkerToMainMessage = { type: 'tickResultDelta', requestId: msg.requestId, delta };
+      const reply: WorkerToMainMessage = { type: 'tickResultDelta', requestId: msg.requestId, delta, ...auditField() };
       (self as unknown as Worker).postMessage(reply);
     } catch (err) {
       // Belt-and-braces: the explicit tick-comparison guard above already

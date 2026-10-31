@@ -142,6 +142,7 @@ import { persistStashedCamera } from './cameraStash';
 import { listRecentOpened, recordRecentOpened } from './recentfiles';
 import { RebuildPrompt, type RebuildPhase } from '../components/RebuildPrompt';
 import { recordError, updateLastKnownState } from './backend';
+import { drainPartitionAuditEvents, applyWorkerPartitionAuditReport } from './sectorPartition';
 import { useBlockingOverlay } from '../components/overlayManager';
 import { BLOCKING_OVERLAY_ID, BLOCKING_OVERLAY_RANK } from '../components/overlayLayers';
 
@@ -2038,6 +2039,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (msg.type !== 'tickResult' && msg.type !== 'tickResultDelta') return;
+      // FEAT-2326609764 inc3a (F1): the audit runs in the worker's module instance; relay its report so MET-V970/V971
+      // are recorded here, this thread's own flag falls back, and debug.json shows the worker's counters.
+      // Applied regardless of stale/discard (the worker genuinely ran the audit).
+      if (msg.partitionAudit) applyWorkerPartitionAuditReport(msg.partitionAudit);
       // FEAT-2326609777: resolve the actual full post-tick SimState this
       // reply describes, and (unconditionally — same "regardless of
       // apply/discard" convention as clearWorkerBusy above, since the
@@ -2797,6 +2802,20 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // enters the reducer.
   useEffect(() => {
     updateLastKnownState(state);
+  }, [state]);
+
+  // FEAT-2326609764 inc3a (AC-13): OUTBOX drain for the partition self-audit. The audit runs
+  // inside the pure reducer (no recordError there, GR#21/BUG-602); a mismatch queues an event
+  // and this render-side effect records the registry error MET-V970 once per event.
+  useEffect(() => {
+    for (const ev of drainPartitionAuditEvents()) {
+      recordError(
+        ev.kind === 'failure'
+          ? `Spatial-partition self-audit at tick ${ev.tick} could not run (${ev.detail}); the partitioned path is switched OFF for the rest of this session (whole-city fallback)`
+          : `Spatial-partition self-audit at tick ${ev.tick}: partitioned totalJobs ${ev.partitioned} != whole-city fold ${ev.wholeCity}; the partitioned path is switched OFF for the rest of this session (whole-city fallback)`,
+        { type: 'app', action: 'tick', code: ev.code },
+      );
+    }
   }, [state]);
 
   // BUG-427 / GR#27: track the LATEST state in a ref so the beforeunload handler

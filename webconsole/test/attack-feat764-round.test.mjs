@@ -352,7 +352,14 @@ test('ATTACK/BUG-1019: the flag has exactly ONE mutation route and it is the gua
   assert.throws(() => { mod.PARTITIONED_DERIVATIONS = true; }, TypeError, 'an ESM live binding must be read-only to importers');
   assert.equal(mod.PARTITIONED_DERIVATIONS, false);
   const src = await readFile(new URL('../src/sim/sectorPartition.ts', import.meta.url), 'utf8');
-  const assignments = src.match(/PARTITIONED_DERIVATIONS\s*=/g) || [];
-  assert.equal(assignments.length, 2, 'exactly two assignments: the `export let` initialiser and the guarded seam');
+  // AMENDED (Bev ruling 2026-10-31, FEAT-2326609844 inc3a): the flag now has EXACTLY TWO named mutation
+  // routes - the guarded seam and the production self-audit's fallback write, which must carry the
+  // BUG-1019-SANCTIONED-ROUTE sentinel on its own line. A third route (or a second sentinel line) reddens this.
+  const lines = src.split(/\r?\n/).filter((l) => /PARTITIONED_DERIVATIONS\s*=/.test(l));
+  const sentinel = lines.filter((l) => l.includes('BUG-1019-SANCTIONED-ROUTE'));
+  const nonSentinel = lines.filter((l) => !l.includes('BUG-1019-SANCTIONED-ROUTE'));
+  assert.equal(sentinel.length, 1, 'exactly one sanctioned audit-fallback write, marked by the sentinel');
+  assert.equal(nonSentinel.length, 2, 'exactly two other assignments: the DEFAULT_ initialiser and the guarded seam');
+  assert.ok(/^\s*PARTITIONED_DERIVATIONS = false;/.test(sentinel[0]) && /function engagePartitionFallback/.test(src), 'the sentinel write lives in the single engagePartitionFallback function');
   assert.ok(/NODE_TEST_CONTEXT/.test(src), 'the seam must stay env-guarded');
 });

@@ -113,6 +113,7 @@ import {
   sectorsCompletingAtTick,
   rebuildCompletionScheduleFromScratch,
   PARTITIONED_DERIVATIONS,
+  runPartitionAudit,
 } from './sectorPartition.ts';
 // BUG-880 fix — re-export the single shared coverage->wellbeing-part
 // transform (defined in data.ts to avoid a new import cycle) so callers can
@@ -11647,6 +11648,8 @@ export function reducer(state: SimState, action: Action): SimState {
     final = next;
   }
   commitPendingDirtySectors(final, s);
+  // FEAT-2326609764 inc3a (AC-13): tick-counted production self-audit. Flag OFF: a boolean check inside.
+  runPartitionAudit(final, s.tick);
   return final;
 }
 
