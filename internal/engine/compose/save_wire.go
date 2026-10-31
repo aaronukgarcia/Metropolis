@@ -153,6 +153,8 @@ func (c *Composition) Participants() []save.Participant {
 		newPoliciesParticipant(st),
 		// FEAT-2326609833: engine.coastal module snapshot + compose posting state.
 		newCoastalParticipant(st),
+		// FEAT-2326609836: engine.defence snapshot + compose posting state.
+		newDefenceParticipant(st),
 	}
 }
 

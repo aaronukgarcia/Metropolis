@@ -12,7 +12,7 @@ import (
 // "central grants (§55)" as a money-in producer, so this package introduces
 // the "grants" category value. Documented here because it is a new category
 // name in finance's namespace.
-const grantCategory finance.Category = "grants"
+const grantCategory = finance.CatGrants
 
 // bidPurpose is the det.Stream purpose tag for grant-bid outcome draws
 // (AC-13): a fixed literal, never string-built from input.
@@ -53,7 +53,21 @@ func (d *DefenceAPI) BidForGrant(req GrantBid) (GrantResult, error) {
 		return GrantResult{}, errs.New(ErrUndeclaredPot, d.correlationID, map[string]any{"pot": req.Pot})
 	}
 
+	// r2 cap: one bid per pot per calendar month.
+	if last, seen := d.lastBidMonth[req.Pot]; seen && last == req.Month {
+		return GrantResult{}, errs.New(ErrBidCapReached, d.correlationID, map[string]any{"pot": req.Pot, "month": req.Month})
+	}
+	// r2 affordability: the match commitment must fit the treasury now.
+	if d.finance == nil {
+		return GrantResult{}, errs.New(ErrDependencyMissing, d.correlationID, map[string]any{"operation": "BidForGrant", "dependency": "engine.finance"})
+	}
+	treasury, _ := d.finance.AccountBalance(finance.AcctTreasury)
+	if req.MatchFunding > treasury {
+		return GrantResult{}, errs.New(ErrBidUnaffordable, d.correlationID, map[string]any{"pot": req.Pot, "matchFunding": int64(req.MatchFunding), "treasury": int64(treasury)})
+	}
+
 	p := d.bidWinProbability(pot, req.MatchFunding)
+	d.lastBidMonth[req.Pot] = req.Month
 	d.bidSeq++
 	stream := det.NewStream(d.worldSeed, d.bidSeq, req.Month, bidPurpose)
 	won := stream.Float64() < p

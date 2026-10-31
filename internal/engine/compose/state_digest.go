@@ -164,6 +164,10 @@ func (c *Composition) StateDigest() [32]byte {
 
 	// FEAT-2326609832: engine.policies state (only once a player used it).
 	st.digestPolicies(h)
+	// 6a. engine.defence (FEAT-2326609836).
+	if st.defenceW != nil {
+		st.defenceW.digestInto(h)
+	}
 	// 6. engine.coastal (FEAT-2326609833).
 	if st.coastalW != nil {
 		st.coastalW.digestInto(h)

@@ -98,6 +98,22 @@ func (d *DefenceAPI) RespondToMandate(req MandateResponse) (MandateResult, error
 		return MandateResult{}, err
 	}
 
+	// FEAT-2326609836: draw every settled citizen id from the composition's
+	// allocator BEFORE any mutation (an allocator failure leaves nothing
+	// half-applied; at worst a gap in the id counter).
+	var settleIDs []uint64
+	if d.allocID != nil {
+		n := fc.PersonnelCount + fc.MarriedQuarters*fc.ChildrenPerQuarter
+		settleIDs = make([]uint64, 0, n)
+		for i := int64(0); i < n; i++ {
+			cid, aerr := d.allocID()
+			if aerr != nil {
+				return MandateResult{}, aerr
+			}
+			settleIDs = append(settleIDs, cid)
+		}
+	}
+
 	// Site the chosen option through engine.build (the registered edge).
 	buildCmd := build.BuildCommand{
 		Tile:    req.Site.Tile,
@@ -139,6 +155,7 @@ func (d *DefenceAPI) RespondToMandate(req MandateResponse) (MandateResult, error
 		marriedQuarters: fc.MarriedQuarters,
 		schoolPlaces:    fc.MarriedQuarters * fc.ChildrenPerQuarter,
 		procurement:     finance.Money(fc.ProcurementMicropounds),
+		ids:             settleIDs,
 	}
 	d.facilities[id] = fac
 

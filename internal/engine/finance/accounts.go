@@ -95,6 +95,12 @@ const (
 	CatMaterials   Category = "opex.materials"
 	CatStaffWages  Category = "opex.staffwages"
 	CatCapex       Category = "capex.maintenance"
+
+	// CatGrants (FEAT-2326609836): central-government grant inflow (external
+	// -> treasury), posted by engine.defence. SSOT for the category name:
+	// engine.defence posts it and engine.fiscal's ledger Sankey reads it for
+	// the NodeGrants source node.
+	CatGrants Category = "grants"
 )
 
 // taxCategories is the ordered set of categories that compose the tax

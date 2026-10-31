@@ -277,3 +277,27 @@ const (
 	// restore.
 	ErrCoastalStateInvalid = "MET-G5484"
 )
+
+// FEAT-2326609836 (wire engine.defence): codes MET-G5490..G5494, claimed via
+// tools/plan/add-error.js claim-range feat.compositionroot --size 10 --layer G.
+const (
+	// ErrDefenceMandateNotPending: a mandate response named a mandate whose
+	// population threshold the city has not reached.
+	ErrDefenceMandateNotPending = "MET-G5490"
+
+	// ErrDefenceCommandInvalid: a defence protocol command was malformed or
+	// engine.defence is not wired.
+	ErrDefenceCommandInvalid = "MET-G5491"
+
+	// ErrDefenceStateInvalid: a defence save record failed validation on
+	// restore.
+	ErrDefenceStateInvalid = "MET-G5492"
+
+	// ErrDefenceCitizenIDCollision: the compose citizen id allocator, asked
+	// for a defence-personnel citizen id, reached a reserved id namespace.
+	ErrDefenceCitizenIDCollision = "MET-G5493"
+
+	// ErrDefenceFacilityUnposted: a monthly facility payroll or procurement
+	// line was rejected by the ledger (logged, not retried).
+	ErrDefenceFacilityUnposted = "MET-G5494"
+)

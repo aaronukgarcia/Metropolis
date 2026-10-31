@@ -124,6 +124,20 @@ func fixtureCommands(t *testing.T) map[Kind]Command {
 			Kind:            KindRepealPolicy,
 			Payload:         RepealPolicyPayload{EnactmentID: "enactment-1"},
 		},
+		KindBidForGrant: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    113,
+			Kind:            KindBidForGrant,
+			Payload:         BidForGrantPayload{Pot: "transport", MatchFundingMicropounds: 1000},
+		},
+		KindRespondToMandate: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    114,
+			Kind:            KindRespondToMandate,
+			Payload:         RespondToMandatePayload{MandateID: "naval-100k", Choice: "naval-base", Cell: CellRef{X: 3, Y: 7}},
+		},
 	}
 }
 

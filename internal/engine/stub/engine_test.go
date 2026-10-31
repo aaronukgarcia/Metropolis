@@ -115,6 +115,10 @@ func wellFormedPayload(kind protocol.Kind, subID protocol.SubscriptionID) protoc
 		return protocol.EnactPolicyPayload{PolicyID: "nationalMinimumWage", ScopeKind: "citywide"}
 	case protocol.KindRepealPolicy:
 		return protocol.RepealPolicyPayload{EnactmentID: "enactment-1"}
+	case protocol.KindBidForGrant:
+		return protocol.BidForGrantPayload{Pot: "transport", MatchFundingMicropounds: 1000}
+	case protocol.KindRespondToMandate:
+		return protocol.RespondToMandatePayload{MandateID: "naval-100k", Choice: "naval-base", Cell: protocol.CellRef{X: 3, Y: 7}}
 	default:
 		panic("wellFormedPayload: unhandled kind " + string(kind))
 	}

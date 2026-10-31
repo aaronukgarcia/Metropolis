@@ -130,17 +130,19 @@ var kindClass = map[protocol.Kind]Class{
 	// gameplay build-queue commands. These are authoritative (a dropped
 	// Buy is a dropped land purchase) but tolerate FIFO batching/delay,
 	// unlike T0's every-tick requirement.
-	protocol.KindSubscribe:     ClassT1Batchable,
-	protocol.KindUnsubscribe:   ClassT1Batchable,
-	protocol.KindInspectEntity: ClassT1Batchable,
-	protocol.KindDebug:         ClassT1Batchable,
-	protocol.KindBuy:           ClassT1Batchable,
-	protocol.KindZone:          ClassT1Batchable,
-	protocol.KindBuild:         ClassT1Batchable,
-	protocol.KindDemolish:      ClassT1Batchable,
-	protocol.KindSetFunding:    ClassT1Batchable,
-	protocol.KindEnactPolicy:   ClassT1Batchable,
-	protocol.KindRepealPolicy:  ClassT1Batchable,
+	protocol.KindSubscribe:        ClassT1Batchable,
+	protocol.KindUnsubscribe:      ClassT1Batchable,
+	protocol.KindInspectEntity:    ClassT1Batchable,
+	protocol.KindDebug:            ClassT1Batchable,
+	protocol.KindBuy:              ClassT1Batchable,
+	protocol.KindZone:             ClassT1Batchable,
+	protocol.KindBuild:            ClassT1Batchable,
+	protocol.KindDemolish:         ClassT1Batchable,
+	protocol.KindSetFunding:       ClassT1Batchable,
+	protocol.KindEnactPolicy:      ClassT1Batchable,
+	protocol.KindRepealPolicy:     ClassT1Batchable,
+	protocol.KindBidForGrant:      ClassT1Batchable,
+	protocol.KindRespondToMandate: ClassT1Batchable,
 }
 
 // classOfDefault is the Class an unrecognised Kind falls back to — see

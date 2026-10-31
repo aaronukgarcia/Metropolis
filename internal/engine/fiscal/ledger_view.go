@@ -38,6 +38,27 @@ func categoryTreasuryCredits(fin *finance.FinanceAPI, cat finance.Category) fina
 	return total
 }
 
+// grantsTreasuryCredits returns the treasury-credit legs of the grants
+// category over the current tick's ledger lines (FEAT-2326609836).
+func grantsTreasuryCredits(fin *finance.FinanceAPI) []finance.Entry {
+	var out []finance.Entry
+	for _, e := range fin.LinesByCategory(finance.CatGrants) {
+		if e.Account == finance.AcctTreasury && e.Side == finance.SideCredit {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// sumEntries is the saturating sum of entry amounts.
+func sumEntries(es []finance.Entry) finance.Money {
+	var total finance.Money
+	for _, e := range es {
+		total, _ = satAdd(total, e.Amount)
+	}
+	return total
+}
+
 // LedgerTaxBreakdown returns the per-type tax inflow read from the finance
 // ledger's tax.* categories (A1). Rates carries tax.council (rates & council
 // tax); Duties has no ledger category and stays zero (Provisional). Its
@@ -58,8 +79,11 @@ func (f *FiscalAPI) LedgerTaxBreakdown() (TaxBreakdown, error) {
 	}, nil
 }
 
-// LedgerMoneyIn is the budget inflow: finance.TaxRevenue() (the external
-// producers are Provisional zero).
+// LedgerMoneyIn is the budget inflow: finance.TaxRevenue() plus the central
+// grants treasury credits (FEAT-2326609836: a won grant bid is real money in;
+// the other external producers are Provisional zero). finance.BudgetBalance
+// stays the canonical finance figure and is NOT altered, so
+// LedgerOtherOutflows (in - out - balance) absorbs the grants amount.
 func (f *FiscalAPI) LedgerMoneyIn() (finance.Money, error) {
 	if err := f.checkNotCopied("LedgerMoneyIn"); err != nil {
 		return 0, err
@@ -68,7 +92,8 @@ func (f *FiscalAPI) LedgerMoneyIn() (finance.Money, error) {
 	if err != nil {
 		return 0, err
 	}
-	return fin.TaxRevenue(), nil
+	in, _ := satAdd(fin.TaxRevenue(), sumEntries(grantsTreasuryCredits(fin)))
+	return in, nil
 }
 
 // LedgerMoneyOut is the Sankey sink total: finance.ImportsTotal() plus
@@ -146,12 +171,23 @@ func (f *FiscalAPI) LedgerTopology() (Topology, error) {
 	})
 	for _, cat := range sourceNodeOrder {
 		var amount finance.Money
-		if cat == NodeTaxRevenue {
+		provisional := isProvisional(cat)
+		switch cat {
+		case NodeTaxRevenue:
 			amount = moneyIn
+		case NodeGrants:
+			// FEAT-2326609836: the grants producer (engine.defence) now posts
+			// treasury-credit lines under finance.CatGrants. The node carries
+			// the ledger sum for the window and drops Provisional once any
+			// grants line exists; with none it stays a Provisional zero.
+			if lines := grantsTreasuryCredits(fin); len(lines) > 0 {
+				amount = sumEntries(lines)
+				provisional = false
+			}
 		}
 		topo.Nodes = append(topo.Nodes, SankeyNode{
 			ID: cat, Label: nodeLabel(cat), Kind: KindSource,
-			Amount: amount, Provisional: isProvisional(cat),
+			Amount: amount, Provisional: provisional,
 		})
 		topo.Edges = append(topo.Edges, SankeyEdge{From: cat, To: NodeBudget, Amount: amount})
 	}
@@ -179,12 +215,20 @@ func (f *FiscalAPI) LedgerDrillThrough(cat NodeCategory) ([]finance.Entry, error
 	if err := f.checkNotCopied("LedgerDrillThrough"); err != nil {
 		return nil, err
 	}
-	if cat != NodeTaxRevenue {
+	if cat != NodeTaxRevenue && cat != NodeGrants {
 		return f.DrillThrough(cat)
 	}
 	fin, err := f.requireFinance("LedgerDrillThrough")
 	if err != nil {
 		return nil, err
+	}
+	if cat == NodeGrants {
+		// FEAT-2326609836: grants lines (both legs, like the tax drill).
+		g := fin.LinesByCategory(finance.CatGrants)
+		if g == nil {
+			g = []finance.Entry{}
+		}
+		return g, nil
 	}
 	out := []finance.Entry{}
 	for _, c := range ledgerTaxCategories {

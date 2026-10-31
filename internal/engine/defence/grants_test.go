@@ -10,7 +10,11 @@ import (
 // varies match funding, asserting the win probability strictly increases
 // (AC-2a): the match-funding term is not decorative.
 func TestGrantWinRate_IncreasesWithMatchFunding(t *testing.T) {
-	d, _ := newGrantDefence(t, 1)
+	d, f := newGrantDefence(t, 1)
+	// The match commitment must be affordable (r2): seed the treasury.
+	if err := postGrant(f, 0, 1_000_000_000, "test treasury seed"); err != nil {
+		t.Fatalf("seed treasury: %v", err)
+	}
 	if err := d.SetPlanningQuality(0.5); err != nil {
 		t.Fatalf("SetPlanningQuality: %v", err)
 	}
@@ -21,7 +25,7 @@ func TestGrantWinRate_IncreasesWithMatchFunding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BidForGrant(low): %v", err)
 	}
-	high, err := d.BidForGrant(GrantBid{Pot: "transport", MatchFunding: 500_000_000, Month: 0})
+	high, err := d.BidForGrant(GrantBid{Pot: "transport", MatchFunding: 500_000_000, Month: 1})
 	if err != nil {
 		t.Fatalf("BidForGrant(high): %v", err)
 	}
@@ -46,7 +50,7 @@ func TestPlanningQualityInput_MovesWinRate(t *testing.T) {
 	if err := d.SetPlanningQuality(1.0); err != nil {
 		t.Fatalf("SetPlanningQuality(1): %v", err)
 	}
-	high, err := d.BidForGrant(GrantBid{Pot: "transport", MatchFunding: 0, Month: 0})
+	high, err := d.BidForGrant(GrantBid{Pot: "transport", MatchFunding: 0, Month: 1})
 	if err != nil {
 		t.Fatalf("BidForGrant(high q): %v", err)
 	}
@@ -101,7 +105,10 @@ func TestUndeclaredPot_Rejected(t *testing.T) {
 // stream, no shared RNG).
 func TestGrantWinRate_DrawIsDeterministic(t *testing.T) {
 	run := func() []bool {
-		d, _ := newGrantDefence(t, 42)
+		d, f := newGrantDefence(t, 42)
+		if err := postGrant(f, 0, 1_000_000_000, "test treasury seed"); err != nil {
+			t.Fatalf("seed treasury: %v", err)
+		}
 		var out []bool
 		for i := 0; i < 20; i++ {
 			r, err := d.BidForGrant(GrantBid{Pot: "transport", MatchFunding: 100_000_000, Month: int64(i)})
@@ -118,5 +125,43 @@ func TestGrantWinRate_DrawIsDeterministic(t *testing.T) {
 		if a[i] != b[i] {
 			t.Fatalf("bid %d diverged across identical runs: %v vs %v", i, a[i], b[i])
 		}
+	}
+}
+
+// TestBidCap_OnePerPotPerMonthAndSurvivesSnapshot pins the r2 cap
+// (FEAT-2326609836 F1): a second bid for the same pot in the same month is
+// refused with ErrBidCapReached, draws nothing, and the cap survives
+// Snapshot/Restore; another pot or another month is unaffected.
+func TestBidCap_OnePerPotPerMonthAndSurvivesSnapshot(t *testing.T) {
+	d, _ := newGrantDefence(t, 7)
+	if _, err := d.BidForGrant(GrantBid{Pot: "transport", Month: 3}); err != nil {
+		t.Fatalf("first bid: %v", err)
+	}
+	seq := d.BidSeq()
+	_, err := d.BidForGrant(GrantBid{Pot: "transport", Month: 3})
+	isErr(t, err, ErrBidCapReached)
+	if d.BidSeq() != seq {
+		t.Fatalf("refused bid advanced the draw counter")
+	}
+	snap := d.Snapshot()
+	d2, _ := newGrantDefence(t, 7)
+	if err := d2.Restore(snap); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	_, err = d2.BidForGrant(GrantBid{Pot: "transport", Month: 3})
+	isErr(t, err, ErrBidCapReached)
+	if _, err := d2.BidForGrant(GrantBid{Pot: "transport", Month: 4}); err != nil {
+		t.Fatalf("next month bid: %v", err)
+	}
+}
+
+// TestBidAffordability_RefusedAndNothingDrawn pins the r2 affordability check.
+func TestBidAffordability_RefusedAndNothingDrawn(t *testing.T) {
+	d, f := newGrantDefence(t, 7)
+	before := f.TotalMoneyInCirculation()
+	_, err := d.BidForGrant(GrantBid{Pot: "transport", MatchFunding: 1, Month: 0})
+	isErr(t, err, ErrBidUnaffordable)
+	if d.BidSeq() != 0 || f.TotalMoneyInCirculation() != before {
+		t.Fatalf("unaffordable bid drew or posted")
 	}
 }

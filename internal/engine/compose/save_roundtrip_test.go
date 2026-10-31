@@ -140,9 +140,10 @@ func TestSaveRoundTrip_PerModuleStateIsByteIdentical(t *testing.T) {
 	// ledger participant + policies (FEAT-2326609832: enactments, districts,
 	// drift events) + fiscal (FEAT-2326609835, A5: planning funding,
 	// childcare places and the civil-service wage bill) + coastal
-	// (FEAT-2326609833: module snapshot + compose posting state) = eighteen.
-	if len(streamsA) != 18 {
-		t.Fatalf("expected 18 participants, got %d", len(streamsA))
+	// (FEAT-2326609833: module snapshot + compose posting state) + defence
+	// (FEAT-2326609836: module snapshot + compose posting state) = nineteen.
+	if len(streamsA) != 19 {
+		t.Fatalf("expected 19 participants, got %d", len(streamsA))
 	}
 
 	dir := t.TempDir()
