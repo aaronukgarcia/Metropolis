@@ -96,6 +96,10 @@ type AdvanceResult struct {
 	DepartureCost        int64 // managed-departure cost recorded this month (AC-7)
 	SatisfactionFriction float64
 	Backlog              int64 // cases still awaiting a caseworker after this month
+	// RescueUnregistered lists rescue service ids (data/coastal.json) that
+	// engine.services does not know at all -- DISTINCT from a registered
+	// service with zero capacity (no stations built). Empty when all ids resolve.
+	RescueUnregistered []string
 }
 
 // ShoreSource supplies shore-cell membership (§30, §2.1). engine.world owns

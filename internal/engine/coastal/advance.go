@@ -1,6 +1,7 @@
 package coastal
 
 import (
+	"errors"
 	"fmt"
 	"math"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/news"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
@@ -59,6 +61,7 @@ func (c *CoastalAPI) Advance(month int64) (AdvanceResult, error) {
 	svc := c.services
 	nws := c.news
 	shore := c.shore
+	idAlloc := c.idAlloc
 	nextCase := c.nextCaseID
 	nextArr := c.nextArrivalID
 	oldBacklog := make([]CaseID, len(c.backlog))
@@ -91,7 +94,8 @@ func (c *CoastalAPI) Advance(month int64) (AdvanceResult, error) {
 	count := arrivalCount(countStream, rate, cfg.MaxArrivalsPerMonth)
 
 	// 2. Rescue response (AC-4): read coastguard/lifeboat capacity live.
-	remainingCap := rescueCapacity(svc, cfg.Rescue)
+	remainingCap, unregistered := rescueCapacity(svc, cfg.Rescue)
+	result.RescueUnregistered = unregistered
 
 	var newEvents []ArrivalEvent
 	for i := 0; i < count; i++ {
@@ -201,7 +205,7 @@ func (c *CoastalAPI) Advance(month int64) (AdvanceResult, error) {
 					"operation":  "granted-citizen-creation",
 				})
 			}
-			citizenID, err := c.createGrantedCitizen(cit, cfg, seed, k, k.ResolveMonth)
+			citizenID, err := c.createGrantedCitizen(cit, cfg, seed, k, k.ResolveMonth, idAlloc)
 			if err != nil {
 				return AdvanceResult{}, err
 			}
@@ -338,9 +342,17 @@ func attainmentFor(cfg Config, seed uint64, id CaseID, month int64) int32 {
 // its personality is the neutral midpoint (the same documented placeholder
 // engine.attract uses for migrants — a future world-pool hook). Returns the
 // minted citizen ID.
-func (c *CoastalAPI) createGrantedCitizen(cit *citizens.CitizensAPI, cfg Config, seed uint64, k Case, month int64) (uint64, error) {
+func (c *CoastalAPI) createGrantedCitizen(cit *citizens.CitizensAPI, cfg Config, seed uint64, k Case, month int64, idAlloc func() (uint64, error)) (uint64, error) {
+	citizenID := uint64(k.ID)
+	if idAlloc != nil {
+		id, aerr := idAlloc()
+		if aerr != nil {
+			return 0, aerr
+		}
+		citizenID = id
+	}
 	rec := citizens.Citizen{
-		ID:          uint64(k.ID),
+		ID:          citizenID,
 		BirthMonth:  clampBirthMonth(month),
 		Sex:         citizens.Sex(uint64(k.ID) & 1),
 		Personality: neutralPersonality(),
@@ -362,7 +374,7 @@ func (c *CoastalAPI) createGrantedCitizen(cit *citizens.CitizensAPI, cfg Config,
 	if err != nil {
 		return 0, err
 	}
-	return uint64(k.ID), nil
+	return citizenID, nil
 }
 
 // neutralPersonality returns the v1 neutral personality (each axis at the
@@ -393,20 +405,33 @@ func clampBirthMonth(month int64) int32 {
 // wired engine.services (AC-4). An unwired services API, an unregistered
 // service, or any read error yields 0 — a total shortfall, never a fabricated
 // capacity.
-func rescueCapacity(svc *services.ServicesAPI, cfg RescueConfig) float64 {
+//
+// FEAT-2326609833: the capacity is still 0 in all those cases, but the SECOND
+// return value now distinguishes "service id not found / services unwired"
+// (the id is listed, sorted by config order) from "registered with zero
+// capacity" (nothing listed: no stations built). The silent capacity-zero
+// masking the wiring round attacks is therefore visible on AdvanceResult.
+func rescueCapacity(svc *services.ServicesAPI, cfg RescueConfig) (float64, []string) {
+	ids := []string{cfg.CoastguardServiceID, cfg.LifeboatServiceID}
 	if svc == nil {
-		return 0
+		return 0, ids
 	}
 	total := 0.0
-	coastguard, err := svc.Capacity(services.ServiceID(cfg.CoastguardServiceID))
-	if err == nil && num.IsFinite(coastguard) && coastguard > 0 {
-		total += coastguard
+	var unregistered []string
+	for _, id := range ids {
+		capacity, err := svc.Capacity(services.ServiceID(id))
+		if err != nil {
+			var e *errs.E
+			if errors.As(err, &e) && e.Code == services.ErrServiceNotRegistered {
+				unregistered = append(unregistered, id)
+			}
+			continue
+		}
+		if num.IsFinite(capacity) && capacity > 0 {
+			total += capacity
+		}
 	}
-	lifeboat, err := svc.Capacity(services.ServiceID(cfg.LifeboatServiceID))
-	if err == nil && num.IsFinite(lifeboat) && lifeboat > 0 {
-		total += lifeboat
-	}
-	return total
+	return total, unregistered
 }
 
 // rescueOutcomeFor records the rescue response for one arrival against the

@@ -21,7 +21,7 @@ const roundTripSeed = uint64(20260901)
 func buildComposition(t *testing.T) (*core.Engine, *Composition) {
 	t.Helper()
 	e := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
-	comp, err := Wire(e, nil)
+	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}
@@ -139,9 +139,10 @@ func TestSaveRoundTrip_PerModuleStateIsByteIdentical(t *testing.T) {
 	// culture-window/lifecycle-event participant) + the compose-owned
 	// ledger participant + policies (FEAT-2326609832: enactments, districts,
 	// drift events) + fiscal (FEAT-2326609835, A5: planning funding,
-	// childcare places and the civil-service wage bill) = seventeen.
-	if len(streamsA) != 17 {
-		t.Fatalf("expected 17 participants, got %d", len(streamsA))
+	// childcare places and the civil-service wage bill) + coastal
+	// (FEAT-2326609833: module snapshot + compose posting state) = eighteen.
+	if len(streamsA) != 18 {
+		t.Fatalf("expected 18 participants, got %d", len(streamsA))
 	}
 
 	dir := t.TempDir()

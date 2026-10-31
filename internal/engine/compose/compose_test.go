@@ -26,11 +26,13 @@ const testTicks = testMonths * int64(core.DailyTicksPerMonth)
 
 // newTestEngine builds a composed engine at the given seed, wiring any
 // supplied invariant options. It is the shared harness for the headless
-// liveness tests below.
+// liveness tests below. Coastal is injected QUIET (FEAT-2326609833): these
+// fixtures assert exact money / population figures of other modules; coastal
+// has its own scenarios in coastal_wire_test.go.
 func newTestEngine(t *testing.T, seed uint64, opts ...invariant.HookOption) (*core.Engine, *Composition) {
 	t.Helper()
 	e := core.NewEngine(core.WithWorldSeed(seed), core.WithPoolSize(1))
-	comp, err := Wire(e, &Deps{InvariantOpts: opts})
+	comp, err := Wire(e, &Deps{InvariantOpts: opts, Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}
@@ -40,7 +42,7 @@ func newTestEngine(t *testing.T, seed uint64, opts ...invariant.HookOption) (*co
 // --- AC-2: deterministic, documented registration order ---
 
 func TestRegistrationOrder_MatchesDocumented(t *testing.T) {
-	want := []string{"world", "traffic", "citizens", "market", "consumption", "finance", "policies", "fiscal", "build", "deathservices-run", "attract", "deathservices", "wellbeing", "invariant"}
+	want := []string{"world", "traffic", "citizens", "market", "consumption", "finance", "policies", "fiscal", "build", "deathservices-run", "attract", "deathservices", "wellbeing", "coastal", "invariant"}
 	got := RegistrationOrder()
 	if len(got) != len(want) {
 		t.Fatalf("RegistrationOrder() = %v, want %v", got, want)
@@ -184,7 +186,7 @@ func TestRequiredModules_CoversFullBaselineOne(t *testing.T) {
 	// a module silently absent from it would be a quiet N-1 success (AC-4).
 	want := map[string]bool{
 		"world": true, "traffic": true, "citizens": true, "market": true, "consumption": true,
-		"finance": true, "policies": true, "fiscal": true, "build": true, "deathservices-run": true, "attract": true, "deathservices": true, "wellbeing": true, "invariant": true,
+		"finance": true, "policies": true, "fiscal": true, "build": true, "deathservices-run": true, "attract": true, "deathservices": true, "wellbeing": true, "coastal": true, "invariant": true,
 	}
 	got := RegistrationOrder()
 	if len(got) != len(want) {

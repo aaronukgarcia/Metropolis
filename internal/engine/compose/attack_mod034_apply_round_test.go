@@ -259,7 +259,7 @@ func TestAttackMOD034_ModifiersBindAtWorstCase(t *testing.T) {
 	measure := func(t *testing.T, mortality, productivity, satisfaction, emigration float64) (pop int, hash [32]byte, wealth int64) {
 		t.Helper()
 		e := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(4))
-		comp, err := Wire(e, nil)
+		comp, err := Wire(e, &Deps{Coastal: quietCoastal(t)})
 		if err != nil {
 			t.Fatalf("Wire: %v", err)
 		}

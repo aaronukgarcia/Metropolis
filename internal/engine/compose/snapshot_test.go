@@ -84,7 +84,7 @@ func advanceViaCommandExpectHalt(t *testing.T, e *core.Engine, n int64) {
 func buildPersistedComposition(t *testing.T, store persist.Store, city persist.CityKey) (*core.Engine, *Composition) {
 	t.Helper()
 	e := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
-	comp, err := Wire(e, &Deps{PersistStore: store, PersistCity: city})
+	comp, err := Wire(e, &Deps{PersistStore: store, PersistCity: city, Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire (persisted): %v", err)
 	}
@@ -320,7 +320,7 @@ func TestSnapshotRestore_MatchesReferenceAndUsesTailReplay(t *testing.T) {
 
 	// Restore: fresh, never-ticked composition, via snapshot + tail replay.
 	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
-	compR, err := Wire(eR, nil)
+	compR, err := Wire(eR, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire (restore target): %v", err)
 	}
@@ -379,7 +379,7 @@ func TestSnapshotRestore_FallsBackToGenesisWhenNoSnapshotExists(t *testing.T) {
 	}
 
 	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
-	compR, err := Wire(eR, nil)
+	compR, err := Wire(eR, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire (restore target): %v", err)
 	}
@@ -441,7 +441,7 @@ func TestSnapshotRestore_ProveCanFail_TruncatedTailDiverges(t *testing.T) {
 	}
 
 	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
-	compR, err := Wire(eR, nil)
+	compR, err := Wire(eR, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *t
 	// would diverge the digest for a reason that has nothing to do with
 	// the walk-back logic this test is actually proving.
 	eGenesis := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
-	compGenesis, err := Wire(eGenesis, nil)
+	compGenesis, err := Wire(eGenesis, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire (genesis reference): %v", err)
 	}
@@ -685,7 +685,7 @@ func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *t
 	// live tick/digest, which included the lost command's effect and can
 	// never be honestly reconstructed from what actually persisted.
 	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
-	compR, err := Wire(eR, nil)
+	compR, err := Wire(eR, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire (restore target): %v", err)
 	}
@@ -815,7 +815,7 @@ func TestMaybeSnapshotEvery_DirtyGateRefusesAfterSwallowedAppend(t *testing.T) {
 	// Same world seed as e1/comp1 (roundTripSeed, via buildPersistedComposition)
 	// -- BUG-479's Load-time seed check refuses a mismatched restore engine.
 	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
-	compR, err := Wire(eR, nil)
+	compR, err := Wire(eR, &Deps{Coastal: quietCoastal(t)})
 	if err != nil {
 		t.Fatalf("Wire (restore target): %v", err)
 	}

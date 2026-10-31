@@ -149,8 +149,10 @@ func (c *Composition) Participants() []save.Participant {
 		// (planning funding, childcare places, civil-service bill).
 		newFiscalParticipant(st),
 		newComposeLedgerParticipant(st),
-		newPoliciesParticipant(st),
 		// FEAT-2326609832: engine.policies' enactments / districts / drift events.
+		newPoliciesParticipant(st),
+		// FEAT-2326609833: engine.coastal module snapshot + compose posting state.
+		newCoastalParticipant(st),
 	}
 }
 
