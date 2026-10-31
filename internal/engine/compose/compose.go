@@ -679,6 +679,8 @@ var viewRegistrationOrder = []viewRegistration{
 	// FEAT-2326609832: "f7.policies" - the policy library, active enactments,
 	// conflicts, drift events and stored at-enact series (policies_publish.go).
 	{name: policiesViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildPoliciesPatch }},
+	// ui.screen.build (F3): build_publish.go.
+	{name: buildViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildF3Patch }},
 }
 
 // RegisteredViewNames returns a defensive copy of the fixed view

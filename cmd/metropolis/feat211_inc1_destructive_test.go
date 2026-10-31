@@ -497,9 +497,9 @@ func TestRouting_SwitchStormWhileKeysFlow(t *testing.T) {
 	}
 	barrier(t, w, "feat211-destructive-storm")
 	switch id := w.screens.ActiveID(); id {
-	case screenIDMap, screenIDFinance, screenIDServices:
+	case screenIDMap, screenIDFinance, screenIDServices, screenIDBuild, screenIDMenu, screenIDDebug:
 	default:
-		t.Fatalf("ActiveID() = %q after a key storm, want one of the three registered screens", id)
+		t.Fatalf("ActiveID() = %q after a key storm, want one of the six registered screens", id)
 	}
 	if got := w.router.PanicCount(); got != panicsBefore {
 		t.Fatalf("router.PanicCount() = %d after a key storm, want unchanged %d", got, panicsBefore)

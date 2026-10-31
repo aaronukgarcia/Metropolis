@@ -68,13 +68,16 @@ func runBoundedSEC020(t *testing.T, name string, fn func()) {
 // re-check uses (internal/engine/core/engine.go) — a future caller added
 // ahead of a check must not silently inherit an unguarded path to mu.
 //
-// That is 4 exported methods (3 guarded, 1 deliberately not) plus 1
-// guarded unexported lock site — 5 direct mu.Lock() sites total in this
+// That is 5 exported methods (4 guarded, 1 deliberately not) plus 1
+// guarded unexported lock site — 6 direct mu.Lock() sites total in this
 // package's non-test source (Collect: 1, RequestToggle: 2,
-// recordToggleFailure: 1, LastToggleError: 1), every guarded one
-// exercised below by name.
+// recordToggleFailure: 1, LastToggleError: 1, DebugOn: 1), every guarded
+// one exercised below by name or in debugon_copy_attack_test.go.
+// DebugOn (added for the F12 BUG-602 fix, FEAT-2326609837) checks for a
+// copy BEFORE taking the lock only — it reads a single flag and returns,
+// so there is no post-unlock window to re-check, unlike Collect.
 //
-// (5, not 4 or 6 — recount deliberately spelled out per Weakness pattern
+// (6, not 5 or 7 — recount deliberately spelled out per Weakness pattern
 // #3's audit-trail instruction, exactly as engine/debug's
 // copyguard_test.go corrected an 8-vs-9 miscount the same way.)
 
