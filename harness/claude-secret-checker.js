@@ -822,28 +822,115 @@ function scanLine(lineText) {
 // Staged diff parsing
 // ---------------------------------------------------------------------------
 
+// BUG-1144: decode a git C-quoted path body (the text between the double quotes): \\ \" \a \b \f
+// \n \r \t \v and \ooo octal bytes (multi-byte UTF-8 sequences arrive as consecutive octals).
+// Returns null on any malformed escape so the caller fails closed.
+const C_QUOTE_SIMPLE = { '\\': 0x5c, '"': 0x22, a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 };
+function decodeCQuoted(body) {
+  const bytes = [];
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (ch !== '\\') {
+      if (ch === '"') return null; // an unescaped quote inside the body is malformed
+      for (const b of Buffer.from(ch, 'utf8')) bytes.push(b);
+      continue;
+    }
+    const next = body[i + 1];
+    if (next === undefined) return null;
+    if (Object.prototype.hasOwnProperty.call(C_QUOTE_SIMPLE, next)) {
+      bytes.push(C_QUOTE_SIMPLE[next]);
+      i += 1;
+      continue;
+    }
+    const oct = body.slice(i + 1, i + 4);
+    if (/^[0-3][0-7]{2}$/.test(oct)) {
+      bytes.push(parseInt(oct, 8));
+      i += 3;
+      continue;
+    }
+    return null;
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+// BUG-1144: parse the text after `+++ `. The scan forces `b/` prefixes at the source, so the only
+// known shapes are `b/<path>`, C-quoted `"b/<path>"`, and `/dev/null` (deletion, no added lines).
+// Returns { file } (file may be null for /dev/null) or null when the shape is unknown (fail closed).
+function parsePlusHeader(rest) {
+  if (rest === '/dev/null') return { file: null };
+  if (rest.startsWith('"') && rest.endsWith('"') && rest.length >= 2) {
+    const decoded = decodeCQuoted(rest.slice(1, -1));
+    if (decoded !== null && decoded.startsWith('b/') && decoded.length > 2) return { file: decoded.slice(2) };
+    return null;
+  }
+  if (rest.startsWith('b/') && rest.length > 2) return { file: rest.slice(2) };
+  return null;
+}
+
+// Returns the added-line records; the array carries a `parseFailures` property listing every
+// `+++` header that did not parse (BUG-1144) - the caller turns each into a finding, never a skip.
+// Header lines are only recognised OUTSIDE hunks: -U0 hunk line counts are consumed so an added
+// line whose text begins "++ " is content, not a header.
 function parseAddedLines(diffText) {
   const records = [];
+  records.parseFailures = [];
   let currentFile = null;
   let nextLineNo = null;
+  let oldRem = 0;
+  let newRem = 0;
   const lines = diffText.split('\n');
   for (const raw of lines) {
+    if (oldRem > 0 || newRem > 0) {
+      if (raw.startsWith('+')) {
+        if (currentFile !== null && nextLineNo !== null) {
+          records.push({ file: currentFile, line: nextLineNo, text: raw.slice(1) });
+          nextLineNo += 1;
+        }
+        newRem -= 1;
+        continue;
+      }
+      if (raw.startsWith('-')) {
+        oldRem -= 1;
+        continue;
+      }
+      if (raw.startsWith('\\')) continue; // "\ No newline at end of file"
+      if (raw.startsWith(' ')) { // context line (not expected at -U0, kept for safety)
+        oldRem -= 1;
+        newRem -= 1;
+        if (nextLineNo !== null) nextLineNo += 1;
+        continue;
+      }
+      oldRem = 0;
+      newRem = 0; // malformed hunk: fall through and re-interpret the line as a header
+    }
     if (raw.startsWith('+++ ')) {
-      const m = raw.match(/^\+\+\+ b\/(.+)$/);
-      currentFile = m ? m[1] : null;
+      // git appends one trailing tab to a header whose name contains a space; strip it.
+      const parsed = parsePlusHeader(raw.slice(4).replace(/\t$/, ''));
+      if (parsed === null) {
+        records.parseFailures.push(raw);
+        currentFile = null;
+      } else {
+        currentFile = parsed.file;
+      }
       continue;
     }
     if (raw.startsWith('--- ')) {
       continue;
     }
-    if (raw.startsWith('@@')) {
-      const m = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      nextLineNo = m ? parseInt(m[1], 10) : null;
+    if (raw.startsWith('+')) {
+      // An added line outside any hunk cannot be attributed: fail closed, never drop it.
+      records.parseFailures.push(raw);
       continue;
     }
-    if (raw.startsWith('+') && currentFile !== null && nextLineNo !== null) {
-      records.push({ file: currentFile, line: nextLineNo, text: raw.slice(1) });
-      nextLineNo += 1;
+    if (raw.startsWith('@@')) {
+      const m = raw.match(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+      if (m) {
+        nextLineNo = parseInt(m[2], 10);
+        oldRem = m[1] === undefined ? 1 : parseInt(m[1], 10);
+        newRem = m[3] === undefined ? 1 : parseInt(m[3], 10);
+      } else {
+        nextLineNo = null;
+      }
       continue;
     }
   }
@@ -868,7 +955,10 @@ function runScan() {
   // names, so a non-ASCII name cannot arrive quote-wrapped and dodge the extension check below.
   const stagedFiles = nameResult.stdout.split('\0').map(s => s.trim()).filter(Boolean);
 
-  const diffResult = spawnSync('git', ['-c', 'core.quotepath=false', 'diff', '--cached', '-U0', '--', '.'], {
+  // BUG-1144: pin the header shape at the source - repo config (diff.mnemonicPrefix / diff.noprefix)
+  // must not change the `+++ b/` form the parser reads. --src-prefix/--dst-prefix are belt-and-braces.
+  const diffResult = spawnSync('git', ['-c', 'core.quotepath=false', '-c', 'diff.mnemonicPrefix=false', '-c', 'diff.noprefix=false',
+    'diff', '--cached', '-U0', '--no-ext-diff', '--no-textconv', '--text', '--no-color', '--src-prefix=a/', '--dst-prefix=b/', '--', '.'], {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -896,6 +986,11 @@ function runScan() {
   }
 
   const addedLines = parseAddedLines(diffResult.stdout);
+  // BUG-1144 fail-closed backstop: a header we cannot parse means that file's content went
+  // unscanned - that is a finding naming the header, never a silent skip.
+  for (const header of addedLines.parseFailures) {
+    findings.push({ file: header, line: 'N/A', category: 'diff-header-parse-failure', evidence: 'unparseable diff header - content of this file could not be scanned, fail-closed' });
+  }
   for (const rec of addedLines) {
     if (isAllowlistedPath(rec.file, allowedPaths)) continue;
     const lineFindings = scanLine(rec.text);

@@ -1233,3 +1233,172 @@ test('BUG-1118 r1: a secret INSIDE an accented-name file is scanned and attribut
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// BUG-1144 (P1, filed by the BUG-1118 round): the content scan keyed on a literal `+++ b/` header,
+// so repo config (diff.mnemonicPrefix / diff.noprefix) changed the header shape and silently
+// disabled content scanning for EVERY file; C-quoted names (tab/quote/newline) did the same.
+// Fixes: explicit -c overrides at the source, C-quote decoding, and a fail-closed backstop for any
+// header that still will not parse. Each shape is proven RED on the pre-fix code, then green.
+const BUG1144_KEY = 'AKIA' + 'IOSFODNN7EXAMPL' + 'Q';
+
+function bug1144Repo(cfg) {
+  const ctx = bug1118ScratchRepo();
+  for (const [k, v] of Object.entries(cfg || {})) ctx.run('git', ['config', k, v]);
+  return ctx;
+}
+
+test('BUG-1144: diff.mnemonicPrefix=true does not disable the content scan', () => {
+  const { dir, run, check } = bug1144Repo({ 'diff.mnemonicPrefix': 'true' });
+  try {
+    fs.writeFileSync(path.join(dir, 'plain.txt'), `harmless\nk=${BUG1144_KEY}\n`, 'utf8');
+    run('git', ['add', 'plain.txt']);
+    const res = check();
+    assert.equal(res.status, 'found-problems', `mnemonicPrefix must not blind the scan, got ${JSON.stringify(res)}`);
+    assert.ok(res.findings.some(f => f.file === 'plain.txt' && f.line === 2 && f.category === 'api-key'), JSON.stringify(res));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('BUG-1144: diff.noprefix=true does not disable the content scan', () => {
+  const { dir, run, check } = bug1144Repo({ 'diff.noprefix': 'true' });
+  try {
+    fs.writeFileSync(path.join(dir, 'plain.txt'), `harmless\nk=${BUG1144_KEY}\n`, 'utf8');
+    run('git', ['add', 'plain.txt']);
+    const res = check();
+    assert.equal(res.status, 'found-problems', `noprefix must not blind the scan, got ${JSON.stringify(res)}`);
+    assert.ok(res.findings.some(f => f.file === 'plain.txt' && f.line === 2 && f.category === 'api-key'), JSON.stringify(res));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('BUG-1144: a C-quoted header name (tab in the name) is decoded and its content scanned', () => {
+  const { dir, run, check } = bug1144Repo();
+  try {
+    const h = run('git', ['hash-object', '-w', '--stdin'], `harmless\nk=${BUG1144_KEY}\n`).trim();
+    run('git', ['update-index', '--add', '--cacheinfo', `100644,${h},a\tb.txt`]);
+    const res = check();
+    assert.equal(res.status, 'found-problems', `quoted-header content must be scanned, got ${JSON.stringify(res)}`);
+    assert.ok(res.findings.some(f => f.file === 'a\tb.txt' && f.line === 2 && f.category === 'api-key'), JSON.stringify(res));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('BUG-1144: an unparseable +++ header fails closed (parse-failure finding), never a skip', () => {
+  const recs = checker.parseAddedLines('diff --git x y\n--- a/x\n+++ ???garbage\n@@ -0,0 +1 @@\n+k=1\n');
+  assert.ok(Array.isArray(recs.parseFailures) && recs.parseFailures.length === 1, JSON.stringify(recs.parseFailures));
+  assert.ok(recs.parseFailures[0].includes('???garbage'));
+});
+
+test('BUG-1144: an added line whose text begins "++ " is content, not a header', () => {
+  const recs = checker.parseAddedLines('--- a/f.txt\n+++ b/f.txt\n@@ -0,0 +1,2 @@\n+++ x\n+second\n');
+  assert.equal(recs.parseFailures.length, 0);
+  assert.deepEqual(recs.map(r => [r.file, r.line, r.text]), [['f.txt', 1, '++ x'], ['f.txt', 2, 'second']]);
+});
+
+// BUG-1144 r2: git never prints the added lines under a textconv driver or for binary-diffed
+// files. Design: --no-textconv --text (cannot be blinded; binaries get scanned as text and any
+// false positive is handled by the allowlist, fail-closed beats clever).
+function bug1144Stage(run, name, content) {
+  const h = run('git', ['hash-object', '-w', '--stdin'], content).trim();
+  run('git', ['update-index', '--add', '--cacheinfo', `100644,${h},${name}`]);
+}
+
+test('BUG-1144 r2: a repo textconv driver cannot hide staged content', () => {
+  const { dir, run, check } = bug1144Repo();
+  try {
+    run('git', ['config', 'diff.hide.textconv', 'sh -c "echo nothing" --']);
+    fs.writeFileSync(path.join(dir, '.gitattributes'), '*.txt diff=hide\n', 'utf8');
+    fs.writeFileSync(path.join(dir, 'p.txt'), `harmless\nk=${BUG1144_KEY}\n`, 'utf8');
+    run('git', ['add', '.gitattributes', 'p.txt']);
+    const res = check();
+    assert.equal(res.status, 'found-problems', JSON.stringify(res));
+    assert.ok(res.findings.some(f => f.file === 'p.txt' && f.category === 'api-key'), JSON.stringify(res));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('BUG-1144 r2: a -diff attribute (staged or committed earlier) or a NUL byte cannot hide staged content', () => {
+  for (const variant of ['attr-staged', 'attr-committed', 'nul']) {
+    const { dir, run, check } = bug1144Repo();
+    try {
+      if (variant !== 'nul') {
+        fs.writeFileSync(path.join(dir, '.gitattributes'), '*.txt -diff\n', 'utf8');
+        run('git', ['add', '.gitattributes']);
+        if (variant === 'attr-committed') {
+          run('git', ['-c', 'user.email=t@e.x', '-c', 'user.name=T', 'commit', '-q', '-m', 'attrs']);
+        }
+        fs.writeFileSync(path.join(dir, 'p.txt'), `harmless\nk=${BUG1144_KEY}\n`, 'utf8');
+      } else {
+        fs.writeFileSync(path.join(dir, 'p.txt'), `\0\nharmless\nk=${BUG1144_KEY}\n`, 'utf8');
+      }
+      run('git', ['add', 'p.txt']);
+      const res = check();
+      assert.equal(res.status, 'found-problems', `${variant}: ${JSON.stringify(res)}`);
+      assert.ok(res.findings.some(f => f.file === 'p.txt' && f.category === 'api-key'), `${variant}: ${JSON.stringify(res)}`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('BUG-1144 r2: octal-escaped control-char name is decoded; quote+space name scanned (not skipped)', () => {
+  const { dir, run, check } = bug1144Repo();
+  try {
+    bug1144Stage(run, 'ctl\x01name.txt', `harmless\nk=${BUG1144_KEY}\n`);
+    bug1144Stage(run, 'a" b.txt', `harmless\nk=${BUG1144_KEY}\n`);
+    const res = check();
+    assert.ok(res.findings.some(f => f.file === 'ctl\x01name.txt' && f.line === 2 && f.category === 'api-key'), JSON.stringify(res));
+    assert.ok(res.findings.some(f => f.file === 'a" b.txt' && f.line === 2 && f.category === 'api-key'), JSON.stringify(res));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('BUG-1144 r2: a space-named file is attributed without git\'s trailing tab', () => {
+  const recs = checker.parseAddedLines('--- /dev/null\n+++ b/my file.txt\t\n@@ -0,0 +1 @@\n+x\n');
+  assert.equal(recs.parseFailures.length, 0);
+  assert.equal(recs[0].file, 'my file.txt');
+});
+
+test('BUG-1144 r2: a parse failure reaches findings end to end; a + line outside a hunk is a parse failure', () => {
+  const recs = checker.parseAddedLines('--- a/f\n+++ b/f\n+orphan\n');
+  assert.equal(recs.length, 0);
+  assert.equal(recs.parseFailures.length, 1);
+  const { dir, run, check } = bug1144Repo();
+  try {
+    // force the unparseable path: stage a name whose C-quoting we cannot decode is hard; instead
+    // exercise runScan through a stubbed parser result.
+    const src = fs.readFileSync(path.join(dir, 'harness', 'claude-secret-checker.js'), 'utf8');
+    assert.ok(src.includes("category: 'diff-header-parse-failure'"));
+    fs.writeFileSync(path.join(dir, 'harness', 'claude-secret-checker.js'),
+      src.replace("const addedLines = parseAddedLines(diffResult.stdout);",
+        "const addedLines = parseAddedLines(diffResult.stdout.replace('+++ b/', '+++ ???/'));"), 'utf8');
+    fs.writeFileSync(path.join(dir, 'plain.txt'), 'harmless\n', 'utf8');
+    run('git', ['add', 'plain.txt']);
+    const res = check();
+    assert.equal(res.status, 'found-problems', JSON.stringify(res));
+    assert.ok(res.findings.some(f => f.category === 'diff-header-parse-failure'), JSON.stringify(res));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('BUG-1144 control: plain repo, plain name, secret is found; clean file is clean', () => {
+  const { dir, run, check } = bug1144Repo();
+  try {
+    fs.writeFileSync(path.join(dir, 'clean.txt'), 'nothing here\n', 'utf8');
+    run('git', ['add', 'clean.txt']);
+    assert.equal(check().status, 'clean');
+    fs.writeFileSync(path.join(dir, 'plain.txt'), `k=${BUG1144_KEY}\n`, 'utf8');
+    run('git', ['add', 'plain.txt']);
+    const res = check();
+    assert.equal(res.status, 'found-problems');
+    assert.ok(res.findings.some(f => f.file === 'plain.txt' && f.line === 1 && f.category === 'api-key'), JSON.stringify(res));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
