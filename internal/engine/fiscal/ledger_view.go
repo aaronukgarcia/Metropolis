@@ -272,8 +272,11 @@ func (f *FiscalAPI) ImportState(s State) error {
 	if !num.IsFinite(s.PlanningFunding) || s.PlanningFunding < 0 || s.PlanningFunding > 1 {
 		return errs.New(ErrInvalidFundingLevel, f.correlationID, map[string]any{"level": s.PlanningFunding})
 	}
-	if s.ChildcarePlaces < 0 || s.CivilServiceWageBill < 0 {
-		return errs.New(ErrInvalidInput, f.correlationID, map[string]any{"field": "state", "places": s.ChildcarePlaces, "bill": s.CivilServiceWageBill})
+	if s.ChildcarePlaces < 0 {
+		return errs.New(ErrInvalidInput, f.correlationID, map[string]any{"field": "childcarePlaces", "value": s.ChildcarePlaces})
+	}
+	if s.CivilServiceWageBill < 0 {
+		return errs.New(ErrInvalidInput, f.correlationID, map[string]any{"field": "civilServiceWageBill", "value": s.CivilServiceWageBill})
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
