@@ -310,3 +310,43 @@ test('SPAWN destination resolution: an omitted remote/branch falls back to the t
     fixture.cleanup();
   }
 });
+
+test('BUG-1118: a pending commit touching functions/café.js (core.quotepath default) is still seen and BLOCKED', () => {
+  const fixture = makeFixtureRepo();
+  try {
+    gitFixture(fixture.workDir, ['config', 'core.quotepath', 'true']);
+    const fnDir = path.join(fixture.workDir, 'functions');
+    fs.mkdirSync(fnDir, { recursive: true });
+    fs.writeFileSync(path.join(fnDir, 'café.js'), 'exports.foo = () => {};\n', 'utf8');
+    gitFixture(fixture.workDir, ['add', '.']);
+    gitFixture(fixture.workDir, ['commit', '-q', '-m', 'add accented cloud function, no deploy line']);
+    const r = runHookOnFixture(fixture, 'git push origin main');
+    assert.equal(r.status, 0);
+    const reason = parseDenyReason(r.stdout);
+    assert.ok(reason, `a quote-wrapped functions/ name must not defeat startsWith('functions/'); stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
+    assert.match(reason, /GOLDEN RULE #19/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// BUG-1118 round r1 (Destructive-BUG1118-quotepath-r1): exercises the fail-closed quote-wrap
+// backstop, which the accented test above cannot reach under -z. A committed path that literally
+// begins with a double quote must count as touching functions/.
+test('BUG-1118 r1: a pending commit whose path literally starts with a double quote trips the fail-closed backstop', () => {
+  const fixture = makeFixtureRepo();
+  try {
+    gitFixture(fixture.workDir, ['config', 'core.protectNTFS', 'false']);
+    const h = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: fixture.workDir, input: 'x\n', encoding: 'utf8' });
+    assert.equal(h.status, 0, h.stderr);
+    gitFixture(fixture.workDir, ['update-index', '--add', '--cacheinfo', `100644,${h.stdout.trim()},"functions/x.js"`]);
+    gitFixture(fixture.workDir, ['commit', '-q', '-m', 'quote-led path, no deploy line']);
+    const r = runHookOnFixture(fixture, 'git push origin main');
+    assert.equal(r.status, 0);
+    const reason = parseDenyReason(r.stdout);
+    assert.ok(reason, `a quote-led name must be treated as functions/ (fail-closed); stdout=${JSON.stringify(r.stdout)}`);
+    assert.match(reason, /GOLDEN RULE #19/);
+  } finally {
+    fixture.cleanup();
+  }
+});

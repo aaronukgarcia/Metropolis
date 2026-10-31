@@ -175,7 +175,7 @@ async function main() {
   // AC-3: staged-file inspection, never command-string path hints.
   let staged = '';
   try {
-    staged = execSync('git diff --cached --name-only', {
+    staged = execSync('git -c core.quotepath=false diff --cached --name-only -z', {
       cwd: ROOT,
       encoding: 'utf8',
       timeout: 5000,
@@ -186,8 +186,10 @@ async function main() {
     return;
   }
 
-  const stagedFiles = staged.split('\n').map(f => f.trim()).filter(Boolean);
-  const touchesEnforcedPath = stagedFiles.some(f => ENFORCED_PATH_RE.test(f));
+  // BUG-1118: NUL-split (-z, quotepath off); a name still quote-wrapped is treated as enforced
+  // (fail-closed) rather than silently failing ENFORCED_PATH_RE.
+  const stagedFiles = staged.split('\0').map(f => f.trim()).filter(Boolean);
+  const touchesEnforcedPath = stagedFiles.some(f => f.startsWith('"') || ENFORCED_PATH_RE.test(f));
   if (!touchesEnforcedPath) {
     // AC-2/AC-3: non-enforced-path commit — silent allow, no output at all.
     allowSilently();

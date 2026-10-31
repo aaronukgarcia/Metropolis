@@ -84,10 +84,11 @@ function tokenize(str) {
 
 /** Run `git <args>` via spawnSync (no shell). Returns trimmed stdout, or
  *  null if the command failed for any reason. */
-function git(args, timeout = 5000) {
+function git(args, timeout = 5000, raw = false) {
   const result = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8', timeout });
   if (result.error || result.status !== 0) return null;
-  return (result.stdout || '').trim();
+  // raw: NUL-delimited (-z) output must not be trimmed (BUG-1118).
+  return raw ? (result.stdout || '') : (result.stdout || '').trim();
 }
 
 /** Parse the positional remote/refspec out of a `git push ...` command
@@ -192,9 +193,14 @@ function main() {
 
     for (const hash of commitHashes) {
       // Did this commit touch functions/?
-      const filesChanged = git(['show', hash, '--name-only', '--pretty=format:']);
+      // BUG-1118: quotepath off + -z (NUL-split); a name still quote-wrapped counts as
+      // touching functions/ (fail-closed) rather than silently missing startsWith().
+      const filesChanged = git(['-c', 'core.quotepath=false', 'show', hash, '--name-only', '-z', '--pretty=format:'], 5000, true);
       if (filesChanged === null) continue; // skip on error
-      const touchesFunctions = filesChanged.split('\n').some(f => f.startsWith('functions/'));
+      const touchesFunctions = filesChanged.split('\0').some(f => {
+        const n = f.replace(/^\n+/, '');
+        return n.startsWith('functions/') || n.startsWith('"');
+      });
       if (!touchesFunctions) continue;
 
       // Get full message body.

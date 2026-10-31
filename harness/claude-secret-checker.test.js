@@ -1150,3 +1150,86 @@ test('BUG-189: empirical sweep — camelCase gap-band evasion rate is now far be
     `expected evasion rate materially below the pre-fix regime, measured ${(evasionRate * 100).toFixed(1)}% (${evaded}/${sampled})`
   );
 });
+
+// BUG-1118 (P1): sibling of SAFE-338/448. With core.quotepath at its default (true) a staged
+// non-ASCII name arrives quote-wrapped + octal-escaped in `--name-only`, so path.extname() saw
+// `.pem"` and the SENSITIVE_FILE_EXTENSIONS check silently missed it. Scratch-repo regression:
+// the checker is COPIED into a throwaway repo's harness/ so its ROOT (and every git call)
+// resolves there, never against this checkout's index.
+test('BUG-1118: a staged non-ASCII-named .pem (core.quotepath default) is flagged certificate-file, not skipped', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-checker-quotepath-'));
+  try {
+    const run = (cmd, args) => {
+      const r = spawnSync(cmd, args, { cwd: dir, encoding: 'utf8' });
+      assert.equal(r.status, 0, `${cmd} ${args.join(' ')} failed: ${r.stderr}`);
+      return r.stdout;
+    };
+    run('git', ['init', '-q']);
+    run('git', ['config', 'core.quotepath', 'true']);
+    fs.mkdirSync(path.join(dir, 'harness'));
+    for (const f of ['claude-secret-checker.js', 'claude-secret-guard.allow.json']) {
+      fs.copyFileSync(path.join(__dirname, f), path.join(dir, 'harness', f));
+    }
+    fs.writeFileSync(path.join(dir, 'café.pem'), 'not really a key\n', 'utf8');
+    run('git', ['add', 'café.pem']);
+    const out = run(process.execPath, ['-e',
+      "const c=require('./harness/claude-secret-checker.js');process.stdout.write(JSON.stringify(c.checkSecrets()));"]);
+    const res = JSON.parse(out);
+    assert.equal(res.status, 'found-problems', `the accented .pem must be seen, got ${out}`);
+    assert.ok(res.findings.some(f => f.category === 'certificate-file'), `expected a certificate-file finding, got ${out}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// BUG-1118 round r1 (Destructive-BUG1118-quotepath-r1): two gaps the lane's test left open.
+// (a) the fail-closed quote-wrap backstop is unreachable from café.pem under -z, so deleting it left
+//     every test green; a name that LITERALLY is quote-wrapped ("k.pem" - extname reads .pem") is
+//     the input that needs it.
+// (b) the unrequested -U0 content-diff hardening: pre-fix, `+++ "b/caf\303\251.txt"` failed the
+//     `+++ b/` header match, so a secret INSIDE an accented-name file was never scanned at all.
+function bug1118ScratchRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'secret-checker-r1-'));
+  const run = (cmd, args, input) => {
+    const r = spawnSync(cmd, args, { cwd: dir, encoding: 'utf8', input });
+    assert.equal(r.status, 0, `${cmd} ${args.join(' ')} failed: ${r.stderr}`);
+    return r.stdout;
+  };
+  run('git', ['init', '-q']);
+  run('git', ['config', 'core.quotepath', 'true']);
+  run('git', ['config', 'core.protectNTFS', 'false']);
+  fs.mkdirSync(path.join(dir, 'harness'));
+  for (const f of ['claude-secret-checker.js', 'claude-secret-guard.allow.json']) {
+    fs.copyFileSync(path.join(__dirname, f), path.join(dir, 'harness', f));
+  }
+  const check = () => JSON.parse(run(process.execPath, ['-e',
+    "const c=require('./harness/claude-secret-checker.js');process.stdout.write(JSON.stringify(c.checkSecrets()));"]));
+  return { dir, run, check };
+}
+
+test('BUG-1118 r1: a staged name that is literally quote-wrapped ("k.pem") trips the fail-closed backstop', () => {
+  const { dir, run, check } = bug1118ScratchRepo();
+  try {
+    const h = run('git', ['hash-object', '-w', '--stdin'], 'x\n').trim();
+    run('git', ['update-index', '--add', '--cacheinfo', `100644,${h},"k.pem"`]);
+    const res = check();
+    assert.equal(res.status, 'found-problems', JSON.stringify(res));
+    assert.ok(res.findings.some(f => f.category === 'certificate-file' && f.file === '"k.pem"'), JSON.stringify(res));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('BUG-1118 r1: a secret INSIDE an accented-name file is scanned and attributed to the right file:line', () => {
+  const { dir, run, check } = bug1118ScratchRepo();
+  try {
+    const key = 'AKIA' + 'IOSFODNN7EXAMPL' + 'Q';
+    fs.writeFileSync(path.join(dir, 'café.txt'), `harmless\nk=${key}\n`, 'utf8');
+    run('git', ['add', 'café.txt']);
+    const res = check();
+    assert.equal(res.status, 'found-problems', `accented-name content must be scanned, got ${JSON.stringify(res)}`);
+    assert.ok(res.findings.some(f => f.file === 'café.txt' && f.line === 2 && f.category === 'api-key'), JSON.stringify(res));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
