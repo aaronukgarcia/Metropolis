@@ -948,7 +948,9 @@
         "int.serializer",
         "engine.policies",
         "engine.tax",
-        "engine.projections"
+        "engine.projections",
+        "engine.fiscal",
+        "engine.coastal"
       ]
     },
     {

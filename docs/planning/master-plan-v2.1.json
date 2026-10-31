@@ -1165,8 +1165,11 @@
         "ui.core",
         "ui.keys",
         "ui.router",
+        "ui.screen.build",
+        "ui.screen.debug",
         "ui.screen.finance",
         "ui.screen.map",
+        "ui.screen.menu",
         "ui.screen.services",
         "ui.widgets"
       ],
@@ -1838,7 +1841,9 @@
         "int.serializer",
         "engine.policies",
         "engine.tax",
-        "engine.projections"
+        "engine.projections",
+        "engine.fiscal",
+        "engine.coastal"
       ],
       "calls": [
         "engine.core",
@@ -1882,7 +1887,9 @@
         "engine.spiral",
         "engine.policies",
         "engine.tax",
-        "engine.projections"
+        "engine.projections",
+        "engine.fiscal",
+        "engine.coastal"
       ],
       "sprint": 6
     },

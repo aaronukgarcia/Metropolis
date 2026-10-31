@@ -3059,6 +3059,16 @@
             "inboundGuid": "500b5f46-c02f-49f8-a44c-b89e03e42db9"
           },
           {
+            "key": "ui.screen.build",
+            "moduleGuid": "e987c775-5de0-4197-a00e-8fe2194841db",
+            "inboundGuid": "650b069f-4ad5-483e-a586-8d120a31af2b"
+          },
+          {
+            "key": "ui.screen.debug",
+            "moduleGuid": "98b0e2b3-169e-4592-b90a-1a2f21b6771a",
+            "inboundGuid": "b1484a1d-a7e6-43a4-ac2a-1f1049e3efc2"
+          },
+          {
             "key": "ui.screen.finance",
             "moduleGuid": "237d6c7a-77af-405f-a2b7-e6164210ab83",
             "inboundGuid": "d7978dd2-7f40-48cf-97f8-3f6ab17b1b6a"
@@ -3067,6 +3077,11 @@
             "key": "ui.screen.map",
             "moduleGuid": "01272dbc-234b-47a1-a645-f61f538089e9",
             "inboundGuid": "5e7a8b05-fcff-4650-9cc8-4400a35c10dd"
+          },
+          {
+            "key": "ui.screen.menu",
+            "moduleGuid": "1328c97e-1bdc-43ac-9234-239cf84f36d6",
+            "inboundGuid": "9693099e-9c45-4bc4-ada8-5b943222572e"
           },
           {
             "key": "ui.screen.services",
@@ -3105,7 +3120,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          }
+        ]
       },
       "outbound": {
         "guid": "5a703ff2-c659-4add-a6ed-7c01a2eeb2d2",
@@ -5278,6 +5298,16 @@
             "key": "engine.projections",
             "moduleGuid": "56d13d82-76bd-4919-8b73-b796b4e37bf5",
             "inboundGuid": "4d6f5619-e6e2-4a10-9f77-71192d1299c4"
+          },
+          {
+            "key": "engine.fiscal",
+            "moduleGuid": "7c79679c-1e54-4415-b176-f646fea3054b",
+            "inboundGuid": "124c2742-157f-413e-a6f9-570d1415fd6f"
+          },
+          {
+            "key": "engine.coastal",
+            "moduleGuid": "8634ea26-2d71-48c2-94a3-49c68f11a6b4",
+            "inboundGuid": "aa2f1db7-481e-468a-be1c-63cdebf2b0e9"
           }
         ]
       },
@@ -6492,6 +6522,10 @@
         "pattern": null,
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.router",
             "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
           }
@@ -6899,7 +6933,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          }
+        ]
       },
       "outbound": {
         "guid": "0166a389-86a1-4ffc-bc18-fff6dd3ec8b7",
@@ -7569,7 +7608,12 @@
         "name": "CoastalAPI",
         "format": "Go package API + deltas",
         "pattern": "event stream + pipeline stages; policies move throughput coefficients",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          }
+        ]
       },
       "outbound": {
         "guid": "1671b81c-4374-4312-91cb-e7f33d3b9be1",
@@ -9600,6 +9644,10 @@
         "format": "Go package API + deltas",
         "pattern": "Sankey topology provider; every band drill-through to ledger",
         "consumers": [
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
           {
             "key": "ui.screen.finance",
             "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
