@@ -1272,8 +1272,20 @@ test('AC-24: unparseable stdin — allow when it does not look like a git commit
 test('AC-25: git diff --cached failing (not a git repo at all) denies rather than silently allowing', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'destructive-guard-nongit-'));
   try {
+    // BUG-1163: os.tmpdir() can sit inside a git repo (TEMP is <project>\temp
+    // on this machine), so git would discover that repo from dir and the
+    // "not a git repo" premise would be false. GIT_CEILING_DIRECTORIES stops
+    // discovery at dir's parent, so the premise holds for both the guard and
+    // this probe. The premise is asserted before the guard is judged, so a
+    // missing or ineffective ceiling fails here instead of passing vacuously.
+    const gitEnv = { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(dir) };
+    const probe = spawnSync('git', ['diff', '--cached'], { cwd: dir, encoding: 'utf8', env: gitEnv });
+    // Outside a repo git exits 129 (diff falls back to --no-index and rejects
+    // --cached); inside one it exits 0. Only the exit status is the premise.
+    assert.notEqual(probe.status, 0, 'premise: git diff --cached must FAIL in this dir (not a repo)');
+
     const payload = JSON.stringify({ tool: 'Bash', tool_input: { command: 'git commit -m "[FEAT-040] change"' } });
-    const r = spawnSync(process.execPath, [GUARD_PATH], { cwd: dir, input: payload, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [GUARD_PATH], { cwd: dir, input: payload, encoding: 'utf8', env: gitEnv });
     const parsed = JSON.parse((r.stdout || '').trim());
     assert.equal(parsed.hookSpecificOutput.permissionDecision, 'deny');
   } finally {
