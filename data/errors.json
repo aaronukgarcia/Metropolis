@@ -166,7 +166,8 @@
       "G5480-G5489": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
       "G5500-G5599": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
       "G5490-G5499": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
-      "V970-V979": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V970-V979": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "G5600-G5609": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -6287,6 +6288,24 @@
       "module": "ui.webconsole",
       "message": "Spatial-partition self-audit at tick {tick} could not run ({detail}); the partitioned path is switched OFF for the rest of this session (whole-city fallback)",
       "remedy": "Report with debug.json (partitionAudit section); the whole-city path is correct but slower. Restart the session to retry the partitioned path."
+    },
+    "MET-G5600": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "Citizen {id} not found: {cause}",
+      "remedy": "Query the ID of a citizen who is alive in this city; dead, never-minted and unknown IDs are refused rather than answered with zeros."
+    },
+    "MET-G5601": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "Query {kind} refused: {cause}",
+      "remedy": "Send a citizen ID within the mintable namespace, a home or workplace listing key, and a page no larger than the occupants page cap."
+    },
+    "MET-G5602": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "Citizen query {kind} failed: {cause}",
+      "remedy": "The composed engine could not answer the query; check that engine.citizens is wired and the citizen store is readable, then retry."
     }
   }
 }

@@ -91,6 +91,14 @@ type CitizensAPI struct {
 	// once at the start of each month and applied across its 30 day-ticks.
 	monthParams ColdPassParams
 
+	// occMu / occ / occGen are the lazily-built occupant index behind
+	// OccupantsPage (occupants.go, FEAT-2326609842). Derived, never persisted,
+	// never part of the population hash. occGen is bumped (under c.mu.Lock) by
+	// every path that can change who lives or works where.
+	occMu  sync.Mutex
+	occ    *occupantIndex
+	occGen uint64
+
 	// mortalityModifier is MOD-034's OPTIONAL injected wellbeing seam
 	// (GR#25/GR#20: engine.citizens may NOT import engine.wellbeing — that
 	// edge is not registered and would cycle, since engine.wellbeing already
@@ -888,6 +896,7 @@ func (c *CitizensAPI) SeedColdRecords(records []ColdRecord, correlationID string
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.occGen++
 	for _, r := range records {
 		// Reject out-of-contract seed records BEFORE they reach the column
 		// narrowing in append (AC-13/GR#16: the cold store is the single
@@ -1199,6 +1208,7 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.occGen++
 
 	switch cmd.Kind {
 	case LifeEventBirth:

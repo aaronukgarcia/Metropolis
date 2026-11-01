@@ -341,6 +341,11 @@ type Engine struct {
 	// modules that adjudicate gameplay intent).
 	gameplayHandler GameplayCommandHandler
 
+	// queryHandler is the injected read-only query handler (QueryCommandHandler,
+	// commands.go; FEAT-2326609842). nil is deny-by-default: the query kinds
+	// are rejected with ErrUnhandledCommandKind.
+	queryHandler QueryCommandHandler
+
 	// journaler is the injected replay-journaling seam accept() consults
 	// (see CommandJournaler's doc comment in commands.go). nil until
 	// WithCommandJournaler/SetCommandJournaler wires one — nil is read as

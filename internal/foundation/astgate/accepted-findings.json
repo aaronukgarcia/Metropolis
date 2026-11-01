@@ -3246,5 +3246,65 @@
   {
     "finding": "internal/engine/compose/social_wire.go|*simState|field access chain|resetSocialIfNoShard|st.defenceW|*simState.defenceW",
     "reason": "Lead port resolution (2026-10-31, FEAT-2326609834 + FEAT-2326609836 cross-product): resetSocialIfNoShard never reads or writes st.defenceW (verified: grep of the whole file finds zero occurrences of defenceW - the two wiring lanes were built in parallel and neither references the other). SEC-049 field-access enumeration registers a ReachableFunc for simState's EVERY declared method once simState holds a defenceW *defenceWiring field (presence, not effect). defenceWiring carries its own SEC-020 self atomic.Pointer copy guard (checkNotCopied, defence_wire.go) enforced at every lock-taking entry point, and st.defenceW is a pointer set once at construction, so a simState copy aliases the one guarded value. Mirrors the coastalW/socialW/defenceW field-access-chain entries above and the cmd/metroserve CityHost|h.health precedent."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|receiver method|currentOccupancyStampLocked|c|*CitizensAPI",
+    "reason": "FEAT-2326609842 (citizen dummy-passport, finisher lane): unexported *Locked-suffixed helper in occupants.go, called ONLY from OccupantsPage, which calls c.checkNotCopied before ever taking c.mu/c.occMu. Never reachable independently (package-private, single call chain, grep-verified). Mirrors the registry.go *Locked-helper-behind-a-guarded-entry-point precedent (householdExistsLocked, coldRowLocked, allColdRecordsLocked) exactly."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|receiver method|buildOccupantIndexLocked|c|*CitizensAPI",
+    "reason": "FEAT-2326609842 (citizen dummy-passport, finisher lane): unexported *Locked-suffixed helper in occupants.go, called ONLY from OccupantsPage, which calls c.checkNotCopied before ever taking c.mu/c.occMu. Never reachable independently (package-private, single call chain, grep-verified). Mirrors the registry.go *Locked-helper-behind-a-guarded-entry-point precedent (householdExistsLocked, coldRowLocked, allColdRecordsLocked) exactly."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|field access chain|currentOccupancyStampLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. currentOccupancyStampLocked never touches c.deathQueue at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. currentOccupancyStampLocked is only reachable from OccupantsPage, which has its own direct c.checkNotCopied() guard. Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|field access chain|currentOccupancyStampLocked|c.pages|*CitizensAPI.pages",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. currentOccupancyStampLocked never touches c.pages at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. currentOccupancyStampLocked is only reachable from OccupantsPage, which has its own direct c.checkNotCopied() guard. Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|field access chain|buildOccupantIndexLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. buildOccupantIndexLocked never touches c.deathQueue at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. buildOccupantIndexLocked is only reachable from OccupantsPage, which has its own direct c.checkNotCopied() guard. Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|field access chain|buildOccupantIndexLocked|c.pages|*CitizensAPI.pages",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. buildOccupantIndexLocked never names c.pages directly (it reaches the paging seam only through shardAt, which takes pagingMu itself); the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. buildOccupantIndexLocked is only reachable from OccupantsPage, which has its own direct c.checkNotCopied() guard. Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|field access chain|OccupantsPage|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. OccupantsPage never touches c.deathQueue at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. OccupantsPage has its OWN direct c.checkNotCopied() guard at its top (SEC-020). Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|field access chain|OccupantsPage|c.pages|*CitizensAPI.pages",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. OccupantsPage never names c.pages directly (it reaches the paging seam only through shardAt, which takes pagingMu itself); the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. OccupantsPage has its OWN direct c.checkNotCopied() guard at its top (SEC-020). Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|field access chain|PassportRecord|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. PassportRecord never touches c.deathQueue at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. PassportRecord has its OWN direct c.checkNotCopied() guard at its top (SEC-020). Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/citizens/occupants.go|*CitizensAPI|field access chain|PassportRecord|c.pages|*CitizensAPI.pages",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. PassportRecord never names c.pages directly (it reaches the paging seam only through coldRecord -> shardAt, under pagingMu); the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. PassportRecord has its OWN direct c.checkNotCopied() guard at its top (SEC-020). Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/compose/citizen_query.go|*simState|field access chain|handleQuery|st.coastalW|*simState.coastalW",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. handleQuery never touches st.coastalW at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a st.coastalW.checkNotCopied() call would satisfy it, which would be nonsensical noise. handleQuery is a read-only query answerer over st.citizens and st.cid only; the wirings carry their own SEC-020 self guards at their lock-taking entry points and st.coastalW is a pointer set once at construction. Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/compose/citizen_query.go|*simState|field access chain|handleQuery|st.socialW|*simState.socialW",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. handleQuery never touches st.socialW at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a st.socialW.checkNotCopied() call would satisfy it, which would be nonsensical noise. handleQuery is a read-only query answerer over st.citizens and st.cid only; the wirings carry their own SEC-020 self guards at their lock-taking entry points and st.socialW is a pointer set once at construction. Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/compose/citizen_query.go|*simState|field access chain|handleQuery|st.defenceW|*simState.defenceW",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. handleQuery never touches st.defenceW at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a st.defenceW.checkNotCopied() call would satisfy it, which would be nonsensical noise. handleQuery is a read-only query answerer over st.citizens and st.cid only; the wirings carry their own SEC-020 self guards at their lock-taking entry points and st.defenceW is a pointer set once at construction. Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|field access chain|SetQueryCommandHandler|e.subs|*Engine.subs",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. SetQueryCommandHandler never touches e.subs at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a e.subs.checkNotCopied() call would satisfy it, which would be nonsensical noise. It has its own direct e.checkNotCopied() calls before and after e.mu.Lock(), mirroring SetGameplayCommandHandler. Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|field access chain|handleQuery|e.subs|*Engine.subs",
+    "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. handleQuery never touches e.subs at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a e.subs.checkNotCopied() call would satisfy it, which would be nonsensical noise. handleQuery has its own direct e.checkNotCopied() guard and is reached only from dispatchCommand. Same shape as the existing entries for the sibling methods on this type."
   }
 ]

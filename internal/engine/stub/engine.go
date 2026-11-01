@@ -363,6 +363,11 @@ func (s *StubEngine) handle(cmd protocol.Command) {
 		result = s.handleDebug(cmd)
 	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish, protocol.KindSetFunding, protocol.KindEnactPolicy, protocol.KindRepealPolicy, protocol.KindBidForGrant, protocol.KindRespondToMandate:
 		result = s.handleGameplay(cmd)
+	case protocol.KindQueryCitizen, protocol.KindQueryOccupants:
+		// The stub owns no citizens (FEAT-2326609842): a query is a read-only
+		// no-op accept with an EMPTY Result -- honestly "no answer", never a
+		// fabricated passport. The composed engine answers for real.
+		result = s.acceptAt(cmd, s.Tick())
 	default:
 		// Defensive: see codes.go's codeUnknownKind doc. Every Kind that
 		// reaches here already passed commandRegistry, so this branch

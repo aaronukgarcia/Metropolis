@@ -386,7 +386,13 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 		"fertilityCfg": "immutable data/fertility.json config, reloaded by NewCitizensAPI",
 		"mortalityCfg": "immutable data/mortality.json config, reloaded by NewCitizensAPI",
 		"mu":           "runtime lock, not state",
-		"self":         "SEC-020 copy-guard pointer, re-armed by NewCitizensAPI",
+		// FEAT-2326609842: occMu/occ/occGen are the lazy occupant index behind
+		// OccupantsPage -- DERIVED index state rebuilt on demand from the cold
+		// store, never save state and never in the population hash.
+		"occMu":  "guards the derived occupant index; runtime lock, not state",
+		"occ":    "derived occupant index (FEAT-2326609842), lazily rebuilt from cold; not save state",
+		"occGen": "invalidation counter for the derived occupant index; not save state",
+		"self":   "SEC-020 copy-guard pointer, re-armed by NewCitizensAPI",
 		"season": "FEAT-087 (mkey feat.deathwave) inc2 — an INJECTED DEPENDENCY " +
 			"(*season.SeasonAPI), re-wired by the composition root on load via SetSeason, " +
 			"not simulation state this module owns (mirrors engine.consumption's own " +

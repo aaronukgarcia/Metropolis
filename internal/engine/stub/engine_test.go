@@ -119,6 +119,10 @@ func wellFormedPayload(kind protocol.Kind, subID protocol.SubscriptionID) protoc
 		return protocol.BidForGrantPayload{Pot: "transport", MatchFundingMicropounds: 1000}
 	case protocol.KindRespondToMandate:
 		return protocol.RespondToMandatePayload{MandateID: "naval-100k", Choice: "naval-base", Cell: protocol.CellRef{X: 3, Y: 7}}
+	case protocol.KindQueryCitizen:
+		return protocol.QueryCitizenPayload{ID: 42}
+	case protocol.KindQueryOccupants:
+		return protocol.QueryOccupantsPayload{By: protocol.OccupantsByWorkplace, Ref: 7, Limit: 10}
 	default:
 		panic("wellFormedPayload: unhandled kind " + string(kind))
 	}

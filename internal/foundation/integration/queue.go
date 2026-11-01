@@ -142,6 +142,8 @@ var kindClass = map[protocol.Kind]Class{
 	protocol.KindEnactPolicy:      ClassT1Batchable,
 	protocol.KindRepealPolicy:     ClassT1Batchable,
 	protocol.KindBidForGrant:      ClassT1Batchable,
+	protocol.KindQueryCitizen:     ClassT1Batchable,
+	protocol.KindQueryOccupants:   ClassT1Batchable,
 	protocol.KindRespondToMandate: ClassT1Batchable,
 }
 

@@ -1678,6 +1678,11 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, wrapSeal(cid, err, "build")
 	}
 
+	// FEAT-2326609842: the citizen dummy-passport's read-only query seam.
+	if err := e.SetQueryCommandHandler(st.handleQuery); err != nil {
+		return nil, wrapSeal(cid, err, "citizens")
+	}
+
 	// Wire the engine-owns-journal seam (Aaron's DD, FEAT-1972079852 inc4;
 	// edge feat.compositionroot -> harness.replay registered 61e41e9): a
 	// nil Deps.CommandJournaler defaults to a freshly constructed

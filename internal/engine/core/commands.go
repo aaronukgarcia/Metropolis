@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -104,6 +105,53 @@ type CommandJournaler interface {
 // deny-by-default: the four gameplay kinds are rejected with
 // ErrUnhandledCommandKind, never silently accepted.
 type GameplayCommandHandler func(cmd protocol.Command) error
+
+// QueryCommandHandler answers the read-only query kinds (KindQueryCitizen,
+// KindQueryOccupants; FEAT-2326609842). It returns the JSON-encoded answer
+// that becomes CommandResult.Result, or a registry-sourced error that becomes
+// the rejection. It MUST NOT mutate sim state: queries bypass accept() and so
+// are never journaled (a replay must not re-run a read).
+type QueryCommandHandler func(cmd protocol.Command) (json.RawMessage, error)
+
+// SetQueryCommandHandler installs the query handler. Same discipline as
+// SetGameplayCommandHandler: before the first AdvanceTicks, ErrEngineSealed
+// afterward.
+func (e *Engine) SetQueryCommandHandler(h QueryCommandHandler) error {
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return err
+	}
+	if e.sealed {
+		return errs.New(ErrEngineSealed, errs.NewCorrelationID(), map[string]any{"handler": "query"})
+	}
+	e.queryHandler = h
+	return nil
+}
+
+// handleQuery runs the read-only query handler and returns its answer on the
+// CommandResult. Deliberately NOT routed through accept(): no journaling.
+func (e *Engine) handleQuery(cmd protocol.Command, correlationID string) protocol.CommandResult {
+	if err := e.checkNotCopied(correlationID, nil); err != nil {
+		return e.reject(cmd, err)
+	}
+	if e.queryHandler == nil {
+		return e.reject(cmd, errs.New(ErrUnhandledCommandKind, correlationID, map[string]any{"kind": string(cmd.Kind)}))
+	}
+	raw, err := e.queryHandler(cmd)
+	if err != nil {
+		return e.reject(cmd, err)
+	}
+	return protocol.CommandResult{
+		CorrelationID: cmd.CorrelationID,
+		Tick:          e.clockTickForResult(),
+		Accepted:      true,
+		Result:        raw,
+	}
+}
 
 // WithGameplayCommandHandler installs the gameplay-command handler
 // handleGameplay consults before accepting KindBuy/KindZone/KindBuild/
@@ -269,6 +317,8 @@ func (e *Engine) dispatchCommand(cmd protocol.Command) protocol.CommandResult {
 		return e.handleInspectEntity(cmd)
 	case protocol.KindDebug:
 		return e.handleDebug(cmd)
+	case protocol.KindQueryCitizen, protocol.KindQueryOccupants:
+		return e.handleQuery(cmd, correlationID)
 	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish, protocol.KindSetFunding, protocol.KindEnactPolicy, protocol.KindRepealPolicy, protocol.KindBidForGrant, protocol.KindRespondToMandate:
 		return e.handleGameplay(cmd, correlationID)
 	default:

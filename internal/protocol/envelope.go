@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -160,6 +161,13 @@ func (cmd Command) Validate() error {
 	if got := cmd.Payload.commandKind(); got != cmd.Kind {
 		return fmt.Errorf("%w: envelope kind %q, payload registered under %q", ErrKindPayloadMismatch, cmd.Kind, got)
 	}
+	// FEAT-2326609842 AC-7: the query payloads' scrape bounds hold on the
+	// in-process path too (a hand-built Command skips DecodeCommand).
+	if q, ok := cmd.Payload.(interface{ validateBounds() error }); ok {
+		if err := q.validateBounds(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -211,6 +219,12 @@ type CommandResult struct {
 	// rejects a command MUST carry an ErrorRef (GR#7) — see
 	// Command.Validate's sibling check in codec.go's result validation.
 	Error *ErrorRef `json:"error,omitempty"`
+	// Result carries the JSON-encoded answer of a read-only query
+	// (KindQueryCitizen -> CitizenPassport, KindQueryOccupants ->
+	// OccupantPage; FEAT-2326609842). Always empty for every other kind, and
+	// omitted from the wire when empty, so every pre-existing result encodes
+	// byte-identically.
+	Result json.RawMessage `json:"result,omitempty"`
 }
 
 // Validate checks CommandResult-level invariants: non-empty

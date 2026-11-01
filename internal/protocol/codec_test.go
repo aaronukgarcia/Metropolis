@@ -138,6 +138,20 @@ func fixtureCommands(t *testing.T) map[Kind]Command {
 			Kind:            KindRespondToMandate,
 			Payload:         RespondToMandatePayload{MandateID: "naval-100k", Choice: "naval-base", Cell: CellRef{X: 3, Y: 7}},
 		},
+		KindQueryCitizen: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    115,
+			Kind:            KindQueryCitizen,
+			Payload:         QueryCitizenPayload{ID: 42},
+		},
+		KindQueryOccupants: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    116,
+			Kind:            KindQueryOccupants,
+			Payload:         QueryOccupantsPayload{By: OccupantsByHome, Cell: CellRef{X: 3, Y: 7}, AfterID: 0, Limit: 10},
+		},
 	}
 }
 

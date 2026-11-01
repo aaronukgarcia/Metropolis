@@ -98,6 +98,13 @@ func DecodeCommand(data []byte) (Command, error) {
 	// so Command.Payload holds the same value-typed CommandPayload a
 	// caller constructing a Command by hand would use.
 	value := derefCommandPayload(payload)
+	// FEAT-2326609842 AC-7: query bounds are enforced AT THE CODEC, so a
+	// garbage ID or an oversized page never reaches an engine handler.
+	if q, ok := value.(interface{ validateBounds() error }); ok {
+		if err := q.validateBounds(); err != nil {
+			return Command{}, err
+		}
+	}
 
 	return Command{
 		ProtocolVersion: wire.ProtocolVersion,
@@ -145,6 +152,10 @@ func derefCommandPayload(p CommandPayload) CommandPayload {
 	case *EnactPolicyPayload:
 		return *v
 	case *RepealPolicyPayload:
+		return *v
+	case *QueryCitizenPayload:
+		return *v
+	case *QueryOccupantsPayload:
 		return *v
 	case *BidForGrantPayload:
 		return *v

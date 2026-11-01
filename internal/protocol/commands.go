@@ -79,6 +79,14 @@ const (
 	// additive extension rule above.
 	KindBidForGrant      Kind = "BidForGrant"
 	KindRespondToMandate Kind = "RespondToMandate"
+
+	// KindQueryCitizen / KindQueryOccupants are the citizen dummy-passport's
+	// READ-ONLY request/response queries (FEAT-2326609842). Unlike every kind
+	// above they carry an answer: the accepting CommandResult.Result holds the
+	// JSON-encoded CitizenPassport / OccupantPage. They never mutate the sim
+	// and are never journaled. Added per the extension rule above.
+	KindQueryCitizen   Kind = "QueryCitizen"
+	KindQueryOccupants Kind = "QueryOccupants"
 )
 
 // AdvanceTicksPayload requests the engine advance the simulation by N
@@ -331,6 +339,8 @@ var commandRegistry = map[Kind]func() CommandPayload{
 	KindEnactPolicy:   func() CommandPayload { return &EnactPolicyPayload{} },
 	KindRepealPolicy:  func() CommandPayload { return &RepealPolicyPayload{} },
 
+	KindQueryCitizen:     func() CommandPayload { return &QueryCitizenPayload{} },
+	KindQueryOccupants:   func() CommandPayload { return &QueryOccupantsPayload{} },
 	KindBidForGrant:      func() CommandPayload { return &BidForGrantPayload{} },
 	KindRespondToMandate: func() CommandPayload { return &RespondToMandatePayload{} },
 }

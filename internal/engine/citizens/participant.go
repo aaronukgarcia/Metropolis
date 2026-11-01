@@ -519,6 +519,7 @@ func (c *CitizensAPI) resetForLoad() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.occGen++
 	for i := range c.cold {
 		c.cold[i] = newColdShard(0)
 	}
@@ -590,6 +591,9 @@ func (c *CitizensAPI) applyLoadRecord(rec serialize.Record) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// A load record changes cold rows/meta: invalidate the derived occupant
+	// index so a mid-load query cannot cache a partial one (round r1 minor).
+	c.occGen++
 
 	switch rec.Kind {
 	case recCitizensMeta:
