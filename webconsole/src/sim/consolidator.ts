@@ -449,7 +449,40 @@ export function tileDensityOf(sp: Spec): number {
  * — zero behaviour change outside health.
  */
 export function familyKeyOf(sp: Spec): string {
-  return `${sp.kind}|${capacityFieldOf(sp) ?? ''}|${sp.tag ?? ''}|${sp.stage ?? ''}|${sp.careTier ?? ''}|${isFarmSpec(sp) ? 'farm' : ''}`;
+  return `${sp.kind}|${capacityFieldOf(sp) ?? ''}|${sp.tag ?? ''}|${sp.stage ?? ''}|${sp.careTier ?? ''}|${isFarmSpec(sp) ? 'farm' : ''}|${isStaySpec(sp) ? 'stay' : ''}|${transportModeOf(sp)}`;
+}
+
+/**
+ * True for a hospitality (overnight stay) spec. Stays share ZoneKind 'leisure' and the
+ * 'tourism' capacity field with the entertainment venues, so the catalogue's id prefix
+ * ('stay_') is the discriminator, exactly as isFarmSpec does for farms. Folded into
+ * familyKeyOf as a seventh segment (BUG-1183): without it a B&B laddered into a theme
+ * park and a cinema into a resort.
+ */
+export function isStaySpec(sp: Spec): boolean {
+  return sp.id.startsWith('stay_');
+}
+
+/**
+ * Transport mode of the kind-'transport' specs whose capacity family would otherwise
+ * mix modes (BUG-1183). The catalogue carries no mode field (no tag, stage or kind
+ * distinguishes them), so this table is the single source of truth. It covers the
+ * 'jobs' family (depots and yards), where road, tram, rail freight and EV charging
+ * are different networks. The interchange/terminal specs (bus_station, trans_parkride,
+ * trans_interchange, grand_terminus) are deliberately UNMAPPED: they are multi-modal
+ * hubs and their rungs are declared in the F2 adjudication below. '' for everything
+ * not listed, so no other family key changes beyond the trailing segment.
+ */
+const TRANSPORT_MODE_BY_SPEC_ID: Readonly<Record<string, string>> = {
+  bus_depot: 'road',
+  tram_depot: 'tram',
+  rail_freightyard: 'rail',
+  ev_charging_hub: 'ev',
+};
+
+export function transportModeOf(sp: Spec): string {
+  if (sp.kind !== 'transport') return '';
+  return TRANSPORT_MODE_BY_SPEC_ID[sp.id] ?? '';
 }
 
 /**

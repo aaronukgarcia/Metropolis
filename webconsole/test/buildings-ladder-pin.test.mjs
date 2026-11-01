@@ -6,12 +6,13 @@
 // deliberately consolidate with nothing. Changing the set is allowed, but only deliberately:
 // edit EXPECTED_RUNGS in the same commit.
 //
+// RED proof (BUG-1183): drop the isStaySpec or transportModeOf segment from familyKeyOf and the stay/transport tests fail.
 // RED proof: drop isFarmSpec from familyKeyOf (farm/industry rungs reappear) or remove
 // harbour_fishing / pow_hvdc from CONSOLIDATION_EXEMPT_SPEC_IDS and tests 2 and 3 fail.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consolidationLadder, familyKeyOf, isFarmSpec } from '../src/sim/consolidator.ts';
+import { consolidationLadder, familyKeyOf, isFarmSpec, isStaySpec, transportModeOf } from '../src/sim/consolidator.ts';
 import { SPECS } from '../src/sim/data.ts';
 
 const FORMER_PLACEHOLDERS = new Set([
@@ -104,46 +105,36 @@ const FORMER_PLACEHOLDERS = new Set([
   'stay_caravan',
 ]);
 
-// QUESTIONABLE-BUT-PINNED (flagged for the lead, not changed here): lei_*/stay_* rungs
-// cross hospitality and entertainment (a B&B -> theme park), and bus_depot / tram_depot /
-// ev_charging_hub -> rail_freightyard cross transport modes. They derive from shared kind
-// and capacity field and are pinned so any further drift is visible.
+// BUG-1183: the ladder family now carries a stay-vs-leisure segment (isStaySpec) and a
+// transport-mode segment (transportModeOf), so stay_* never ladders with lei_* and the
+// road / tram / rail-freight / EV depots never cross modes. Rungs REMOVED by that fix
+// (previously pinned here):
+//   bus_depot -> rail_freightyard x7, ev_charging_hub -> rail_freightyard x18,
+//   ev_charging_hub -> tram_depot x4, tram_depot -> rail_freightyard x4,
+//   lei_cinema -> stay_luxury x4, lei_cinema -> stay_resort x11, lei_museum -> stay_resort x4,
+//   lei_stables -> stay_luxury x7, lei_stables -> stay_resort x18, lei_theatre -> stay_resort x6,
+//   stay_bb -> lei_arena x11, stay_bb -> lei_museum x4, stay_bb -> lei_themepark x26,
+//   stay_caravan -> lei_arena x5, stay_caravan -> lei_themepark x11, stay_hotel -> lei_themepark x8.
 const EXPECTED_RUNGS = [
-  'bus_depot -> rail_freightyard x7',
   'com_darkstore -> com_hypermarket x44',
   'com_darkstore -> com_mall x12',
   'com_discounter -> com_hypermarket x26',
   'com_discounter -> com_mall x7',
-  'ev_charging_hub -> rail_freightyard x18',
-  'ev_charging_hub -> tram_depot x4',
   'farm_abattoir -> farm_estate x75',
   'farm_dairy -> farm_estate x125',
   'ind_cement -> ind_refinery x7',
   'ind_chemworks -> ind_estate x14',
   'ind_refinery -> ind_estate x5',
   'ind_warehouse -> ind_fulfilment x4',
-  'lei_cinema -> stay_luxury x4',
-  'lei_cinema -> stay_resort x11',
   'lei_gym -> lei_leisure x4',
-  'lei_museum -> stay_resort x4',
   'lei_stables -> lei_arena x11',
   'lei_stables -> lei_museum x4',
   'lei_stables -> lei_themepark x26',
-  'lei_stables -> stay_luxury x7',
-  'lei_stables -> stay_resort x18',
-  'lei_theatre -> stay_resort x6',
   'mine_chalk -> mine_deep x4',
-  'stay_bb -> lei_arena x11',
-  'stay_bb -> lei_museum x4',
-  'stay_bb -> lei_themepark x26',
   'stay_bb -> stay_luxury x7',
   'stay_bb -> stay_resort x18',
-  'stay_caravan -> lei_arena x5',
-  'stay_caravan -> lei_themepark x11',
   'stay_caravan -> stay_resort x7',
-  'stay_hotel -> lei_themepark x8',
   'stay_hotel -> stay_resort x5',
-  'tram_depot -> rail_freightyard x4',
   'trans_parkride -> grand_terminus x10',
   'trans_parkride -> trans_interchange x5',
 ];
@@ -181,4 +172,22 @@ test('harbour_fishing, pow_hvdc and the two helibases consolidate with nothing (
 test('the pre-existing ind_light / ind_warehouse / ind_logistics -> farm_estate rungs are gone', () => {
   const labels = new Set(consolidationLadder().map((e) => `${e.from}>${e.to}`));
   for (const f of ['ind_light', 'ind_warehouse', 'ind_logistics']) assert.equal(labels.has(`${f}>farm_estate`), false, f);
+});
+
+test('BUG-1183: no stay<->leisure rung exists', () => {
+  for (const e of consolidationLadder()) {
+    assert.equal(isStaySpec(SPECS[e.from]), isStaySpec(SPECS[e.to]), rungLabel(e));
+  }
+  assert.notEqual(familyKeyOf(SPECS.stay_bb), familyKeyOf(SPECS.lei_themepark));
+  assert.equal(familyKeyOf(SPECS.stay_bb), familyKeyOf(SPECS.stay_resort), 'stays still share a family with each other');
+});
+
+test('BUG-1183: no cross-mode transport rung exists', () => {
+  const modes = new Set(['bus_depot', 'tram_depot', 'rail_freightyard', 'ev_charging_hub']);
+  for (const e of consolidationLadder()) {
+    assert.equal(transportModeOf(SPECS[e.from]), transportModeOf(SPECS[e.to]), rungLabel(e));
+    assert.equal(modes.has(e.from) || modes.has(e.to), false, `${rungLabel(e)}: depots have no rung left`);
+  }
+  const keys = [...modes].map((id) => familyKeyOf(SPECS[id]));
+  assert.equal(new Set(keys).size, 4, 'four depot modes, four families');
 });
