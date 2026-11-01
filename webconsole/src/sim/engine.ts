@@ -6588,6 +6588,26 @@ function applyConsolidatorPass(
  *       "the last pass"); a second Undo without a new pass in between is a
  *       no-op (the log is already empty of that entry).
  */
+/**
+ * BUG-1149 r2 F3: bounded, deterministic refusal notice. Lists at most
+ * UNDO_NOTICE_MAX_BUILDINGS distinct blocking buildings (first-seen order),
+ * then "+N more tiles"; the header always carries the total tile count.
+ */
+const UNDO_NOTICE_MAX_BUILDINGS = 10;
+function undoBlockedNotice(blockers: { tile: string; occupant: string }[]): string {
+  const byOcc = new Map<string, string[]>();
+  for (const b of blockers) {
+    const t = byOcc.get(b.occupant);
+    if (t) t.push(b.tile);
+    else byOcc.set(b.occupant, [b.tile]);
+  }
+  const entries = Array.from(byOcc);
+  const shown = entries.slice(0, UNDO_NOTICE_MAX_BUILDINGS);
+  const hidden = entries.slice(UNDO_NOTICE_MAX_BUILDINGS).reduce((n, [, t]) => n + t.length, 0);
+  const parts = shown.map(([occ, t]) => `${occ} at ${t.slice(0, 6).join(' ')}${t.length > 6 ? ` +${t.length - 6}` : ''}`);
+  return `Undo refused: ${blockers.length} tile${blockers.length === 1 ? '' : 's'} blocked - clear them and Undo again: ${parts.join('; ')}${hidden > 0 ? `; +${hidden} more tiles` : ''}.`;
+}
+
 function undoLastConsolidatorPass(state: SimState): SimState {
   const log = state.consolidatorLog ?? [];
   // BUG-742 round REJECT (opus-round-bug742), two findings resolved together:
@@ -6687,8 +6707,64 @@ function undoLastConsolidatorPass(state: SimState): SimState {
   const addedIds = new Set<number>();
   for (const txn of allTxns) for (const a of txn.added) addedIds.add(a.id);
 
+  // BUG-1149/1150 (round r1 LEAD RULING): Undo is ALL-OR-NOTHING. Every
+  // removed member's whole (real, grown-aware) footprint must be free once this
+  // pass's added buildings are gone - the SAME occupancy rule placement uses.
+  // Occupancy starts from state.buildings minus addedIds and accumulates as
+  // each member is (tentatively) restored, so two members can never claim one
+  // tile. If ANY member is blocked the WHOLE Undo is refused BEFORE any
+  // mutation: the state is returned unchanged except for a placeNotice naming
+  // every blocking tile. The undo record is NOT consumed, so Undo can be
+  // retried once the player clears the tiles. (A partial restore opened a
+  // money path: scrap never charged back for blocked members.)
+  const survivors = state.buildings.filter((b) => !addedIds.has(b.id));
+  const occ = new Set(occupiedSet({ ...state, buildings: survivors }));
   const removedRestored: Building[] = [];
-  for (const txn of allTxns) for (const r of txn.removed) removedRestored.push(recordToBuilding(r));
+  const blockers: { tile: string; occupant: string }[] = [];
+  let occupantByTile: Map<string, string> | null = null;
+  const occupantOf = (k: string): string => {
+    if (!occupantByTile) {
+      occupantByTile = new Map();
+      for (const sb of survivors) {
+        const ssp = SPECS[sb.spec];
+        if (!ssp) continue;
+        const { w, h } = footprintOf(sb, ssp);
+        for (let dx = 0; dx < w; dx++) for (let dy = 0; dy < h; dy++) occupantByTile.set(`${sb.x + dx},${sb.y + dy}`, `${ssp.name} #${sb.id}`);
+      }
+    }
+    return occupantByTile.get(k) ?? 'another member being restored';
+  };
+  for (const txn of allTxns) {
+    for (const r of txn.removed) {
+      const rb = recordToBuilding(r);
+      const rsp = SPECS[rb.spec];
+      const tiles: string[] = [];
+      let blocked = !rsp;
+      if (rsp) {
+        const { w, h } = footprintOf(rb, rsp);
+        for (let dx = 0; dx < w; dx++) {
+          for (let dy = 0; dy < h; dy++) {
+            const k = `${rb.x + dx},${rb.y + dy}`;
+            if (occ.has(k)) {
+              blocked = true;
+              blockers.push({ tile: k, occupant: occupantOf(k) });
+            } else tiles.push(k);
+          }
+        }
+      } else {
+        blockers.push({ tile: `${rb.x},${rb.y}`, occupant: `unknown spec ${r.spec} (#${r.id})` });
+      }
+      if (blocked) continue;
+      for (const k of tiles) occ.add(k);
+      removedRestored.push(rb);
+    }
+  }
+  if (blockers.length > 0) {
+    return {
+      ...state,
+      placeNotice: undoBlockedNotice(blockers),
+    };
+  }
 
   const fullyUndoneBuildings = state.buildings.filter((b) => !addedIds.has(b.id)).concat(removedRestored);
   const fullyUndoneState: SimState = {
@@ -6727,20 +6803,74 @@ function undoLastConsolidatorPass(state: SimState): SimState {
     finalBuildings = finalBuildings.concat(Array.from(keptAddedRecords.values()).map(recordToBuilding));
   }
 
+  // BUG-1149 FIX (money truth): Undo refunds only what it actually reverses.
+  // ATTRIBUTION RULE: a transaction's buildCost is split across its `added`
+  // records, and its scrapRecovered across its `removed` records, each pro-rata
+  // to placementCost(spec) (equal split if every weight is 0, e.g. free zones),
+  // with cumulative rounding so the shares sum to the total to the penny. No
+  // new field on ConsolidationRecord (save shape untouched; legacy saves behave
+  // identically). Refund = shares of added buildings STILL PRESENT (the player
+  // already chose the fate of an added building that is gone - bulldozed with
+  // its 25% refund, sold, or re-consolidated - and was paid by that path)
+  // minus the scrap of the members restored (all of them, Undo being
+  // all-or-nothing).
+  // When every added is present and every removed restored the refund is the
+  // recorded netCost exactly (the legacy figure).
+  const presentIds = new Set(state.buildings.map((x) => x.id));
+  const shares = (total: number, recs: ConsolidationRecord[]): number[] => {
+    const ws = recs.map((r) => {
+      const sp = SPECS[r.spec];
+      return sp ? Math.max(0, placementCost(sp)) : 0;
+    });
+    const wsum = ws.reduce((x, y) => x + y, 0);
+    const use = wsum > 0 ? ws : recs.map(() => 1);
+    const usum = wsum > 0 ? wsum : recs.length;
+    const out: number[] = [];
+    let cum = 0;
+    let prev = 0;
+    for (let i = 0; i < recs.length; i++) {
+      cum += use[i];
+      const upto = i === recs.length - 1 ? total : Math.round((total * cum) / usum);
+      out.push(upto - prev);
+      prev = upto;
+    }
+    return out;
+  };
   let reversedNetCost = 0;
   let reversedBuildCost = 0;
   let reversedUpkeepDelta = 0;
   for (const txn of allTxns) {
     const kept = txn.kind === 'reconnect' && txn.added.some((a) => keptAddedRecords.has(a.id));
     if (kept) continue; // the asset survives — its spend is not refunded.
-    reversedNetCost += txn.netCost;
-    reversedBuildCost += txn.buildCost;
+    const allAddedPresent = txn.added.every((a) => presentIds.has(a.id));
+    let net = txn.netCost;
+    let build = txn.buildCost;
+    if (!allAddedPresent) {
+      const aShares = shares(txn.buildCost, txn.added);
+      build = 0;
+      txn.added.forEach((a, i) => {
+        if (presentIds.has(a.id)) build += aShares[i];
+      });
+      net = build - txn.scrapRecovered;
+    }
+    reversedNetCost += net;
+    reversedBuildCost += build;
     // ROUND-14 F3 FIX (opus-round11-inc3 REJECT, P1, "one undo burns 74% of
     // the budget forever"): a layout txn's own upkeep contribution must be
-    // reversed too, exactly like its capex — otherwise Undo refunds the
-    // one-time build cost but leaves the recurring upkeep it added charged
-    // against the budget permanently.
+    // reversed too. BUG-1149 r1 F2: ALWAYS the full delta - bulldozing a
+    // successor never lowers consolidatorLayoutCumulativeUpkeepDelta, so
+    // there is no double reversal to guard against.
     reversedUpkeepDelta += txn.upkeepDelta ?? 0;
+  }
+
+  // BUG-1149 r2 F1: a NEGATIVE refund (added buildings gone, scrap still owed back) is
+  // a debit - refuse the whole Undo (record kept, nothing changed but the notice)
+  // unless the player can afford it, so Undo can never push funds past zero unseen.
+  if (reversedNetCost < 0 && state.funds + reversedNetCost < 0) {
+    return {
+      ...state,
+      placeNotice: `Undo refused: it would cost ${fmtMoney(-reversedNetCost)} (the scrap you were paid, less the buildings still standing) and you have ${fmtMoney(state.funds)} - short by ${fmtMoney(-(state.funds + reversedNetCost))}. Raise funds and Undo again.`,
+    };
   }
 
   const label = `Consolidation Undo (${last.transactions.length} site${last.transactions.length === 1 ? '' : 's'}${(last.tierLayout ?? []).length > 0 ? ` + ${last.tierLayout!.length} tier-layout section${last.tierLayout!.length === 1 ? '' : 's'}` : ''})${anyPartial ? ' — 1+ spur kept (would strand)' : ''}`;
@@ -6786,6 +6916,8 @@ function undoLastConsolidatorPass(state: SimState): SimState {
     // press is a no-op until a new pass runs (see the flag's doc comment).
     consolidatorUndoConsumed: true,
     ...(reversedNetCost !== 0 ? logEvent(state, label, reversedNetCost) : {}),
+    // BUG-1149 r2 F2: replace any stale 'Undo refused' notice with the success notice.
+    placeNotice: reversedNetCost >= 0 ? `Undo complete: refunded ${fmtMoney(reversedNetCost)}` : `Undo complete: charged ${fmtMoney(-reversedNetCost)}`,
   };
 }
 
