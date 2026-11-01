@@ -31,6 +31,7 @@ import {
   findSpot,
   rankedProviders,
   canEnterSim,
+  PH,
 } from '../src/sim/data.ts';
 import { initialState, reducer, specUnlocked } from '../src/sim/engine.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
@@ -39,6 +40,12 @@ import { replayFromGenesis, replayIsDeterministic, stableStringify } from '../sr
 import { restoreFromSavepoint, SAVEPOINT_KEY_PREFIX } from '../src/sim/replay.ts';
 
 const DAM = 'pow_hydro';
+
+// FEAT-9995385590: no roadmap placeholder remains in the shipped catalogue, so the
+// "placeholders sort last / never counted" guarantees run against a SYNTHETIC
+// placeholder built with the shipped PH() helper (SPECS is mutable; the node test
+// runner gives each file its own process, so this cannot leak into another suite).
+SPECS.ph_syn_a = PH('ph_syn_a', 'power', 'Synthetic Placeholder A', 'test-only', 2, 2, '#888888', 'services', 3);
 
 /** A god-mode, cash-flush state so unlock level and affordability never
  *  interfere with the cap assertions themselves. */
@@ -358,8 +365,8 @@ describe('AC-30: palette sort + gating logic for an at-cap unique building', () 
       ...s,
       buildings: [...s.buildings, { id: 999107, spec: DAM, x: 300, y: 100, builtTick: 0 }],
     };
-    // pow_wind: available; pow_hydro: at-cap; rail_branch: placeholder.
-    const family = ['rail_branch', DAM, 'pow_wind'];
+    // pow_wind: available; pow_hydro: at-cap; ph_syn_a: placeholder.
+    const family = ['ph_syn_a', DAM, 'pow_wind'];
     const sorted = sortPaletteItems(withOne, family);
     const tierOf = (id) => {
       const sp = SPECS[id];
@@ -374,12 +381,12 @@ describe('AC-30: palette sort + gating logic for an at-cap unique building', () 
 
   test('sortPaletteItems: with NO dam built, the same family sorts pow_hydro as available (control)', () => {
     const s = richState();
-    const family = ['rail_branch', DAM, 'pow_wind'];
+    const family = ['ph_syn_a', DAM, 'pow_wind'];
     const sorted = sortPaletteItems(s, family);
     // Both real specs are available; original relative order preserved within tier 1.
     assert.equal(sorted[0], DAM);
     assert.equal(sorted[1], 'pow_wind');
-    assert.equal(sorted[2], 'rail_branch');
+    assert.equal(sorted[2], 'ph_syn_a');
   });
 
   test('the BottomBar disabled/atCap boolean logic (mirrors the shipped component exactly)', () => {

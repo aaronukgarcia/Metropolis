@@ -62,7 +62,8 @@ test('round: landUseDensityMapping covers EXACTLY the residents/jobs-bearing SPE
   const mapped = Object.keys(LOCAL.landUseDensityMapping);
   assert.deepEqual(need.filter((x) => !mapped.includes(x)), [], 'a residents/jobs spec with no mapping entry (the module throws MET-V957 at load)');
   assert.deepEqual(mapped.filter((x) => !need.includes(x)), [], 'an orphan mapping entry for a spec that generates no demand');
-  assert.equal(need.length, 41);
+  // FEAT-9995385590: 41 original + 84 formerly-placeholder specs that now carry jobs (the no-gap assertions above are the real guard).
+  assert.equal(need.length, 125);
 });
 
 test('round: the mapping is MONOTONE in (residents+jobs) against mode_share_by_density.json band order (the generator rule, otherwise unrecorded)', () => {

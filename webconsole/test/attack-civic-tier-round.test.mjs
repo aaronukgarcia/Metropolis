@@ -125,13 +125,16 @@ test('ATTACK-3: full ladder delta under old vs new field order', () => {
   // still reflecting the real, intentional hea_clinic->hea_hospital removal
   // that F1 causes independently — see HAND RECOST 3 SUPERSEDED in
   // attack-consolidator-inc1-round.test.mjs for that removal's own proof.
-  const oldFamily = (sp) => `${sp.kind}|${oldField(sp) ?? ''}|${sp.tag ?? ''}|${sp.stage ?? ''}|${sp.careTier ?? ''}`;
+  // FEAT-9995385590: the farm segment of familyKeyOf is likewise orthogonal to the field-order
+  // reorder under test, so it is folded into both derivations symmetrically (as careTier is).
+  const oldFamily = (sp) => `${sp.kind}|${oldField(sp) ?? ''}|${sp.tag ?? ''}|${sp.stage ?? ''}|${sp.careTier ?? ''}|${sp.id.startsWith('farm_') ? 'farm' : ''}`;
   const oldCap = (sp) => {
     if (sp.capacityTiers && sp.capacityTiers.length > 0) return sp.capacityTiers[0];
     const f = oldField(sp);
     return f == null ? 0 : (typeof sp[f] === 'number' ? sp[f] : 0);
   };
-  const EXEMPT_IDS = new Set(['hea_eldercare']);
+  // harbour_fishing / pow_hvdc / the two helibases: FEAT-9995385590 exemptions (CONSOLIDATION_EXEMPT_SPEC_IDS), unrelated to the reorder.
+  const EXEMPT_IDS = new Set(['hea_eldercare', 'harbour_fishing', 'pow_hvdc', 'air_fire_helibase', 'air_police_helibase']);
   const oldLadder = [];
   for (const a of specs) {
     if (oldField(a) == null) continue;
@@ -157,7 +160,29 @@ test('ATTACK-3: full ladder delta under old vs new field order', () => {
   console.log('LADDER ADDED:', added);
   // eslint-disable-next-line no-console
   console.log('LADDER REMOVED:', removed);
-  assert.equal(removed.length, 0, `reorder REMOVED rungs: ${removed.join(', ')}`);
+  // FEAT-9995385590: the 87 former placeholders. They carry a SECONDARY 'jobs' field the old
+  // (jobs-first) order would have keyed on, so the reorder legitimately drops some rungs for
+  // THEM; the original claim (the reorder removes nothing) is still enforced for every spec
+  // that existed before.
+  const NEW_87 = new Set([
+  'rail_branch', 'trans_parkride', 'trans_interchange', 'rail_freightyard', 'ev_charging_hub',
+  'com_discounter', 'com_darkstore', 'ind_chemworks', 'ind_refinery', 'ind_fulfilment', 'ind_parcelhub',
+  'farm_dairy', 'farm_abattoir', 'harbour_fishing', 'mine_chalk', 'mine_clay', 'mine_coal', 'lei_gym',
+  'lei_sportsground', 'lei_stables', 'pow_hvdc', 'pow_reprocess', 'death_cemetery', 'death_crematorium',
+  'air_heliport', 'air_fire_helibase', 'air_police_helibase', 'land_containerport', 'land_ferryterminal',
+  'land_cern', 'land_gigafactory', 'land_semifab', 'tour_greatwall', 'tour_colosseum', 'tour_tajmahal',
+  'tour_machupicchu', 'tour_petra', 'tour_giza', 'tour_eiffel', 'tour_liberty', 'tour_grandcanyon',
+  'tour_niagara', 'tour_angkor', 'tour_stonehenge', 'tour_acropolis', 'tour_redeemer', 'tour_sagrada',
+  'tour_forbidden', 'tour_stpeters', 'tour_alhambra', 'tour_chichenitza', 'tour_fuji', 'tour_opera',
+  'tour_goldengate', 'tour_louvre', 'tour_santorini', 'tour_venice', 'tour_neuschwanstein', 'tour_burj',
+  'tour_iguazu', 'tour_banff', 'tour_aurora', 'tour_reef', 'tour_yellowstone', 'tour_serengeti',
+  'tour_fushimi', 'tour_prague', 'tour_dubrovnik', 'tour_cappadocia', 'tour_moai', 'tour_uluru',
+  'tour_tablemountain', 'tour_hallstatt', 'tour_antelope', 'tour_halong', 'tour_zhangjiajie',
+  'tour_matterhorn', 'tour_towerlondon', 'tour_versailles', 'tour_montstmichel', 'tour_giantscauseway',
+  'tour_edinburgh', 'stay_bb', 'stay_hotel', 'stay_luxury', 'stay_resort', 'stay_caravan',
+  ]);
+  const removedLegacy = removed.filter((r) => { const [f, t] = r.split('->'); return !NEW_87.has(f) && !NEW_87.has(t); });
+  assert.equal(removedLegacy.length, 0, `reorder REMOVED rungs: ${removedLegacy.join(', ')}`);
 });
 
 // ATTACK 4 — determinism (GR#21): ladder derivation is order-independent.

@@ -1391,6 +1391,10 @@ export const KIND_TO_WAGE_SECTOR: Readonly<Record<string, WageSector>> = Object.
   // employment in the real world (the same bucket commercial/office jobs
   // already use), not civil-service 'public' roles.
   landmark: 'tertiary',
+  // FEAT-9995385590 (F1, BUG-652 class): stay_*/lei_* specs are kind 'leisure'
+  // and now carry jobs; without this entry those jobs counted toward
+  // employment but paid no wages. Hotels, gyms, stables: private services.
+  leisure: 'tertiary',
 });
 
 /** Per-sector job counts — the injected decomposition-basis input to

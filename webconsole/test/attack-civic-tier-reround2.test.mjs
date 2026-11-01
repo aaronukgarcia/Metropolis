@@ -305,7 +305,7 @@ describe('RR2-F2: declared rungs are capacity-conserving and stage-clean', () =>
     void bad;
   });
 
-  test('the transport family really is a family of two — no third spec leaks in', () => {
+  test('the transport family rung set is exactly the declared three (no unpinned spec leaks in)', () => {
     const fam = familyKeyOf(SPECS.grand_terminus);
     const members = Object.values(SPECS).filter((sp) => familyKeyOf(sp) === fam && capacityFieldOf(sp) != null);
     // eslint-disable-next-line no-console
@@ -322,7 +322,15 @@ describe('RR2-F2: declared rungs are capacity-conserving and stage-clean', () =>
     const famRungs = consolidationLadder().filter((e) => familyKeyOf(SPECS[e.from]) === fam);
     // eslint-disable-next-line no-console
     console.log('RR2-F2 transport family rungs:', JSON.stringify(famRungs));
-    assert.equal(famRungs.length, 1, 'transport|served family must have exactly the one declared rung');
+    // FEAT-9995385590: Park & Ride and Interchange (former placeholders) joined this family;
+    // the declared rung set is now these three, pinned exactly so a further catalogue change
+    // cannot add one silently. (Park & Ride -> Grand Terminus and -> Interchange are the
+    // new-spec rungs; the original bus_station -> grand_terminus rung is unchanged.)
+    assert.deepEqual(
+      famRungs.map((e) => `${e.from}->${e.to}`).sort(),
+      ['bus_station->grand_terminus', 'trans_parkride->grand_terminus', 'trans_parkride->trans_interchange'],
+      'transport|served family rung set',
+    );
   });
 });
 

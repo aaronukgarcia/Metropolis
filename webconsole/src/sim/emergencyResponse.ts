@@ -334,12 +334,15 @@ const nearestRoadSegmentOf: (s: SimState) => Map<string, string> = memoOnState((
 
 // --- station discovery (AC-2) -----------------------------------------------
 
+/** Health specs that DISPATCH ambulances: the road Ambulance Station and (FEAT-9995385590) the Air-Ambulance Pad. A small id set, not kind==='health' (which also matches clinics and hospitals, neither a dispatch point). */
+const AMBULANCE_STATION_SPEC_IDS: ReadonlySet<string> = new Set(['hea_ambulance', 'air_heliport']);
+
 /** AC-2 — spec-kind-driven, never a hand-typed id LIST. Ambulance is the one
  * exception that must check the SPEC ID (not `kind==='health'`, which also
  * matches clinics/hospitals — neither is a dispatch point) — a single id
  * equality, not an array, per the doc's own AC-2 wording. */
 function isStationOfService(sp: Spec, service: EmergencyService): boolean {
-  if (service === 'ambulance') return sp.kind === 'health' && sp.id === 'hea_ambulance';
+  if (service === 'ambulance') return sp.kind === 'health' && AMBULANCE_STATION_SPEC_IDS.has(sp.id);
   if (service === 'fire') return sp.kind === 'fire';
   return sp.kind === 'police';
 }

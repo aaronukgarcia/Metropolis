@@ -132,7 +132,8 @@ test('A1: every jobs-bearing spec in the catalogue lands on the correct jobsAtTi
   // Exact membership, so a future spec joining either branch is a visible diff.
   assert.deepEqual(
     flat.map((sp) => sp.id).sort(),
-    ['grand_terminus', 'hea_teaching', 'station_ashford', 'uni'],
+    // FEAT-9995385590: helibases, lei_gym/lei_sportsground (served + jobs) and trans_interchange (fare capacity + jobs) joined - the legitimate effect of new real specs; none carries a jobs ladder (asserted above).
+    ['air_fire_helibase', 'air_police_helibase', 'grand_terminus', 'hea_teaching', 'lei_gym', 'lei_sportsground', 'station_ashford', 'trans_interchange', 'uni'],
     'the FLAT branch membership changed — re-audit jobsAtTier()',
   );
   assert.ok(
@@ -185,7 +186,8 @@ test('A9: totalChildrenCapacity reads `children`, never uni\'s new `jobs` figure
 
 test('A2: every zero-jobs landmark costs EXACTLY £0 of wages and contributes EXACTLY 0 jobs, despite landmark now being a mapped wage sector', () => {
   const zeroJob = Object.values(SPECS).filter((sp) => sp.kind === 'landmark' && !sp.jobs).map((sp) => sp.id);
-  assert.ok(zeroJob.length > 20, `expected the bulk of the landmark family to remain jobless (got ${zeroJob.length})`);
+  // FEAT-9995385590: the 87 former placeholders (50 tour_* landmarks, land_*) all carry jobs now, so only the 4 original jobless landmarks remain; the intent (jobless landmarks cost exactly 0) needs only a non-empty set.
+  assert.ok(zeroJob.length >= 1, `expected at least one jobless landmark to exercise the zero-wage path (got ${zeroJob.length})`);
   assert.ok(!zeroJob.some((id) => NEW_JOB_SPECS.includes(id)), 'the three newly-jobbed landmarks must not appear in the zero-jobs set');
 
   let s = { ...initialState(), buildings: [], population: 5_000_000 };

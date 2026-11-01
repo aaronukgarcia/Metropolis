@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { planConnector } from '../src/sim/roadConnect.ts';
 import {
   SPECS,
+  PH,
   fittingTier,
   roadTierOf,
   ROAD_TIER_SPECS,
@@ -219,9 +220,12 @@ test('conservation: the connector spend is journaled to the ledger', () => {
 
 test('placeholders unaffected: a placeholder cannot be placed, so auto-connect never runs', () => {
   const s = board([{ id: 1, spec: 'road', x: 10, y: 10, builtTick: 0 }]);
-  // rail_branch is still a "coming soon" placeholder (canEnterSim === false).
-  assert.equal(SPECS.rail_branch.placeholder, true, 'precondition: rail_branch is a placeholder');
-  const after = reducer(s, { type: 'place', spec: 'rail_branch', x: 12, y: 10 });
+  // FEAT-9995385590: no roadmap placeholder ships any more, so a SYNTHETIC one (built
+  // with the shipped PH() helper, injected into the mutable SPECS record) pins the
+  // guarantee; the node test runner isolates each file's process.
+  SPECS.ph_syn_a = PH('ph_syn_a', 'transport', 'Synthetic Placeholder A', 'test-only', 2, 2, '#888888', 'services', 1);
+  assert.equal(SPECS.ph_syn_a.placeholder, true, 'precondition: ph_syn_a is a placeholder');
+  const after = reducer(s, { type: 'place', spec: 'ph_syn_a', x: 12, y: 10 });
   assert.deepEqual(after, s, 'reducer returns state untouched — no building, no connector, no notice');
 });
 

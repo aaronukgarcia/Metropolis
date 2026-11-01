@@ -9,8 +9,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SPECS, PALETTE, sortPaletteItems, isPlaceable } from '../src/sim/data.ts';
+import { SPECS, PALETTE, PH, sortPaletteItems, isPlaceable } from '../src/sim/data.ts';
 import { initialState, specUnlocked, reducer, xpForLevel } from '../src/sim/engine.ts';
+
+// FEAT-9995385590: every roadmap placeholder is now a real building, so the shipped
+// catalogue has NONE. The sort/gate guarantees stay pinned against SYNTHETIC
+// placeholders built with the shipped PH() helper (SPECS is mutable; the node test
+// runner gives each file its own process, so this cannot leak into another suite).
+SPECS.ph_syn_a = PH('ph_syn_a', 'power', 'Synthetic Placeholder A', 'test-only', 2, 2, '#888888', 'services', 3);
+SPECS.ph_syn_b = PH('ph_syn_b', 'transport', 'Synthetic Placeholder B', 'test-only', 2, 2, '#888888', 'services', 1);
 
 // ---- AC-1: Available-first sort within each family ----
 
@@ -18,19 +25,19 @@ test('AC-1: sortPaletteItems sorts items: available → locked (by unlock level)
   const state = initialState();
   // At level 1, the palace starts with unlock level 1 already available.
   // Build a test family: mix of available (unlock<=1), locked (unlock>1), and placeholders.
-  const testFamily = ['res_hut', 'res_block', 'pow_wind', 'pow_coal', 'rail_branch'];
+  const testFamily = ['res_hut', 'res_block', 'pow_wind', 'pow_coal', 'ph_syn_a'];
   // res_hut: unlock 1 (available)
   // res_block: unlock 2 (locked at level 1)
   // pow_wind: unlock 2 (locked at level 1)
   // pow_coal: unlock 3 (locked at level 1)
-  // rail_branch: placeholder (locked)
+  // ph_syn_a: placeholder (locked)
 
   const sorted = sortPaletteItems(state, testFamily);
 
   // res_hut should come first (available).
   // Then the locked real specs in unlock order: res_block (2), pow_wind (2), pow_coal (3).
-  // Then the placeholder: rail_branch.
-  const expected = ['res_hut', 'res_block', 'pow_wind', 'pow_coal', 'rail_branch'];
+  // Then the placeholder: ph_syn_a.
+  const expected = ['res_hut', 'res_block', 'pow_wind', 'pow_coal', 'ph_syn_a'];
   assert.deepEqual(sorted, expected, `at level 1, expected order: ${expected.join(', ')}`);
 });
 
@@ -64,12 +71,12 @@ test('AC-1: all items available at high level (unlock thresholds all crossed)', 
 
 test('AC-1: placeholder specs always at bottom regardless of level', () => {
   const state = { ...initialState(), xp: xpForLevel(20), unlockedAll: true };
-  const testFamily = ['pow_wind', 'rail_branch', 'pow_coal', 'trans_parkride'];
+  const testFamily = ['pow_wind', 'ph_syn_a', 'pow_coal', 'ph_syn_b'];
 
   const sorted = sortPaletteItems(state, testFamily);
 
   // With unlockedAll, all REAL specs are available.
-  // Placeholders (rail_branch, trans_parkride) sink to the bottom.
+  // Placeholders (ph_syn_a, ph_syn_b) sink to the bottom.
   const available = sorted.filter((id) => !SPECS[id]?.placeholder);
   const placeholders = sorted.filter((id) => SPECS[id]?.placeholder);
 
@@ -151,7 +158,7 @@ test('AC-9: Spec properties used in card are ALWAYS read from data.ts SPECS, nev
 
 test('AC-8: sortPaletteItems is deterministic — same state always same sort order', () => {
   const state = { ...initialState(), level: 5 };
-  const family = ['pow_wind', 'pow_coal', 'res_hut', 'pow_nuke', 'rail_branch'];
+  const family = ['pow_wind', 'pow_coal', 'res_hut', 'pow_nuke', 'ph_syn_a'];
 
   const sort1 = sortPaletteItems(state, family);
   const sort2 = sortPaletteItems(state, family);
@@ -175,8 +182,8 @@ test('AC-8: sortPaletteItems returns a new array, does not mutate input', () => 
 
 test('AC-14: placeholders always after locked real specs (not at top with available)', () => {
   const state = initialState(); // level 1
-  // Mix: res_hut (available), pow_coal (locked), rail_branch (placeholder).
-  const family = ['rail_branch', 'pow_coal', 'res_hut'];
+  // Mix: res_hut (available), pow_coal (locked), ph_syn_a (placeholder).
+  const family = ['ph_syn_a', 'pow_coal', 'res_hut'];
 
   const sorted = sortPaletteItems(state, family);
 
@@ -257,8 +264,8 @@ test('spec data: verify unlock levels used in tests actually exist', () => {
 });
 
 test('spec data: placeholder flag is set correctly', () => {
-  assert.equal(SPECS.rail_branch.placeholder, true);
-  assert.equal(SPECS.trans_parkride.placeholder, true);
+  assert.equal(SPECS.ph_syn_a.placeholder, true);
+  assert.equal(SPECS.ph_syn_b.placeholder, true);
   assert.equal(SPECS.res_hut.placeholder, undefined);
   assert.equal(SPECS.pow_coal.placeholder, undefined);
 });
@@ -267,7 +274,7 @@ test('spec data: placeholder flag is set correctly', () => {
 
 test('regression: isPlaceable unchanged by sortPaletteItems (independent functions)', () => {
   const state = initialState();
-  const testSpecs = ['res_hut', 'pow_wind', 'rail_branch'];
+  const testSpecs = ['res_hut', 'pow_wind', 'ph_syn_a'];
 
   for (const id of testSpecs) {
     const sp = SPECS[id];

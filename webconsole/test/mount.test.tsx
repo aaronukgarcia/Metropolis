@@ -257,16 +257,30 @@ test('FEAT-1972079860 AC-4: locked-spec buttons NOT disabled (clickable), placeh
   const { SimProvider } = await import('../src/sim/store.tsx');
   const { BottomBar } = await import('../src/components/bottom/BottomBar.tsx');
 
+  // FEAT-9995385590: every roadmap placeholder is now a real building, so the shipped
+  // palette has none. A SYNTHETIC placeholder (the shipped PH() helper) is appended to
+  // the first palette family for this render only and removed in the finally block.
+  const { PH, PALETTE, SPECS } = await import('../src/sim/data.ts');
+  const synId = 'ph_syn_mount';
+  SPECS[synId] = PH(synId, 'power', 'Synthetic Placeholder', 'test-only', 2, 2, '#888888', 'services', 3);
+  PALETTE[0].items.push(synId);
+
   // Render BottomBar inside SimProvider (required for useSim context).
   // At level 1, we know:
   // - res_hut (unlock 1) is AVAILABLE
   // - pow_coal (unlock 3) is LOCKED
-  // - rail_branch is a PLACEHOLDER
-  const html = renderToString(
-    React.default.createElement(SimProvider, {
-      children: React.default.createElement(BottomBar),
-    })
-  );
+  // - ph_syn_mount is a (synthetic) PLACEHOLDER
+  let html;
+  try {
+    html = renderToString(
+      React.default.createElement(SimProvider, {
+        children: React.default.createElement(BottomBar),
+      })
+    );
+  } finally {
+    PALETTE[0].items.pop();
+    delete SPECS[synId];
+  }
 
   assert.equal(typeof html, 'string', 'renderToString must return a string');
   assert.ok(html.length > 0, 'rendered HTML must be non-empty');

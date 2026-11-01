@@ -449,7 +449,21 @@ export function tileDensityOf(sp: Spec): number {
  * — zero behaviour change outside health.
  */
 export function familyKeyOf(sp: Spec): string {
-  return `${sp.kind}|${capacityFieldOf(sp) ?? ''}|${sp.tag ?? ''}|${sp.stage ?? ''}|${sp.careTier ?? ''}`;
+  return `${sp.kind}|${capacityFieldOf(sp) ?? ''}|${sp.tag ?? ''}|${sp.stage ?? ''}|${sp.careTier ?? ''}|${isFarmSpec(sp) ? 'farm' : ''}`;
+}
+
+/**
+ * True for a farming spec. Farms share ZoneKind 'industrial' with factories and
+ * warehouses and carry no distinguishing data field, so the catalogue's id prefix
+ * ('farm_') is the established discriminator (nonDwellingSliderCategoryOf below
+ * already classifies farms this way). Folded into familyKeyOf as a sixth segment
+ * (FEAT-9995385590): without it every non-polluting industrial JOBS spec shared one
+ * family with the farms, so the ladder offered nonsense rungs such as Parcel Hub ->
+ * Farm Estate and Dairy -> Fulfilment Centre. '' on every non-farm spec, so no
+ * other family key changes beyond the trailing separator.
+ */
+export function isFarmSpec(sp: Spec): boolean {
+  return sp.id.startsWith('farm_');
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +488,7 @@ export function familyKeyOf(sp: Spec): string {
 export function nonDwellingSliderCategoryOf(sp: Spec): keyof ConsolidatorSliders | null {
   if (sp.kind === 'office') return 'office';
   if (sp.kind === 'mine') return 'mining';
-  if (sp.kind === 'industrial') return sp.id.startsWith('farm_') ? 'farming' : 'factory';
+  if (sp.kind === 'industrial') return isFarmSpec(sp) ? 'farming' : 'factory';
   return null;
 }
 
@@ -565,7 +579,17 @@ export const CONSOLIDATOR_MIN_GROUP = 4;
  * undeclared rungs (`col_sixth -> uni`, `bus_station -> grand_terminus`)
  * are adjudicated ACCEPT and left DECLARED, not exempted.
  */
-const CONSOLIDATION_EXEMPT_SPEC_IDS: ReadonlySet<string> = new Set(['hea_eldercare']);
+// harbour_fishing (FEAT-9995385590): a fishing harbour is a unique, coast-bound
+// landing and processing asset, neither a farm nor a generic factory; no catalogue
+// spec is its scale-up, so it consolidates with nothing (it was being offered as a
+// feeder into farm_estate purely because both are non-polluting industrial jobs).
+// pow_hvdc (FEAT-9995385590): a transmission LINK whose 2000 MW is not a generator
+// footprint; as a target it offered 'replace 333 wind turbines with one cable'
+// (pow_wind -> pow_hvdc x333, and solar/windfarm/offshore likewise).
+// air_fire_helibase / air_police_helibase (FEAT-9995385590): air bases are specialist
+// additions, not the scale-up of ground stations; as targets they swallowed ten Fire
+// Posts (or four Police Stations) into one helipad and wiped out ground coverage.
+const CONSOLIDATION_EXEMPT_SPEC_IDS: ReadonlySet<string> = new Set(['hea_eldercare', 'harbour_fishing', 'pow_hvdc', 'air_fire_helibase', 'air_police_helibase']);
 
 /**
  * F2 adjudication (FEAT-2326609761 civic-tier round, 2026-09-05): the

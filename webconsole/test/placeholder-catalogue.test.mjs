@@ -11,7 +11,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SPECS, PALETTE, PALETTE_FLAT, isPlaceable } from '../src/sim/data.ts';
+import { SPECS, PALETTE_FLAT, PH, isPlaceable } from '../src/sim/data.ts';
 import { initialState, specUnlocked, reducer } from '../src/sim/engine.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
 import { restoreFromSavepoint, SAVEPOINT_KEY_PREFIX } from '../src/sim/replay.ts';
@@ -26,59 +26,30 @@ function mockStorage(seed = {}) {
   };
 }
 
-// The exact roadmap placeholders this feature adds (mirrors the task list).
-// FEAT-1972079907 inc1: rd_avenue/rd_dual/rd_aroad GRADUATED to real placeable
-// road tiers (roadTier/capacity + real cost), so they are no longer placeholders.
-const PLACEHOLDER_IDS = [
-  // Network
-  'rail_branch',
-  // Transport
-  'trans_parkride', 'trans_interchange', 'rail_freightyard', 'ev_charging_hub',
-  // Estates — FEAT-1972079900 inc1: res_estate/off_businesspark/ind_estate GRADUATED
-  // to real placeable estate-scale specs (residents/jobs + real cost/upkeep), so they
-  // are no longer placeholders.
-  // Retail — FEAT-1972079900 inc1: com_hypermarket GRADUATED to the real out-of-town
-  // retail estate.
-  'com_discounter', 'com_darkstore',
-  // Industry & Farms
-  'ind_chemworks', 'ind_refinery', 'ind_fulfilment', 'ind_parcelhub',
-  'farm_dairy', 'farm_abattoir', 'harbour_fishing',
-  // Mining
-  'mine_chalk', 'mine_clay', 'mine_coal',
-  // Leisure
-  'lei_gym', 'lei_sportsground', 'lei_stables',
-  // Power — FEAT-1972079901: pow_hydro (Five Gorges Dam) GRADUATED to a real
-  // placeable mega-hydro generator, so it is no longer a placeholder. pow_hvdc
-  // (transmission link) and pow_reprocess (fuel reprocessing) stay placeholders.
-  'pow_hvdc', 'pow_reprocess',
-  // Water & Waste
-  // FEAT-1972079906 inc1: waste_depot GRADUATED (collection depot).
-  // FEAT-1972079906 inc2: the four PROCESSING specs (waste_landfill /
-  // waste_incinerator / waste_recycling / waste_compost) GRADUATED to real
-  // placeable buildings (processCapacity + real cost/upkeep), so they are no
-  // longer placeholders.
-  // Health & Deathcare
-  'death_cemetery', 'death_crematorium', 'air_heliport',
-  // Fire & Rescue
-  'air_fire_helibase',
-  // Police & Justice
-  'air_police_helibase',
-  // Landmarks
-  'land_containerport', 'land_ferryterminal', 'land_cern', 'land_gigafactory', 'land_semifab',
-  'tour_greatwall', 'tour_colosseum', 'tour_tajmahal', 'tour_machupicchu', 'tour_petra',
-  'tour_giza', 'tour_eiffel', 'tour_liberty', 'tour_grandcanyon', 'tour_niagara',
-  'tour_angkor', 'tour_stonehenge', 'tour_acropolis', 'tour_redeemer', 'tour_sagrada',
-  'tour_forbidden', 'tour_stpeters', 'tour_alhambra', 'tour_chichenitza', 'tour_fuji',
-  'tour_opera', 'tour_goldengate', 'tour_louvre', 'tour_santorini', 'tour_venice',
-  'tour_neuschwanstein', 'tour_burj', 'tour_iguazu', 'tour_banff', 'tour_aurora',
-  'tour_reef', 'tour_yellowstone', 'tour_serengeti', 'tour_fushimi', 'tour_prague',
-  'tour_dubrovnik', 'tour_cappadocia', 'tour_moai', 'tour_uluru', 'tour_tablemountain',
-  'tour_hallstatt', 'tour_antelope', 'tour_halong', 'tour_zhangjiajie', 'tour_matterhorn',
-  'tour_towerlondon', 'tour_versailles', 'tour_montstmichel', 'tour_giantscauseway', 'tour_edinburgh',
-  'stay_bb', 'stay_hotel', 'stay_luxury', 'stay_resort', 'stay_caravan',
-];
+// 2026-11-01 (FEAT-9995385590): the LAST 87 roadmap placeholders became real
+// buildings, so the shipped catalogue now holds ZERO placeholder specs. The
+// placeholder MECHANISM (never placeable, zero stats, sorted last, never in the sim)
+// must stay pinned for future roadmap entries, so these tests run against SYNTHETIC
+// placeholders built with the shipped PH() helper and injected into SPECS here.
+// (SPECS is a plain mutable record; node --test isolates each file in its own
+// process, so the injection cannot leak into another suite.)
+const SHIPPED_PLACEHOLDERS = Object.values(SPECS).filter((sp) => sp.placeholder === true).map((sp) => sp.id);
 
-test('every planned placeholder exists in SPECS with placeholder===true', () => {
+const PLACEHOLDER_IDS = ['ph_syn_power', 'ph_syn_transport', 'ph_syn_industry'];
+SPECS.ph_syn_power = PH('ph_syn_power', 'power', 'Synthetic Placeholder Power', 'test-only', 2, 2, '#888888', 'services', 3);
+SPECS.ph_syn_transport = PH('ph_syn_transport', 'transport', 'Synthetic Placeholder Transport', 'test-only', 2, 2, '#888888', 'services', 1);
+SPECS.ph_syn_industry = PH('ph_syn_industry', 'industrial', 'Synthetic Placeholder Industry', 'test-only', 3, 3, '#888888', 'zones', 5);
+
+test('the shipped catalogue holds ZERO placeholder specs (all 87 roadmap entries are real)', () => {
+  assert.deepEqual(SHIPPED_PLACEHOLDERS, [], 'a shipped spec is flagged placeholder:true; either build it or add it to a roadmap lane deliberately');
+});
+
+test('the shipped palette lists no placeholder id (nothing greyed-out ships today)', () => {
+  const shipped = new Set(SHIPPED_PLACEHOLDERS);
+  for (const id of PALETTE_FLAT) assert.equal(shipped.has(id), false, id);
+});
+
+test('PH() builds a spec flagged placeholder===true', () => {
   for (const id of PLACEHOLDER_IDS) {
     const sp = SPECS[id];
     assert.ok(sp, `placeholder "${id}" missing from SPECS`);
@@ -111,18 +82,7 @@ test('placeholders carry ZERO / safe sim stats (no cost, upkeep, or capacity)', 
   }
 });
 
-test('the ~45 placeholders are exactly the new placeholder specs (no stray flags)', () => {
-  const flagged = Object.values(SPECS).filter((sp) => sp.placeholder === true).map((sp) => sp.id).sort();
-  assert.deepEqual(flagged, [...PLACEHOLDER_IDS].sort(), 'the set of placeholder-flagged specs must match the roadmap list');
-  assert.equal(flagged.length, PLACEHOLDER_IDS.length, 'placeholder count must match PLACEHOLDER_IDS');
-});
-
-test('every placeholder appears in exactly ONE palette family (roadmap is visible)', () => {
-  const counts = new Map();
-  for (const fam of PALETTE) for (const id of fam.items) counts.set(id, (counts.get(id) ?? 0) + 1);
-  for (const id of PLACEHOLDER_IDS) {
-    assert.equal(counts.get(id), 1, `placeholder "${id}" must appear in exactly one family`);
-  }
+test('palette has no duplicate ids across families', () => {
   assert.equal(new Set(PALETTE_FLAT).size, PALETTE_FLAT.length, 'no duplicate ids across families');
 });
 
@@ -168,7 +128,7 @@ test('REDUCER: dispatching place for a placeholder with unlockedAll does NOT ent
   // Free empty tile away from the seeded map corner; unlockedAll=true so the ONLY
   // thing that can stop the placement is the placeholder guard itself.
   const s = { ...initialState(), unlockedAll: true };
-  for (const id of ['pow_reprocess', 'ind_chemworks', 'land_cern', 'rail_branch', 'ind_refinery']) {
+  for (const id of PLACEHOLDER_IDS) {
     const sp = SPECS[id];
     assert.equal(specUnlocked(s, sp), true, `precondition: ${id} passes the unlock gate under god-mode`);
     const after = reducer(s, { type: 'place', spec: id, x: 200, y: 120 });
@@ -194,7 +154,7 @@ test('REDUCER: a real spec CAN still be placed on a free tile under unlockedAll 
 
 test('REDUCER: stampRegion with a placeholder clipboard item does NOT enter the sim (whole stamp refused)', () => {
   const s = { ...initialState(), unlockedAll: true };
-  for (const id of ['pow_reprocess', 'land_gigafactory', 'rail_freightyard']) {
+  for (const id of PLACEHOLDER_IDS) {
     const clipboard = { w: 5, h: 5, items: [{ spec: id, dx: 0, dy: 0 }] };
     const after = reducer(s, { type: 'stampRegion', clipboard, x: 200, y: 120 });
     assert.equal(after.buildings.length, s.buildings.length, `${id}: stampRegion must not add a placeholder building`);
@@ -208,7 +168,7 @@ test('REDUCER: stampRegion refuses a MIXED clipboard (real + placeholder) all-or
   const s = { ...initialState(), unlockedAll: true };
   // A real spec next to a placeholder: the presence of the placeholder rejects the
   // entire stamp, so the real one is NOT smuggled in alongside it.
-  const clipboard = { w: 5, h: 5, items: [{ spec: 'res_hut', dx: 0, dy: 0 }, { spec: 'pow_reprocess', dx: 2, dy: 0 }] };
+  const clipboard = { w: 5, h: 5, items: [{ spec: 'res_hut', dx: 0, dy: 0 }, { spec: 'ph_syn_power', dx: 2, dy: 0 }] };
   const after = reducer(s, { type: 'stampRegion', clipboard, x: 200, y: 120 });
   assert.deepEqual(after, s, 'a mixed stamp containing any placeholder is rejected whole');
 });
@@ -232,14 +192,14 @@ test('CONSISTENCY: a placeholder building is flagged as a consistency FAILURE', 
 
   const dirty = {
     ...clean,
-    buildings: [...clean.buildings, { id: 999001, spec: 'pow_reprocess', x: 200, y: 120, builtTick: 0 }],
+    buildings: [...clean.buildings, { id: 999001, spec: 'ph_syn_power', x: 200, y: 120, builtTick: 0 }],
   };
   const report = runConsistencyChecks(dirty);
   assert.ok(report.failures > 0, 'a placeholder building must make the state inconsistent');
   const check = report.checks.find((c) => c.id === 'placeholder.none-in-sim');
   assert.ok(check, 'the universal placeholder check must run');
   assert.equal(check.ok, false, 'the placeholder building must fail the check');
-  assert.match(check.detail, /pow_reprocess/, 'the failing detail names the offending placeholder spec');
+  assert.match(check.detail, /ph_syn_power/, 'the failing detail names the offending placeholder spec');
 });
 
 test('CONSISTENCY: real buildings are NOT flagged by the placeholder check (not over-broad)', () => {
@@ -262,7 +222,7 @@ test('RESTORE: a crafted savepoint with a placeholder building restores with NO 
   const genesis = initialState();
   const snapshot = {
     ...genesis,
-    buildings: [...genesis.buildings, { id: 999003, spec: 'rail_branch', x: 200, y: 120, builtTick: 0 }],
+    buildings: [...genesis.buildings, { id: 999003, spec: 'ph_syn_transport', x: 200, y: 120, builtTick: 0 }],
   };
   const savepoint = {
     savedAt: new Date().toISOString(),

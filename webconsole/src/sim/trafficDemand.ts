@@ -176,6 +176,8 @@ export const KIND_TO_FREIGHT_SECTOR: Readonly<Record<string, string>> = Object.f
   pylon: 'services_office',
   road: 'services_office',
   landmark: 'services_office',
+  // FEAT-9995385590 (F1): leisure/stay specs now carry jobs; services-grade freight.
+  leisure: 'services_office',
 });
 
 /** Road-going freight vehicle ids in scope for the blended capacity figure

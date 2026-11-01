@@ -1192,6 +1192,13 @@ export function regionalGrantPerTick(tick: number): number {
   return Math.floor((g * (phase + 1)) / tpm) - Math.floor((g * phase) / tpm);
 }
 
+/**
+ * Specs whose presence (built + online) grants the x1.4 Freight Tax boost. The
+ * Deep-Water Harbour always did; the Container Port (FEAT-9995385590) is the same
+ * class of freight gateway. One boost regardless of how many are built.
+ */
+export const FREIGHT_BOOST_SPECS: ReadonlySet<string> = new Set(['land_harbour', 'land_containerport']);
+
 export function computeFlows(
   s: SimState,
 ): {
@@ -1392,7 +1399,7 @@ export function computeFlows(
 
   // BUG-569: an under-construction harbour shouldn't grant the Freight Tax
   // boost yet — existence alone isn't enough, mirror the isOnline gate.
-  const harbourBoost = s.buildings.some((b) => b.spec === 'land_harbour' && isOnline(s, b))
+  const harbourBoost = s.buildings.some((b) => FREIGHT_BOOST_SPECS.has(b.spec) && isOnline(s, b))
     ? 1.4
     : 1;
 

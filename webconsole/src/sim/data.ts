@@ -1692,7 +1692,7 @@ const P = (
  * unconditionally — so a placeholder can never be selected, placed, or enter the
  * running sim. These are roadmap previews only; do not tune gameplay against them.
  */
-const PH = (
+export const PH = (
   id: string,
   kind: ZoneKind,
   name: string,
@@ -2493,13 +2493,15 @@ export const SPECS: Record<string, Spec> = {
   // ⚠ PLACEHOLDER-balance cost/upkeep — directional, pending Aaron's approval.
   rd_mwyjunction: P('rd_mwyjunction', 'road', 'Motorway Junction', 'Grade-separated motorway crossing · auto-placed', 1, 1, 480000, 0, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
 
-  rail_branch: PH('rail_branch', 'rail', 'Branch Line', 'Planned — single-track branch railway', 1, 1, '#8a6d3b', 'network', 6),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  rail_branch: P('rail_branch', 'rail', 'Branch Line', 'Single-track branch rail tile · joins the rail network and road connectivity; no separate train service modelled', 1, 1, 450000, 30, '#8a6d3b', 'network', 6),
 
   // ---- Transport ----
-  trans_parkride: PH('trans_parkride', 'transport', 'Park & Ride', 'Planned — edge-of-town commuter interchange', 2, 2, '#5ea0c8', 'services', 7),
-  trans_interchange: PH('trans_interchange', 'transport', 'Interchange Hub', 'Planned — multi-modal transport interchange', 2, 2, '#4d8fb8', 'services', 10),
-  rail_freightyard: PH('rail_freightyard', 'transport', 'Freight Yard', 'Planned — rail freight marshalling yard', 3, 2, '#7f6a3b', 'services', 8),
-  ev_charging_hub: PH('ev_charging_hub', 'transport', 'EV Charging Hub', 'Planned — rapid EV charging plaza', 1, 1, '#3d7ea6', 'services', 6),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  trans_parkride: P('trans_parkride', 'transport', 'Park & Ride', 'Edge-of-town commuter interchange · adds transit ridership capacity (fare revenue); no car-park or congestion relief modelled', 2, 2, 12600000, 700, '#5ea0c8', 'services', 7, { served: 8000 }),
+  trans_interchange: P('trans_interchange', 'transport', 'Interchange Hub', 'Multi-modal interchange · large transit ridership capacity and staff; no transfer-time model', 2, 2, 62000000, 3400, '#4d8fb8', 'services', 10, { served: 40000, jobs: 120 }),
+  rail_freightyard: P('rail_freightyard', 'transport', 'Freight Yard', 'Rail freight marshalling yard · employs staff and costs upkeep; freight flows are not modelled', 3, 2, 30000000, 1700, '#7f6a3b', 'services', 8, { jobs: 150 }),
+  ev_charging_hub: P('ev_charging_hub', 'transport', 'EV Charging Hub', 'Rapid EV charging plaza · a few staff jobs only; EV charging and fuel demand are not modelled', 1, 1, 3600000, 200, '#3d7ea6', 'services', 6, { jobs: 8 }),
 
   // ---- Housing / Offices / Industry estates ----
   // FEAT-1972079900 inc1 — ESTATE-SCALE placeable specs (object density / LOD inc1).
@@ -2637,27 +2639,31 @@ export const SPECS: Record<string, Spec> = {
   // carrying the AGGREGATE retail jobs of an out-of-town superstore. Same DATA-only
   // treatment as the other estates above (no mw, no water tag). PLACEHOLDER-balance.
   com_hypermarket: P('com_hypermarket', 'commercial', 'Hypermarket', 'Out-of-town retail estate · ≈ 20 shops', 5, 5, 90000000, 480, '#e3b341', 'zones', 10, { jobs: 800 }),
-  com_discounter: PH('com_discounter', 'commercial', 'Discount Store', 'Planned — value discount retailer', 2, 2, '#d9a52e', 'zones', 5),
-  com_darkstore: PH('com_darkstore', 'commercial', 'Dark Store', 'Planned — online-only fulfilment store', 2, 2, '#c99a2a', 'zones', 9),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  com_discounter: P('com_discounter', 'commercial', 'Discount Store', 'Value discount retailer · high footfall, thin margins', 2, 2, 3600000, 18, '#d9a52e', 'zones', 5, { jobs: 30 }),
+  com_darkstore: P('com_darkstore', 'commercial', 'Dark Store', 'Online-only fulfilment store · pick-and-dispatch jobs', 2, 2, 2800000, 14, '#c99a2a', 'zones', 9, { jobs: 18 }),
 
   // ---- Industry & Farms ----
-  ind_chemworks: PH('ind_chemworks', 'industrial', 'Chemical Works', 'Planned — heavy chemical plant', 3, 3, '#8957d9', 'zones', 10),
-  ind_refinery: PH('ind_refinery', 'industrial', 'Oil Refinery', 'Planned — petroleum refinery complex', 4, 4, '#7d4fc9', 'zones', 13),
-  ind_fulfilment: PH('ind_fulfilment', 'industrial', 'Fulfilment Centre', 'Planned — automated fulfilment warehouse', 3, 3, '#9a6ee0', 'zones', 11),
-  ind_parcelhub: PH('ind_parcelhub', 'industrial', 'Parcel Hub', 'Planned — parcel sortation hub', 2, 2, '#9a6ee0', 'zones', 9),
-  farm_dairy: PH('farm_dairy', 'industrial', 'Dairy', 'Planned — dairy processing farm', 2, 2, '#7da24f', 'zones', 3),
-  farm_abattoir: PH('farm_abattoir', 'industrial', 'Abattoir', 'Planned — livestock abattoir', 2, 2, '#8a6d3b', 'zones', 5),
-  harbour_fishing: PH('harbour_fishing', 'industrial', 'Fishing Harbour', 'Planned — coastal fishing harbour', 3, 2, '#5e8bb0', 'zones', 8),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  ind_chemworks: P('ind_chemworks', 'industrial', 'Chemical Works', 'Heavy chemical plant · polluting, skilled jobs', 3, 3, 22000000, 120, '#8957d9', 'zones', 10, { tag: 'pollution', jobs: 140 }),
+  ind_refinery: P('ind_refinery', 'industrial', 'Oil Refinery', 'Petroleum refinery complex · heavy output, heavy pollution', 4, 4, 60000000, 320, '#7d4fc9', 'zones', 13, { tag: 'pollution', jobs: 350 }),
+  ind_fulfilment: P('ind_fulfilment', 'industrial', 'Fulfilment Centre', 'Automated fulfilment warehouse · parcel jobs', 3, 3, 20000000, 90, '#9a6ee0', 'zones', 11, { jobs: 80 }),
+  ind_parcelhub: P('ind_parcelhub', 'industrial', 'Parcel Hub', 'Parcel sortation hub · night-shift jobs', 2, 2, 9000000, 45, '#9a6ee0', 'zones', 9, { jobs: 35 }),
+  farm_dairy: P('farm_dairy', 'industrial', 'Dairy', 'Dairy processing farm · milk and cheese', 2, 2, 1200000, 6, '#7da24f', 'zones', 3, { jobs: 12 }),
+  farm_abattoir: P('farm_abattoir', 'industrial', 'Abattoir', 'Livestock abattoir · meat processing', 2, 2, 2200000, 12, '#8a6d3b', 'zones', 5, { jobs: 20 }),
+  harbour_fishing: P('harbour_fishing', 'industrial', 'Fishing Harbour', 'Fishing harbour · catch landing and processing', 3, 2, 6000000, 25, '#5e8bb0', 'zones', 8, { jobs: 30 }),
 
   // ---- Mining ----
-  mine_chalk: PH('mine_chalk', 'mine', 'Chalk Pit', 'Planned — chalk extraction pit', 2, 2, '#b08d55', 'zones', 4),
-  mine_clay: PH('mine_clay', 'mine', 'Clay Pit', 'Planned — clay extraction pit', 2, 2, '#a37f4a', 'zones', 5),
-  mine_coal: PH('mine_coal', 'mine', 'Deep Coal Mine', 'Planned — deep-shaft coal mine', 3, 3, '#9c6f3f', 'zones', 7),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  mine_chalk: P('mine_chalk', 'mine', 'Chalk Pit', 'Chalk extraction pit · lime and aggregate', 2, 2, 2400000, 14, '#b08d55', 'zones', 4, { tag: 'pollution', jobs: 22 }),
+  mine_clay: P('mine_clay', 'mine', 'Clay Pit', 'Clay extraction pit · brick and tile feedstock', 2, 2, 2800000, 16, '#a37f4a', 'zones', 5, { tag: 'pollution', jobs: 26 }),
+  mine_coal: P('mine_coal', 'mine', 'Deep Coal Mine', 'Deep-shaft coal mine · heavy freight output', 3, 3, 12000000, 65, '#9c6f3f', 'zones', 7, { tag: 'pollution', jobs: 75 }),
 
   // ---- Leisure ----
-  lei_gym: PH('lei_gym', 'leisure', 'Gym', 'Planned — fitness and gym centre', 1, 1, '#e07be0', 'services', 3),
-  lei_sportsground: PH('lei_sportsground', 'leisure', 'Sports Ground', 'Planned — playing fields and pavilion', 2, 2, '#d06fd0', 'services', 4),
-  lei_stables: PH('lei_stables', 'leisure', 'Stables', 'Planned — riding stables and paddock', 2, 2, '#c95fc9', 'services', 6),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  lei_gym: P('lei_gym', 'leisure', 'Gym', 'Fitness centre · staff and upkeep only; leisure capacity is not modelled yet', 1, 1, 2700000, 150, '#e07be0', 'services', 3, { served: 2000, jobs: 12 }),
+  lei_sportsground: P('lei_sportsground', 'leisure', 'Sports Ground', 'Playing fields and pavilion · staff and upkeep only; leisure capacity is not modelled yet', 2, 2, 7200000, 400, '#d06fd0', 'services', 4, { served: 5000, jobs: 10 }),
+  lei_stables: P('lei_stables', 'leisure', 'Stables', 'Riding stables and paddock · small visitor draw', 2, 2, 5400000, 300, '#c95fc9', 'services', 6, { tourism: 6, jobs: 8 }),
 
   // ---- Power ----
   // FEAT-1972079901: pow_hydro (Five Gorges Dam) GRADUATED to a real placeable
@@ -2665,8 +2671,13 @@ export const SPECS: Record<string, Spec> = {
   // TRANSMISSION link, not a generator) and pow_reprocess (fuel reprocessing, not
   // a generator) stay placeholders — giving either an `mw` would be a false grid
   // generation leak, so they are intentionally NOT graduated here.
-  pow_hvdc: PH('pow_hvdc', 'power', 'HVDC Interconnector', 'Planned — long-distance DC power link', 2, 2, '#ff7b72', 'services', 14),
-  pow_reprocess: PH('pow_reprocess', 'power', 'THORP Reprocessing Plant', 'Planned — nuclear fuel reprocessing plant', 4, 4, '#e05d38', 'services', 18),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590): an HVDC link is an
+  // interconnector, not a power-station footprint - maxPerCity 2, excluded from the
+  // Demand Fix power candidates. Cost 1.2M/MW (matches onshore wind, so it is NOT the
+  // cheapest-per-MW generator while being the densest) and upkeep at the uniform
+  // generator ratio (bug-477 coherence band).
+  pow_hvdc: P('pow_hvdc', 'power', 'HVDC Interconnector', 'Subsea link to France · counts 2,000 MW toward supply; the per-MW import tariff and outages are not modelled per link', 2, 2, 2400000000, 133333, '#ff7b72', 'services', 14, { mw: 2000, maxPerCity: 2 }),
+  pow_reprocess: P('pow_reprocess', 'power', 'THORP Reprocessing Plant', 'Nuclear fuel reprocessing · large public-sector employer; no fuel cycle or waste modelled, generates no power', 4, 4, 1200000000, 60000, '#e05d38', 'services', 18, { jobs: 2500, maxPerCity: 1 }),
 
   // ---- Water & Waste ----
   // FEAT-1972079906 inc1: waste_depot GRADUATED (refuse COLLECTION).
@@ -2683,79 +2694,89 @@ export const SPECS: Record<string, Spec> = {
   waste_compost: P('waste_compost', 'water', 'Composting Site', 'Turns organics into compost · 30 t/tick', 2, 2, 6300000, 350, '#6b9e6b', 'services', 5, { processCapacity: 30 }),
 
   // ---- Health & Deathcare ----
-  death_cemetery: PH('death_cemetery', 'health', 'Cemetery', 'Planned — municipal cemetery', 3, 3, '#8a94a8', 'services', 4),
-  death_crematorium: PH('death_crematorium', 'health', 'Crematorium', 'Planned — crematorium and gardens', 2, 2, '#8a94a8', 'services', 7),
-  air_heliport: PH('air_heliport', 'health', 'Air-Ambulance Pad', 'Planned — air-ambulance helipad', 1, 1, '#ff7b72', 'services', 8),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  // No `served` on the three health-kind specs below: totalServedCapacity sums served over
+  // every health/police building, so a death-care or helipad `served` would inflate the
+  // health monitor denominator. Their real function (burials, air-ambulance) is Go-only.
+  death_cemetery: P('death_cemetery', 'health', 'Cemetery', 'Municipal cemetery and burial ground', 3, 3, 4500000, 120, '#8a94a8', 'services', 4, { jobs: 8 }),
+  death_crematorium: P('death_crematorium', 'health', 'Crematorium', 'Crematorium and memorial gardens', 2, 2, 9000000, 500, '#8a94a8', 'services', 7, { jobs: 14 }),
+  air_heliport: P('air_heliport', 'health', 'Air-Ambulance Pad', 'Air-ambulance helipad', 1, 1, 7200000, 420, '#ff7b72', 'services', 8, { jobs: 10 }),
 
   // ---- Fire & Rescue ----
-  air_fire_helibase: PH('air_fire_helibase', 'fire', 'Fire Heli Base', 'Planned — aerial firefighting base', 2, 2, '#f65b56', 'services', 10),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  air_fire_helibase: P('air_fire_helibase', 'fire', 'Fire Heli Base', 'Aerial firefighting base · covers 40,000', 2, 2, 45000000, 2400, '#f65b56', 'services', 10, { served: 40000, jobs: 40 }),
 
   // ---- Police & Justice ----
-  air_police_helibase: PH('air_police_helibase', 'police', 'Police Heli Base', 'Planned — police air-support base', 2, 2, '#6e7bd9', 'services', 10),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  air_police_helibase: P('air_police_helibase', 'police', 'Police Heli Base', 'Air-support base · covers 40,000', 2, 2, 45000000, 2400, '#6e7bd9', 'services', 10, { served: 40000, jobs: 40 }),
 
   // ---- Landmarks ----
-  land_containerport: PH('land_containerport', 'landmark', 'Container Port', 'Planned — deep-water container port', 4, 4, '#5e8bb0', 'services', 12),
-  land_ferryterminal: PH('land_ferryterminal', 'landmark', 'Ferry Terminal', 'Planned — cross-channel ferry terminal', 3, 3, '#4a9dae', 'services', 10),
-  land_cern: PH('land_cern', 'landmark', 'Particle Accelerator', 'Planned — underground particle accelerator ring', 5, 5, '#a371f7', 'services', 19),
-  land_gigafactory: PH('land_gigafactory', 'landmark', 'Gigafactory', 'Planned — battery gigafactory', 5, 5, '#43aa8b', 'services', 15),
-  land_semifab: PH('land_semifab', 'landmark', 'Semiconductor Fab', 'Planned — semiconductor fabrication plant', 4, 4, '#2f8f74', 'services', 16),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  land_containerport: P('land_containerport', 'landmark', 'Container Port', 'Deep-water container port · big employer; grants the same x1.4 freight boost as the Deep-Water Harbour (no per-container trade model)', 4, 4, 600000000, 33000, '#5e8bb0', 'services', 12, { jobs: 6000, maxPerCity: 1 }),
+  land_ferryterminal: P('land_ferryterminal', 'landmark', 'Ferry Terminal', 'Cross-channel ferry terminal · employer plus some tourism; no sailings modelled', 3, 3, 220000000, 12000, '#4a9dae', 'services', 10, { jobs: 900, tourism: 40, maxPerCity: 1 }),
+  land_cern: P('land_cern', 'landmark', 'Particle Accelerator', 'Underground accelerator ring · science employer and visitor draw; no research output modelled', 5, 5, 4500000000, 250000, '#a371f7', 'services', 19, { jobs: 5000, tourism: 90, maxPerCity: 1 }),
+  land_gigafactory: P('land_gigafactory', 'landmark', 'Gigafactory', 'Battery gigafactory · very large employer; no goods output or EV link modelled', 5, 5, 1800000000, 100000, '#43aa8b', 'services', 15, { jobs: 8000, maxPerCity: 1 }),
+  land_semifab: P('land_semifab', 'landmark', 'Semiconductor Fab', 'Semiconductor fabrication plant · large employer; no chip output or supply chain modelled', 4, 4, 2600000000, 140000, '#2f8f74', 'services', 16, { jobs: 6000, maxPerCity: 1 }),
 
-  tour_greatwall: PH('tour_greatwall', 'landmark', 'Great Wall', 'Planned — world attraction', 5, 5, '#d0a83c', 'services', 20),
-  tour_colosseum: PH('tour_colosseum', 'landmark', 'Colosseum', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_tajmahal: PH('tour_tajmahal', 'landmark', 'Taj Mahal', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_machupicchu: PH('tour_machupicchu', 'landmark', 'Machu Picchu', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_petra: PH('tour_petra', 'landmark', 'Petra', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_giza: PH('tour_giza', 'landmark', 'Great Pyramid', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_eiffel: PH('tour_eiffel', 'landmark', 'Eiffel Tower', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_liberty: PH('tour_liberty', 'landmark', 'Statue of Liberty', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_grandcanyon: PH('tour_grandcanyon', 'landmark', 'Grand Canyon rim', 'Planned — world attraction', 5, 5, '#d0a83c', 'services', 20),
-  tour_niagara: PH('tour_niagara', 'landmark', 'Niagara Falls', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_angkor: PH('tour_angkor', 'landmark', 'Angkor Wat', 'Planned — world attraction', 5, 5, '#d0a83c', 'services', 20),
-  tour_stonehenge: PH('tour_stonehenge', 'landmark', 'Stonehenge', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_acropolis: PH('tour_acropolis', 'landmark', 'Acropolis', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_redeemer: PH('tour_redeemer', 'landmark', 'Christ the Redeemer', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_sagrada: PH('tour_sagrada', 'landmark', 'Sagrada Família', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_forbidden: PH('tour_forbidden', 'landmark', 'Forbidden City', 'Planned — world attraction', 5, 5, '#d0a83c', 'services', 20),
-  tour_stpeters: PH('tour_stpeters', 'landmark', 'St Peter\'s', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_alhambra: PH('tour_alhambra', 'landmark', 'Alhambra', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_chichenitza: PH('tour_chichenitza', 'landmark', 'Chichén Itzá', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_fuji: PH('tour_fuji', 'landmark', 'Mount Fuji station', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_opera: PH('tour_opera', 'landmark', 'Sydney Opera House', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_goldengate: PH('tour_goldengate', 'landmark', 'Golden Gate', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_louvre: PH('tour_louvre', 'landmark', 'Louvre', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_santorini: PH('tour_santorini', 'landmark', 'Caldera town', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_venice: PH('tour_venice', 'landmark', 'Canal quarter', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_neuschwanstein: PH('tour_neuschwanstein', 'landmark', 'Neuschwanstein', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_burj: PH('tour_burj', 'landmark', 'Supertall observatory', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_iguazu: PH('tour_iguazu', 'landmark', 'Iguazú Falls', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_banff: PH('tour_banff', 'landmark', 'Alpine lake park', 'Planned — world attraction', 5, 5, '#d0a83c', 'services', 20),
-  tour_aurora: PH('tour_aurora', 'landmark', 'Aurora lodge', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_reef: PH('tour_reef', 'landmark', 'Reef visitor centre', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_yellowstone: PH('tour_yellowstone', 'landmark', 'Geyser park', 'Planned — world attraction', 5, 5, '#d0a83c', 'services', 20),
-  tour_serengeti: PH('tour_serengeti', 'landmark', 'Safari lodge', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_fushimi: PH('tour_fushimi', 'landmark', 'Fushimi Inari', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_prague: PH('tour_prague', 'landmark', 'Castle quarter', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_dubrovnik: PH('tour_dubrovnik', 'landmark', 'Walled city', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_cappadocia: PH('tour_cappadocia', 'landmark', 'Cappadocia', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_moai: PH('tour_moai', 'landmark', 'Moai field', 'Planned — world attraction', 3, 3, '#d0a83c', 'services', 20),
-  tour_uluru: PH('tour_uluru', 'landmark', 'Uluru', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_tablemountain: PH('tour_tablemountain', 'landmark', 'Table Mountain', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_hallstatt: PH('tour_hallstatt', 'landmark', 'Lakeside village', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_antelope: PH('tour_antelope', 'landmark', 'Slot canyon', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_halong: PH('tour_halong', 'landmark', 'Ha Long Bay', 'Planned — world attraction', 5, 5, '#d0a83c', 'services', 20),
-  tour_zhangjiajie: PH('tour_zhangjiajie', 'landmark', 'Pillar peaks', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_matterhorn: PH('tour_matterhorn', 'landmark', 'Matterhorn', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_towerlondon: PH('tour_towerlondon', 'landmark', 'Tower of London', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_versailles: PH('tour_versailles', 'landmark', 'Versailles', 'Planned — world attraction', 4, 4, '#d0a83c', 'services', 20),
-  tour_montstmichel: PH('tour_montstmichel', 'landmark', 'Mont-Saint-Michel', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_giantscauseway: PH('tour_giantscauseway', 'landmark', 'Giant\'s Causeway', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
-  tour_edinburgh: PH('tour_edinburgh', 'landmark', 'Edinburgh Castle', 'Planned — world attraction', 2, 2, '#d0a83c', 'services', 20),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590): stats scaled from existing landmarks
+  tour_greatwall: P('tour_greatwall', 'landmark', 'Great Wall', 'Ramparts running over the northern ridges', 5, 5, 1080000000, 60000, '#d0a83c', 'services', 20, { tourism: 200, jobs: 1800, maxPerCity: 1 }),
+  tour_colosseum: P('tour_colosseum', 'landmark', 'Colosseum', 'Ancient amphitheatre of the Roman games', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 600, maxPerCity: 1 }),
+  tour_tajmahal: P('tour_tajmahal', 'landmark', 'Taj Mahal', 'Ivory-white mausoleum on the river bank', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 600, maxPerCity: 1 }),
+  tour_machupicchu: P('tour_machupicchu', 'landmark', 'Machu Picchu', 'Inca mountain citadel above the cloud forest', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 160, jobs: 1200, maxPerCity: 1 }),
+  tour_petra: P('tour_petra', 'landmark', 'Petra', 'Rose-red rock city carved into cliffs', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 160, jobs: 1200, maxPerCity: 1 }),
+  tour_giza: P('tour_giza', 'landmark', 'Great Pyramid', 'Great pyramid, oldest of the ancient wonders', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 160, jobs: 1200, maxPerCity: 1 }),
+  tour_eiffel: P('tour_eiffel', 'landmark', 'Eiffel Tower', 'Iron lattice tower over the Champ de Mars', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 60, jobs: 300, maxPerCity: 1 }),
+  tour_liberty: P('tour_liberty', 'landmark', 'Statue of Liberty', 'Copper colossus at the harbour mouth', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 60, jobs: 300, maxPerCity: 1 }),
+  tour_grandcanyon: P('tour_grandcanyon', 'landmark', 'Grand Canyon rim', 'Lookout on the rim of a mile-deep gorge', 5, 5, 1080000000, 60000, '#d0a83c', 'services', 20, { tourism: 200, jobs: 1800, maxPerCity: 1 }),
+  tour_niagara: P('tour_niagara', 'landmark', 'Niagara Falls', 'Great falls on the river border', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 160, jobs: 1200, maxPerCity: 1 }),
+  tour_angkor: P('tour_angkor', 'landmark', 'Angkor Wat', 'Temple complex in the jungle with carved galleries', 5, 5, 1080000000, 60000, '#d0a83c', 'services', 20, { tourism: 200, jobs: 1800, maxPerCity: 1 }),
+  tour_stonehenge: P('tour_stonehenge', 'landmark', 'Stonehenge', 'Ring of standing stones on the chalk plain', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 60, jobs: 300, maxPerCity: 1 }),
+  tour_acropolis: P('tour_acropolis', 'landmark', 'Acropolis', 'Hilltop temples above the old city', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 90, jobs: 600, maxPerCity: 1 }),
+  tour_redeemer: P('tour_redeemer', 'landmark', 'Christ the Redeemer', 'Outstretched statue on the mountain above the bay', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 60, jobs: 300, maxPerCity: 1 }),
+  tour_sagrada: P('tour_sagrada', 'landmark', 'Sagrada Família', 'Basilica still rising in the old quarter', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 90, jobs: 600, maxPerCity: 1 }),
+  tour_forbidden: P('tour_forbidden', 'landmark', 'Forbidden City', 'Imperial palace of walls and courtyards', 5, 5, 1080000000, 60000, '#d0a83c', 'services', 20, { tourism: 160, jobs: 1800, maxPerCity: 1 }),
+  tour_stpeters: P('tour_stpeters', 'landmark', 'St Peter\'s', 'Basilica and square at the heart of the Vatican', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 90, jobs: 600, maxPerCity: 1 }),
+  tour_alhambra: P('tour_alhambra', 'landmark', 'Alhambra', 'Moorish palace on the hill above the old town', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 90, jobs: 600, maxPerCity: 1 }),
+  tour_chichenitza: P('tour_chichenitza', 'landmark', 'Chichén Itzá', 'Stepped Maya pyramid aligned to the equinox', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_fuji: P('tour_fuji', 'landmark', 'Mount Fuji station', 'Mountain station with views to the summit', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_opera: P('tour_opera', 'landmark', 'Sydney Opera House', 'Sail-shaped concert halls on the harbour', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 600, maxPerCity: 1 }),
+  tour_goldengate: P('tour_goldengate', 'landmark', 'Golden Gate', 'Red suspension bridge over the strait', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_louvre: P('tour_louvre', 'landmark', 'Louvre', 'Former royal palace turned great gallery', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 160, jobs: 1200, maxPerCity: 1 }),
+  tour_santorini: P('tour_santorini', 'landmark', 'Caldera town', 'Whitewashed cliff town above a sunken caldera', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 90, jobs: 600, maxPerCity: 1 }),
+  tour_venice: P('tour_venice', 'landmark', 'Canal quarter', 'Canal quarter of bridges and gondolas', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_neuschwanstein: P('tour_neuschwanstein', 'landmark', 'Neuschwanstein', 'Fairy-tale castle on a mountain crag', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
+  tour_burj: P('tour_burj', 'landmark', 'Supertall observatory', 'Supertall tower with a city-wide observatory deck', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
+  tour_iguazu: P('tour_iguazu', 'landmark', 'Iguazú Falls', 'Horseshoe of waterfalls on the jungle border', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_banff: P('tour_banff', 'landmark', 'Alpine lake park', 'Alpine lakes and peaks in a national park', 5, 5, 1080000000, 60000, '#d0a83c', 'services', 20, { tourism: 160, jobs: 1800, maxPerCity: 1 }),
+  tour_aurora: P('tour_aurora', 'landmark', 'Aurora lodge', 'Lodge under the northern lights', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
+  tour_reef: P('tour_reef', 'landmark', 'Reef visitor centre', 'Visitor centre on the living coral reef', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 90, jobs: 600, maxPerCity: 1 }),
+  tour_yellowstone: P('tour_yellowstone', 'landmark', 'Geyser park', 'Geysers and hot springs in a volcanic basin', 5, 5, 1080000000, 60000, '#d0a83c', 'services', 20, { tourism: 160, jobs: 1800, maxPerCity: 1 }),
+  tour_serengeti: P('tour_serengeti', 'landmark', 'Safari lodge', 'Lodges on the open savanna plains', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_fushimi: P('tour_fushimi', 'landmark', 'Fushimi Inari', 'Thousands of vermilion gates up the hillside', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
+  tour_prague: P('tour_prague', 'landmark', 'Castle quarter', 'Hilltop castle quarter above the river', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 90, jobs: 600, maxPerCity: 1 }),
+  tour_dubrovnik: P('tour_dubrovnik', 'landmark', 'Walled city', 'Medieval walled city on the Adriatic', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 90, jobs: 600, maxPerCity: 1 }),
+  tour_cappadocia: P('tour_cappadocia', 'landmark', 'Cappadocia', 'Valleys of fairy chimneys and balloon flights', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_moai: P('tour_moai', 'landmark', 'Moai field', 'Giant carved stone heads on the grassland', 3, 3, 216000000, 12000, '#d0a83c', 'services', 20, { tourism: 90, jobs: 600, maxPerCity: 1 }),
+  tour_uluru: P('tour_uluru', 'landmark', 'Uluru', 'Sandstone monolith glowing at sunset', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_tablemountain: P('tour_tablemountain', 'landmark', 'Table Mountain', 'Flat-topped mountain above the bay', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_hallstatt: P('tour_hallstatt', 'landmark', 'Lakeside village', 'Lakeside village tucked under the cliffs', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
+  tour_antelope: P('tour_antelope', 'landmark', 'Slot canyon', 'Narrow sandstone slot canyon with light shafts', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
+  tour_halong: P('tour_halong', 'landmark', 'Ha Long Bay', 'Limestone karsts rising from emerald water', 5, 5, 1080000000, 60000, '#d0a83c', 'services', 20, { tourism: 160, jobs: 1800, maxPerCity: 1 }),
+  tour_zhangjiajie: P('tour_zhangjiajie', 'landmark', 'Pillar peaks', 'Pillar peaks of the sandstone forest', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_matterhorn: P('tour_matterhorn', 'landmark', 'Matterhorn', 'Pyramid peak above the Alpine valley', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_towerlondon: P('tour_towerlondon', 'landmark', 'Tower of London', 'Fortress and royal jewels on the Thames', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
+  tour_versailles: P('tour_versailles', 'landmark', 'Versailles', 'Gilded palace and gardens of the Sun King', 4, 4, 450000000, 25000, '#d0a83c', 'services', 20, { tourism: 120, jobs: 1200, maxPerCity: 1 }),
+  tour_montstmichel: P('tour_montstmichel', 'landmark', 'Mont-Saint-Michel', 'Island abbey rising from the tidal bay', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
+  tour_giantscauseway: P('tour_giantscauseway', 'landmark', 'Giant\'s Causeway', 'Hexagonal basalt columns on the coast', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
+  tour_edinburgh: P('tour_edinburgh', 'landmark', 'Edinburgh Castle', 'Castle on the volcanic rock above the city', 2, 2, 72000000, 4000, '#d0a83c', 'services', 20, { tourism: 45, jobs: 300, maxPerCity: 1 }),
 
-  stay_bb: PH('stay_bb', 'leisure', 'B&B / guesthouse', 'Planned — visitor beds', 1, 1, '#e07be0', 'services', 20),
-  stay_hotel: PH('stay_hotel', 'leisure', 'City hotel', 'Planned — visitor beds', 2, 2, '#e07be0', 'services', 20),
-  stay_luxury: PH('stay_luxury', 'leisure', 'Luxury hotel', 'Planned — visitor beds', 3, 2, '#e07be0', 'services', 20),
-  stay_resort: PH('stay_resort', 'leisure', 'Resort campus', 'Planned — visitor beds', 4, 4, '#e07be0', 'services', 20),
-  stay_caravan: PH('stay_caravan', 'leisure', 'Caravan & camping', 'Planned — visitor beds', 3, 3, '#e07be0', 'services', 20),
+  // PLACEHOLDER BALANCE (AARON BALANCE PASS, FEAT-9995385590)
+  // Visitor stays: the TS sim has no bed/occupancy model, only a per-building `tourism` draw.
+  stay_bb: P('stay_bb', 'leisure', 'B&B / guesthouse', 'Guesthouse beds · small visitor draw', 1, 1, 3600000, 200, '#e07be0', 'services', 20, { tourism: 6, jobs: 4 }),
+  stay_hotel: P('stay_hotel', 'leisure', 'City hotel', 'City-centre hotel · visitor draw', 2, 2, 18000000, 900, '#e07be0', 'services', 20, { tourism: 20, jobs: 60 }),
+  stay_luxury: P('stay_luxury', 'leisure', 'Luxury hotel', 'Five-star hotel · strong visitor draw', 3, 2, 45000000, 2400, '#e07be0', 'services', 20, { tourism: 45, jobs: 150 }),
+  stay_resort: P('stay_resort', 'leisure', 'Resort campus', 'Resort campus · major visitor draw', 4, 4, 126000000, 7000, '#e07be0', 'services', 20, { tourism: 110, jobs: 600 }),
+  stay_caravan: P('stay_caravan', 'leisure', 'Caravan & camping', 'Caravan and camping park · modest visitor draw', 3, 3, 5400000, 300, '#e07be0', 'services', 20, { tourism: 14, jobs: 12 }),
   // ═══════════════ end FEAT-1972079877 roadmap placeholders ═══════════════
 };
 
@@ -6689,7 +6710,7 @@ const DEMAND_FIX_PROVIDERS: Record<
     match: (sp) => sp.kind === 'water' && sp.tag === 'waste',
     unitCapacity: (sp) => sp.served ?? 0,
   },
-  power: { match: (sp) => sp.kind === 'power', unitCapacity: (sp) => sp.mw ?? 0 },
+  power: { match: (sp) => sp.kind === 'power' && sp.id !== 'pow_hvdc', unitCapacity: (sp) => sp.mw ?? 0 },
   refuse: { match: (sp) => (sp.wasteCapacity ?? 0) > 0, unitCapacity: (sp) => sp.wasteCapacity ?? 0 },
   // BUG-571/FEAT-demanddock-overhaul §4: fire was deliberately excluded pending
   // this follow-up — fire_post/fire_station/fire_hq are already kind:'fire'.
