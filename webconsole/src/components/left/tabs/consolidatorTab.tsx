@@ -430,7 +430,7 @@ export function renderReplanSection(state: SimState) {
   );
 }
 
-function renderTierAuditSection(state: SimState) {
+export function renderTierAuditSection(state: SimState) {
   const log = state.consolidatorLog ?? [];
   if (log.length === 0) return null;
   const recent = log.slice(0, 5);
@@ -464,9 +464,12 @@ function renderTierAuditSection(state: SimState) {
                 </tr>
               </thead>
               <tbody>
-                {layoutTxns.flatMap((t) =>
-                  (t.tierAudit ?? []).map((ta) => (
-                    <tr key={`${t.sectionKey}-${ta.tier}`}>
+                {layoutTxns.flatMap((t, ti) =>
+                  (t.tierAudit ?? []).map((ta, ai) => (
+                    // BUG-1157: (section, tier) is not unique (several plans per tier, or
+                    // repeated sections); the list is a static per-pass snapshot so the
+                    // txn/audit position is a safe, deterministic discriminator.
+                    <tr key={`${t.sectionKey}-${ta.tier}-${ti}-${ai}`}>
                       <td>{t.sectionKey}</td>
                       <td>{ta.tier}</td>
                       <td>{ta.actuallyPlaced ? 'yes' : 'no'}</td>
@@ -499,7 +502,7 @@ function renderTierAuditSection(state: SimState) {
  * monthTop/wholeMapTop) rather than once with a whole-map list sitting
  * under a "Month N scope" header that lied about what it showed.
  */
-function renderOpportunityTable(top: TopOpportunity[], emptyMessage: string) {
+export function renderOpportunityTable(top: TopOpportunity[], emptyMessage: string) {
   if (top.length === 0) return <p className="consolidator-empty">{emptyMessage}</p>;
   return (
     <table className="consolidator-opportunities">
@@ -528,7 +531,11 @@ function renderOpportunityTable(top: TopOpportunity[], emptyMessage: string) {
               <td>{o.estimatedReconnectCost != null ? `at least ${fmtMoney(o.estimatedReconnectCost)}` : '—'}</td>
             </tr>
           ) : (
-            <tr key={`c-${o.sectionKey}-${o.fromSpec}-${o.toSpec}`}>
+            // BUG-1157: city-wide families emit one opportunity PER GROUP, all
+            // anchored to the same section/spec pair at scale. Groups are
+            // disjoint, so the first (lowest-capacity-sorted) member id is a
+            // deterministic discriminator.
+            <tr key={`c-${o.sectionKey}-${o.fromSpec}-${o.toSpec}-${o.buildingIds[0] ?? 'x'}`}>
               <td>{o.rank}</td>
               <td>Consolidate</td>
               <td>{o.sectionKey}</td>
