@@ -68,6 +68,9 @@ export const Z_INDEX = {
   /** .stale-build-banner — dev-server staleness guard, the single most
    *  urgent developer-facing fact when it fires. */
   STALE_BUILD_BANNER: 3001,
+  /** .lineage-recovery-banner (BUG-1156) — non-blocking list of recoverable
+   *  saved cities after a lineage-mismatch boot. */
+  LINEAGE_RECOVERY_BANNER: 3002,
   /** RebuildPrompt's inline overlayStyle — the boot-time engine-version
    *  decision gate. Must win over literally everything else in the app,
    *  including the decline screen, because the game state underneath may

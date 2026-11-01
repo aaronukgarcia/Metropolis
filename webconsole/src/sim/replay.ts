@@ -69,6 +69,13 @@ export interface Savepoint {
    */
   buildVersion?: string;
   /**
+   * BUG-1156 r4: true when this save was written by a SCRATCH city (the city a
+   * withheld-pointer boot ran). Stamped per savepoint by createSavepoint; absent
+   * means false (legacy / real city). The Cities list labels and orders from this
+   * stamp alone, so a scratch city can never lose its label to a capped list.
+   */
+  scratch?: boolean;
+  /**
    * FEAT-1972079897 inc2 (camera restore, Aaron 2026-08-27): the UI camera at save
    * time (zoom + focus), captured so a post-rebuild resume can re-home the view
    * instead of jumping to the default. Envelope/UI state — never part of SimState,
@@ -365,7 +372,7 @@ function readSlot(storage: StorageLike, slot: number, lineageId?: string): Savep
  * are auto-purged (dev placeholder ~1 month). An unparsable `savedAt` is
  * treated as "not stale" — never purge on a timestamp we can't trust.
  */
-function isStaleAutosave(sp: Savepoint, nowMs: number): boolean {
+export function isStaleAutosave(sp: Savepoint, nowMs: number): boolean {
   const savedMs = Date.parse(sp?.savedAt as unknown as string);
   if (Number.isNaN(savedMs)) return false;
   return nowMs - savedMs > AUTOSAVE_RETENTION_MS;
@@ -450,6 +457,213 @@ export function scanAllSavepointLineages(storage: StorageLike): string[] {
     return [];
   }
   return Array.from(found);
+}
+
+/** BUG-1156 r4: one city (lineage) that holds at least one VALID savepoint, described by its newest valid save. */
+export interface RecoverableLineage {
+  lineageId: string;
+  snapshotTick: number;
+  savedAt: string;
+  /** Building count of the newest save (from the already-parsed savepoint; undefined when the snapshot carries no buildings array). */
+  buildingCount?: number;
+  /** Population of the newest save, when the snapshot carries a finite one. */
+  population?: number;
+  /**
+   * True when the newest valid save carries the durable `scratch: true` stamp
+   * (written by the autosave of a scratch city - see Savepoint.scratch). Derived
+   * ONLY from that stamp; absent means false. Ranked after real cities.
+   */
+  scratch: boolean;
+  /** BUG-1156 r5: true when NO valid localStorage save exists for this city - it lives only in IndexedDB (a quota-overflow .idbOnly key, or an evicted localStorage slot with the durable copy surviving). */
+  idbOnly?: boolean;
+  /** True for the running city (only set by listCities). */
+  current?: boolean;
+  /** Human label: "Recovered session city <short id>" for scratch, "City <short id>" otherwise. */
+  label: string;
+}
+
+/** BUG-1156 r5: lineage id of an adopted IndexedDB-only city awaiting its async restore (boot-only). */
+export const IDB_ADOPT_KEY = 'metropolis.idbAdopt';
+
+/**
+ * BUG-1156 F1: the id of the ONE scratch lineage a withheld-pointer boot resumes
+ * (so N reloads leave one scratch city, not N). KEPT only for that "which scratch
+ * id do I resume" question; it plays NO part in labelling or ordering (those derive
+ * from the per-savepoint `scratch` stamp), so losing it can never hide or mislabel a city.
+ */
+export const SCRATCH_LINEAGE_KEY = 'metropolis.scratchLineage';
+
+/**
+ * BUG-1156 r4: the lineage id of the scratch city that is RUNNING in this page, or
+ * null. createSavepoint stamps `scratch: true` on every save of that lineage, so the
+ * stamp rides every autosave without touching the call sites. Set by the boot (and
+ * Start Over); never read by the reducer (GR#21 untouched).
+ */
+let runningScratchLineageId: string | null = null;
+export function setRunningScratchLineage(id: string | null): void {
+  runningScratchLineageId = id;
+}
+
+/** Read the scratch-lineage id, or null. Never throws. */
+export function readScratchLineageId(storage: StorageLike): string | null {
+  try {
+    const raw = storage.getItem(SCRATCH_LINEAGE_KEY);
+    return raw && raw.length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Forget the scratch-lineage id (its saves, if any, stay on disk). Never throws. */
+export function clearScratchLineageId(storage: StorageLike): void {
+  try {
+    storage.removeItem(SCRATCH_LINEAGE_KEY);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * BUG-1156 F1: the scratch lineage id for a withheld-pointer boot - reuse the
+ * stored one (never equal to `currentLineageId`), else mint and store it.
+ * Boot-only; outside the reducer. Never throws.
+ */
+export function getOrMintScratchLineageId(storage: StorageLike, currentLineageId: string): string {
+  const existing = readScratchLineageId(storage);
+  if (existing && existing !== currentLineageId) return existing;
+  const id = mintLineageId();
+  try {
+    storage.setItem(SCRATCH_LINEAGE_KEY, id);
+  } catch {
+    /* best-effort */
+  }
+  return id;
+}
+
+function shortLineageId(id: string): string {
+  return id === LEGACY_LINEAGE_ID ? 'legacy' : id.length > 8 ? id.slice(-8) : id;
+}
+
+/**
+ * BUG-1156 r4: EVERY city (lineage) with at least one VALID savepoint (finite
+ * snapshotTick, string savedAt - fail closed per entry), the running one included
+ * (`current: true`). The persistent File -> Cities list reads this; nothing is
+ * excluded except invalid entries, so reachability never depends on boot state.
+ * Order: real cities first, scratch after, each newest savedAt first, ties by id
+ * (GR#21 deterministic). Reads storage; call it when a menu OPENS, not per render
+ * (BUG-602). Never throws.
+ */
+export function listCities(storage: StorageLike, currentLineageId: string | null, now: Date = new Date()): RecoverableLineage[] {
+  try {
+    const byLineage = new Map<string, Savepoint[]>();
+    for (const id of scanAllSavepointLineages(storage)) {
+      try {
+        byLineage.set(id, readAllSavepoints(storage, now, id));
+      } catch {
+        /* one hostile entry never poisons the list */
+      }
+    }
+    return buildCityRows(byLineage, currentLineageId, new Set(byLineage.keys()));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * BUG-1156 r5: the pure row builder shared by the localStorage-only listCities and the
+ * two-tier listCitiesAll (saveStore.ts). Applies the ONE validity rule (finite snapshotTick,
+ * string savedAt), picks the newest valid save per lineage (de-dup across tiers), stamps scratch
+ * from that save, and sorts real-first / newest-first / id tiebreak. `localIds` names the
+ * lineages that have a valid localStorage save (the rest are IndexedDB-only: `idbOnly: true`).
+ */
+export function buildCityRows(
+  byLineage: Map<string, Savepoint[]>,
+  currentLineageId: string | null,
+  localIds: Set<string>,
+): RecoverableLineage[] {
+  const out: RecoverableLineage[] = [];
+  for (const [id, saves] of byLineage) {
+    try {
+      const valid = saves.filter(
+        (sp) =>
+          !!sp &&
+          typeof sp === 'object' &&
+          typeof sp.snapshotTick === 'number' &&
+          Number.isFinite(sp.snapshotTick) &&
+          typeof sp.savedAt === 'string',
+      );
+      const best = mostRecentSavepoint(valid);
+      if (!best) continue;
+      const snap = best.snapshot as { buildings?: unknown; population?: unknown } | undefined;
+      const scratch = (best as { scratch?: unknown }).scratch === true;
+      const pop = snap?.population;
+      out.push({
+        lineageId: id,
+        snapshotTick: best.snapshotTick,
+        savedAt: best.savedAt,
+        buildingCount: Array.isArray(snap?.buildings) ? (snap!.buildings as unknown[]).length : undefined,
+        population: typeof pop === 'number' && Number.isFinite(pop) ? pop : undefined,
+        scratch,
+        current: id === currentLineageId,
+        label: `${scratch ? 'Recovered session city' : 'City'} ${shortLineageId(id)}`,
+        idbOnly: !localIds.has(id),
+      });
+    } catch {
+      /* one hostile entry never poisons the list */
+    }
+  }
+  return out.sort((a, b) =>
+    a.scratch !== b.scratch
+      ? a.scratch
+        ? 1
+        : -1
+      : a.savedAt < b.savedAt
+        ? 1
+        : a.savedAt > b.savedAt
+          ? -1
+          : a.lineageId < b.lineageId
+            ? -1
+            : a.lineageId > b.lineageId
+              ? 1
+              : 0,
+  );
+}
+
+/**
+ * BUG-1156: every city OTHER than `excludeLineageId` (and `alsoExclude`, the
+ * actively running scratch id) - the banner's quick-adopt rows. A filter over
+ * listCities, same order.
+ */
+export function listRecoverableLineages(
+  storage: StorageLike,
+  excludeLineageId: string,
+  now: Date = new Date(),
+  alsoExclude?: string,
+): RecoverableLineage[] {
+  return listCities(storage, null, now).filter((c) => c.lineageId !== excludeLineageId && c.lineageId !== alsoExclude);
+}
+
+/**
+ * BUG-1156: adopt a city - make it the current one so the NEXT boot restores it.
+ * Runs OUTSIDE the pure reducer (a UI handler, then a reload; GR#21 untouched).
+ * Returns true only when the pointer read-back equals `lineageId` (a swallowed
+ * write failure must not look like success). Never throws.
+ */
+export function adoptLineage(storage: StorageLike, lineageId: string, idbOnly = false): boolean {
+  writeCurrentLineageId(storage, lineageId);
+  const ok = readCurrentLineageId(storage) === lineageId;
+  // BUG-1156 r5: an IndexedDB-only city has nothing for the synchronous boot to find; the marker tells the
+  // boot to start under THIS lineage (pointer kept) and let the IDB-primary swap restore it.
+  try {
+    if (ok && idbOnly) storage.setItem(IDB_ADOPT_KEY, lineageId);
+    else storage.removeItem(IDB_ADOPT_KEY);
+  } catch {
+    /* best-effort: a failed marker means the boot behaves as before */
+  }
+  // BUG-1156 r5 (F1): the scratch RESUME id is deliberately NOT cleared here. If the adopted city then
+  // fails to restore (shape-valid but refused), the withheld boot resumes the played scratch city instead of
+  // minting a fresh one; a clean restore of a real city clears it at boot (recoverableAfterRestore).
+  return ok;
 }
 
 /**
@@ -1495,6 +1709,8 @@ export function createSavepoint(
     // AUTOMATICALLY here — no call site anywhere in the app needs to pass
     // it explicitly; it simply rides whatever `state` is being saved.
     ...(state.lineageId ? { lineageId: state.lineageId } : {}),
+    // BUG-1156 r4: durable scratch-city stamp (absent = real city, backward compatible).
+    ...(state.lineageId && state.lineageId === runningScratchLineageId ? { scratch: true } : {}),
     // FEAT-2326609790: stamp the CURRENT build's grid size — see the
     // gridW/gridH field's own doc comment for why restoreFromSavepoint
     // gates on it (a save from a larger grid than this build defines must

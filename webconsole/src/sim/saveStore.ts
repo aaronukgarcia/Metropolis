@@ -57,7 +57,20 @@ import { decode } from './saveCodec.ts';
 // its overflow-key derivation can never silently drift from replay.ts's
 // definition — the SAME reason `savepointKey` is imported by store.tsx
 // rather than hand-re-derived there.
-import { LEGACY_LINEAGE_ID, savepointKey, isUsableSavepointFreshness } from './replay.ts';
+import {
+  LEGACY_LINEAGE_ID,
+  savepointKey,
+  isUsableSavepointFreshness,
+  SAVEPOINT_KEY_PREFIX,
+  decodeSavepointBytes,
+  readAllSavepoints,
+  scanAllSavepointLineages,
+  buildCityRows,
+  isStaleAutosave,
+  type Savepoint,
+  type StorageLike,
+  type RecoverableLineage,
+} from './replay.ts';
 
 /** IndexedDB database name + version for the save estate. */
 export const SAVE_STORE_DB_NAME = 'metropolis-saves';
@@ -819,4 +832,70 @@ export async function mirrorSaveCheckpoint(
   if (!savepointsOk) return { savepointsOk, journalOk: false };
   const journalOk = await mirrorKeyFromLocalStorage(store, localStorage, opts.journalKey);
   return { savepointsOk, journalOk };
+}
+
+/**
+ * BUG-1156 r5 (F2): EVERY city with a valid savepoint in EITHER tier - localStorage rotation
+ * slots AND IndexedDB (the quota-overflow `metropolis.savepoint.<lineage>.idbOnly` key and any
+ * mirrored `.<slot>` copy whose localStorage slot is gone). Reads the durable store through the
+ * SAME `SaveStore` the IDB-primary boot uses (`listKeys` + `getItem`, then `decodeSavepointBytes`).
+ *
+ * De-dup rule: ONE row per lineage; its newest valid save (greatest `savedAt`, the same
+ * `mostRecentSavepoint` rule as the localStorage-only list) wins across both tiers. Validity
+ * (finite snapshotTick, string savedAt), ordering (real first, newest first, id tiebreak) and the
+ * scratch stamp (read off the winning save) are the shared `buildCityRows`. A row with no valid
+ * localStorage save is `idbOnly: true`. Async: call when a menu OPENS or from a boot effect, never
+ * per render (BUG-602). Never throws; an unreadable IDB degrades to the localStorage-only list.
+ */
+export async function listCitiesAll(
+  storage: StorageLike,
+  idb: SaveStore | null,
+  currentLineageId: string | null,
+  now: Date = new Date(),
+): Promise<RecoverableLineage[]> {
+  const byLineage = new Map<string, Savepoint[]>();
+  const localIds = new Set<string>();
+  try {
+    for (const id of scanAllSavepointLineages(storage)) {
+      try {
+        const saves = readAllSavepoints(storage, now, id);
+        byLineage.set(id, saves);
+        if (saves.some((sp) => !!sp && typeof sp.snapshotTick === 'number' && Number.isFinite(sp.snapshotTick) && typeof sp.savedAt === 'string')) localIds.add(id);
+      } catch {
+        /* hostile local entry skipped */
+      }
+    }
+  } catch {
+    /* local scan best-effort */
+  }
+  if (idb) {
+    try {
+      const nowMs = now.getTime();
+      const keys = await idb.listKeys(`${SAVEPOINT_KEY_PREFIX}.`);
+      for (const key of keys) {
+        const segments = key.slice(SAVEPOINT_KEY_PREFIX.length + 1).split('.');
+        const last = segments[segments.length - 1];
+        if (!/^(\d+|idbOnly)$/.test(last)) continue;
+        const lineageId = segments.length === 1 ? LEGACY_LINEAGE_ID : segments.slice(0, -1).join('.');
+        try {
+          const raw = await idb.getItem(key);
+          if (raw === null) continue;
+          const sp = decodeSavepointBytes(raw);
+          if (!sp || typeof sp !== 'object' || isStaleAutosave(sp, nowMs)) continue;
+          const list = byLineage.get(lineageId);
+          if (list) list.push(sp);
+          else byLineage.set(lineageId, [sp]);
+        } catch {
+          /* one corrupt IDB value never poisons the list */
+        }
+      }
+    } catch {
+      /* IDB unreadable: the localStorage rows still list */
+    }
+  }
+  try {
+    return buildCityRows(byLineage, currentLineageId, localIds);
+  } catch {
+    return [];
+  }
 }

@@ -132,14 +132,17 @@ test('R2-B2 (mount): booting with a DANGLING currentLineage pointer (F1 wrote it
     // 2. It booted a FRESH city (correct: the pointed-at lineage owns nothing)
     //    and minted+adopted a lineage of its own rather than silently
     //    adopting the dangling one.
+    // BUG-1156 SUPERSEDES the old "re-mint + overwrite the pointer" assertion:
+    // that overwrite was the one-way abandonment of the city that owns the
+    // saves. Now the pointer is WITHHELD (a reload retries it, the recovery
+    // banner offers the real city) while the fresh city runs under a scratch
+    // lineage of its own, never inheriting the dead id.
     const afterPointer = readCurrentLineageId(storage);
     pin(() =>
-      assert.notEqual(
-        afterPointer,
-        'Ldangling00000nothing',
-        'boot left the pointer on a lineage that owns nothing — the very next autosave would write into a namespace the NEXT boot re-resolves the same way, ' +
-          'which is fine, but the pointer must be re-minted so the fresh city has a real identity rather than inheriting a dead one.',
-      ),
+      assert.equal(afterPointer, 'Ldangling00000nothing', 'BUG-1156: boot must not overwrite the pointer while savepoints exist under another lineage'),
+    );
+    pin(() =>
+      assert.notEqual(seen.state.lineageId, 'Ldangling00000nothing', 'the fresh city must run under its own scratch lineage, not the dead pointer id'),
     );
 
     // 3. THE CRITICAL PROPERTY: the de-referenced real city is untouched and

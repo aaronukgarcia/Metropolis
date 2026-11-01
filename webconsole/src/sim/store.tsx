@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { reducer, initialState, SPEED_MS, sanitizeTreasury, nextSafeBuildingId, CONSOLIDATOR_ENABLED_DEFAULT } from './engine';
 import type { Action } from './engine';
@@ -44,6 +44,15 @@ import {
   writeCurrentLineageId,
   mintLineageId,
   scanAllSavepointLineages,
+  listRecoverableLineages,
+  adoptLineage,
+  getOrMintScratchLineageId,
+  readScratchLineageId,
+  clearScratchLineageId,
+  setRunningScratchLineage,
+  listCities,
+  IDB_ADOPT_KEY,
+  type RecoverableLineage,
   migrateLegacySavepointsInPlace,
   persistSavepointWithReason,
   persistSavepointWithReasonAsync,
@@ -79,6 +88,7 @@ import {
   mirrorSaveCheckpoint,
   mirrorSavepointDirect as mirrorSavepointDirectToStore,
   SAVEPOINT_OVERFLOW_KEY,
+  listCitiesAll,
 } from './saveStore';
 import { encode, decode } from './saveCodec';
 // FEAT-webworker-sim-offload Stage 1 / Landing 2 (2026-09-02): tick-only
@@ -141,6 +151,7 @@ import { currentMapUi, type MapViewState } from './uistate';
 import { persistStashedCamera } from './cameraStash';
 import { listRecentOpened, recordRecentOpened } from './recentfiles';
 import { RebuildPrompt, type RebuildPhase } from '../components/RebuildPrompt';
+import { LineageRecoveryBanner } from '../components/LineageRecoveryBanner';
 import { recordError, updateLastKnownState } from './backend';
 import { drainPartitionAuditEvents, applyWorkerPartitionAuditReport } from './sectorPartition';
 import { useBlockingOverlay } from '../components/overlayManager';
@@ -815,6 +826,42 @@ function runOneTimeSaveMigrationAsync(): Promise<void> {
   }
 }
 
+/**
+ * BUG-1156/BUG-765: React StrictMode double-invokes the boot initializer; the
+ * second pass saw identical storage and recorded MET-V868 a second time. The
+ * refusal is recorded once per distinct signature per page lifetime.
+ */
+/**
+ * BUG-1156 r4: banner (nudge) rows for a SUCCESSFUL restore, and the side effect
+ * of telling createSavepoint whether the restored city is a scratch city (its
+ * newest save carries the durable `scratch` stamp). A real city is nudged only
+ * about scratch cities waiting elsewhere; a scratch city is nudged about every
+ * other city. Only the scratch RESUME id is forgotten after a real-city restore (it never affects reachability): the persistent File -> Cities list (not this
+ * banner) is the guaranteed route to every city. Never throws.
+ */
+function recoverableAfterRestore(restoredLineageId: string, restoredIsScratch: boolean): RecoverableLineage[] {
+  setRunningScratchLineage(restoredIsScratch ? restoredLineageId : null);
+  try {
+    // Resume-id housekeeping only (reachability does not depend on it: labels and the Cities list come from the save stamp).
+    if (!restoredIsScratch) clearScratchLineageId(window.localStorage);
+    const others = listRecoverableLineages(window.localStorage, restoredLineageId);
+    return restoredIsScratch ? others : others.filter((c) => c.scratch);
+  } catch {
+    return [];
+  }
+}
+
+let lastRefusalSignature: string | null = null;
+function recordRefusalOnce(signature: string, message: string): void {
+  if (lastRefusalSignature === signature) return;
+  lastRefusalSignature = signature;
+  recordError(message, { type: 'app', action: 'load', code: 'MET-V868' });
+}
+/** Test hook: clears the once-per-page refusal memo so independent boots in one process each record. */
+export function resetBootRefusalGuardForTests(): void {
+  lastRefusalSignature = null;
+}
+
 export function SimProvider({ children }: { children: ReactNode }) {
   // FEAT-1972079854: boot-time recovery from a persisted savepoint + journal,
   // computed SYNCHRONOUSLY in a lazy useState initializer (runs exactly once) so
@@ -923,6 +970,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
           journal: loadedJournal,
           saveIndex: loadedJournal.entries.length,
           pendingRebuild: null,
+          recoverableLineages: recoverableAfterRestore(currentLineageId, (most as { scratch?: unknown } | null)?.scratch === true),
+          bannerNote: null,
+          bannerKind: 'adopted' as const,
           pendingTailReplay: {
             tail: prepared.tail,
             camera: prepared.camera ?? null,
@@ -955,6 +1005,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
           ? { savedVersion: most?.buildVersion ?? null, currentVersion: running, camera: most?.camera ?? null, kind: 'rebuild' as StandbyKind }
           : null,
         pendingTailReplay: null,
+        recoverableLineages: recoverableAfterRestore(currentLineageId, (most as { scratch?: unknown } | null)?.scratch === true),
+        bannerNote: null,
+        bannerKind: 'adopted' as const,
         bootSavepointMeta: most ? { snapshotTick: most.snapshotTick, savedAt: most.savedAt, saveSeq: most.saveSeq, lineageId: currentLineageId } : null,
       };
     }
@@ -968,6 +1021,117 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // isn't captured until we're already here (restoreResult falling through
     // is the normal "no savepoint at all" path too), so record it now.
     restoreFailureReason = restoreResult.reason;
+    // BUG-1156 r5 (F2): the player opened a city that lives only in IndexedDB (adoptLineage
+    // wrote the marker). The synchronous boot cannot see it, so boot a SCRATCH city with the
+    // pointer WITHHELD (a failed async restore leaves the player on a durable scratch city and a
+    // reload retries) and let the IDB-primary effect swap the real city in.
+    let idbPendingLineage: string | undefined;
+    try {
+      if (!most) {
+        const marked = window.localStorage.getItem(IDB_ADOPT_KEY);
+        if (marked && marked === currentLineageId) idbPendingLineage = marked;
+      }
+    } catch {
+      /* best-effort: without the marker the boot behaves as before */
+    }
+    // BUG-1156 r3 (design principle: a scratch city is a real city, exactly as
+    // durable as any other). Describe the refusal ONCE (error + player notice) so
+    // both the scratch-restore branch and the fresh-city branch below report it.
+    type Refusal = { signature: string; message: string; notice: string; bannerNote: string };
+    const refusalReasonText = (): string =>
+      preparedFailureReason && restoreFailureReason && preparedFailureReason !== restoreFailureReason
+        ? `${preparedFailureReason}; ${restoreFailureReason}`
+        : (preparedFailureReason ?? restoreFailureReason ?? 'restore refused with no reason captured');
+    const describeRefusal = (): Refusal | null => {
+      try {
+        if (most) {
+          const reasonText = refusalReasonText();
+          return {
+            signature: `most|${currentLineageId}|${most.saveSeq ?? ''}|${most.savedAt}`,
+            message: `Savepoint restore refused for lineage ${currentLineageId}: ${reasonText} -- booted a fresh city instead of the ${most.snapshotTick}-tick save`,
+            notice:
+              `Your saved city (tick ${most.snapshotTick}) could not be restored (${reasonText}) — a new city was started instead. ` +
+              'The old save was NOT deleted; report this so it can be recovered.',
+            bannerNote: `Your saved city (tick ${most.snapshotTick}) could not be restored (${reasonText}). It is unrecoverable for now but KEPT on disk, not deleted. That is why you are on a different city.`,
+          };
+        }
+        const otherLineages = scanAllSavepointLineages(window.localStorage).filter((id) => id !== currentLineageId);
+        if (otherLineages.length > 0) {
+          return {
+            signature: `other|${currentLineageId}|${otherLineages.join(',')}`,
+            message:
+              `Savepoint restore refused: no savepoint found for current lineage '${currentLineageId}', but savepoint(s) exist under ` +
+              `other lineage id(s) [${otherLineages.join(', ')}] -- booted a TEMPORARY city under a scratch lineage; the current-lineage pointer was NOT moved ` +
+              '(a reload retries it) and the saved cities are listed for adoption. This is a lineage-pointer mismatch, not a missing save.',
+            notice:
+              `A saved city was found but not under your current profile (lineage mismatch: current='${currentLineageId}', ` +
+              `found=[${otherLineages.join(', ')}]) — a temporary new city was started instead. Your old save was NOT deleted; ` +
+              'use the Adopt banner to go back to it.',
+            bannerNote: 'A saved city was found but not under your current profile (lineage mismatch). Nothing was deleted.',
+          };
+        }
+      } catch {
+        /* diagnostics never take the boot down */
+      }
+      return null;
+    };
+    // BUG-1156 r3 F1: a withheld boot that finds the stored scratch city with a
+    // valid savepoint RESTORES it (newest valid save) instead of booting fresh
+    // under its id - reloading must never lose scratch progress. Fresh only when
+    // the scratch has no valid save.
+    try {
+      const storedScratch = readScratchLineageId(window.localStorage);
+      if (storedScratch && storedScratch !== currentLineageId) {
+        const scratchMost = mostRecentSavepoint(readAllSavepoints(window.localStorage, new Date(), storedScratch));
+        if (scratchMost) {
+          const refusal = describeRefusal();
+          if (refusal) recordRefusalOnce(refusal.signature, refusal.message);
+          setRunningScratchLineage(storedScratch);
+          const lineages = listRecoverableLineages(window.localStorage, currentLineageId, new Date(), storedScratch);
+          const meta = { snapshotTick: scratchMost.snapshotTick, savedAt: scratchMost.savedAt, saveSeq: scratchMost.saveSeq, lineageId: storedScratch };
+          const sPrepared = prepareRestoreForChunkedTail(window.localStorage, storedScratch);
+          if (sPrepared.success && sPrepared.state && sPrepared.tail) {
+            const loadedJournal = loadJournal(window.localStorage);
+            return {
+              state: sanitizeTreasury({ ...sPrepared.state, lineageId: storedScratch, ...(refusal ? { placeNotice: refusal.notice } : {}) }),
+              journal: loadedJournal,
+              saveIndex: loadedJournal.entries.length,
+              pendingRebuild: null,
+              recoverableLineages: lineages,
+              bannerNote: refusal?.bannerNote ?? null,
+              bannerKind: 'temporary' as const,
+              idbPendingLineage,
+              pendingTailReplay: {
+                tail: sPrepared.tail,
+                camera: sPrepared.camera ?? null,
+                crossBuildAfter: null,
+                needsJobsGrandfatherCatchUp: sPrepared.needsJobsGrandfatherCatchUp ?? false,
+              },
+              bootSavepointMeta: meta,
+            };
+          }
+          const sRestore = restoreFromSavepoint(window.localStorage, storedScratch);
+          if (sRestore.success && sRestore.state) {
+            const loadedJournal = loadJournal(window.localStorage);
+            return {
+              state: sanitizeTreasury({ ...sRestore.state, lineageId: storedScratch, ...(refusal ? { placeNotice: refusal.notice } : {}) }),
+              journal: loadedJournal,
+              saveIndex: loadedJournal.entries.length,
+              pendingRebuild: null,
+              recoverableLineages: lineages,
+              bannerNote: refusal?.bannerNote ?? null,
+              bannerKind: 'temporary' as const,
+              idbPendingLineage,
+              pendingTailReplay: null,
+              bootSavepointMeta: meta,
+            };
+          }
+          // scratch save unreadable: fall through to a fresh scratch (never crash the boot)
+        }
+      }
+    } catch {
+      /* best-effort: worst case a fresh city boots below */
+    }
     const fresh =
       typeof process !== 'undefined' && process.env.NODE_TEST_CONTEXT
         ? initialState()
@@ -992,42 +1156,78 @@ export function SimProvider({ children }: { children: ReactNode }) {
     // themselves unguarded, so a failure inside THIS diagnostic block must
     // never take the boot down with it. Worst case on a throw here: the
     // fresh city still boots, just without the loud trail — never a crash.
+    //
+    // BUG-1156 (P1, 10 recorded occurrences): the pointer write below used to
+    // run on EVERY fresh-city boot, so an IMPLICIT refusal (restore refused, or
+    // pointer drifted off the lineage that holds the city) minted a new lineage
+    // and overwrote metropolis.currentLineage — one-way abandonment of the old
+    // city with no UI route back. Now: whenever savepoints exist anywhere
+    // (current lineage refused, or under other lineages) the pointer is
+    // WITHHELD, the fresh city runs under its own scratch lineage (its autosaves
+    // are keyed by state.lineageId, not by the pointer), a plain reload retries
+    // the original lineage, and the recoverable lineages are surfaced for
+    // one-click adoption. A genuinely fresh start (no saves anywhere) writes as
+    // before; explicit intent (Start Over, freshStart, loadDevCity1 via the UI)
+    // does not pass through here.
+    let recoverableLineages: RecoverableLineage[] = [];
+    let withholdPointer = !!most || !!idbPendingLineage;
+    try {
+      // The stored scratch city (a previous withheld boot's) is not a "real" other lineage.
+      const storedScratch = readScratchLineageId(window.localStorage);
+      const otherLineagesForRecovery = scanAllSavepointLineages(window.localStorage).filter((id) => id !== currentLineageId && id !== storedScratch);
+      if (otherLineagesForRecovery.length > 0) withholdPointer = true;
+    } catch {
+      /* diagnostic/recovery listing is best-effort — see the P2 note above */
+    }
+    if (withholdPointer) {
+      // BUG-1156 F1: reuse ONE scratch lineage across reloads (no per-boot mint pile-up).
+      fresh.lineageId = getOrMintScratchLineageId(window.localStorage, currentLineageId);
+      try {
+        recoverableLineages = listRecoverableLineages(window.localStorage, currentLineageId, new Date(), fresh.lineageId);
+      } catch {
+        /* best-effort */
+      }
+      setRunningScratchLineage(fresh.lineageId);
+    } else {
+      setRunningScratchLineage(null);
+    }
+    let bannerNote: string | null = null;
     try {
       if (most) {
-        const reasonText =
-          preparedFailureReason && restoreFailureReason && preparedFailureReason !== restoreFailureReason
-            ? `${preparedFailureReason}; ${restoreFailureReason}`
-            : (preparedFailureReason ?? restoreFailureReason ?? 'restore refused with no reason captured');
-        recordError(
-          `Savepoint restore refused for lineage ${currentLineageId}: ${reasonText} -- booted a fresh city instead of the ${most.snapshotTick}-tick save`,
-          { type: 'app', action: 'load', code: 'MET-V868' },
-        );
-        fresh.placeNotice =
-          `Your saved city (tick ${most.snapshotTick}) could not be restored (${reasonText}) — a new city was started instead. ` +
-          'The old save was NOT deleted; report this so it can be recovered.';
+        const reasonText = refusalReasonText();
+        const refusal = describeRefusal();
+        if (refusal) {
+          recordRefusalOnce(refusal.signature, refusal.message);
+          fresh.placeNotice = refusal.notice;
+          bannerNote = refusal.bannerNote;
+        } else {
+          recordRefusalOnce(`most|${currentLineageId}`, `Savepoint restore refused for lineage ${currentLineageId}: ${reasonText}`);
+        }
       } else {
-        const otherLineages = scanAllSavepointLineages(window.localStorage).filter((id) => id !== currentLineageId);
-        if (otherLineages.length > 0) {
-          recordError(
-            `Savepoint restore refused: no savepoint found for current lineage '${currentLineageId}', but savepoint(s) exist under ` +
-              `other lineage id(s) [${otherLineages.join(', ')}] -- booted a fresh city instead. This is a lineage-pointer mismatch, not a missing save.`,
-            { type: 'app', action: 'load', code: 'MET-V868' },
-          );
-          fresh.placeNotice =
-            `A saved city was found but not under your current profile (lineage mismatch: current='${currentLineageId}', ` +
-            `found=[${otherLineages.join(', ')}]) — a new city was started instead. Your old save was NOT deleted; report this so it can be recovered.`;
+        const refusal = describeRefusal();
+        if (refusal) {
+          recordRefusalOnce(refusal.signature, refusal.message);
+          fresh.placeNotice = refusal.notice;
+          bannerNote = refusal.bannerNote;
         }
       }
     } catch {
       // Never let the loud-refusal diagnostic itself take the boot down —
       // see the P2 doc comment above. The fresh city still boots below.
     }
-    writeCurrentLineageId(window.localStorage, freshLineageId);
+    // BUG-1156: only a genuinely fresh start (no savepoint anywhere) claims the
+    // pointer; an implicit refusal leaves it untouched (see withholdPointer).
+    if (!withholdPointer) writeCurrentLineageId(window.localStorage, freshLineageId);
     return {
       state: sanitizeTreasury(fresh),
       journal: emptyJournal(),
       saveIndex: 0,
       pendingRebuild: null,
+      recoverableLineages,
+      bannerNote,
+      bannerKind: 'temporary' as const,
+      idbPendingLineage,
+      freshStartBoot: !withholdPointer,
       pendingTailReplay: null,
       bootSavepointMeta: null,
     };
@@ -1099,6 +1299,52 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // drives the modal (prompt → running → report); `rebuildReportState` carries
   // the before/after metrics once a rebuild has run.
   const [rebuildDecision, setRebuildDecision] = useState(boot.pendingRebuild);
+  // BUG-1156: lineages the boot refused to restore but that still hold saves.
+  const [recoverableLineages, setRecoverableLineages] = useState<RecoverableLineage[]>(boot.recoverableLineages);
+  const [bannerNote, setBannerNote] = useState<string | null>(boot.bannerNote);
+  const onAdoptLineage = useCallback((lineageId: string, idbOnly = false) => {
+    // Outside the reducer (GR#21): pointer write + reload, so the NEXT boot restores it.
+    // idbOnly: the city has no localStorage save - the marker routes the boot to the IDB-primary restore.
+    if (!adoptLineage(window.localStorage, lineageId, idbOnly)) {
+      // F3: a swallowed pointer-write failure must not reload as if it worked.
+      recordError(`Could not adopt lineage ${lineageId}: the current-lineage pointer could not be written (storage refused it). Nothing was changed; your saved city is untouched.`, { type: 'app', action: 'load', code: 'MET-V868' });
+      return;
+    }
+    setRecoverableLineages([]);
+    try {
+      window.location.reload();
+    } catch {
+      /* non-browser host: the pointer is set, the next boot adopts it */
+    }
+  }, []);
+  // BUG-1156 r5 (F2): the banner's recoverable list is sync (localStorage) at boot; this effect adds the cities
+  // that live ONLY in IndexedDB, after first paint (never blocks render, BUG-602). Banner visibility rule is
+  // unchanged: IDB rows join a banner that is already showing (withheld/scratch boot) or a genuinely fresh start.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await migrationPromiseRef.current;
+      if (cancelled) return;
+      const running = stateRefForDispatch.current.lineageId ?? null;
+      const all = await listCitiesAll(window.localStorage, getDefaultSaveStore(), running);
+      if (cancelled) return;
+      const extra = all.filter((c) => c.idbOnly && c.lineageId !== running && c.lineageId !== boot.idbPendingLineage);
+      if (extra.length === 0) return;
+      setRecoverableLineages((prev) => {
+        if (prev.length === 0 && !boot.bannerNote && !(boot as { freshStartBoot?: boolean }).freshStartBoot) return prev;
+        const have = new Set(prev.map((c) => c.lineageId));
+        const add = extra.filter((c) => !have.has(c.lineageId));
+        if (add.length === 0) return prev;
+        return [...prev, ...add].sort((a, b) =>
+          a.scratch !== b.scratch ? (a.scratch ? 1 : -1) : a.savedAt < b.savedAt ? 1 : a.savedAt > b.savedAt ? -1 : a.lineageId < b.lineageId ? -1 : 1,
+        );
+      });
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- boot-only: runs once per mount
+  }, []);
   const rebuildDecisionRef = useRef(rebuildDecision);
   useEffect(() => {
     rebuildDecisionRef.current = rebuildDecision;
@@ -1352,7 +1598,17 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // attacker fixtures, which never stamp a lineageId, still exercise
       // byte-for-byte). A different lineage's mirrored slots simply live at
       // a different key and are never even read here, let alone compared.
-      const currentLineageForIdbRead = bootSavepointMetaRef.current?.lineageId;
+      // BUG-1156 r5: an adopted IndexedDB-only city is read by ITS lineage and compared against NO booted
+      // save (the booted city is a scratch one); the marker is consumed here, once, whatever the outcome.
+      const idbPendingLineage = boot.idbPendingLineage;
+      if (idbPendingLineage) {
+        try {
+          window.localStorage.removeItem(IDB_ADOPT_KEY);
+        } catch {
+          /* best-effort */
+        }
+      }
+      const currentLineageForIdbRead = idbPendingLineage ?? bootSavepointMetaRef.current?.lineageId;
       const idbSlotKey = (slot: number) =>
         !currentLineageForIdbRead || currentLineageForIdbRead === LEGACY_LINEAGE_ID
           ? `${SAVEPOINT_KEY_PREFIX}.${slot}`
@@ -1372,9 +1628,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
       if (cancelled || tailReplayActiveRef.current || rebuildDecisionRef.current !== null || idbSwapAttemptedRef.current) return;
 
       const best = freshestSavepoint(rawCandidates.map(decodeSavepointRaw));
-      if (!best) return; // IndexedDB has nothing valid (fresh browser, degraded store, migration not yet run) — localStorage's boot stands.
+      if (idbPendingLineage && best && normalizeLineageId(best.lineageId) !== normalizeLineageId(idbPendingLineage)) return;
+      if (!best) {
+        if (idbPendingLineage) {
+          recordError(`Could not open city ${idbPendingLineage}: its IndexedDB savepoint is missing or unreadable - staying on the current city (nothing was deleted).`, { type: 'app', action: 'load', code: 'MET-V868' });
+        }
+        return;
+      } // IndexedDB has nothing valid (fresh browser, degraded store, migration not yet run) — localStorage's boot stands.
       const bestMeta: SavepointFreshnessMeta = { snapshotTick: best.snapshotTick, savedAt: best.savedAt, saveSeq: best.saveSeq, lineageId: best.lineageId };
-      if (!isStrictlyFresherSavepointMeta(bestMeta, bootSavepointMetaRef.current)) {
+      if (!isStrictlyFresherSavepointMeta(bestMeta, idbPendingLineage ? null : bootSavepointMetaRef.current)) {
         return; // localStorage's boot is already current or newer — no-op, no second hydrate.
       }
       // Did a REAL, comparable saveSeq decide this, or did the comparison
@@ -1390,7 +1652,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // storage hands back.
       const rawBest = JSON.stringify(best);
       const prepared = prepareRestoreForChunkedTail(singleSavepointStorage(rawBest));
-      if (!prepared.success || !prepared.state || !prepared.tail) return;
+      if (!prepared.success || !prepared.state || !prepared.tail) {
+        if (idbPendingLineage) {
+          // F1: a shape-valid but refused city leaves the player on the current/scratch city with the reason shown.
+          const why = prepared.reason ?? 'restore refused with no reason captured';
+          recordError(`Could not open city ${idbPendingLineage}: ${why}. Staying on the current city; the saved city was NOT deleted.`, { type: 'app', action: 'load', code: 'MET-V868' });
+          setBannerNote(`City ${idbPendingLineage} could not be opened (${why}). You are on your current city; the saved city was NOT deleted and a reload retries it.`);
+        }
+        return;
+      }
       if (cancelled || tailReplayActiveRef.current || rebuildDecisionRef.current !== null || idbSwapAttemptedRef.current) return;
 
       // FEAT-2326609780 round 3 (ATTACK A vs ATTACK G — see
@@ -1553,6 +1823,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
           // makes cross-lineage seq comparison impossible, but starting a
           // brand-new lineage's count at 0 is the honest representation).
           writeCurrentLineageId(window.localStorage, freshLineageId);
+          clearScratchLineageId(window.localStorage);
+          setRunningScratchLineage(null);
           saveSeqRef.current = 0;
           // FEAT-2326609778: mirror the just-written archive entry into the
           // durable layer. GR#27's fail-closed gate has ALREADY run above
@@ -3974,6 +4246,23 @@ export function SimProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // BUG-1156 r5 (F2): the two-tier union; async, awaited by the File -> Cities open handler (BUG-602).
+  const listCitiesAllForMenu = async () => {
+    try {
+      return await listCitiesAll(window.localStorage, getDefaultSaveStore(), state.lineageId ?? null);
+    } catch {
+      return [];
+    }
+  };
+
+  const listCitiesForMenu = () => {
+    try {
+      return listCities(window.localStorage, state.lineageId ?? null);
+    } catch {
+      return [];
+    }
+  };
+
   const renameCity = (
     name: string,
     opts?: { confirmedOverwrite?: boolean },
@@ -4024,6 +4313,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
       renameCity,
       exportCity,
       importCity,
+      listCities: listCitiesForMenu,
+      listCitiesAll: listCitiesAllForMenu,
+      adoptCity: onAdoptLineage,
     }),
     [state, guardedDispatch, cityName],
   );
@@ -4079,6 +4371,16 @@ export function SimProvider({ children }: { children: ReactNode }) {
             : `⚠ Start Over aborted — could not archive debug snapshot (${captureError}). Your city is intact.`}
         </div>
       )}
+      <LineageRecoveryBanner
+        lineages={recoverableLineages}
+        onAdopt={onAdoptLineage}
+        note={bannerNote}
+        kind={boot.bannerKind}
+        onDismiss={() => {
+          setRecoverableLineages([]);
+          setBannerNote(null);
+        }}
+      />
       {rebuildDecision && isRebuildPromptTop && (
         <RebuildPrompt
           phase={rebuildPhase}

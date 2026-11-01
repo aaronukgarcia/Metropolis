@@ -3,6 +3,7 @@ import type { SimState } from './types.ts';
 import type { Action } from './engine.ts';
 import type { NamedSaveMeta, NamedSaveCollision } from './namedsaves.ts';
 import type { RecentOpened } from './recentfiles.ts';
+import type { RecoverableLineage } from './replay.ts';
 import { codedError } from './backend.ts';
 
 /**
@@ -31,6 +32,12 @@ export interface SimContextValue {
   exportCity: () => Promise<boolean>;
   /** FEAT-2326609778/Q100131: import a city previously produced by exportCity(). */
   importCity: () => Promise<boolean>;
+  /** BUG-1156 r4: every city with a valid savepoint (current marked), read from storage when called - FileMenu calls it when the menu OPENS. Optional so test doubles need not supply it. */
+  listCities?: () => RecoverableLineage[];
+  /** BUG-1156 r5: the two-tier (localStorage + IndexedDB) union of the same list; async, called when the menu opens (BUG-602). */
+  listCitiesAll?: () => Promise<RecoverableLineage[]>;
+  /** BUG-1156 r4: adopt a city (pointer set, then reload). */
+  adoptCity?: (lineageId: string, idbOnly?: boolean) => void;
 }
 
 const g = globalThis as unknown as { __metroSimContext?: Context<SimContextValue | null> };

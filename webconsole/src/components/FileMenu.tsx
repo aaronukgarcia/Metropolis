@@ -3,12 +3,18 @@ import { useSim } from '../sim/simContext';
 import { fmtNum } from '../sim/utils';
 import type { NamedSaveMeta } from '../sim/namedsaves';
 import type { RecentOpened } from '../sim/recentfiles';
+import type { RecoverableLineage } from '../sim/replay';
 
 export function FileMenu() {
-  const { cityName, listSaves, listRecent, saveGame, saveGameAs, loadGame, loadNamed, renameCity, exportCity, importCity } =
+  const { cityName, listSaves, listRecent, saveGame, saveGameAs, loadGame, loadNamed, renameCity, exportCity, importCity, listCities, listCitiesAll, adoptCity } =
     useSim();
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<'menu' | 'saveAs' | 'rename' | 'load'>('menu');
+  const [mode, setMode] = useState<'menu' | 'saveAs' | 'rename' | 'load' | 'cities'>('menu');
+  // BUG-1156 r4: read from storage when the Cities view OPENS (not per render, BUG-602).
+  const [cities, setCities] = useState<RecoverableLineage[]>([]);
+  // BUG-1156 r5: the IndexedDB half of the list is async - the localStorage rows show at once, this flags the pending union.
+  const [citiesLoading, setCitiesLoading] = useState(false);
+  const citiesReq = useRef(0);
   const [name, setName] = useState(cityName);
   const root = useRef<HTMLDivElement>(null);
 
@@ -72,6 +78,29 @@ export function FileMenu() {
                 }}
               >
                 Load…
+              </button>
+              <button
+                className="brand-menu-item"
+                onClick={() => {
+                  // Storage reads happen HERE (open handler), never in render (BUG-602). The sync
+                  // localStorage rows paint first; the two-tier union (IndexedDB too) replaces them.
+                  const req = ++citiesReq.current;
+                  setCities(listCities ? listCities() : []);
+                  setMode('cities');
+                  if (listCitiesAll) {
+                    setCitiesLoading(true);
+                    void listCitiesAll()
+                      .then((all) => {
+                        if (citiesReq.current === req) setCities(all);
+                      })
+                      .catch(() => undefined)
+                      .finally(() => {
+                        if (citiesReq.current === req) setCitiesLoading(false);
+                      });
+                  }
+                }}
+              >
+                Cities…
               </button>
               <button
                 className="brand-menu-item"
@@ -160,6 +189,9 @@ export function FileMenu() {
               </button>
             </form>
           )}
+          {mode === 'cities' && (
+            <CitiesList cities={cities} loading={citiesLoading} onOpen={(id, idbOnly) => adoptCity?.(id, idbOnly)} />
+          )}
           {mode === 'load' && (
             <LoadList
               recents={listRecent()}
@@ -211,5 +243,48 @@ function LoadList({
         </button>
       ))}
     </>
+  );
+}
+
+/**
+ * BUG-1156 r4: the persistent Cities list - EVERY lineage with a valid savepoint,
+ * whatever the boot state: the current city (marked, not openable), real cities,
+ * then scratch ("Recovered session") cities. Open adopts the lineage and reloads.
+ */
+function CitiesList({
+  cities,
+  loading,
+  onOpen,
+}: {
+  cities: RecoverableLineage[];
+  loading: boolean;
+  onOpen: (lineageId: string, idbOnly?: boolean) => void;
+}) {
+  if (cities.length === 0 && loading) return <div className="brand-menu-city muted" data-cities-loading>Loading saved cities…</div>;
+  if (cities.length === 0) return <div className="brand-menu-city muted">No saved cities found</div>;
+  return (
+    <div data-cities-list>
+      {loading && (
+        <div className="brand-menu-city muted" data-cities-loading>
+          Checking durable storage…
+        </div>
+      )}
+      {cities.map((c) => (
+        <div key={c.lineageId} className="brand-menu-item" data-city={c.lineageId} data-scratch={c.scratch ? 'true' : 'false'}>
+          <strong>{c.label}</strong>
+          {c.current ? ' (current)' : ''}
+          <span className="muted">
+            {' '}
+            t{fmtNum(c.snapshotTick)}
+            {c.population !== undefined ? `, pop ${fmtNum(c.population)}` : ''}, saved {c.savedAt}
+          </span>{' '}
+          {c.current ? null : (
+            <button className="btn tiny" onClick={() => onOpen(c.lineageId, c.idbOnly)}>
+              Open
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
