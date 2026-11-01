@@ -244,24 +244,30 @@ func (st *simState) accrueAndSettleConstruction(dayTick int64) error {
 		return nil
 	}
 
-	if st.constructionAccrualLocal > 0 {
-		amount := st.constructionAccrualLocal
-		st.constructionAccrualLocal = 0 // zeroed regardless of the settle outcome (see doc comment)
-		if settled, err := st.finance.SettleConstructionSourced(finance.Money(amount), true); err != nil {
-			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "SettleConstructionSourced.local", "cause": err.Error()})
-		} else {
-			st.constructionSettledLocal = num.SatAdd(st.constructionSettledLocal, int64(settled))
+	// BUG-1142: the settlement moves money out of the tracked stock (treasury ->
+	// firms/external); fold the measured change into moneyDelta (withLedgerDelta)
+	// so the same-tick money conservation check balances.
+	_ = st.withLedgerDelta(func() error {
+		if st.constructionAccrualLocal > 0 {
+			amount := st.constructionAccrualLocal
+			st.constructionAccrualLocal = 0 // zeroed regardless of the settle outcome (see doc comment)
+			if settled, err := st.finance.SettleConstructionSourced(finance.Money(amount), true); err != nil {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "SettleConstructionSourced.local", "cause": err.Error()})
+			} else {
+				st.constructionSettledLocal = num.SatAdd(st.constructionSettledLocal, int64(settled))
+			}
 		}
-	}
-	if st.constructionAccrualExternal > 0 {
-		amount := st.constructionAccrualExternal
-		st.constructionAccrualExternal = 0
-		if settled, err := st.finance.SettleConstructionSourced(finance.Money(amount), false); err != nil {
-			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "SettleConstructionSourced.external", "cause": err.Error()})
-		} else {
-			st.constructionSettledExternal = num.SatAdd(st.constructionSettledExternal, int64(settled))
+		if st.constructionAccrualExternal > 0 {
+			amount := st.constructionAccrualExternal
+			st.constructionAccrualExternal = 0
+			if settled, err := st.finance.SettleConstructionSourced(finance.Money(amount), false); err != nil {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "SettleConstructionSourced.external", "cause": err.Error()})
+			} else {
+				st.constructionSettledExternal = num.SatAdd(st.constructionSettledExternal, int64(settled))
+			}
 		}
-	}
+		return nil
+	})
 	st.syncMoneyFromLedger()
 	return nil
 }

@@ -1158,6 +1158,12 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		if err != nil {
 			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "logistics"})
 		}
+		// BUG-1142: the default composition's baseline materials supply
+		// (data/logistics.json startingStocks). A caller-supplied
+		// deps.Logistics is left exactly as the caller provisioned it.
+		if err := logisticsAPI.ProvisionStartingStocks(); err != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "logistics"})
+		}
 	}
 	buildAPI, err := build.LoadDefault(cid)
 	if err != nil {
@@ -1589,6 +1595,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		powerNet:                   powerNet,
 		gasNet:                     gasNet,
 		buildAPI:                   buildAPI,
+		logistics:                  logisticsAPI,
 		attract:                    attractAPI,
 		finance:                    financeAPI,
 		spiral:                     spiralAPI,
@@ -1949,6 +1956,10 @@ type simState struct {
 
 	buildAPI *build.BuildAPI
 	attract  *attract.AttractAPI
+
+	// logistics is the shared engine.logistics instance (BUG-1142 r1: a save
+	// participant and a StateDigest input).
+	logistics *logistics.LogisticsAPI
 
 	// finance is the shared *finance.FinanceAPI instance constructed in
 	// Wire and handed to attract (SetFinance) and, since FEAT-207, to

@@ -199,24 +199,50 @@ type composeLedgerWire struct {
 	// backfill-ambiguous case (FirmID 0 is never a valid firm id --
 	// firmIDForLocked's det.NewStream draw is remapped away from 0).
 	BuildersMerchantFirmID uint64 `json:"buildersMerchantFirmID,omitempty"`
+	// MaterialsDrawnCumulative / ConstructionAccrualLocal/External /
+	// ConstructionSettledLocal/External (BUG-1142 round r1 F2): the NET-90
+	// construction accrual state (moneycirc_inc2.go). The cumulative is the
+	// baseline accrueAndSettleConstruction diffs the build queue's drawn
+	// tonnage against; unrestored it restarts at 0, every prior draw re-counts
+	// and the next settlement PAYS A SECOND TIME. The accruals are the
+	// accrued-but-unsettled cost; the settled pair are run-long evidence
+	// tallies. MaterialsDrawnCumulative is a pointer so ABSENT (a bundle
+	// written before this fix) is distinguishable from a genuine 0: absent
+	// re-bases the cumulative on the restored build queue's CURRENT drawn
+	// total (nothing already drawn is re-charged; the pre-fix window's
+	// unsettled accrual, which could only exist in a bundle saved after the
+	// BUG-1142 supply landed and before this fix, is dropped -- an under-charge
+	// of an unreleased build, preferred to a double charge). Genuinely old
+	// saves had no materials supply at all, so there is nothing to lose.
+	MaterialsDrawnCumulative    *int64 `json:"materialsDrawnCumulative,omitempty"`
+	ConstructionAccrualLocal    int64  `json:"constructionAccrualLocal,omitempty"`
+	ConstructionAccrualExternal int64  `json:"constructionAccrualExternal,omitempty"`
+	ConstructionSettledLocal    int64  `json:"constructionSettledLocal,omitempty"`
+	ConstructionSettledExternal int64  `json:"constructionSettledExternal,omitempty"`
 }
 
 // composeLedgerToWire projects the durable ledger fields off the live
 // simState. treasury/citizenWealth are intentionally absent — they are
 // recomputed from the finance module on load (see the file doc comment).
 func composeLedgerToWire(st *simState) composeLedgerWire {
+	drawn := st.materialsDrawnCumulative
 	return composeLedgerWire{
-		MoneyFlows:            st.moneyFlows,
-		NetMigration:          st.netMigration,
-		ConsumptionDelivered:  st.consumptionDelivered,
-		VitalBirths:           st.vitalBirths,
-		VitalDeaths:           st.vitalDeaths,
-		PeopleOpening:         st.peopleOpening,
-		PeopleDelta:           st.peopleDelta,
-		MoneyOpening:          st.moneyOpening,
-		MoneyDelta:            st.moneyDelta,
-		BuildRegistryCursor:   uint64(st.buildRegistryCursor),
-		BuildDemolitionCursor: uint64(st.buildDemolitionCursor),
+		MaterialsDrawnCumulative:    &drawn,
+		ConstructionAccrualLocal:    st.constructionAccrualLocal,
+		ConstructionAccrualExternal: st.constructionAccrualExternal,
+		ConstructionSettledLocal:    st.constructionSettledLocal,
+		ConstructionSettledExternal: st.constructionSettledExternal,
+		MoneyFlows:                  st.moneyFlows,
+		NetMigration:                st.netMigration,
+		ConsumptionDelivered:        st.consumptionDelivered,
+		VitalBirths:                 st.vitalBirths,
+		VitalDeaths:                 st.vitalDeaths,
+		PeopleOpening:               st.peopleOpening,
+		PeopleDelta:                 st.peopleDelta,
+		MoneyOpening:                st.moneyOpening,
+		MoneyDelta:                  st.moneyDelta,
+		BuildRegistryCursor:         uint64(st.buildRegistryCursor),
+		BuildDemolitionCursor:       uint64(st.buildDemolitionCursor),
 		// Copy, never alias the live slice — Source snapshots at a point in
 		// time (this file's own "single-goroutine observation point"
 		// precedent); a later in-place mutation of st.deathServiceBridgeCemeteryIDs
@@ -255,6 +281,17 @@ func composeLedgerFromWire(st *simState, w composeLedgerWire) {
 	st.deathServiceBridgeCemeteryIDs = append([]string(nil), w.DeathServiceBridgeCemeteryIDs...)
 	st.deathServiceBridgeCrematoriumIDs = append([]string(nil), w.DeathServiceBridgeCrematoriumIDs...)
 	st.buildersMerchantFirmID = firms.FirmID(w.BuildersMerchantFirmID)
+	if w.MaterialsDrawnCumulative != nil {
+		st.materialsDrawnCumulative = *w.MaterialsDrawnCumulative
+	} else if st.buildAPI != nil {
+		// Old bundle (see the wire field's doc): re-base on the build queue
+		// the build shard (loaded before this one) has just restored.
+		st.materialsDrawnCumulative = st.totalMaterialsDrawn()
+	}
+	st.constructionAccrualLocal = w.ConstructionAccrualLocal
+	st.constructionAccrualExternal = w.ConstructionAccrualExternal
+	st.constructionSettledLocal = w.ConstructionSettledLocal
+	st.constructionSettledExternal = w.ConstructionSettledExternal
 }
 
 // composeLedgerParticipant adapts the composition root's own simState ledgers

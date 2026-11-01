@@ -338,6 +338,22 @@ func (l *LogisticsAPI) Provision(district string, c market.CommodityType, capaci
 	return snapshotStock(district, c, st), nil
 }
 
+// ProvisionStartingStocks provisions every shelf listed in data/logistics.json's
+// "startingStocks" (BUG-1142: the default composition's baseline supply, so
+// engine.build's Draw can fill). Explicit rather than done in Load, so tests
+// and callers that want a bare API keep one. Returns the first Provision error.
+func (l *LogisticsAPI) ProvisionStartingStocks() error {
+	if err := l.checkNotCopied("ProvisionStartingStocks"); err != nil {
+		return err
+	}
+	for _, ss := range l.cfg.StartingStocks {
+		if _, err := l.Provision(ss.District, market.CommodityType(ss.Commodity), ss.Capacity, ss.InitialLevel); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Stock returns the read-only snapshot of the (district, commodity)
 // stock record (AC-2/AC-5: queryable without mutating it). Returns
 // ErrUnknownCommodity for an unregistered commodity and ErrUnknownDistrict

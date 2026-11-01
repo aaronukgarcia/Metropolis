@@ -9,6 +9,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/deathservices"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/save"
@@ -18,6 +19,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
 
 // FEAT-1972079941 AC-6 — save live-wiring. This is the integration payoff:
@@ -97,6 +99,9 @@ func (c *Composition) Participants() []save.Participant {
 		citizens.NewSaveParticipant(st.citizens),
 		finance.NewSaveParticipant(st.finance),
 		build.NewSaveParticipant(st.buildAPI),
+		// BUG-1142 r1 F1: the shelf levels. Without it every load re-ran Wire's
+		// starting-stock provision and refilled the materials shelf.
+		newLogisticsParticipant(st),
 		refuse.NewSaveParticipant(st.refuse),
 		traffic.NewSaveParticipant(st.traffic),
 		unlocks.NewSaveParticipant(st.unlocks),
@@ -158,6 +163,28 @@ func (c *Composition) Participants() []save.Participant {
 		// FEAT-2326609836: engine.defence snapshot + compose posting state.
 		newDefenceParticipant(st),
 	}
+}
+
+// newLogisticsParticipant wraps the shared logistics instance (always set by
+// Wire). A nil instance (a hand-built simState in a unit test) yields a
+// conformant empty participant rather than a nil dereference at Save.
+func newLogisticsParticipant(st *simState) save.Participant {
+	if st.logistics == nil {
+		return emptyLogisticsParticipant{}
+	}
+	return logistics.NewSaveParticipant(st.logistics)
+}
+
+// emptyLogisticsParticipant is the nil-logistics stand-in: it emits no
+// records and ignores any it is handed.
+type emptyLogisticsParticipant struct{}
+
+func (emptyLogisticsParticipant) Kind() string { return logistics.KindLogistics }
+func (emptyLogisticsParticipant) Source() serialize.RecordSource {
+	return func() (serialize.Record, bool, error) { return serialize.Record{}, false, nil }
+}
+func (emptyLogisticsParticipant) Handler() serialize.RecordHandler {
+	return func(serialize.Record) error { return nil }
 }
 
 // Save writes a full manual save of every composed module's state under
@@ -444,19 +471,19 @@ func (c *Composition) reconstructWellbeingForRestore() error {
 // would have produced.
 //
 // Why the trackers need re-establishing, not just the clock: snapshot()'s
-// closeLedgerForTick gates purely on lastClosedTick vs the current tick
-// (compose.go). A fresh Wire's lastClosedTick is 0, so the very next
-// invariant-hook tick after a clock-seeded-but-tracker-naive load would see
-// lastClosedTick(0) < tick+1 and roll the ledger's opening baseline back to
-// previousClosingPop/Money's fresh-Wire zero values -- corrupting the
-// conservation ledger even though every module's own state loaded exactly
-// right. Because Load has already restored citizens/finance byte-exact (and
-// syncMoneyFromLedger has already re-synced the treasury/citizenWealth
-// mirrors), the closing values a live engine would have recorded at the END
-// of tick `tick` are exactly the CURRENT restored population and money
-// totals -- so LoadAt sets lastClosedTick=tick and
-// previousClosingPop/Money from those already-restored figures, matching
-// what closeLedgerForTick(tick) itself would have left behind.
+// closeLedgerForTick gates on lastClosedTick vs the label of the snapshot
+// about to run. The first resumed tick carries label == tick, and the last
+// snapshot a never-stopped engine closed carried label tick-1, so LoadAt sets
+// lastClosedTick = tick-1 (closeLedgerForTick(tick) then FIRES on resume and
+// rolls the opening to the closing set below). The closing set is the
+// restored population/money totals MINUS the pending peopleDelta/moneyDelta
+// the save carries: those deltas are within-tick activity (e.g. the
+// month-end finance legs) accumulated AFTER the last snapshot closed, so the
+// last snapshot's closing -- the opening of the first resumed tick -- excludes
+// them. (An earlier revision of this comment said lastClosedTick=tick and
+// closing == plain totals; that coincided only while the pending delta was
+// zero and mis-based conservation once a NET-90 settlement landed before a
+// month-end save.)
 //
 // This is deliberately a SEPARATE entry point rather than a change to
 // Load's own behaviour: Load's documented contract (a state snapshot at
@@ -493,9 +520,25 @@ func (c *Composition) LoadAt(root string, tick int64, opts ...save.LoadOption) e
 	// after tick `tick`'s snapshot are exactly the population/money totals
 	// Load has already restored (state is byte-exact at this point).
 	st := c.state
-	st.lastClosedTick = tick
-	st.previousClosingPop = int64(st.citizens.TotalPopulation(st.cid))
-	st.previousClosingMoney = num.SatAdd(st.treasury, st.citizenWealth)
+	// BUG-1142: label of the last snapshot a never-stopped engine would have
+	// closed is tick-1 (the first resumed tick carries label == tick), so
+	// closeLedgerForTick(tick) must FIRE on resume to roll the opening to the
+	// closing set below; lastClosedTick=tick skipped it and left the stale wire
+	// opening (StateDigest hashes the openings, so they cannot be overwritten
+	// here without breaking the load-point digest round trip).
+	st.lastClosedTick = tick - 1
+	// BUG-1142: the restored totals are the state AFTER any un-snapshotted
+	// within-tick activity: the save wire carries peopleDelta/moneyDelta
+	// accumulated since the last snapshot closed (e.g. the month-end finance
+	// legs that run after the label-(tick-1) snapshot). The LAST SNAPSHOT'S
+	// CLOSING -- the opening of the first resumed tick -- is therefore the
+	// restored total MINUS that pending delta, not the total itself. The
+	// two coincided with the plain total / stale wire opening whenever the
+	// pending delta was zero; the provisioned construction supply (NET-90 settlement on
+	// dayTick 90 right before a month-end) broke that coincidence (MET-E300
+	// measured: money short by exactly the 45,000,000 settlement).
+	st.previousClosingPop = num.SatSub(int64(st.citizens.TotalPopulation(st.cid)), st.peopleDelta)
+	st.previousClosingMoney = num.SatSub(num.SatAdd(st.treasury, st.citizenWealth), st.moneyDelta)
 
 	// MOD-034 (engine.wellbeing downstream-effect application): eagerly
 	// reconstruct st.wellbeingStatus for the restored month, mirroring the

@@ -16,6 +16,15 @@
       "waste": "kg — matches engine.market"
     }
   },
+  "startingStocks": [
+    {
+      "district": "city",
+      "commodity": "constructionMaterials",
+      "capacity": 100000,
+      "initialLevel": 100000,
+      "comment": "BUG-1142: the default composition's baseline construction-materials supply (tonnes) so engine.build's logistics.Draw can fill and queued orders progress and settle. PLACEHOLDER (ASM-234) - AARON BALANCE PASS: size, and whether a standing import/producer trickle should replace this one-off stock. The district must equal engine.build's DefaultDistrict."
+    }
+  ],
   "bufferPolicies": {
     "lean": {
       "safetyBuffer": 0.10,

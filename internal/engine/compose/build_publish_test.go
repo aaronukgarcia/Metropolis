@@ -50,8 +50,8 @@ func sendAndAwait(t *testing.T, transport *protocol.InProcTransport, kind protoc
 // TestBuildView_AC_B2_B3_QueuedBuildVisible drives the real
 // engine: the first f3.build delta carries zones/catalogue/empty queue;
 // after a real Buy + Build the published queue gains the order. The
-// ledger half of AC-B3 is NOT claimed here: builds never post today
-// (BUG-1142); the gated attack test covers it when that bug falls.
+// ledger half of AC-B3 is NOT claimed here (BUG-1142 FIXED: the default
+// composition now has a materials supply); TestBuildView_Attack_AC_B3_BuildCostReachesTreasury (un-skipped) carries it.
 func TestBuildView_AC_B2_B3_QueuedBuildVisible(t *testing.T) {
 	_, transport, cancel := wireFinanceTestEngine(t)
 	defer cancel()

@@ -103,9 +103,12 @@ func loadAtWithoutAttractParticipant(c *Composition, root string, tick int64) er
 	if err := st.e.SeedClockForRestore(st.cid, tick); err != nil {
 		return err
 	}
-	st.lastClosedTick = tick
-	st.previousClosingPop = int64(st.citizens.TotalPopulation(st.cid))
-	st.previousClosingMoney = num.SatAdd(st.treasury, st.citizenWealth)
+	// Mirrors the production convention (LoadAt, BUG-1142): the label of the
+	// last closed snapshot is tick-1, and the closing set is the restored
+	// totals MINUS any pending (un-snapshotted) deltas.
+	st.lastClosedTick = tick - 1
+	st.previousClosingPop = num.SatSub(int64(st.citizens.TotalPopulation(st.cid)), st.peopleDelta)
+	st.previousClosingMoney = num.SatSub(num.SatAdd(st.treasury, st.citizenWealth), st.moneyDelta)
 	return nil
 }
 

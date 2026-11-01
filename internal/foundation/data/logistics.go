@@ -3,6 +3,7 @@ package data
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 )
 
 // This file defines data/logistics.json's typed schema (engine.logistics,
@@ -77,6 +78,19 @@ type LogisticsFile struct {
 	Meta           json.RawMessage                     `json:"meta,omitempty"`
 	BufferPolicies map[string]BufferPolicyRecord       `json:"bufferPolicies"`
 	Commodities    map[string]LogisticsCommodityRecord `json:"commodities"`
+	// StartingStocks is the default composition's baseline supply (BUG-1142):
+	// shelves Provisioned at boot so engine.build's logistics.Draw can fill.
+	StartingStocks []LogisticsStartingStock `json:"startingStocks,omitempty"`
+}
+
+// LogisticsStartingStock is one baseline stock shelf (BUG-1142). Figures are
+// PLACEHOLDER balance data awaiting Aaron's balance pass (ASM-234 class).
+type LogisticsStartingStock struct {
+	District     string `json:"district"`
+	Commodity    string `json:"commodity"`
+	Capacity     int64  `json:"capacity"`
+	InitialLevel int64  `json:"initialLevel"`
+	Comment      string `json:"comment,omitempty"`
 }
 
 // Validate implements Validator. See this file's package-level doc
@@ -133,6 +147,27 @@ func (l *LogisticsFile) Validate() error {
 			return fieldErr("commodities["+name+"].defaultBufferPolicy",
 				"must name a policy present in bufferPolicies (got \""+rec.DefaultBufferPolicy+"\")")
 		}
+	}
+	seenStock := make(map[string]struct{}, len(l.StartingStocks))
+	for i, ss := range l.StartingStocks {
+		pfx := "startingStocks[" + strconv.Itoa(i) + "]"
+		if err := requireNonEmptyString(pfx+".district", ss.District); err != nil {
+			return err
+		}
+		if _, ok := l.Commodities[ss.Commodity]; !ok {
+			return fieldErr(pfx+".commodity", "must name a commodity present in commodities (got \""+ss.Commodity+"\")")
+		}
+		if ss.Capacity < 0 || ss.InitialLevel < 0 || ss.InitialLevel > ss.Capacity {
+			return fieldErr(pfx, "capacity and initialLevel must be >= 0 and initialLevel <= capacity")
+		}
+		// BUG-1142 r1 F3: a repeated (district, commodity) row would silently
+		// REPLACE the earlier shelf at provision time (Provision resets), e.g.
+		// an empty second row re-creating the "no materials" bug. Refuse.
+		dupKey := ss.District + "|" + ss.Commodity
+		if _, dup := seenStock[dupKey]; dup {
+			return fieldErr(pfx, "duplicate (district, commodity) row \""+ss.District+"\"/\""+ss.Commodity+"\"; each shelf may be listed once")
+		}
+		seenStock[dupKey] = struct{}{}
 	}
 	return nil
 }

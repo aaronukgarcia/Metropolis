@@ -75,7 +75,7 @@ func TestWireTUI_AC_B2_BuildScreenShowsEngineState(t *testing.T) {
 // real engine and the engine's reason is shown on screen. (The accepted
 // path's queue evidence lives in compose's
 // TestBuildView_AC_B2_B3_QueuedBuildVisible; the ledger half is
-// descoped against BUG-1142.)
+// carried by compose's un-skipped TestBuildView_Attack_AC_B3_BuildCostReachesTreasury; BUG-1142 fixed.)
 func TestWireTUI_AC_B4_RejectionReasonShown(t *testing.T) {
 	w := bootForScreenTest(t)
 	cat, _ := w.extra.build.Catalogue()

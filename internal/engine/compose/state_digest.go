@@ -177,6 +177,30 @@ func (c *Composition) StateDigest() [32]byte {
 		st.socialW.digestInto(h)
 	}
 
+	// 8. BUG-1142 r1: the construction accrual state (a settlement-timing
+	// ledger no module holds) and the logistics shelves (the round found the
+	// digest blind to both, so save-integrity gates could not see a refilled
+	// shelf or a reset accrual baseline).
+	digestInt64(h, st.materialsDrawnCumulative)
+	digestInt64(h, st.constructionAccrualLocal)
+	digestInt64(h, st.constructionAccrualExternal)
+	digestInt64(h, st.constructionSettledLocal)
+	digestInt64(h, st.constructionSettledExternal)
+	if st.logistics != nil {
+		shelves, shErr := st.logistics.DigestStocks()
+		digestInt64Err(h, int64(len(shelves)), shErr)
+		for _, sh := range shelves {
+			h.Write([]byte(sh.District))
+			h.Write([]byte{0})
+			h.Write([]byte(sh.Commodity))
+			h.Write([]byte{0})
+			digestInt64(h, sh.Level)
+			digestInt64(h, sh.Capacity)
+			h.Write([]byte(sh.BufferPolicy))
+			h.Write([]byte{0})
+		}
+	}
+
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out

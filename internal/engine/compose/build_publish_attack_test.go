@@ -2,7 +2,6 @@ package compose
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
@@ -43,9 +42,9 @@ func wireBuildAttackEngine(t *testing.T) (*Composition, *protocol.InProcTranspor
 // treatment's treasury must end strictly lower. Tick-based, no wall clock
 // beyond sendAndAwait's hang guard.
 func TestBuildView_Attack_AC_B3_BuildCostReachesTreasury(t *testing.T) {
-	if os.Getenv("METRO_RUN_BUG1142") != "1" {
-		t.Skip("BUG-1142: the default composition has no ConstructionMaterials supply, so a queued build never reaches the ledger; set METRO_RUN_BUG1142=1 to run (expected RED until BUG-1142 lands)")
-	}
+	// BUG-1142 FIXED: the default composition now provisions a baseline
+	// ConstructionMaterials stock (data/logistics.json startingStocks), so the
+	// queued build progresses and settles; no env gate remains.
 	run := func(withBuild bool) int64 {
 		comp, transport := wireBuildAttackEngine(t)
 		cell := protocol.CellRef{X: 0, Y: 0}
@@ -70,6 +69,7 @@ func TestBuildView_Attack_AC_B3_BuildCostReachesTreasury(t *testing.T) {
 		t.Fatal("control treasury is zero: the comparison would be vacuous")
 	}
 	treated := run(true)
+	t.Logf("control treasury = %d, treated = %d, settled build cost = %d", control, treated, control-treated)
 	if treated >= control {
 		t.Fatalf("treasury with a queued build = %d, without = %d: the build cost never reached the ledger", treated, control)
 	}
