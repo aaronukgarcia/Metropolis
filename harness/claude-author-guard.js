@@ -2520,6 +2520,28 @@ function scanTextHasDecoderFedShell(text) {
 // guard cannot see. `print(1+1)` and other harmless one-liners carry none.
 const SHELL_REACH_RE = /\b(system|popen|passthru|shell_exec|os\.system|os\.popen|subprocess\.(?:run|call|check_call|Popen|popen)|execSync|spawnSync|spawn|fork|exec)\s*\(|\bchild_process\b|`/i;
 
+/** BUG-1148: runtime-aware shell-reach test. In node, a backtick is a TEMPLATE
+ * LITERAL (markdown inline-code in a string edit is full of them) and
+ * `<regex>.exec(` is RegExp.exec - neither reaches a shell, so a plain
+ * `node -e` fs string-replace one-liner must not trip the BUG-332 deny. Real
+ * node shell reach (`child_process`, execSync/spawnSync/spawn/fork/bare exec()
+ * call) still matches. Every other runtime (perl/php/ruby backticks ARE
+ * shell exec) keeps the full SHELL_REACH_RE unchanged. */
+function shellReachIn(body, runtime, doubleQuoted) {
+  if (!runtime || runtime.toLowerCase() !== 'node') return SHELL_REACH_RE.test(body);
+  // r2: in a DOUBLE-quoted body an unescaped backtick is bash command
+  // substitution (runs before node) - the caller already blanked the
+  // backslash-escaped ones, so only a single-quoted body gets blanked here.
+  let jsBody = doubleQuoted ? body : body.replace(/`/g, ' ');
+  // r2: only a genuine regex LITERAL receiver (start not preceded by an
+  // identifier/closer, first char not * or /) is RegExp.exec - `c/**/.exec(`
+  // and `c/*g*/.exec(` are comment-adjacent real exec calls.
+  jsBody = jsBody.replace(
+    /(^|[=(,:;!&|?{}\[\s])\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^\/\\\n\[])+\/[gimsuyd]*\.exec\s*\(/g,
+    '$1 ');
+  return SHELL_REACH_RE.test(jsBody);
+}
+
 /** True when a STRING-EXECUTING RUNTIME at command position in code-exec mode
  * has a code string that reaches a shell — `php -r 'system(...)'`,
  * `python -c 'import os; os.system(...)'`, `perl -e 'system(...)'`. Same
@@ -2536,8 +2558,14 @@ function stringExecutorFeedsShell(text) {
   const re = /(?:^|[;&|(\n])\s*(?:python|python2|python3|perl|php|ruby|node)(?:\.exe)?\s+(?:-\S+\s+)*(?:-[A-Za-z]*[cerpm][A-Za-z]*|--eval)\s+(?:"((?:\$\([^()]*\)|`[^`]*`|\\.|[^"\\])*)"|'([^']*)')/gi;
   let m;
   while ((m = re.exec(normalized)) !== null) {
-    const body = m[1] !== undefined ? unescapeDoubleQuoted(m[1]) : m[2];
-    if (body && SHELL_REACH_RE.test(body)) return true;
+    const dq = m[1] !== undefined;
+    // r2: backslash-escaped backticks in a double-quoted body are literal
+    // (template-literal) characters, not command substitution - blank them
+    // BEFORE unescaping; any remaining backtick is bash substitution.
+    const runtime = (m[0].match(/(python3?|python2|perl|php|ruby|node)(?:\.exe)?\s/i) || [])[1];
+    const isNode = !!runtime && runtime.toLowerCase() === 'node';
+    const body = dq ? unescapeDoubleQuoted(isNode ? m[1].replace(/\\([\s\S])/g, (pair, ch) => (ch === '`' ? ' ' : pair)) : m[1]) : m[2];
+    if (body && shellReachIn(body, runtime, dq)) return true;
   }
   return false;
 }

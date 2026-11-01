@@ -1682,6 +1682,32 @@ test('BUG-332 r18 (r17 F3): a known data-text TRANSFORMER (sed/awk/tr with a pro
   }
 });
 
+test('BUG-1148: a plain node -e fs string-replace one-liner (template literal / RegExp.exec / sed as data) is NOT a decoder-fed shell; true BUG-332 shapes still flag', () => {
+  // (a) the false-positive shape: markdown inline-code backticks (template
+  // literal) and /re/.exec( inside a node -e source, no pipe, no git.
+  const tick = String.fromCharCode(96);
+  const allowed = [
+    `node -e 'const fs=require("fs");let s=fs.readFileSync("a.md","utf8");s=s.replace(/x/,${tick}y${tick});fs.writeFileSync("a.md",s)'`,
+    `node -e "const fs=require('fs');let s=fs.readFileSync('a.md','utf8');s=s.replace(/x(\\d)/.exec(s)[0],'y');fs.writeFileSync('a.md',s)"`,
+    // (d) quoted script text containing sed/awk/tr/base64 as data
+    `node -e "console.log('sed s/a/b/ awk tr base64 -d | bash')"`,
+  ];
+  for (const cmd of allowed) {
+    assert.equal(guard.hasDecoderFedShell(cmd), false, `must stay clear: ${cmd}`);
+  }
+  // (b) genuine decoder piped to a shell, (c) node -e output piped to a shell,
+  // plus node that really reaches a shell, plus non-node backtick exec.
+  const flagged = [
+    "echo 'Zm9v' | base64 -d | bash",
+    `node -e "console.log('git commit -m x')" | sh`,
+    `node -e "require('child_process').execSync('git commit -m x')"`,
+    `perl -e 'print ${tick}git commit -m x${tick}'`,
+  ];
+  for (const cmd of flagged) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must still flag: ${cmd}`);
+  }
+});
+
 test('BUG-046: git cherry-pick with a -c user.email override is now ADVISED, not BLOCKED (was zero coverage)', () => {
   withTempRepo((dir) => {
     initRepoWithHistory(dir, 3);
