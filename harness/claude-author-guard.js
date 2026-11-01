@@ -2428,8 +2428,29 @@ function commandSubstitutionFeedsShell(text) {
       const body = text.slice(i + 2, close);
       if (substitutionBodyEndsInDecoder(body)) return true;
     }
+    // BUG-1166: backtick substitution is the same construct. Same rules: not
+    // inside a quoted region (mask - single quotes are inert), at command
+    // position, and a backslash-escaped backtick (odd run of backslashes
+    // before it) is a literal character, not an opener.
+    if (text[i] === '`' && !isEscapedAt(text, i) &&
+        substitutionIsAtCommandPosition(text, i, mask)) {
+      let j = i + 1;
+      while (j < text.length && !(text[j] === '`' && !isEscapedAt(text, j))) j++;
+      if (j >= text.length) continue; // unterminated
+      const body = text.slice(i + 1, j).replace(/\\`/g, '`');
+      if (substitutionBodyEndsInDecoder(body)) return true;
+      if (commandSubstitutionFeedsShell(body)) return true; // re-scan body for a nested $( ... )
+      i = j; // skip past the closer so it is not read as a new opener
+    }
   }
   return false;
+}
+
+/** True when the character at `i` is preceded by an odd run of backslashes. */
+function isEscapedAt(text, i) {
+  let n = 0;
+  for (let k = i - 1; k >= 0 && text[k] === '\\'; k--) n++;
+  return n % 2 === 1;
 }
 
 /** A long base64-looking token (≥16 base64 chars, optional `=` padding) — the
