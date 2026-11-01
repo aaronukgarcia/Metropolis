@@ -460,6 +460,7 @@ import {
 import type {
   BoxPlan,
   CityWideCivicGroup,
+  PlanBoxInput,
   ReplanBox,
   ReplanContent,
   ReplanLadderRung,
@@ -3574,6 +3575,53 @@ function replanCityWideGroups(cur: SimState, box: ReplanBox): CityWideCivicGroup
   return out;
 }
 
+// ---- BUG-1172: discarded re-plan memo ---------------------------------------
+// replanBox is a pure function of its input, so a plan discarded for an
+// invariant failure fails identically on every later glide pass until an input
+// changes (box, ports, phase, contents, groups, seed). Without a memo the same
+// MET-V871 re-logged every pass (14 records in ~8 s). SESSION-scoped module
+// cache, deliberately NOT in SimState (save/load and the state digest are
+// untouched). Reducer-safe the same way the other module caches are: it holds
+// only a pure function of the input, so a StrictMode double invoke or a replay
+// reaches the identical decision; a memo hit takes the SAME discard branch
+// (same skip entry, same dwell clear, same release) and only suppresses the
+// repeat log. Bounded FIFO.
+const REPLAN_DISCARD_MEMO_MAX = 64;
+const replanDiscardedPlans = new Set<string>();
+let replanBoxImpl: (input: PlanBoxInput) => BoxPlan = replanBox;
+
+export function replanDiscardKeyOf(input: PlanBoxInput): string {
+  // EXACT key (BUG-1172 r1): the full canonical serialisation of the planner
+  // input, compared by string equality. A lossy hash key could collide for two
+  // different inputs and a false hit changes STATE (a sound plan discarded,
+  // dwell cleared), so the memo never trusts a hash. Deterministic: every
+  // field is an ordered array/scalar built by the callers in a fixed order.
+  return JSON.stringify([
+    input.box,
+    input.ports,
+    input.latticePhase ?? 0,
+    input.seed,
+    input.contents,
+    input.cityWideGroups ?? [],
+    input.rungs,
+  ]);
+}
+function replanRememberDiscard(key: string): void {
+  if (replanDiscardedPlans.has(key)) return;
+  if (replanDiscardedPlans.size >= REPLAN_DISCARD_MEMO_MAX) {
+    const oldest = replanDiscardedPlans.values().next().value;
+    if (oldest !== undefined) replanDiscardedPlans.delete(oldest);
+  }
+  replanDiscardedPlans.add(key);
+}
+
+/** TEST SEAM (BUG-1172): swap the planner (null restores it) and clear the memo. */
+export function replanDiscardMemoTestSeam(impl: ((input: PlanBoxInput) => BoxPlan) | null): { size: () => number } {
+  replanBoxImpl = impl ?? replanBox;
+  replanDiscardedPlans.clear();
+  return { size: () => replanDiscardedPlans.size };
+}
+
 /**
  * LEAD RULING 2026-09-06 — THE CITY-WIDE LATTICE PHASE, computed ONCE per pass
  * over the whole city and handed to every box the pass plans. It must never be
@@ -5176,7 +5224,7 @@ function applyConsolidatorPass(
           replanBoxRect.y0 <= wildernessHi.y &&
           replanBoxRect.y0 + replanBoxRect.h - 1 >= wildernessLo.y);
       if (boxNearCity) {
-        const plan = replanBox({
+        const planInput: PlanBoxInput = {
           box: replanBoxRect,
           contents: replanContentsOf(cur, replanBoxRect),
           ports: replanFindPorts(
@@ -5188,16 +5236,31 @@ function applyConsolidatorPass(
           // LEAD RULING 2026-09-06: ONE city-wide phase for every box this pass.
           latticePhase: replanLatticePhase(cur),
           seed: layoutSeedOf(sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0), 0),
-        });
-        if (plan.invariantFailures.length > 0) {
+        };
+        // BUG-1172: the plan is a pure function of its input, so a plan that
+        // was discarded for an invariant failure fails identically on every
+        // later glide pass until an input changes. Skip re-planning (and
+        // re-logging MET-V871) for an input already discarded this session.
+        // The memo is only consulted when non-empty, so the common path pays
+        // no hashing cost.
+        const discardKey = replanDiscardedPlans.size > 0 ? replanDiscardKeyOf(planInput) : null;
+        const alreadyDiscarded = discardKey !== null && replanDiscardedPlans.has(discardKey);
+        const planOrNull: BoxPlan | null = alreadyDiscarded ? null : replanBoxImpl(planInput);
+        // Non-null on every path that reads it (the discard branch below
+        // guards on planOrNull before touching it).
+        const plan = planOrNull as BoxPlan;
+        if (alreadyDiscarded || (planOrNull !== null && planOrNull.invariantFailures.length > 0)) {
           // GR#7/GR#17: a plan that fails its own invariants is DISCARDED
           // loudly and the box is left untouched — never executed. A plan
           // that (say) orphans a port would cut the outside network off from
           // everything inside the box.
-          recordError(
-            `Consolidator re-plan produced a plan violating its own invariant at box ${planKey}: ${plan.invariantFailures.join('; ')}`,
-            { type: 'app', code: 'MET-V871', action: `tick=${tick}` },
-          );
+          if (planOrNull !== null) {
+            recordError(
+              `Consolidator re-plan produced a plan violating its own invariant at box ${planKey}: ${plan.invariantFailures.join('; ')}`,
+              { type: 'app', code: 'MET-V871', action: `tick=${tick}` },
+            );
+            replanRememberDiscard(discardKey ?? replanDiscardKeyOf(planInput));
+          }
           skipped.push({ sectionKey: sectionKeyOf(replanBoxRect.x0, replanBoxRect.y0), reason: 'replan discarded: invariant failure' });
           // LEAD RULING "the box dwells": a discarded plan has nothing to
           // converge to, so the window is released immediately and slides on
