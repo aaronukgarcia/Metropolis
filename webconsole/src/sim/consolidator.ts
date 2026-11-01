@@ -1296,8 +1296,37 @@ export function findOpportunities(
       // s.buildings here (AC-37: nothing O(buildings) inside a loop over
       // sections/rungs).
       const bucket = audit.buildingIdsBySpec[rung.from] ?? [];
-      const candidateIds = bucket.slice(0, rung.groupSize);
+      // BUG-1151 (FEAT-2326609846 blind review): mirror the city-wide round-F1
+      // rule — order by (real capacity at current tier ASCENDING, id
+      // ascending) BEFORE slicing, so an auto-scaled member (capacityTier > 0)
+      // is only pulled in when no smaller-capacity alternative remains. A
+      // plain lowest-id slice let one scaled low-id member push the group's
+      // capacityGain negative and the apply step skip it every pass forever
+      // while a valid tier-0 group sat in the same bucket. The id tiebreak
+      // keeps the order total (GR#21). The apply step consumes
+      // opp.buildingIds verbatim (engine.ts group lookup), so finder and
+      // apply agree on membership by construction.
+      const orderedBucket = bucket.slice();
+      if (orderedBucket.length > rung.groupSize) {
+        // Only needed when there is a real choice; an exactly-groupSize
+        // bucket has one possible group (order within it is irrelevant to
+        // membership, and ids stay ascending as before).
+        const capOf = new Map<number, number>();
+        for (const bid of orderedBucket) {
+          capOf.set(bid, buildingCapacityOf(fromSpec, buildingById.get(bid)?.capacityTier ?? 0));
+        }
+        orderedBucket.sort((a, b) => {
+          const ca = capOf.get(a) ?? 0;
+          const cb = capOf.get(b) ?? 0;
+          if (ca !== cb) return ca - cb;
+          return a - b;
+        });
+      }
+      const candidateIds = orderedBucket.slice(0, rung.groupSize);
       if (candidateIds.length < rung.groupSize) continue;
+      // Keep the reported ids ascending (previous contract: lowest-id-first
+      // listing) regardless of the capacity-first selection order.
+      candidateIds.sort((a, b) => a - b);
 
       const buildCost = placementCost(toSpec);
       const scrapRecovered = Math.round(placementCost(fromSpec) * CONSOLIDATOR_SCRAP_FRACTION) * rung.groupSize;
