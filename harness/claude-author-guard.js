@@ -394,8 +394,13 @@ function git(args) {
  * logical line" to their respective shells. Collapse both to a single space
  * before any matching runs, so the rest of this file never has to know they
  * existed. */
-function normalizeContinuations(cmd) {
-  return cmd.replace(/\\\r?\n/g, ' ').replace(/`\r?\n/g, ' ');
+function normalizeContinuations(cmd, view) {
+  const out = cmd.replace(/\\\r?\n/g, ' ');
+  // BUG-1182 gap 1: a backtick before a newline is a PowerShell continuation
+  // but, in bash, can be the CLOSER of a substitution that ends its line. The
+  // text alone does not say which shell it is for, so the decoder scan reads
+  // BOTH views (hasDecoderFedShell); view 'bash' keeps backtick-newline.
+  return view === 'bash' ? out : out.replace(/`\r?\n/g, ' ');
 }
 
 // ---------------------------------------------------------------------------
@@ -445,8 +450,8 @@ const WRAPPER_PATTERNS = [
  * "run this string as a command" wrappers, recursed to MAX_WRAPPER_DEPTH.
  * Order matters: the outer text is checked first (index 0), so a direct
  * invocation is found before any nested one. */
-function gatherScanTexts(cmd, depth) {
-  const normalized = normalizeContinuations(cmd);
+function gatherScanTexts(cmd, depth, view) {
+  const normalized = normalizeContinuations(cmd, view);
   const texts = [normalized];
   if (depth >= MAX_WRAPPER_DEPTH) return texts;
   for (const pattern of WRAPPER_PATTERNS) {
@@ -469,7 +474,7 @@ function gatherScanTexts(cmd, depth) {
       // shells inside single quotes, so it is used as-is — unescaping it
       // would be wrong, not merely unnecessary.
       const body = m[1] !== undefined ? unescapeDoubleQuoted(m[1]) : m[2];
-      if (body) texts.push(...gatherScanTexts(body, depth + 1));
+      if (body) texts.push(...gatherScanTexts(body, depth + 1, view));
     }
   }
   // BUG-332 r7: wrapper bodies the boundary-anchored WRAPPER_PATTERNS above
@@ -479,28 +484,28 @@ function gatherScanTexts(cmd, depth) {
   // wrapper word). The lexer recognises the wrapper word at COMMAND position
   // and extracts the run-string it executes, recursed the same way.
   for (const body of wrapperBodiesFromWords(normalized)) {
-    if (body) texts.push(...gatherScanTexts(body, depth + 1));
+    if (body) texts.push(...gatherScanTexts(body, depth + 1, view));
   }
   // BUG-332 r9 (r8 attacker F4): heredoc bodies fed to a SHELL are command
   // text the shell executes (`sudo bash <<'EOF' … git add … EOF`), but
   // buildQuoteMask masks them opaque so the lexer never splits the git words
   // inside. Extract the body of every shell-fed heredoc and recurse into it.
   for (const body of heredocBodiesFromWords(normalized)) {
-    if (body) texts.push(...gatherScanTexts(body, depth + 1));
+    if (body) texts.push(...gatherScanTexts(body, depth + 1, view));
   }
   // BUG-332 r10 (r9 attacker F4b): pipe-fed shell text — `echo "git add x &&
   // git commit" | bash` has no wrapper and no heredoc, yet bash EXECUTES the
   // piped text. Extract the verbatim emitter's quoted arguments when a shell
   // is the pipe target (see pipeFedShellBodies for the honest emitter scope).
   for (const body of pipeFedShellBodies(normalized)) {
-    if (body) texts.push(...gatherScanTexts(body, depth + 1));
+    if (body) texts.push(...gatherScanTexts(body, depth + 1, view));
   }
   // BUG-332 r12 (r11 attacker NEW-1): herestring bodies fed to a shell —
   // `bash <<< "git add evil.go && git commit"` — are command text the shell
   // executes from STDIN (a `<<<` redirection the lexer masks as a quoted
   // prose word). Extract every shell-fed herestring operand and recurse.
   for (const body of herestringBodiesFromWords(normalized)) {
-    if (body) texts.push(...gatherScanTexts(body, depth + 1));
+    if (body) texts.push(...gatherScanTexts(body, depth + 1, view));
   }
   // De-duplicate: the regex and lexer paths can both surface the SAME body
   // (a `; eval "..."` is both boundary-anchored and command-position) and two
@@ -2381,10 +2386,44 @@ function findSubstitutionClose(text, open) {
  * EXECUTED as (part of) a command; one inside a quoted argument is data. */
 function substitutionIsAtCommandPosition(text, open, mask) {
   if (mask[open]) return false;
-  let i = open - 1;
-  while (i >= 0 && /\s/.test(text[i])) i--;
-  if (i < 0) return true; // start of text
-  return '|;&({'.includes(text[i]);
+  return isCommandPositionAt(text, open);
+}
+
+// BUG-1182 gap 2: words after which the next word is again a command.
+const COMMAND_POSITION_KEYWORDS = new Set([
+  'if', 'then', 'do', 'else', 'elif', 'while', 'until', 'time', 'env', 'eval',
+]);
+
+/** True when index `at` starts a command word: start of text, after a newline
+ * or one of `|;&({!`, or after a command-position keyword (if/then/do/time/
+ * env/eval/...). Spaces and tabs are skipped, newlines are NOT (a newline
+ * ends the previous command). A keyword only counts when it is itself at
+ * command position, so `echo then $(x)` stays data. */
+function isCommandPositionAt(text, at, depth) {
+  if ((depth || 0) > 8) return false;
+  let i = at - 1;
+  while (i >= 0 && (text[i] === ' ' || text[i] === '\t' || text[i] === '\r')) i--;
+  if (i < 0) return true;
+  const c = text[i];
+  if (c === '\n' || '|;&({'.includes(c)) return true;
+  if (c === '!') return i === 0 || /[\s;&|({]/.test(text[i - 1]);
+  let k = i;
+  while (k >= 0 && /[A-Za-z]/.test(text[k])) k--;
+  const word = text.slice(k + 1, i + 1);
+  if (word && COMMAND_POSITION_KEYWORDS.has(word) && (k < 0 || /[\s;&|({]/.test(text[k]))) {
+    return isCommandPositionAt(text, k + 1, (depth || 0) + 1);
+  }
+  return false;
+}
+
+/** BUG-1182 gap 2: the substitution is the WHOLE content of a double-quoted
+ * command word (`"$(decoder)" | bash`, a quoted backtick form): the quote
+ * opens at command position and closes right after the substitution. */
+function substitutionIsQuotedCommandWord(text, open, close, mask) {
+  const q = open - 1;
+  if (q < 0 || text[q] !== '"' || !mask[q] || (q > 0 && mask[q - 1])) return false;
+  if (text[close + 1] !== '"') return false;
+  return isCommandPositionAt(text, q);
 }
 
 /** True when the command-substitution body's pipeline ends in a known
@@ -2418,30 +2457,60 @@ function substitutionBodyEndsInDecoder(body) {
  * AND each wrapper/heredoc/herestring body) is scanned by the caller, so a
  * `bash -c "$(echo '<b64>' | base64 -d)"` is caught on its extracted body
  * where the substitution sits at command position. */
-function commandSubstitutionFeedsShell(text) {
+function commandSubstitutionFeedsShell(text, top) {
   const mask = buildQuoteMask(text);
   for (let i = 0; i < text.length; i++) {
-    if (text[i] === '$' && text[i + 1] === '(' &&
-        substitutionIsAtCommandPosition(text, i, mask)) {
+    if (text[i] === '$' && text[i + 1] === '(') {
       const close = findSubstitutionClose(text, i);
-      if (close < 0) continue;
-      const body = text.slice(i + 2, close);
-      if (substitutionBodyEndsInDecoder(body)) return true;
+      if (close >= 0 &&
+          (substitutionIsAtCommandPosition(text, i, mask) ||
+           substitutionIsQuotedCommandWord(text, i, close, mask))) {
+        const body = text.slice(i + 2, close);
+        if (substitutionBodyEndsInDecoder(body)) return true;
+      }
     }
     // BUG-1166: backtick substitution is the same construct. Same rules: not
     // inside a quoted region (mask - single quotes are inert), at command
     // position, and a backslash-escaped backtick (odd run of backslashes
     // before it) is a literal character, not an opener.
-    if (text[i] === '`' && !isEscapedAt(text, i) &&
-        substitutionIsAtCommandPosition(text, i, mask)) {
+    if (text[i] === '`' && !isEscapedAt(text, i)) {
       let j = i + 1;
       while (j < text.length && !(text[j] === '`' && !isEscapedAt(text, j))) j++;
-      if (j >= text.length) continue; // unterminated
-      const body = text.slice(i + 1, j).replace(/\\`/g, '`');
-      if (substitutionBodyEndsInDecoder(body)) return true;
-      if (commandSubstitutionFeedsShell(body)) return true; // re-scan body for a nested $( ... )
-      i = j; // skip past the closer so it is not read as a new opener
+      if (j >= text.length) {
+        // BUG-1182 gap 3: an unterminated backtick outside quotes/comments is
+        // refused (fail closed) - the shell would read on for a closer the
+        // guard cannot see. A backtick that ends its line is left alone: it
+        // is a PowerShell continuation in the other view of the same text.
+        if (top && !mask[i] && !backtickInComment(text, i) &&
+            text[i + 1] !== '\n' && text[i + 1] !== '\r' &&
+            // narrowed after r1: a lone backtick is PowerShell's escape char and
+            // bash rejects it as a syntax error, so refuse only when the text
+            // after it ends in a decoder.
+            substitutionBodyEndsInDecoder(text.slice(i + 1))) return true;
+        continue;
+      }
+      if (substitutionIsAtCommandPosition(text, i, mask) ||
+          substitutionIsQuotedCommandWord(text, i, j, mask)) {
+        const body = text.slice(i + 1, j).replace(/\\`/g, '`');
+        if (substitutionBodyEndsInDecoder(body)) return true;
+        if (commandSubstitutionFeedsShell(body, false)) return true; // re-scan body for a nested $( ... )
+        i = j; // skip past the closer so it is not read as a new opener
+      } else if (!mask[i]) {
+        // a real (unquoted) substitution that is DATA here (`cd `pwd``): its
+        // closer must not be read as a fresh, unterminated opener.
+        i = j;
+      }
     }
+  }
+  return false;
+}
+
+/** True when the unquoted \`#\` starts a comment earlier on the line of index i. */
+function backtickInComment(text, i) {
+  let ls = text.lastIndexOf('\n', i - 1) + 1;
+  const mask = buildQuoteMask(text);
+  for (let k = ls; k < i; k++) {
+    if (text[k] === '#' && !mask[k] && (k === ls || /\s/.test(text[k - 1]))) return true;
   }
   return false;
 }
@@ -2479,13 +2548,19 @@ function powerShellDecoderFeedsShell(text) {
 }
 
 function hasDecoderFedShell(text) {
-  for (const t of gatherScanTexts(text, 0)) {
-    if (scanTextHasDecoderFedShell(t)) return true;
+  // BUG-1182 gap 1: scan BOTH readings of backtick-newline (PowerShell
+  // continuation = removed; bash = a real backtick, possibly a closer). The
+  // PowerShell view is first, so nothing it caught before is lost.
+  for (const view of [undefined, 'bash']) {
+    const texts = gatherScanTexts(text, 0, view);
+    for (let n = 0; n < texts.length; n++) {
+      if (scanTextHasDecoderFedShell(texts[n], n === 0 && view === 'bash')) return true;
+    }
   }
   return false;
 }
 
-function scanTextHasDecoderFedShell(text) {
+function scanTextHasDecoderFedShell(text, top) {
   const words = scanShellWords(text);
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
@@ -2519,7 +2594,7 @@ function scanTextHasDecoderFedShell(text) {
   // whose body pipeline ends in a known decoder — `bash -c "$(echo '<b64>' |
   // base64 -d)"`, `$(echo '<b64>' | base64 -d) | bash` — the substitution
   // output is decoded bytes a shell executes.
-  if (commandSubstitutionFeedsShell(text)) return true;
+  if (commandSubstitutionFeedsShell(text, top)) return true;
   // BUG-332 r16 (r15 attacker F8): PowerShell's base64 command surface.
   if (powerShellDecoderFeedsShell(text)) return true;
   // BUG-332 r17 (r16 attacker F2c): a string-executing runtime at COMMAND
@@ -2549,6 +2624,13 @@ const SHELL_REACH_RE = /\b(system|popen|passthru|shell_exec|os\.system|os\.popen
  * call) still matches. Every other runtime (perl/php/ruby backticks ARE
  * shell exec) keeps the full SHELL_REACH_RE unchanged. */
 function shellReachIn(body, runtime, doubleQuoted) {
+  // BUG-1182 gap 4: a backtick in a SINGLE-quoted python body is literal to
+  // bash and meaningless to python (perl/php/ruby backticks DO run a shell),
+  // so it is not a shell-reach signal there. Real python shell reach
+  // (os.system, subprocess, ...) still matches.
+  if (runtime && /^python/i.test(runtime) && !doubleQuoted) {
+    return SHELL_REACH_RE.test(body.replace(/`/g, ' '));
+  }
   if (!runtime || runtime.toLowerCase() !== 'node') return SHELL_REACH_RE.test(body);
   // r2: in a DOUBLE-quoted body an unescaped backtick is bash command
   // substitution (runs before node) - the caller already blanked the
