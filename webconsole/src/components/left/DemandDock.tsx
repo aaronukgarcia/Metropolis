@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, isBrownoutActive, demandFixPlan, orderedDemandFixPlan, AUTO_BUILD_DEMAND_PERCENT } from '../../sim/data';
+import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, isBrownoutActive, demandFixPlan, demandFixInProgress, orderedDemandFixPlan, AUTO_BUILD_DEMAND_PERCENT } from '../../sim/data';
 import { useSim } from '../../sim/simContext';
 import { demandOf, levelOf } from '../../sim/engine';
 import { useBusy } from '../Busy';
 import { Panel } from '../Tabs';
-import { formatBuildingCount, demandFixMessage } from '../demandFixUi';
+import { formatBuildingCount, demandFixMessage, demandFixInProgressMessage } from '../demandFixUi';
 import { AffordabilityConfirm } from '../AffordabilityConfirm';
 import { evaluatePlacementBatch, type PendingBatchPlacement } from '../placementGate';
 
@@ -27,6 +27,9 @@ export function DemandDock() {
   // uncapped shortfall AND an unlocked provider; keyed by serviceKey so each
   // row looks up its own plan entry (services.map below).
   const fixPlanByService = new Map(demandFixPlan(state).map((p) => [p.serviceKey, p]));
+  // BUG-1164: services whose shortfall is already covered by providers under
+  // construction — no Fix, no Auto-build fallback, an honest row line instead.
+  const inProgressByService = new Map(demandFixInProgress(state).map((p) => [p.serviceKey, p]));
   // BUG-572 AC-2/AC-3: dynamic sort by demand height (worst shortfall first —
   // same `.value` descending comparator pickAutoSpec() already applies at
   // data.ts, reused verbatim), with Health pinned at the top — Aaron-approved
@@ -91,6 +94,7 @@ export function DemandDock() {
     // of always placing exactly one unit regardless of how large the
     // shortfall is. fixPlanByService is the SAME demandFixPlan(state) map
     // the Fix buttons read (SSOT, GR#3), keyed by auto.serviceKey.
+    if (inProgressByService.has(auto.serviceKey)) return; // BUG-1164: already being built
     const plan = fixPlanByService.get(auto.serviceKey);
     if (plan) {
       // Same plan, same gate as the "Fix (N)" button itself (runResolveDemand) —
@@ -163,7 +167,7 @@ export function DemandDock() {
               // 50?"): a visible (not just hover-title) sizing + alternative
               // line, built from the SAME fix plan item the button dispatches
               // against (agreement-by-construction).
-              fixMessage={fix ? demandFixMessage(fix) : undefined}
+              fixMessage={fix ? demandFixMessage(fix) : inProgressByService.has(m.id) ? demandFixInProgressMessage(inProgressByService.get(m.id)!) : undefined}
             />
           );
         })}

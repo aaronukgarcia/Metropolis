@@ -7134,19 +7134,99 @@ export function largestFirstFill(
  * "or you could use M x B instead" competing pick), preserving that
  * informational case unchanged.
  */
-export function demandFixPlan(s: SimState): DemandFixPlanItem[] {
+/**
+ * BUG-1164 — PIPELINE capacity: the credited capacity (same measure
+ * largestFirstFill() sizes a plan in — creditedUnitCapacity) of every
+ * same-service provider that is PLACED but still under construction
+ * (builtTick set and `tick - builtTick < constructionTicks(sp)`, the exact
+ * test isOnline() applies first). The coverage `have` counts online
+ * buildings only, so without this a Fix that has just been placed is
+ * invisible to the next plan and the whole shortfall is bought again
+ * (Aaron's Y10 city: 28 nuclear plants twice). The webconsole sim has no
+ * separate order queue — a placed building IS the queue entry
+ * (constructionQueueOf reads the same buildings) — so this walk is the
+ * whole pipeline. A bulldozed/cancelled provider is gone from
+ * s.buildings and so returns its capacity to the shortfall for free.
+ * 'parks' is excluded: parksCapacityOf() is deliberately NOT online-gated,
+ * so a park under construction is already in `have`. Pure/tick-derived
+ * (GR#21): no clock, no storage.
+ */
+let pipelineWalkCount = 0;
+/** TEST SEAM (BUG-1164 r1): number of building walks pipelineMapOf has performed. NODE_TEST_CONTEXT-guarded like the other house seams; structural pin, never wall-clock. */
+export function __pipelineWalkCountForTest(): number {
+  if (typeof process === 'undefined' || !process.env?.NODE_TEST_CONTEXT) {
+    throw new Error('__pipelineWalkCountForTest may only be called under NODE_TEST_CONTEXT (node --test)');
+  }
+  return pipelineWalkCount;
+}
+
+/** ONE memoised pass over s.buildings -> serviceKey -> pipeline {units, capacity} for every DEMAND_FIX_PROVIDERS service at once (BUG-1164 r1 perf: was one unmemoised walk per service per caller). */
+const pipelineMapOf: (s: SimState) => Map<string, { units: number; capacity: number }> = memoOnState((s) => {
+  pipelineWalkCount++;
+  const entries = Object.entries(DEMAND_FIX_PROVIDERS).filter(([k]) => k !== 'parks');
+  const map = new Map<string, { units: number; capacity: number }>();
+  for (const [k] of entries) map.set(k, { units: 0, capacity: 0 });
+  for (const b of s.buildings) {
+    if (b.builtTick == null) continue;
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    if (s.tick - b.builtTick >= constructionTicks(sp)) continue; // already online (or past construction)
+    for (const [k, rule] of entries) {
+      if (!rule.match(sp)) continue;
+      const acc = map.get(k)!;
+      acc.units++;
+      acc.capacity += creditedUnitCapacity(sp, rule.unitCapacity(sp));
+    }
+  }
+  return map;
+});
+
+function pipelineOf(s: SimState, serviceKey: string): { units: number; capacity: number } {
+  return pipelineMapOf(s).get(serviceKey) ?? { units: 0, capacity: 0 };
+}
+
+/** BUG-1164: a service in shortfall whose pipeline already covers the whole
+ *  fix target — demandFixPlan() omits it (no Fix button); the UI says so. */
+export interface DemandFixInProgress {
+  serviceKey: string;
+  /** Providers placed and still under construction for this service. */
+  units: number;
+  /** Their summed credited capacity. */
+  capacity: number;
+}
+
+function demandFixRows(s: SimState): { serviceKey: string; need: number; have: number }[] {
   const waste = wasteStatsOf(s);
-  const rows: { serviceKey: string; need: number; have: number }[] = [
+  return [
     ...serviceCoverageOf(s).map((c) => ({ serviceKey: c.id, need: c.need, have: c.cap })),
     { serviceKey: 'refuse', need: waste.generated, have: waste.capacity },
   ];
+}
+
+export function demandFixInProgress(s: SimState): DemandFixInProgress[] {
+  const out: DemandFixInProgress[] = [];
+  for (const row of demandFixRows(s)) {
+    if (row.need <= 0 || row.need - row.have <= 0) continue;
+    const pl = pipelineOf(s, row.serviceKey);
+    if (pl.units > 0 && (row.need - row.have) * AUTO_BUILD_DEMAND_FRACTION - pl.capacity <= 0) {
+      out.push({ serviceKey: row.serviceKey, units: pl.units, capacity: pl.capacity });
+    }
+  }
+  return out;
+}
+
+export function demandFixPlan(s: SimState): DemandFixPlanItem[] {
+  const rows = demandFixRows(s);
 
   const plan: DemandFixPlanItem[] = [];
   for (const row of rows) {
     if (row.need <= 0) continue;
     const shortfall = row.need - row.have;
     if (shortfall <= 0) continue; // already at/above need — nothing to fix
-    const fixAmount = shortfall * AUTO_BUILD_DEMAND_FRACTION;
+    // BUG-1164: size only what the pipeline (placed, still under construction)
+    // does not already cover — the plan's 150% target minus pipeline capacity.
+    const fixAmount = shortfall * AUTO_BUILD_DEMAND_FRACTION - pipelineOf(s, row.serviceKey).capacity;
+    if (fixAmount <= 0) continue; // pipeline already covers it — NO-OP (demandFixInProgress reports it)
     // BUG-685-MONEY (Aaron/independent-round 2026-09-04): demandFixPlan()'s
     // own mix/specId/count stay PURE capacity-driven — no `budget` argument
     // here — so the informational "headline" pick (a demand notice's "N x

@@ -8,6 +8,7 @@
 // output and formats it; it never mutates SimState.
 import {
   demandFixPlan,
+  type DemandFixInProgress,
   SPECS,
   AUTO_BUILD_DEMAND_PERCENT,
   AUTO_BUILD_DEMAND_FRACTION,
@@ -163,6 +164,17 @@ export function demandFixMessage(item: DemandFixPlanItem): string {
   const altName = SPECS[item.alternative.specId]?.name ?? item.alternative.specId;
   const alt = `${formatBuildingCount(altName, item.alternative.count)} (${fmtMoney(item.alternative.planCost)})`;
   return `${label}: ${shortfall} short — Fix builds ${AUTO_BUILD_DEMAND_PERCENT}%: ${chosen} or ${alt} — cheapest picked`;
+}
+
+/**
+ * BUG-1164: the one-line honest row text for a service whose shortfall is
+ * already covered by providers under construction (demandFixPlan() omits it,
+ * so there is no Fix button). Built from demandFixInProgress()'s own item.
+ */
+export function demandFixInProgressMessage(item: DemandFixInProgress): string {
+  const rawLabel = DEMAND_FIX_SERVICE_LABELS[item.serviceKey] ?? item.serviceKey;
+  const label = rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1);
+  return `${label}: ${item.units} building${item.units === 1 ? '' : 's'} in progress`;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

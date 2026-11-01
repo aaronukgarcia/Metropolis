@@ -182,7 +182,13 @@ test('ATTACK r3/PAUSED-SIM: with no tick between clicks, coverage never refreshe
   // outcome of the cap raise (more real progress per click), not a
   // regression — re-check this number again if a future cap/AUTO_BUILD_
   // DEMAND_FRACTION change moves it further.
-  assert.equal(after, 10, `paused-sim row count changed post-cap-raise (${before} -> ${after}) — re-check the "click again" guidance`);
+  // BUG-1164 PREMISE CHANGE (pipeline-blindness removed): this assertion used
+  // to pin `after === 10` — a count that only held because every re-click
+  // re-saw the SAME shortfall (placed-but-still-under-construction providers
+  // were invisible to demandFixPlan) and re-bought it. Now the placed
+  // providers count as pipeline capacity, so in a paused sim the plan is
+  // empty after the clicks (11 -> 0) and the extra clicks spend nothing.
+  assert.equal(after, 0, `paused-sim row count changed (${before} -> ${after}) — pipeline-aware sizing should leave nothing to re-buy`);
   assert.ok(s.funds >= 0);
 });
 
