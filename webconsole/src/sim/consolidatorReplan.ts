@@ -1206,7 +1206,16 @@ export function validatePlan(plan: ValidatablePlan): string[] {
   for (const tier of TIER_ORDER) {
     const tiles = plan.tierTiles[tier];
     if (tiles.length === 0) continue;
-    const distinct = new Set(Array.from(componentsOfTier(tiles, plan.passThrough?.[tier]).values()));
+    // BUG-1155 (lead ruling): a tile joined road-to-road to a tile of ANOTHER
+    // tier (a minor port's inside tile beside a higher-tier spur; an A-road
+    // spur ending on the minor line) is not its own component - the game's
+    // computeRoadConnectivity connects side-touching road tiles across tiers.
+    // Same shared TERMINAL-JOIN predicate the realised-box metric uses (GR#3):
+    // family = every planned tile of any tier plus this tier's recorded
+    // grade-separated crossings. Orthogonal adjacency only (tileComponents).
+    const family = new Set(all);
+    for (const k of Array.from(plan.passThrough?.[tier] ?? new Set<string>())) family.add(k);
+    const distinct = new Set(Array.from(componentsOfTierWithJoins(tiles, family).values()));
     if (distinct.size !== 1) failures.push(`${tier}: ${distinct.size} components inside the box, expected 1`);
   }
 
