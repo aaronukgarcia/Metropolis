@@ -1,8 +1,11 @@
 // FEAT-2326609728 inc2 — one-click demand fix, UI HALF.
 //
 // Pure UI-side helpers shared by the MapView advisor prompt and the DemandDock
-// per-service "Fix (N)" buttons, so the two surfaces never diverge on wording
-// or on which shortfall is "most pressing". Deliberately kept OUT of
+// per-service "Fix (N)" buttons, so the two share "which shortfall is most
+// pressing". Wording is NOT guaranteed identical: since UX-2 (FEAT-9995385592)
+// the dock's Fix label comes from demandPresentation.fixLabelOf (whole mix,
+// "(as funds allow)"), while the MapView advisor prompt still words its own
+// count x mix[0] text (tracked separately as BUG-1194). Deliberately kept OUT of
 // sim/data.ts / sim/engine.ts (inc1's engine core is landed + rounded and is
 // not touched by this increment) — this file only reads demandFixPlan()'s
 // output and formats it; it never mutates SimState.
@@ -43,6 +46,18 @@ import { fmtMoney, fmtNum } from '../sim/utils';
  */
 export function formatBuildingCount(name: string, count: number): string {
   return `${count} x ${name}`;
+}
+
+/**
+ * UX-2 r2 (F1): the WHOLE plan mix as one phrase, "4 x Nature Reserve + 1 x
+ * Botanical Garden" — what resolveDemand really places (placePlanItem walks
+ * every `mix` entry), never `count` (the mix TOTAL) glued to mix[0]'s name.
+ * Falls back to count x specId for a fixture without a mix. Pure.
+ */
+export function formatMixText(item: { specId: string; count: number; mix?: { specId: string; count: number }[] }): string {
+  // One entry (or none): count IS that entry's count, so keep reading the plan's own count/specId.
+  const entries = item.mix && item.mix.length > 1 ? item.mix : [{ specId: item.specId, count: item.count }];
+  return entries.map((m) => formatBuildingCount(SPECS[m.specId]?.name ?? m.specId, m.count)).join(' + ');
 }
 
 /**
@@ -156,9 +171,11 @@ export function demandFixMessage(item: DemandFixPlanItem): string {
   const rawLabel = DEMAND_FIX_SERVICE_LABELS[item.serviceKey] ?? item.serviceKey;
   const label = rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1);
   const shortfall = fmtShortfall(item.need - item.have);
-  const chosenName = SPECS[item.specId]?.name ?? item.specId;
-  const chosen = `${formatBuildingCount(chosenName, item.count)} (${fmtMoney(item.planCost)})`;
-  if (!item.alternative) {
+  const multi = !!item.mix && item.mix.length > 1;
+  // UX-2 r2 (F1): a multi-spec mix is named in full (count is the mix TOTAL, not
+  // mix[0]'s); its `alternative` is mix[1], already part of the list, so it is dropped.
+  const chosen = `${formatMixText(item)} (${fmtMoney(item.planCost)})`;
+  if (!item.alternative || multi) {
     return `${label}: ${shortfall} short — Fix builds ${AUTO_BUILD_DEMAND_PERCENT}%: ${chosen}`;
   }
   const altName = SPECS[item.alternative.specId]?.name ?? item.alternative.specId;

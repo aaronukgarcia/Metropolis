@@ -221,10 +221,10 @@ test('FEAT-2326609728 inc2 (b): a DEMAND-panel row in shortfall shows a "Fix (N)
     // "Fix (1)" (cleanwater AND hosp both clear in one unit) — disambiguate by
     // the button's title, which names the specific spec (fixTitle embeds
     // SPECS[fix.specId].name), not just the count.
-    const waterBtn = buttons.find((b) => /Fix \(1\)/.test(b.textContent ?? '') && /Reservoir/.test(b.title ?? ''));
+    const waterBtn = buttons.find((b) => /^Build up to 1 x Reservoir/.test(b.textContent ?? '') && /Reservoir/.test(b.title ?? ''));
     assert.ok(
       waterBtn,
-      `expected a "Fix (1)" Reservoir button for the clean-water row among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`
+      `expected a "Build up to 1 x Reservoir" button for the clean-water row among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`
     );
     // BUG-587: the title must read "1 x Reservoir" (formatBuildingCount),
     // never a mangled English-pluraliser suffix.
@@ -364,12 +364,12 @@ test('BUG-587 (d): "Water Works" x4 renders as "4 x Water Works" (never "Water W
     const { ctx: dockCtx } = makeCtx(state);
     const dock = await mountReal(DemandDock, dockCtx);
     const buttons = Array.from(dock.container.querySelectorAll('.demand-fix-btn')) as any[];
-    const waterBtn = buttons.find((b) => /Fix \(4\)/.test(b.textContent ?? '') && /Water Works/.test(b.title ?? ''));
+    const waterBtn = buttons.find((b) => /^Build up to 1 x Water Works \+ 3 x Water Tower$/.test(b.textContent ?? '') && /Water Works/.test(b.title ?? ''));
     assert.ok(
       waterBtn,
-      `expected a "Fix (4)" Water Works button among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`,
+      `expected a "Build up to 1 x Water Works + 3 x Water Tower" button (UX-2 r2 F1: the label names the whole mix, never the mix total glued to mix[0]) among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`,
     );
-    assert.ok(/4 x Water Works/.test(waterBtn!.title ?? ''), `Fix button title must read "4 x Water Works", got: "${waterBtn!.title}"`);
+    assert.ok(/1 x Water Works \+ 3 x Water Tower/.test(waterBtn!.title ?? ''), `Fix button title must read "1 x Water Works + 3 x Water Tower", got: "${waterBtn!.title}"`);
     assert.ok(!/Water Workses/.test(waterBtn!.title ?? ''), `Fix button title must not double-pluralise "Water Works": "${waterBtn!.title}"`);
     await dock.act(async () => {
       dock.root.unmount();

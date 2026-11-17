@@ -1,12 +1,25 @@
 import { useState } from 'react';
-import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, isBrownoutActive, demandFixPlan, demandFixInProgress, orderedDemandFixPlan, AUTO_BUILD_DEMAND_PERCENT } from '../../sim/data';
+import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, isBrownoutActive, demandFixPlan, demandFixInProgress, orderedDemandFixPlan } from '../../sim/data';
 import { useSim } from '../../sim/simContext';
 import { demandOf, levelOf } from '../../sim/engine';
 import { useBusy } from '../Busy';
 import { Panel } from '../Tabs';
-import { formatBuildingCount, demandFixMessage, demandFixInProgressMessage } from '../demandFixUi';
+import { demandFixMessage, demandFixInProgressMessage } from '../demandFixUi';
 import { AffordabilityConfirm } from '../AffordabilityConfirm';
 import { evaluatePlacementBatch, type PendingBatchPlacement } from '../placementGate';
+import {
+  METER_CAPS,
+  DEMAND_COLOUR_LAW,
+  serviceQuantitiesOf,
+  serviceRowView,
+  isBoughtIn,
+  fixLabelOf,
+  fixTitleOf,
+  zoneRowViews,
+  zoneArrow,
+  demandSummary,
+  type DemandTone,
+} from '../demandPresentation';
 
 export function DemandDock() {
   const { state, dispatch } = useSim();
@@ -86,6 +99,25 @@ export function DemandDock() {
   // shortfall in — it can never disagree with the other two consumers.
   const brownoutActive = isBrownoutActive(state);
 
+  // UX-2: every row's words/colour/quantities come from demandPresentation.ts
+  // (one colour law, GR#3). Quantities are the SAME serviceCoverageOf /
+  // wasteStatsOf rows demandFixPlan reads.
+  const quantities = serviceQuantitiesOf(state);
+  const zoneViews = zoneRowViews(state);
+  const serviceViews = new Map(
+    sortedServices.map((m) => [
+      m.id,
+      serviceRowView(m.id, m.value, m.alert, quantities.get(m.id), fixPlanByService.has(m.id), inProgressByService.get(m.id)?.units ?? 0, isBoughtIn(state, m.id)),
+    ]),
+  );
+  const summary = demandSummary(
+    sortedServices.map((m) => ({ label: m.label, tone: serviceViews.get(m.id)!.tone, value: m.value, phrase: serviceViews.get(m.id)!.phrase })),
+  );
+  // AC-2.5: collapsed by default when nothing is action-needed; a click on the
+  // summary strip overrides (session-local UI state, never SimState).
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? (summary.actionCount > 0 || summary.unknownCount > 0);
+
   function runAuto() {
     if (!auto) return;
     // BUG-601 (Aaron ruling, 2026-09-02): Auto-build now sizes the SAME way
@@ -142,11 +174,29 @@ export function DemandDock() {
             BROWNOUT: demand exceeds supply
           </div>
         )}
-        <DemandMeter label="Housing" value={demand.residential} color={SPECS.res_hut.color} />
-        <DemandMeter label="Shops" value={demand.commercial} color={SPECS.com_shop.color} />
-        <DemandMeter label="Industry" value={demand.industrial} color={SPECS.ind_factory.color} />
+        <button
+          type="button"
+          className={`demand-summary tone-${summary.tone === 'unknown' ? 'idle' : summary.tone}`}
+          aria-expanded={open}
+          onClick={() => setUserOpen(!open)}
+        >
+          <span className="demand-summary-caret">{open ? '▾' : '▸'}</span> {summary.text}
+        </button>
+        {open && (
+          <>
+        <div className="demand-legend" title="One colour law for every row">
+          {(['action', 'watch', 'healthy', 'build', 'idle'] as DemandTone[]).map((t) => (
+            <span key={t} className={`legend-chip tone-${t}`} title={DEMAND_COLOUR_LAW[t].meaning}>
+              {DEMAND_COLOUR_LAW[t].colour}: {DEMAND_COLOUR_LAW[t].meaning}
+            </span>
+          ))}
+        </div>
+        <DemandMeter label="Housing" value={demand.residential} color={SPECS.res_hut.color} tone={zoneViews.residential.tone} phrase={zoneViews.residential.phrase} quantity={zoneViews.residential.quantity} inputs={zoneViews.residential.inputs} caps="zone" arrow={zoneArrow(demand.residential)} />
+        <DemandMeter label="Shops" value={demand.commercial} color={SPECS.com_shop.color} tone={zoneViews.commercial.tone} phrase={zoneViews.commercial.phrase} quantity={zoneViews.commercial.quantity} inputs={zoneViews.commercial.inputs} caps="zone" arrow={zoneArrow(demand.commercial)} />
+        <DemandMeter label="Industry" value={demand.industrial} color={SPECS.ind_factory.color} tone={zoneViews.industrial.tone} phrase={zoneViews.industrial.phrase} quantity={zoneViews.industrial.quantity} inputs={zoneViews.industrial.inputs} caps="zone" arrow={zoneArrow(demand.industrial)} />
         {sortedServices.map((m) => {
           const fix = fixPlanByService.get(m.id);
+          const view = serviceViews.get(m.id)!;
           return (
             <DemandMeter
               key={m.id}
@@ -154,15 +204,20 @@ export function DemandDock() {
               value={m.value}
               color={SPECS[m.spec].color}
               alert={m.alert}
+              tone={view.tone}
+              phrase={view.phrase}
+              quantity={view.quantity}
+              caps="service"
               fixCount={fix?.count}
+              fixLabel={fix && view.fixAllowed ? fixLabelOf(fix, state.funds) : undefined}
               // BUG-587: "N x <Name>" (formatBuildingCount) — same shape as the
               // MapView advisor prompt and engine.ts's placeNotice (BUG-583),
               // sidestepping English pluralisation entirely. BUG-601: the
               // action now sizes to 50% of the outstanding shortfall (not a
               // full clear+5% headroom) — the copy says so, matching what
               // demandFixPlan()/resolveDemand actually place.
-              fixTitle={fix ? `Place ${formatBuildingCount(SPECS[fix.specId].name, fix.count)} to fix ${AUTO_BUILD_DEMAND_PERCENT}% of this shortfall` : undefined}
-              onFix={fix ? () => runResolveDemand(m.id) : undefined}
+              fixTitle={fix ? fixTitleOf(fix, state.funds) : undefined}
+              onFix={fix && view.fixAllowed ? () => runResolveDemand(m.id) : undefined}
               // BUG-606 ("no help - how much what type ... one hypermarket or
               // 50?"): a visible (not just hover-title) sizing + alternative
               // line, built from the SAME fix plan item the button dispatches
@@ -187,6 +242,8 @@ export function DemandDock() {
           </p>
         )}
         {!auto && <p className="hint">All covered — nothing needed right now.</p>}
+          </>
+        )}
       </div>
     </Panel>
     {pendingAfford && (
@@ -212,10 +269,31 @@ function DemandMeter({
   fixTitle,
   onFix,
   fixMessage,
+  tone,
+  phrase,
+  quantity,
+  inputs,
+  caps,
+  arrow,
+  fixLabel,
 }: {
   label: string;
   value: number;
   color: string;
+  /** UX-2 colour law tone (demandPresentation.ts) — colours bar, value and row accent. */
+  tone: DemandTone;
+  /** UX-2 plain-words direction phrase. */
+  phrase: string;
+  /** UX-2 real quantities ("Need 1,200, have 800 places"). */
+  quantity: string;
+  /** UX-2 model inputs, shown on hover. */
+  inputs?: string;
+  /** Which labelled end caps this meter carries (AC-2.3). */
+  caps: 'zone' | 'service';
+  /** Zone rows: arrow + label so direction is never colour-only. */
+  arrow?: string;
+  /** UX-2 action phrase naming the build ("Build 3 x Clinic"). */
+  fixLabel?: string;
   alert?: boolean;
   /** FEAT-2326609728 inc2: demandFixPlan() count for this service, when a
    *  provider is unlocked and buildable — undefined/onFix absent = no button. */
@@ -229,42 +307,51 @@ function DemandMeter({
    *  hovering. undefined = no shortfall for this row -> no line rendered. */
   fixMessage?: string;
 }) {
-  const w = Math.min(Math.abs(value), 100) / 2;
+  const finite = Number.isFinite(value);
+  const w = finite ? Math.min(Math.abs(value), 100) / 2 : 0;
   const pos = value >= 0;
+  const c = METER_CAPS[caps];
   return (
-    <div className="demand-row">
+    <div className={`demand-row tone-${tone}`} data-tone={tone}>
       <div
         className={`demand${alert ? ' alert' : ''}`}
-        title={`${label}: ${value > 0 ? '+' : ''}${value}${alert ? ' — BROWNOUT' : ''}`}
+        title={`${label}: ${finite ? `${value > 0 ? '+' : ''}${value}` : 'unknown'}${alert ? ' — BROWNOUT' : ''}${inputs ? `\n${inputs}` : ''}`}
       >
         <span className="swatch" style={{ background: color }} />
         <span className="d-label">{label}</span>
         <div className="d-bar">
           {pos ? (
-            <span className="d-fill pos" style={{ left: '50%', width: `${w}%` }} />
+            <span className={`d-fill tone-${tone}`} style={{ left: '50%', width: `${w}%` }} />
           ) : (
-            <span className="d-fill neg" style={{ right: '50%', width: `${w}%` }} />
+            <span className={`d-fill tone-${tone}`} style={{ right: '50%', width: `${w}%` }} />
           )}
           <span className="d-zero" />
         </div>
-        <span className={`mono d-val ${pos ? 'in' : 'out'}`}>
-          {value > 0 ? '+' : ''}
-          {value}
+        <span className={`mono d-val tone-${tone}`}>
+          {finite ? `${value > 0 ? '+' : ''}${value}` : '?'}
         </span>
         {onFix && (
           <button
             type="button"
             className="btn tiny demand-fix-btn"
             title={fixTitle}
+            data-fix-count={fixCount}
             onClick={(e) => {
               e.stopPropagation();
               onFix();
             }}
           >
-            Fix ({fixCount})
+            {fixLabel ?? `Fix (${fixCount})`}
           </button>
         )}
       </div>
+      <div className="d-caps" aria-hidden="true">
+        <span>{c.low}</span>
+        <span>{c.mid}</span>
+        <span>{c.high}</span>
+      </div>
+      <p className={`d-phrase tone-${tone}`}>{arrow ? `${arrow} — ` : ''}{phrase}</p>
+      <p className="d-qty">{quantity}</p>
       {fixMessage && <p className="fix-hint">{fixMessage}</p>}
     </div>
   );
