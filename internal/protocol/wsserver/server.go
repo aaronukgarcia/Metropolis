@@ -236,8 +236,11 @@ type Server struct {
 	transport        protocol.Transport
 	engineVersion    string
 	handshakeTimeout time.Duration
-	upgrader         websocket.Upgrader
-	newCorrelationID func() string
+	// handshakeWriteTimeout bounds the handshake reply write (BUG-1204); zero
+	// means "use handshakeTimeout". Set via WithHandshakeWriteTimeout.
+	handshakeWriteTimeout time.Duration
+	upgrader              websocket.Upgrader
+	newCorrelationID      func() string
 	// resolveTransport, when non-nil (installed via WithTransportResolver,
 	// FEAT-1972079936 Phase 2 inc2 AC-2), routes each connection to a
 	// per-city transport resolved during the handshake. When nil (the
@@ -328,6 +331,15 @@ func WithCapabilities(caps []string) Option {
 // dependency edge).
 func WithTransportResolver(r TransportResolver) Option {
 	return func(s *Server) { s.resolveTransport = r }
+}
+
+// WithHandshakeWriteTimeout overrides the deadline placed on the handshake
+// reply write (BUG-1204). Default: the server's handshake timeout. A peer that
+// completes the upgrade and handshake request but never drains its receive
+// window would otherwise stall the reply write forever, holding any claim the
+// resolver took until that claim's own TTL lapses.
+func WithHandshakeWriteTimeout(d time.Duration) Option {
+	return func(s *Server) { s.handshakeWriteTimeout = d }
 }
 
 // WithConnectionLifecycle installs OPTIONAL per-connection open/close hooks
@@ -639,7 +651,17 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 	}
 	resultBytes, _ := json.Marshal(result)
 	reply := rpcMessage{JSONRPC: rpcVersion, ID: msg.ID, Result: resultBytes}
-	if err := conn.WriteJSON(reply); err != nil {
+	// BUG-1204: the reply write carries a deadline (the read deadline above
+	// only covers the inbound handshake). It is cleared afterwards so the
+	// steady-state pump is unbounded as before.
+	wt := s.handshakeWriteTimeout
+	if wt <= 0 {
+		wt = s.handshakeTimeout
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(wt))
+	werr := conn.WriteJSON(reply)
+	_ = conn.SetWriteDeadline(time.Time{})
+	if err := werr; err != nil {
 		// Bound the transport but never told the client: treat as an unbound
 		// failure so NO lifecycle hook fires (the client will not proceed) —
 		// keeps onOpen/onClose exactly-once-paired (AC-1).
