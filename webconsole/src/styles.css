@@ -1202,3 +1202,38 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .pal-item[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 .pal-item.atcap[aria-disabled="true"] { opacity: 0.65; }
 .pal-item.broke { opacity: 0.6; }
+
+/* BUG-1160: the ONE notification column. Every transient overlay is a flex
+   child (.notif-slot) of this fixed stack, so no two can share a rectangle;
+   text wraps (never ellipsised) and the column scrolls instead of clipping,
+   so a critical alert (slot 0) is never hidden. It sits BELOW the top bar
+   (8px app padding + 48px bar + 8px gap = 64px, +8px) and at
+   Z_INDEX.NOTIF_STACK, under every blocking modal. No transform (a transform
+   would become the containing block of the confirm's fixed backdrop). */
+/* r3 G1: the stack is anchored INSIDE .map-wrap (position:relative) at the
+   map's top-left, capped to the map column (100% of .map-wrap minus gutters).
+   No transform/filter/contain on any ancestor, so the confirm backdrop
+   (position:fixed) still covers the whole app. A provider that is not
+   `anchored` (isolated tests) falls back to a viewport-fixed column below. */
+.notif-stack { position: absolute; top: 60px; left: 12px; z-index: 150; display: flex; flex-direction: column; align-items: stretch; gap: 8px; width: min(640px, calc(100% - 24px)); max-width: calc(100% - 24px); max-height: calc(100% - 72px); overflow-y: auto; pointer-events: none; }
+.notif-stack:not([data-notif-anchored]) { position: fixed; top: 72px; left: 0; right: 0; margin: 0 auto; width: min(640px, 94vw); max-width: 94vw; max-height: calc(100vh - 80px); }
+.notif-stack:empty { display: none; }
+/* r3 G2: slots are click-through; only genuinely interactive children take the pointer. */
+/* r4 H2: top:60px clears .map-coord (top 8) and .map-block (top 32, ~22px tall) in the map's top-right corner at every width. */
+/* r4 H1: dialogs live in this viewport-fixed, viewport-centred MODAL HOST (not the map-anchored stack). Its own z-index sits between the stack and the blocking modals; no transform on it or any ancestor. */
+.notif-modal-host { position: fixed; inset: 0; z-index: 160; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; pointer-events: none; }
+.notif-modal-host:empty { display: none; }
+.notif-modal-host .notif-slot { position: static; display: flex; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }
+.notif-slot { pointer-events: none; flex: 0 0 auto; min-width: 0; overflow-wrap: anywhere; }
+.notif-slot :is(button, a, input, select, textarea, [role="dialog"], [data-affordability-backdrop], .advisor.clickable) { pointer-events: auto; }
+.notif-slot [role="dialog"] { max-width: 100%; box-sizing: border-box; }
+/* While a dialog is open every non-dialog slot is inert (attribute set by NotificationSlot); this rule beats the child rules above. */
+.notif-stack.has-dialog .notif-slot:not(.notif-dialog) { opacity: 0.3; }
+.notif-slot[inert], .notif-slot[inert] * { pointer-events: none !important; }
+.notif-slot .news-feed { position: static; transform: none; max-width: 100%; }
+.notif-slot .news-feed-ticker { width: 100%; box-sizing: border-box; }
+.notif-slot .news-feed-ticker-text { white-space: normal; overflow: visible; text-overflow: clip; }
+.notif-slot .advisor { position: static; max-width: 100%; box-sizing: border-box; }
+.notif-slot .lineage-recovery-banner { position: static !important; transform: none !important; max-width: 100% !important; box-sizing: border-box; }
+.notif-slot .stale-build-banner { position: static; z-index: auto; border-radius: 6px; pointer-events: auto; }
+.notif-slot .version-upgrade-toast { position: static !important; transform: none !important; box-sizing: border-box; }

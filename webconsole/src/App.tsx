@@ -8,6 +8,7 @@ import { MapView } from './components/MapView';
 import { PerfHud } from './components/PerfHud';
 import { QueueDepthHud } from './components/right/QueueDepthHud';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { NotificationProvider } from './components/NotificationHost';
 import { VersionUpgradeToast } from './sim/liveVersion';
 import { OverlayManagerProvider } from './components/overlayManager';
 
@@ -37,6 +38,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <OverlayManagerProvider>
+        <NotificationProvider anchored>
         <BusyProvider>
           <SimProvider>
             <ErrorBoundary>
@@ -70,6 +72,7 @@ export default function App() {
             <VersionUpgradeToast />
           </SimProvider>
         </BusyProvider>
+        </NotificationProvider>
       </OverlayManagerProvider>
     </ErrorBoundary>
   );

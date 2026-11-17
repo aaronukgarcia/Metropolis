@@ -17,6 +17,7 @@
 // ever moves it FORWARD to whatever the latest commit wrote.
 
 import { useEffect, useRef, useState } from 'react';
+import { NotificationSlot } from '../components/notificationSlot';
 import { versionNumeric, versionRaw } from './version';
 import { setLiveVersion } from './liveVersionRef';
 import { subscribeToRebuildProgress } from './genesisReplay';
@@ -173,8 +174,10 @@ export function VersionUpgradeToast() {
   const { upgradedTo, upgradeSource } = useLiveVersion();
   if (!upgradedTo) return null;
   return (
+    <NotificationSlot id="version-upgrade" kind="toast">
     <div
       role="status"
+      className="version-upgrade-toast"
       style={{
         position: 'fixed',
         bottom: '12px',
@@ -194,5 +197,6 @@ export function VersionUpgradeToast() {
     >
       {toastMessageFor(upgradedTo, upgradeSource ?? 'hot')}
     </div>
+    </NotificationSlot>
   );
 }

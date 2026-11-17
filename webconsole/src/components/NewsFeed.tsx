@@ -36,6 +36,7 @@ import {
   type NewsEntry,
 } from '../sim/newsFeed';
 import { recordError } from '../sim/backend';
+import { NotificationSlot } from './notificationSlot';
 import { financeStatusTracker, type FinanceStatusSnapshot, type InsolvencyStatusSnapshot } from '../sim/financeStatusTracker';
 
 const SEVERITY_LABEL: Record<NewsEntry['severity'], string> = {
@@ -302,6 +303,7 @@ export function NewsFeed() {
   }
 
   return (
+    <NotificationSlot id="news-feed" kind="toast">
     <div className="news-feed" role="region" aria-label="News">
       <button
         type="button"
@@ -350,5 +352,6 @@ export function NewsFeed() {
         </div>
       )}
     </div>
+    </NotificationSlot>
   );
 }

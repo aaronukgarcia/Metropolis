@@ -11,6 +11,7 @@
 
 import type { RecoverableLineage } from '../sim/replay';
 import { Z_INDEX } from './overlayLayers';
+import { NotificationSlot } from './notificationSlot';
 
 export interface LineageRecoveryBannerProps {
   lineages: readonly RecoverableLineage[];
@@ -25,6 +26,7 @@ export interface LineageRecoveryBannerProps {
 export function LineageRecoveryBanner({ lineages, onAdopt, onDismiss, note = null, kind = 'temporary' }: LineageRecoveryBannerProps) {
   if (lineages.length === 0 && !note) return null;
   return (
+    <NotificationSlot id="lineage-recovery" kind="banner">
     <div
       className="lineage-recovery-banner"
       role="alert"
@@ -64,5 +66,6 @@ export function LineageRecoveryBanner({ lineages, onAdopt, onDismiss, note = nul
         Dismiss
       </button>
     </div>
+    </NotificationSlot>
   );
 }

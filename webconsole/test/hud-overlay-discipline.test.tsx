@@ -457,6 +457,8 @@ test('Z_INDEX registry stays in sync with styles.css (SSOT parity — a drift he
     // LEVELUP_BANNER) are retired — both absorbed into the single scrolling
     // news feed, which kept the higher of their two z-index slots.
     ['.news-feed', 'NEWS_FEED'],
+    ['.notif-stack', 'NOTIF_STACK'],
+    ['.notif-modal-host', 'NOTIF_MODAL_HOST'],
     ['.busy-chip', 'BUSY_CHIP'],
     ['.insolvency-popup-overlay', 'INSOLVENCY_POPUP'],
     ['.perf-hud', 'PERF_HUD'],

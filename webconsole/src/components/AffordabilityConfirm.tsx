@@ -27,7 +27,9 @@
 // whatever the ORIGINAL batch dispatch was — this component never needs to
 // know whether it is confirming one building or a hundred.
 
+import { useCallback, useEffect, useRef } from 'react';
 import { Z_INDEX } from './overlayLayers';
+import { NotificationSlot, useHasNotificationHost } from './notificationSlot';
 
 export interface AffordabilityConfirmProps {
   /** Pre-formatted confirmation copy naming the batch's real recurring cost
@@ -35,6 +37,9 @@ export interface AffordabilityConfirmProps {
   message: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** BUG-1160 F5: notification-slot id; owners mounting a confirm at the same
+   *  time pass distinct ids (the registry also keys by instance). */
+  slotId?: string;
 }
 
 const overlayStyle: React.CSSProperties = {
@@ -58,7 +63,8 @@ const panelStyle: React.CSSProperties = {
   borderRadius: '10px',
   padding: '18px 20px',
   maxWidth: '460px',
-  width: '90vw',
+  width: '100%',
+  boxSizing: 'border-box',
   boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
   fontSize: '13px',
   lineHeight: 1.5,
@@ -78,21 +84,55 @@ function button(primary: boolean): React.CSSProperties {
   };
 }
 
-export function AffordabilityConfirm({ message, onConfirm, onCancel }: AffordabilityConfirmProps) {
-  return (
-    <div style={overlayStyle} role="dialog" aria-modal="true" aria-label="Confirm expensive placement">
-      <div style={panelStyle}>
-        <h2 style={{ margin: '0 0 8px', fontSize: '15px', color: '#e0a33e' }}>Big commitment</h2>
-        <p style={{ margin: '0 0 8px' }}>{message}</p>
-        <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
-          <button style={button(true)} onClick={onConfirm}>
-            Build anyway
-          </button>
-          <button style={button(false)} onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
+export function AffordabilityConfirm({ message, onConfirm, onCancel, slotId = 'affordability-confirm' }: AffordabilityConfirmProps) {
+  // BUG-1160: with a NotificationProvider the dialog PANEL takes a slot in the
+  // shared notification column (never on top of a toast) and only a dim
+  // backdrop is drawn here; without one (isolated tests/SSR) the original
+  // self-centred full-screen overlay is unchanged.
+  const hosted = useHasNotificationHost();
+  // BUG-1160 r4 H1: a modal takes focus - OK (the primary button) on open,
+  // the previously focused element is restored on close.
+  // The opener is captured at first render (before the dialog's own buttons
+  // exist). The ref callback re-focuses OK whenever the button element is
+  // (re)attached, because the slot moves from inline to the portal target
+  // once the modal host is registered.
+  const prevFocusRef = useRef<HTMLElement | null>(
+    typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
+  );
+  const okRef = useCallback((el: HTMLButtonElement | null) => {
+    if (el) el.focus();
+  }, []);
+  useEffect(() => {
+    const prev = prevFocusRef.current;
+    return () => {
+      if (prev && typeof prev.focus === 'function' && prev.isConnected) prev.focus();
+    };
+  }, []);
+  const panel = (
+    <div style={hosted ? { ...panelStyle, pointerEvents: 'auto', position: 'relative', zIndex: 1, maxHeight: '100%', overflowY: 'auto' } : panelStyle} role="dialog" aria-modal="true" aria-label="Confirm expensive placement">
+      <h2 style={{ margin: '0 0 8px', fontSize: '15px', color: '#e0a33e' }}>Big commitment</h2>
+      <p style={{ margin: '0 0 8px' }}>{message}</p>
+      <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
+        <button ref={okRef} style={button(true)} onClick={onConfirm}>
+          Build anyway
+        </button>
+        <button style={button(false)} onClick={onCancel}>
+          Cancel
+        </button>
       </div>
     </div>
+  );
+  if (!hosted) {
+    return <div style={overlayStyle}>{panel}</div>;
+  }
+  // r4 H1: the slot portals into the viewport-fixed MODAL HOST
+  // (Z_INDEX.NOTIF_MODAL_HOST, above the stack, below the blocking modals).
+  // The backdrop is fixed full-app inside it; the panel is centred on the
+  // viewport. Stack slots are dimmed + inert by .notif-stack.has-dialog.
+  return (
+    <NotificationSlot id={slotId} kind="dialog">
+      <div style={{ ...overlayStyle, zIndex: 0, pointerEvents: 'auto' }} data-affordability-backdrop />
+      {panel}
+    </NotificationSlot>
   );
 }

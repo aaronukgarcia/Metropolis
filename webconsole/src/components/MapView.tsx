@@ -66,6 +66,7 @@ import { HelpOverlay } from './HelpOverlay';
 import { PropertyCard, PropertyCardGone } from './PropertyCard';
 import { AffordabilityConfirm } from './AffordabilityConfirm';
 import { NewsFeed } from './NewsFeed';
+import { NotificationSlot, NotificationStack } from './notificationSlot';
 import { evaluatePlacementBatch, type PendingBatchPlacement } from './placementGate';
 import { makeKeydownHandler } from '../sim/keyhandler';
 import type { Building, ZoneKind, TaxRates } from '../sim/types';
@@ -1409,6 +1410,7 @@ export function MapView() {
 
   return (
     <div className="map-wrap" ref={wrapRef}>
+      <NotificationStack />
       <canvas
         ref={canvasRef}
         style={{ width: size.w, height: size.h }}
@@ -1662,6 +1664,7 @@ export function MapView() {
       <ForcedAssetSalesPanel />
       <DeclineScreen />
       <PlayModeBanner />
+      <NotificationSlot id="advisor" kind="banner">
       <div
         className={`advisor${advisorContent.go ? ' clickable' : ''}`}
         onClick={advisorContent.go}
@@ -1670,6 +1673,7 @@ export function MapView() {
         {advisorContent.text}
         {advisorContent.go && <span className="adv-hint">click to place</span>}
       </div>
+      </NotificationSlot>
       {(state.tool.mode !== 'select' || state.movingId != null) && (
         <div className="tool-chip">
           <b>

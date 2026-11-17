@@ -44,6 +44,14 @@ export const Z_INDEX = {
    *  .place-notice-banner (19) / .levelup-banner (20) stacked popups; kept at
    *  the higher of the two retired slots since it is now the only occupant. */
   NEWS_FEED: 20,
+  /** .notif-stack (BUG-1160) — the ONE notification column (toasts, banners,
+   *  the placement confirm). Below every blocking modal (INFO_DIALOG and up)
+   *  so a modal always covers it; above the busy chip. */
+  NOTIF_STACK: 150,
+  /** .notif-modal-host (BUG-1160 r4) - the viewport-fixed, centred host for
+   *  dialog slots (the placement confirm). Dialogs are modals: above the
+   *  notification stack, below every blocking modal (INFO_DIALOG and up). */
+  NOTIF_MODAL_HOST: 160,
   /** .busy-chip — the "working…" indicator. */
   BUSY_CHIP: 99,
   /** .about-backdrop / .spec-card-backdrop / .help-overlay-backdrop — the

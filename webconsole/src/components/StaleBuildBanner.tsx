@@ -54,6 +54,7 @@
 // connection — the real dead-server signature.
 
 import { useEffect, useState } from 'react';
+import { NotificationSlot } from './notificationSlot';
 import { APP_VERSION_SHA } from '../generated/version';
 import { resolveStaleBuild, type StaleBuildResult } from '../sim/staleBuildGuard';
 import { subscribeHmrConnection } from '../sim/hmrLiveness';
@@ -87,6 +88,7 @@ export function StaleBuildBannerView({
   if (!result.stale || dismissed) return null;
   const reload = onReload ?? (() => window.location.reload());
   return (
+    <NotificationSlot id="stale-build" kind="critical">
     <div className="stale-build-banner" role="alert">
       <span className="stale-build-banner-text">
         ⚠ STALE BUILD — 🔄 A newer build is available (running {result.runningSha}, disk{' '}
@@ -110,6 +112,7 @@ export function StaleBuildBannerView({
         ×
       </button>
     </div>
+    </NotificationSlot>
   );
 }
 

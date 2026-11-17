@@ -248,6 +248,7 @@ export function DemandDock() {
     </Panel>
     {pendingAfford && (
       <AffordabilityConfirm
+        slotId="affordability-confirm-demand"
         message={pendingAfford.afford.message}
         onConfirm={() => {
           pendingAfford.commit();
