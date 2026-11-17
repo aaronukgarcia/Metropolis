@@ -601,7 +601,11 @@ export function buildCityRows(
         lineageId: id,
         snapshotTick: best.snapshotTick,
         savedAt: best.savedAt,
-        buildingCount: Array.isArray(snap?.buildings) ? (snap!.buildings as unknown[]).length : undefined,
+        buildingCount: Array.isArray(snap?.buildings)
+          ? (snap!.buildings as unknown[]).length
+          : typeof (snap as { indexedBuildingCount?: unknown } | undefined)?.indexedBuildingCount === 'number'
+            ? ((snap as { indexedBuildingCount: number }).indexedBuildingCount)
+            : undefined, // BUG-1181: index stand-ins carry the count, not the buildings
         population: typeof pop === 'number' && Number.isFinite(pop) ? pop : undefined,
         scratch,
         current: id === currentLineageId,

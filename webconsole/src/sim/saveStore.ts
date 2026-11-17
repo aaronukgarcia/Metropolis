@@ -835,6 +835,87 @@ export async function mirrorSaveCheckpoint(
 }
 
 /**
+ * BUG-1181: a metadata-only index of the IndexedDB savepoints, so File -> Cities does not
+ * fully decode every (large) savepoint on each open. One SaveStore JSON blob under a key that
+ * does NOT match the `metropolis.savepoint.` scan prefix (no dot after "savepoint").
+ * An entry is trusted only while its fingerprint (raw length + FNV-1a 32 of the raw string)
+ * matches the stored value; any mismatch / missing / malformed entry falls back to one decode
+ * and an upsert. Only the IndexedDB tier is indexed.
+ */
+export const SAVEPOINT_INDEX_KEY = 'metropolis.savepointIndex';
+
+export interface SavepointIndexEntry {
+  fp: string;
+  savedAt: string;
+  snapshotTick: number;
+  saveSeq?: number;
+  scratch: boolean;
+  buildingCount?: number;
+  population?: number;
+}
+
+export interface SavepointIndex {
+  v: 1;
+  entries: Record<string, SavepointIndexEntry>;
+}
+
+export function savepointFingerprint(raw: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < raw.length; i++) {
+    h ^= raw.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `${raw.length}:${h.toString(16)}`;
+}
+
+function isValidIndexEntry(e: unknown): e is SavepointIndexEntry {
+  if (!e || typeof e !== 'object') return false;
+  const o = e as Record<string, unknown>;
+  return (
+    typeof o.fp === 'string' &&
+    typeof o.savedAt === 'string' &&
+    typeof o.snapshotTick === 'number' &&
+    Number.isFinite(o.snapshotTick) &&
+    typeof o.scratch === 'boolean'
+  );
+}
+
+function entryFromSavepoint(sp: Savepoint, fp: string): SavepointIndexEntry | null {
+  if (typeof sp.savedAt !== 'string' || typeof sp.snapshotTick !== 'number' || !Number.isFinite(sp.snapshotTick)) return null;
+  const snap = sp.snapshot as { buildings?: unknown; population?: unknown } | undefined;
+  const e: SavepointIndexEntry = { fp, savedAt: sp.savedAt, snapshotTick: sp.snapshotTick, scratch: (sp as { scratch?: unknown }).scratch === true };
+  const seq = (sp as { saveSeq?: unknown }).saveSeq;
+  if (typeof seq === 'number' && Number.isFinite(seq)) e.saveSeq = seq;
+  if (Array.isArray(snap?.buildings)) e.buildingCount = (snap!.buildings as unknown[]).length;
+  if (typeof snap?.population === 'number' && Number.isFinite(snap.population)) e.population = snap.population;
+  return e;
+}
+
+function standInFromEntry(e: SavepointIndexEntry): Savepoint {
+  const snapshot: Record<string, unknown> = {};
+  if (e.buildingCount !== undefined) snapshot.indexedBuildingCount = e.buildingCount;
+  if (e.population !== undefined) snapshot.population = e.population;
+  const sp: Record<string, unknown> = { savedAt: e.savedAt, snapshotTick: e.snapshotTick, snapshot, journalTail: [] };
+  if (e.scratch) sp.scratch = true;
+  if (e.saveSeq !== undefined) sp.saveSeq = e.saveSeq;
+  return sp as unknown as Savepoint;
+}
+
+async function loadSavepointIndex(idb: SaveStore): Promise<{ index: SavepointIndex; dirty: boolean }> {
+  try {
+    const raw = await idb.getItem(SAVEPOINT_INDEX_KEY);
+    if (raw === null) return { index: { v: 1, entries: {} }, dirty: false };
+    const parsed = JSON.parse(raw) as { v?: unknown; entries?: unknown };
+    if (!parsed || parsed.v !== 1 || !parsed.entries || typeof parsed.entries !== 'object' || Array.isArray(parsed.entries)) {
+      return { index: { v: 1, entries: {} }, dirty: true };
+    }
+    return { index: { v: 1, entries: { ...(parsed.entries as Record<string, SavepointIndexEntry>) } }, dirty: false };
+  } catch {
+    return { index: { v: 1, entries: {} }, dirty: true };
+  }
+}
+
+/**
  * BUG-1156 r5 (F2): EVERY city with a valid savepoint in EITHER tier - localStorage rotation
  * slots AND IndexedDB (the quota-overflow `metropolis.savepoint.<lineage>.idbOnly` key and any
  * mirrored `.<slot>` copy whose localStorage slot is gone). Reads the durable store through the
@@ -852,7 +933,12 @@ export async function listCitiesAll(
   idb: SaveStore | null,
   currentLineageId: string | null,
   now: Date = new Date(),
+  decodeFn: (raw: string) => Savepoint | null | undefined = decodeSavepointBytes,
 ): Promise<RecoverableLineage[]> {
+  const index: SavepointIndex = { v: 1, entries: {} };
+  let indexDirty = false;
+  const seenKeys = new Set<string>();
+  let listedOk = false;
   const byLineage = new Map<string, Savepoint[]>();
   const localIds = new Set<string>();
   try {
@@ -871,7 +957,11 @@ export async function listCitiesAll(
   if (idb) {
     try {
       const nowMs = now.getTime();
+      const loaded = await loadSavepointIndex(idb);
+      index.entries = loaded.index.entries;
+      indexDirty = loaded.dirty;
       const keys = await idb.listKeys(`${SAVEPOINT_KEY_PREFIX}.`);
+      listedOk = true;
       for (const key of keys) {
         const segments = key.slice(SAVEPOINT_KEY_PREFIX.length + 1).split('.');
         const last = segments[segments.length - 1];
@@ -880,7 +970,23 @@ export async function listCitiesAll(
         try {
           const raw = await idb.getItem(key);
           if (raw === null) continue;
-          const sp = decodeSavepointBytes(raw);
+          seenKeys.add(key);
+          const fp = savepointFingerprint(raw);
+          const hit = index.entries[key];
+          let sp: Savepoint | null | undefined;
+          if (hit && hit.fp === fp && isValidIndexEntry(hit)) {
+            sp = standInFromEntry(hit); // BUG-1181 fast path: no decode
+          } else {
+            sp = decodeFn(raw);
+            const fresh = sp && typeof sp === 'object' ? entryFromSavepoint(sp, fp) : null;
+            if (fresh) {
+              index.entries[key] = fresh;
+              indexDirty = true;
+            } else if (hit) {
+              delete index.entries[key];
+              indexDirty = true;
+            }
+          }
           if (!sp || typeof sp !== 'object' || isStaleAutosave(sp, nowMs)) continue;
           const list = byLineage.get(lineageId);
           if (list) list.push(sp);
@@ -891,6 +997,22 @@ export async function listCitiesAll(
       }
     } catch {
       /* IDB unreadable: the localStorage rows still list */
+    }
+    if (listedOk) {
+      // BUG-1181: prune entries whose key is gone, write back ONCE and only if changed.
+      for (const k of Object.keys(index.entries)) {
+        if (!seenKeys.has(k)) {
+          delete index.entries[k];
+          indexDirty = true;
+        }
+      }
+      if (indexDirty) {
+        try {
+          await idb.setItem(SAVEPOINT_INDEX_KEY, JSON.stringify(index));
+        } catch {
+          /* best-effort: the next listing simply decodes again */
+        }
+      }
     }
   }
   try {
