@@ -14,6 +14,7 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/persist"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
@@ -102,6 +103,15 @@ type runningCity struct {
 	// actually been torn down, without each of those three call sites
 	// needing its own unregister call.
 	unregisterHealth func()
+
+	// BUG-1197: what stop() needs to write the final snapshot. store is nil
+	// in no-persist mode (no snapshot); finalBudget <= 0 turns the final
+	// snapshot off.
+	store         persist.Store
+	key           persist.CityKey
+	snapshotEvery int64
+	finalBudget   time.Duration
+	logw          io.Writer
 }
 
 // Engine, Composition and Transport expose the bundled handles to callers
@@ -116,11 +126,54 @@ func (rc *runningCity) Transport() protocol.Transport     { return rc.transport 
 // runningCity level is NOT required (CityHost removes it from the map under
 // the lock before calling stop, so stop runs exactly once per city).
 func (rc *runningCity) stop() {
+	rc.stopBy(time.Now().Add(rc.finalBudget), false)
+}
+
+// stopBy is stop with an explicit absolute deadline for the BUG-1197 final
+// snapshot (CityHost.Close shares one deadline across every city it stops in
+// parallel, so N cities cannot take N x budget). Order: cancel -> join tick
+// driver (no new ticks) -> join command loop (the in-flight command or tick
+// finishes and is journaled; nothing further is accepted) -> join pump ->
+// close transport -> final snapshot (engine quiescent, journal fsynced per
+// record) -> release the composition.
+//
+// abandonOnDeadline is the process-exit flag (CityHost.Close, the SIGTERM
+// path): once the deadline passes with the in-memory snapshot build still
+// running, stopBy stops waiting for it so the host's exit is bounded by the
+// deadline, not by the build (BUG-1197 r2 F3). It still calls comp.Close
+// (r3 G1): Close only releases the citizen-paging claim (claim.pid), which
+// must not outlive the process or the next boot's GetOrCreate refuses the
+// city (MET-G819) and restart-loops. That is safe while the abandoned build
+// runs because a build that finishes after the deadline is never written.
+// Eviction and Shutdown pass false: the process keeps running, so they wait
+// for the build to finish before releasing the composition.
+func (rc *runningCity) stopBy(deadline time.Time, abandonOnDeadline bool) {
 	rc.cancel()
 	<-rc.tickDone
 	<-rc.loopDone
 	<-rc.pumpDone
 	_ = rc.transport.Close()
+	if rc.finalBudget > 0 {
+		done := writeFinalSnapshot(rc.comp, rc.store, rc.key, rc.snapshotEvery, deadline, rc.logw)
+		// The goroutine behind an abandoned snapshot reads comp state; the
+		// composition must not be closed under it. A snapshot that built
+		// after the deadline never writes, so this wait only covers the
+		// remainder of an in-memory serialisation (see compose.FinalSnapshot).
+		select {
+		case <-done:
+		default:
+			if abandonOnDeadline {
+				// Process exiting: do not wait for the build, but release
+				// the paging claim (see the stopBy comment, r3 G1).
+				_ = rc.comp.Close()
+				if rc.unregisterHealth != nil {
+					rc.unregisterHealth()
+				}
+				return
+			}
+			<-done
+		}
+	}
 	// BUG-764 round finding F1: release this city's citizen-paging
 	// exclusive directory claim (a no-op if paging was never enabled)
 	// BEFORE this city's key can be considered free again -- see
@@ -252,6 +305,11 @@ type CityHost struct {
 	// still ticking — the round's own reachable production path for F1.
 	stopping map[persist.CityKey]chan struct{}
 
+	// finalBudget is the BUG-1197 shutdown/eviction snapshot deadline
+	// (WithShutdownSnapshotDeadline; DefaultShutdownSnapshotDeadline). <= 0
+	// disables the final snapshot.
+	finalBudget time.Duration
+
 	// idleTimeout / sweepInterval are the eviction tunables (FEAT-1972079942
 	// AC-3), seeded from IdleEvictTimeout / evictSweepInterval by NewCityHost.
 	// They are unexported fields rather than consts precisely so a test can set
@@ -347,6 +405,23 @@ func WithSnapshotEvery(ticks int64) CityHostOption {
 	}
 }
 
+// DefaultShutdownSnapshotDeadline is how long a city's final snapshot (SIGTERM
+// or idle eviction, BUG-1197) may take before it is abandoned. 20 s is Aaron's
+// Spot-reclaim budget (Q100163, 2026-11-17).
+const DefaultShutdownSnapshotDeadline = 20 * time.Second
+
+// WithShutdownSnapshotDeadline sets the final-snapshot deadline (BUG-1197);
+// d <= 0 disables the final snapshot (restore then replays the journal tail
+// past the last cadence snapshot, as before BUG-1197).
+func WithShutdownSnapshotDeadline(d time.Duration) CityHostOption {
+	return func(h *CityHost) {
+		if err := h.checkNotCopied(); err != nil {
+			return
+		}
+		h.finalBudget = d
+	}
+}
+
 // WithGameMode sets the FEAT-143 new-game initialization mode
 // ("real"/"unlimited", gameinit.Mode's own wire strings — this package
 // never imports internal/engine/gameinit, see the gameMode field's own
@@ -409,12 +484,14 @@ func NewCityHost(persistDir string, tickInterval time.Duration, opts ...CityHost
 // without a lock (they never change after construction).
 func newCityHost(persistDir string, tickInterval, idleTimeout, sweepInterval time.Duration, opts ...CityHostOption) (*CityHost, error) {
 	var store persist.Store
+	var disk *persist.DiskStore
 	if persistDir != "" {
-		disk, err := persist.NewDiskStore(persistDir)
+		d, err := persist.NewDiskStore(persistDir)
 		if err != nil {
 			return nil, fmt.Errorf("metroserve: CityHost open persist store %q: %w", persistDir, err)
 		}
-		store = disk
+		disk = d
+		store = d
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &CityHost{
@@ -431,6 +508,18 @@ func newCityHost(persistDir string, tickInterval, idleTimeout, sweepInterval tim
 		evictorDone:   make(chan struct{}),
 		health:        newHealthRegistry(),
 		persistDir:    persistDir,
+		finalBudget:   DefaultShutdownSnapshotDeadline,
+	}
+	if disk != nil {
+		// BUG-1197: a torn journal tail truncated on open is reported under
+		// its registry code (persist is a leaf and imports no registry).
+		disk.SetTornTailHook(func(city persist.CityKey, r persist.JournalRepair) {
+			_, _ = fmt.Fprintf(h.logw, "metroserve: %v\n", errs.New(ErrJournalTornTailTruncated, "", map[string]any{
+				"city":           city.TenantID + "/" + city.CityID,
+				"truncatedBytes": r.TruncatedBytes,
+				"goodBytes":      r.GoodBytes,
+			}))
+		})
 	}
 	// self is stamped BEFORE options run (not after, as a pre-inc3b draft of
 	// this function had it) so every CityHostOption closure can call the
@@ -555,7 +644,28 @@ claim:
 		h.onBuildStart()
 	}
 
-	city, err := buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.snapshotEvery, h.engineOpts, h.logw, h.health, h.gameMode, h.persistDir, h.citizenPagingEnabled, h.citizenPageBudget, h.citizenPagingReclaim)
+	// BUG-1197: cut any torn journal tail before the rehydrate reads it and
+	// before any append can land after it.
+	var city *runningCity
+	var err error
+	if rep, ok := h.store.(interface {
+		RepairJournal(context.Context, persist.CityKey) (persist.JournalRepair, error)
+	}); ok {
+		_, err = rep.RepairJournal(ctx, cityKey)
+	}
+	var corrupt *persist.JournalCorruptError
+	if errors.As(err, &corrupt) {
+		// BUG-1197 r2 F1: mid-file journal corruption is NOT a torn tail; the
+		// file is untouched and the city refuses to load (fail closed).
+		err = errs.Wrap(ErrJournalCorrupt, "", err, map[string]any{
+			"city":      cityKey.TenantID + "/" + cityKey.CityID,
+			"goodBytes": corrupt.GoodBytes,
+			"fileBytes": corrupt.FileBytes,
+		})
+	}
+	if err == nil {
+		city, err = buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.snapshotEvery, h.engineOpts, h.logw, h.health, h.gameMode, h.persistDir, h.citizenPagingEnabled, h.citizenPageBudget, h.citizenPagingReclaim)
+	}
 	if err != nil {
 		// Register NOTHING on failure: remove the claim before signalling, so
 		// no half-built city is ever observable in the map, and a later
@@ -567,6 +677,7 @@ claim:
 		close(entry.ready)
 		return nil, err
 	}
+	city.store, city.key, city.snapshotEvery, city.finalBudget, city.logw = h.store, cityKey, h.snapshotEvery, h.finalBudget, h.logw
 	entry.city = city
 	// Start the idle clock now the city is READY (FEAT-1972079942 AC-3/AC-4),
 	// under the lock so it is ordered against Acquire/Release/evictIdle. If a
@@ -651,12 +762,21 @@ func (h *CityHost) Close() error {
 	h.cities = make(map[persist.CityKey]*cityEntry)
 	h.mu.Unlock()
 
+	// BUG-1197: every city snapshots in parallel under ONE shared deadline,
+	// so a host holding N cities still exits within the budget.
+	deadline := time.Now().Add(h.finalBudget)
+	var wg sync.WaitGroup
 	for _, e := range entries {
-		<-e.ready // let any in-flight construction settle
-		if e.city != nil {
-			e.city.stop()
-		}
+		wg.Add(1)
+		go func(e *cityEntry) {
+			defer wg.Done()
+			<-e.ready // let any in-flight construction settle
+			if e.city != nil {
+				e.city.stopBy(deadline, true)
+			}
+		}(e)
 	}
+	wg.Wait()
 	return nil
 }
 

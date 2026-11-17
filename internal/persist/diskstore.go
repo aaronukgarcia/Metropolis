@@ -114,6 +114,12 @@ type DiskStore struct {
 
 	mu    sync.Mutex // guards locks map only
 	locks map[string]*sync.Mutex
+
+	// repaired records the city dirs whose journal tail AppendJournal has
+	// already repaired this store lifetime (BUG-1197); onTornTail is the
+	// optional report hook (SetTornTailHook).
+	repaired   sync.Map
+	onTornTail func(city CityKey, r JournalRepair)
 }
 
 var _ Store = (*DiskStore)(nil)
@@ -289,6 +295,15 @@ func (s *DiskStore) AppendJournal(ctx context.Context, city CityKey, record []by
 		return err
 	}
 
+	// BUG-1197: before the first append of this store's life for this city,
+	// cut any torn tail left by a crash so this frame lands after the last
+	// good one rather than after garbage.
+	if _, checked := s.repaired.Load(dir); !checked {
+		if _, err := s.repairJournalLocked(dir, city); err != nil {
+			return err
+		}
+		s.repaired.Store(dir, struct{}{})
+	}
 	path := filepath.Join(dir, journalFileName)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, filePerm)
 	if err != nil {
@@ -311,6 +326,117 @@ func (s *DiskStore) AppendJournal(ctx context.Context, city CityKey, record []by
 		return fmt.Errorf("persist: close journal: %w", err)
 	}
 	return nil
+}
+
+// JournalCorruptError is returned by RepairJournal / AppendJournal when the
+// journal has a bad frame that is followed by complete, valid frames: that is
+// mid-file corruption, not a torn tail, so nothing is truncated and the
+// journal is left byte-identical (BUG-1197 r2). The host maps it to
+// MET-P063 and refuses to load the city (fail closed). persist is a leaf and
+// imports no error registry, hence a typed error rather than a registry one.
+type JournalCorruptError struct {
+	City CityKey
+	// GoodBytes is the offset one past the last good frame before the damage.
+	GoodBytes int64
+	// FileBytes is the journal's length.
+	FileBytes int64
+}
+
+// Error implements error.
+func (e *JournalCorruptError) Error() string {
+	return fmt.Sprintf("persist: journal for city %s/%s is corrupt mid-file: bad frame at offset %d is followed by valid frames (file %d bytes); left untouched", e.City.TenantID, e.City.CityID, e.GoodBytes, e.FileBytes)
+}
+
+// JournalRepair reports what RepairJournal did (BUG-1197).
+type JournalRepair struct {
+	// GoodBytes is the length of the journal after repair: the offset one
+	// past the last complete, checksum-valid frame.
+	GoodBytes int64
+	// TruncatedBytes is how many torn or corrupt tail bytes were removed;
+	// 0 means the journal was already clean (or absent).
+	TruncatedBytes int64
+}
+
+// RepairJournal truncates a torn or corrupt journal tail back to the last
+// good frame (BUG-1197). decodeFrames has always IGNORED such a tail on
+// read, but AppendJournal opens O_APPEND, so a later append landed AFTER the
+// garbage and every frame written from then on was unreachable (decode stops
+// at the first bad frame). Truncating on open means appends follow the last
+// good frame and stay readable. The truncation is fsynced. Nothing committed
+// is lost: a torn tail is by definition an incomplete frame, never a
+// completed append (appends fsync per record). Absent or clean journals are
+// a no-op. AppendJournal runs this once per city per DiskStore before its
+// first append; callers that only read (a wake that replays and never
+// appends) may call it explicitly.
+func (s *DiskStore) RepairJournal(ctx context.Context, city CityKey) (JournalRepair, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return JournalRepair{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return JournalRepair{}, err
+	}
+	dir := s.cityDir(city)
+	lock := s.lockFor(dir)
+	lock.Lock()
+	defer lock.Unlock()
+	return s.repairJournalLocked(dir, city)
+}
+
+// repairJournalLocked is RepairJournal's body; the caller holds the city lock.
+func (s *DiskStore) repairJournalLocked(dir string, city CityKey) (JournalRepair, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return JournalRepair{}, err
+	}
+	path := filepath.Join(dir, journalFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return JournalRepair{}, nil
+		}
+		return JournalRepair{}, fmt.Errorf("persist: read journal for repair: %w", err)
+	}
+	_, good := decodeFramesWithOffset(data)
+	res := JournalRepair{GoodBytes: int64(good)}
+	if good == len(data) {
+		return res, nil
+	}
+	// BUG-1197 r2 F1: only a GENUINE torn tail may be cut. If any complete,
+	// valid frame follows the bad one, this is mid-file corruption: fail
+	// closed and leave the file byte-identical for an operator.
+	if validFrameAfter(data, good) {
+		return JournalRepair{}, &JournalCorruptError{City: city, GoodBytes: int64(good), FileBytes: int64(len(data))}
+	}
+	res.TruncatedBytes = int64(len(data) - good)
+	f, err := os.OpenFile(path, os.O_WRONLY, filePerm)
+	if err != nil {
+		return JournalRepair{}, fmt.Errorf("persist: open journal for truncate: %w", err)
+	}
+	if err := f.Truncate(int64(good)); err != nil {
+		_ = f.Close()
+		return JournalRepair{}, fmt.Errorf("persist: truncate torn journal tail: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return JournalRepair{}, fmt.Errorf("persist: fsync truncated journal: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return JournalRepair{}, fmt.Errorf("persist: close truncated journal: %w", err)
+	}
+	if s.onTornTail != nil {
+		s.onTornTail(city, res)
+	}
+	return res, nil
+}
+
+// SetTornTailHook installs a callback invoked (under the city lock) each
+// time a repair truncates a torn tail, so the host can surface it under its
+// registry code (MET-P060) -- this leaf package imports no error registry.
+// Set it before the store is shared; it is not synchronised.
+func (s *DiskStore) SetTornTailHook(fn func(city CityKey, r JournalRepair)) {
+	if err := s.checkNotCopied(); err != nil {
+		return
+	}
+	s.onTornTail = fn
 }
 
 // ReadJournal implements Store.

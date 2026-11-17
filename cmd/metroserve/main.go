@@ -37,6 +37,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -111,6 +112,11 @@ func run(args []string, stdout, stderr *os.File) int {
 	// over. Default false: a stale claim is refused loudly, never silently
 	// stolen.
 	citizenPagingReclaim := fs.Bool("citizen-paging-reclaim", false, "force-take an existing citizen-paging directory claim rather than refuse (operator override for a claim left behind by a crashed process; verify no other live composition holds it first -- see CitizenPagingOptions.Reclaim)")
+	// BUG-1197: bounded final snapshot on SIGTERM and idle eviction (Aaron's
+	// Spot-reclaim ruling Q100163: 20 s). METROSERVE_SHUTDOWN_SNAPSHOT_DEADLINE
+	// overrides the default; the flag overrides both. 0 turns the final
+	// snapshot off.
+	shutdownSnapshotDeadline := fs.Duration("shutdown-snapshot-deadline", shutdownSnapshotDeadlineDefault(stderr), "deadline for the final snapshot written when a city stops (SIGTERM, idle eviction); an unfinished snapshot is abandoned and the previous one stays latest (0 = off; env METROSERVE_SHUTDOWN_SNAPSHOT_DEADLINE)")
 	printVersion := fs.Bool("version", false, "print build identity and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -126,7 +132,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	// the legacy single-city host, byte-for-byte unchanged (AC-6). Gating on
 	// persist-dir keeps a default `metroserve` invocation identical to today.
 	if *persistDir != "" {
-		return runHosted(*addr, *persistDir, *city, *tickInterval, *snapshotEvery, *gameMode, *citizenPaging, *citizenPageBudget, *citizenPagingReclaim, stdout, stderr)
+		return runHosted(*addr, *persistDir, *city, *tickInterval, *snapshotEvery, *gameMode, *citizenPaging, *citizenPageBudget, *citizenPagingReclaim, *shutdownSnapshotDeadline, stdout, stderr)
 	}
 
 	correlationID := string(protocol.NewCorrelationID())
@@ -231,8 +237,8 @@ func run(args []string, stdout, stderr *os.File) int {
 // resolver two plain strings; metroserve builds the persist.CityKey here,
 // inside its own package, and calls its own host — no new dependency edge is
 // forced on internal/protocol.
-func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snapshotEvery int64, gameMode string, citizenPaging bool, citizenPageBudget int, citizenPagingReclaim bool, stdout, stderr *os.File) int {
-	host, err := NewCityHost(persistDir, tickInterval, WithSnapshotEvery(snapshotEvery), WithGameMode(gameMode), WithCitizenPaging(citizenPaging, citizenPageBudget, citizenPagingReclaim))
+func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snapshotEvery int64, gameMode string, citizenPaging bool, citizenPageBudget int, citizenPagingReclaim bool, shutdownSnapshotDeadline time.Duration, stdout, stderr *os.File) int {
+	host, err := NewCityHost(persistDir, tickInterval, WithShutdownSnapshotDeadline(shutdownSnapshotDeadline), WithSnapshotEvery(snapshotEvery), WithGameMode(gameMode), WithCitizenPaging(citizenPaging, citizenPageBudget, citizenPagingReclaim))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "metroserve: %v\n", err)
 		return 1
@@ -354,4 +360,21 @@ func tickLoop(ctx context.Context, e *core.Engine, transport *protocol.InProcTra
 		}
 	}()
 	return done
+}
+
+// shutdownSnapshotDeadlineDefault is the -shutdown-snapshot-deadline default:
+// METROSERVE_SHUTDOWN_SNAPSHOT_DEADLINE when set and parseable, otherwise
+// DefaultShutdownSnapshotDeadline. A bad env value is reported and ignored
+// (never a silent fallback).
+func shutdownSnapshotDeadlineDefault(stderr io.Writer) time.Duration {
+	v := os.Getenv("METROSERVE_SHUTDOWN_SNAPSHOT_DEADLINE")
+	if v == "" {
+		return DefaultShutdownSnapshotDeadline
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		_, _ = fmt.Fprintf(stderr, "metroserve: ignoring invalid METROSERVE_SHUTDOWN_SNAPSHOT_DEADLINE %q (want a non-negative duration such as 20s)\n", v)
+		return DefaultShutdownSnapshotDeadline
+	}
+	return d
 }

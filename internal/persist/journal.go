@@ -61,6 +61,14 @@ func encodeFrame(payload []byte) []byte {
 // unrecoverable states, which in practice never occur here since every
 // failure mode simply means "no more complete frames".
 func decodeFrames(data []byte) [][]byte {
+	records, _ := decodeFramesWithOffset(data)
+	return records
+}
+
+// decodeFramesWithOffset is decodeFrames plus the byte offset one past the
+// last complete, checksum-valid frame (BUG-1197): everything from that
+// offset to len(data) is the torn or corrupt tail RepairJournal truncates.
+func decodeFramesWithOffset(data []byte) ([][]byte, int) {
 	var records [][]byte
 	off := 0
 	for {
@@ -87,7 +95,30 @@ func decodeFrames(data []byte) [][]byte {
 		records = append(records, rec)
 		off += need
 	}
-	return records
+	return records, off
+}
+
+// validFrameAfter reports whether a complete, checksum-valid frame starts at
+// ANY byte offset strictly after from (BUG-1197 r2). A genuine torn tail is
+// the last thing a crash wrote, so no complete valid frame can follow it;
+// when one does, the bad frame is mid-file corruption (a flipped bit, a bad
+// sector, a hand edit) and truncating at it would destroy committed,
+// fsynced commands. Offsets are scanned one byte at a time because a corrupt
+// length header means the next frame boundary is unknown. The scan only runs
+// on the repair path (a bad frame exists), never on a clean journal.
+func validFrameAfter(data []byte, from int) bool {
+	for off := from + 1; off+frameLenSize+frameCRCSize <= len(data); off++ {
+		l := binary.BigEndian.Uint32(data[off : off+frameLenSize])
+		need := frameLenSize + int(l) + frameCRCSize
+		if need < 0 || len(data)-off < need {
+			continue
+		}
+		want := binary.BigEndian.Uint32(data[off+frameLenSize+int(l) : off+need])
+		if crc32.ChecksumIEEE(data[off:off+frameLenSize+int(l)]) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // readAllFrames reads r fully and decodes every complete frame in it.

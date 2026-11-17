@@ -752,6 +752,24 @@ func RegisteredViewNames() []string {
 // directional liveness ACs without reaching into unexported state.
 type Composition struct {
 	state *simState
+
+	// finalBuildHook, when non-nil, runs inside FinalSnapshot's build
+	// goroutine after the snapshot bytes are built and before the deadline
+	// gate -- a test seam that models a build outliving its deadline
+	// (SetFinalSnapshotBuildHook). Set before the composition is shared.
+	finalBuildHook func()
+}
+
+// SetFinalSnapshotBuildHook installs a callback FinalSnapshot's build
+// goroutine runs after building and before its deadline gate (BUG-1197 r2).
+// It exists so tests can hold the build open past a deadline with a channel
+// instead of racing wall-clock sleeps; production never sets it. Set it
+// before the composition is shared; it is not synchronised.
+func (c *Composition) SetFinalSnapshotBuildHook(fn func()) {
+	if c == nil {
+		return
+	}
+	c.finalBuildHook = fn
 }
 
 // Close releases resources this Composition holds OUTSIDE the engine

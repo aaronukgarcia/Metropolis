@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
@@ -22,6 +23,22 @@ import (
 // startCommandLoop's doc comment below for the fail-loud-but-continue
 // policy this code exists to carry.
 const ErrHostedSnapshotFailed = "MET-P035"
+
+// BUG-1197 registry codes (owner range int.persist P060-P069).
+const (
+	// ErrJournalTornTailTruncated: a torn journal tail was cut on open.
+	ErrJournalTornTailTruncated = "MET-P060"
+	// ErrFinalSnapshotSkipped: the shutdown/eviction snapshot was skipped or
+	// abandoned (deadline, dirty journal, trailing command...).
+	ErrFinalSnapshotSkipped = "MET-P061"
+	// ErrFinalSnapshotFailed: the shutdown/eviction snapshot hit a real
+	// build/write error.
+	ErrFinalSnapshotFailed = "MET-P062"
+	// ErrJournalCorrupt: the journal is damaged mid-file (a bad frame with
+	// valid frames after it); nothing was truncated and the city refuses to
+	// load.
+	ErrJournalCorrupt = "MET-P063"
+)
 
 // FEAT-1972079936 Phase 1 inc3b — wiring compose's snapshot cadence
 // (snapshot.go, landed 9dd1872) into metroserve's live tick driver.
@@ -164,4 +181,37 @@ func startCommandLoop(ctx context.Context, e *core.Engine, transport *protocol.I
 	loopDone := make(chan error, 1)
 	go func() { loopDone <- e.RunCommandLoop(ctx, source) }()
 	return loopDone
+}
+
+// writeFinalSnapshot is the BUG-1197 stop-time snapshot: with the city
+// quiesced (command loop joined, so the in-flight tick finished and nothing
+// further is accepted) it writes one snapshot at the current tick, bounded
+// by deadline. It never panics and never returns an error: every non-write
+// outcome is logged under MET-P061 (skip/abandon, not a fault: the journal
+// is fsynced per accepted command so nothing is lost, the next wake just
+// replays a longer tail) or MET-P062 (a real build/write error); in every
+// case the previous snapshot stays the latest (snapshots are written
+// temp-then-rename). Returns a channel that closes when any background
+// serialisation has finished, so a caller that keeps running (eviction) can
+// wait before closing the composition; a caller about to exit may ignore it.
+//
+// Off when comp or store is nil or snapshotEvery <= 0 ("snapshotting off" is
+// an operator choice the stop path must respect too).
+func writeFinalSnapshot(comp *compose.Composition, store persist.Store, city persist.CityKey, snapshotEvery int64, deadline time.Time, logw io.Writer) <-chan struct{} {
+	closed := make(chan struct{})
+	close(closed)
+	if comp == nil || store == nil || snapshotEvery <= 0 {
+		return closed
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	cityLabel := city.TenantID + "/" + city.CityID
+	res, err := comp.FinalSnapshot(ctx, store, city)
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(logw, "metroserve: %v\n", errs.Wrap(ErrFinalSnapshotFailed, "", err, map[string]any{"city": cityLabel, "tick": res.Tick}))
+	case res.SkipReason != "":
+		_, _ = fmt.Fprintf(logw, "metroserve: %v\n", errs.New(ErrFinalSnapshotSkipped, "", map[string]any{"city": cityLabel, "reason": res.SkipReason}))
+	}
+	return res.Done
 }

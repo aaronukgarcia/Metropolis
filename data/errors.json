@@ -168,7 +168,8 @@
       "G5490-G5499": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
       "V970-V979": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
       "G5600-G5609": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
-      "P050-P059": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")"
+      "P050-P059": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
+      "P060-P069": "reserved for int.persist (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -6343,6 +6344,30 @@
       "module": "int.protocol",
       "message": "WebSocket handshake accepted with differing builds: client {clientVersion} / engine {serverVersion} (wire {negotiatedVersion}, tenant {tenantId}, city {cityId}, at {at})",
       "remedy": "Informational only (Q100145): protocol-compatible builds connect; the badge shows a warning. Redeploy the webconsole or engine so both report the same build when convenient."
+    },
+    "MET-P060": {
+      "severity": "warn",
+      "module": "int.persist",
+      "message": "persist: journal for city {city} had a torn or corrupt tail of {truncatedBytes} bytes after the last good frame (offset {goodBytes}); truncated to the last good frame so later appends are readable",
+      "remedy": "A crash or power loss interrupted an append mid-frame. The journal fsyncs per record, so a crash normally leaves only an incomplete frame that was never acknowledged. Caveat: a damaged FINAL complete frame (a bit flip in the last record) is indistinguishable from a torn tail and is cut too, so that one acknowledged command can be lost; damage with a valid frame after it is never cut (MET-P063). If this recurs without a crash, check the disk and filesystem; if truncatedBytes is large, the tail held more than one frame - inspect the city directory backup before the next run."
+    },
+    "MET-P061": {
+      "severity": "warn",
+      "module": "int.persist",
+      "message": "metroserve: shutdown snapshot for city {city} skipped ({reason}); the city restores from its previous snapshot plus the journal tail",
+      "remedy": "Not a fault: the journal is fsynced per accepted command so nothing is lost; only the next wake replays a longer tail. Reasons: deadline (the snapshot did not finish within the shutdown budget - raise -shutdown-snapshot-deadline or wait for the packed snapshot format), journal-dirty (a prior journal append failed, MET-G813), persist-halted, trailing-command (a non-tick command was journaled after the last tick so a snapshot would double-apply it on replay), partial-tick (the engine is ahead of the durable journal, e.g. an AdvanceTicks that failed mid-loop; a snapshot there could not be reconciled)."
+    },
+    "MET-P062": {
+      "severity": "error",
+      "module": "int.persist",
+      "message": "metroserve: shutdown snapshot for city {city} at tick {tick} failed: {cause}",
+      "remedy": "Check the persist.Store backing this host (disk space, permissions). The previous snapshot is untouched (snapshots are written temp-then-rename) and the journal is intact, so the next wake restores correctly with a longer tail replay."
+    },
+    "MET-P063": {
+      "severity": "error",
+      "module": "int.persist",
+      "message": "persist: journal for city {city} is corrupt mid-file: the bad frame at offset {goodBytes} is followed by valid frames (file {fileBytes} bytes); the journal was left untouched and the city refused to load",
+      "remedy": "This is NOT a torn tail (a crash can only damage the last frame), so truncating would destroy committed commands. Copy the city directory aside, then inspect journal.dat: restore it from backup, or an operator may cut it at goodBytes only after accepting the loss of every later command. The city stays unloadable until then (fail closed)."
     }
   }
 }
