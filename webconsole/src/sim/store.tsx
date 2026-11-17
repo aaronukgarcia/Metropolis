@@ -1114,7 +1114,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
           if (sRestore.success && sRestore.state) {
             const loadedJournal = loadJournal(window.localStorage);
             return {
-              state: sanitizeTreasury({ ...sRestore.state, lineageId: storedScratch, ...(refusal ? { placeNotice: refusal.notice } : {}) }),
+              state: sanitizeTreasury({ ...sRestore.state, lineageId: storedScratch, ...(refusal ? { placeNotice: [refusal.notice, sRestore.state.placeNotice].filter(Boolean).join(' ') } : {}) }),
               journal: loadedJournal,
               saveIndex: loadedJournal.entries.length,
               pendingRebuild: null,

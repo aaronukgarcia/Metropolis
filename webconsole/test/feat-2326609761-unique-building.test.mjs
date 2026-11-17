@@ -445,15 +445,12 @@ describe('AC-31: old save with two dams', () => {
     };
   }
 
-  // NOTE (Aaron 2026-09-04 ruling supersedes the old AC-31 "none are
-  // removed" behaviour — see bug677-tick-hydrate-notice.test.mjs and
-  // consistency/fiscal coverage for the new purge-on-load path). This
-  // specific test exercises `restoreFromSavepoint` DIRECTLY, bypassing the
-  // 'hydrate' reducer case entirely (it is the synchronous, pre-render boot
-  // path — see engine.ts's hydrate-case comment) — so it still shows both
-  // dams intact here; the purge itself is proven against the 'hydrate'
-  // reducer case below and in the dedicated purge test file.
-  test('restoreFromSavepoint alone (bypassing "hydrate") does not itself purge — loads intact, no money clawed back', () => {
+  // BUG-1184 (supersedes the earlier pin that the raw restore path leaves both
+  // dams intact): restoreFromSavepoint is the synchronous fallback boot and never
+  // reaches a 'hydrate' dispatch, so it now runs the SAME surplus purge itself
+  // (engine.ts purgeSurplusOverCap) - identical scrap credit, ledger entry and
+  // notice as the hydrate case. Full coverage: bug1184-restore-purge.test.mjs.
+  test('restoreFromSavepoint enforces the cap through the same purge as hydrate (one dam kept, scrap credited once)', () => {
     const snapshot = twoDamSnapshot();
     const savepoint = {
       savedAt: new Date().toISOString(),
@@ -464,8 +461,10 @@ describe('AC-31: old save with two dams', () => {
     const storage = mockStorage({ [`${SAVEPOINT_KEY_PREFIX}.0`]: JSON.stringify(savepoint) });
     const result = restoreFromSavepoint(storage);
     assert.equal(result.success, true, `restore should succeed; got: ${result.reason}`);
-    assert.equal(countOfSpec(result.state, DAM), 2, 'the raw restore path itself does not purge');
-    assert.equal(result.state.funds, snapshot.funds, 'no money moves on the raw restore path itself');
+    assert.equal(countOfSpec(result.state, DAM), 1, 'the fallback restore path purges the surplus dam');
+    const viaHydrate = reducer(initialState(), { type: 'hydrate', state: snapshot });
+    assert.equal(result.state.funds, viaHydrate.funds, 'same scrap credit as the hydrate case');
+    assert.equal(result.state.placeNotice, viaHydrate.placeNotice, 'same notice as the hydrate case');
   });
 
   test('does not corrupt: consistency checks stay clean with two over-cap dams present', () => {

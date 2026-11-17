@@ -12,7 +12,7 @@
 import type { SimState } from './types.ts';
 import type { Journal, JournalEntry } from './journal.ts';
 import type { MapViewState } from './uistate.ts';
-import { reducer, initialState as getInitialState, nextSafeBuildingId, computeFlows } from './engine.ts';
+import { reducer, initialState as getInitialState, nextSafeBuildingId, computeFlows, applyRestoreSurplusPurge } from './engine.ts';
 import { runConsistencyChecks } from './consistency.ts';
 import type { ConsistencyReport, RecomputedFlowsOverride } from './consistency.ts';
 import type { ReplayProgress } from './genesisReplay.ts';
@@ -1659,6 +1659,13 @@ export function restoreFromSavepoint(storage: StorageLike, lineageId?: string): 
         reason: `Replay failed consistency (${afterReport.blockingFailures} blocking of ${afterReport.failures} failures) after ${replayed} actions`,
       };
     }
+
+    // BUG-1184: this synchronous fallback restore never reaches a 'hydrate'
+    // dispatch (store.tsx boots its result directly), so the maxPerCity surplus
+    // purge that hydrate performs must run here, AFTER the tail replay so its
+    // notice cannot be overwritten by a replayed place. Same function, same
+    // 50% scrap credit, ledger entry and notice as the hydrate case.
+    state = applyRestoreSurplusPurge(state);
 
     return { success: true, state, replayed };
   } catch (e) {

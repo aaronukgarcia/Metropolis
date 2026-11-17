@@ -11493,36 +11493,6 @@ function reduceCore(
       // Gated on source !== 'tick' by the early return above — this scan is
       // an O(buildings) sweep per capped spec and must never run on the
       // worker-tick hydrate hot path (BUG-677).
-      let purged = hydrated.buildings;
-      let creditTotal = 0;
-      let inflows = hydrated.lastFlows.inflows;
-      let ledger = hydrated.ledger;
-      let nextLedgerId = hydrated.nextLedgerId;
-      const notices: string[] = [];
-      for (const sp of Object.values(SPECS)) {
-        if (sp.maxPerCity == null) continue;
-        const surplus = surplusInstancesOf({ ...hydrated, buildings: purged }, sp);
-        if (surplus.length === 0) continue;
-        const removeIds = new Set(surplus.map((b) => b.id));
-        purged = purged.filter((b) => !removeIds.has(b.id));
-        const specCredit = surplus.reduce(
-          (sum, b) => sum + Math.round(placementCost(SPECS[b.spec] ?? sp) * CONSOLIDATOR_SCRAP_FRACTION),
-          0,
-        );
-        creditTotal += specCredit;
-        const scrapLabel = `Surplus ${sp.name} decommission scrap`;
-        inflows = [...inflows, { label: scrapLabel, value: specCredit }];
-        // Ledger entry too (mirrors sellAsset/bulldoze) — threaded through
-        // a running {ledger, nextLedgerId, tick} cursor since logEvent()
-        // takes a whole SimState and multiple capped specs can purge in the
-        // same load.
-        const ledgerUpdate = logEvent({ ...hydrated, ledger, nextLedgerId }, scrapLabel, specCredit);
-        ledger = ledgerUpdate.ledger;
-        nextLedgerId = ledgerUpdate.nextLedgerId;
-        notices.push(
-          `Removed ${surplus.length} surplus ${sp.name} — cap is ${sp.maxPerCity} per city; ${fmtMoney(specCredit)} scrap credited`,
-        );
-      }
       // FEAT-2326609764 inc2 (AC-10/AC-7): a REAL load (this point is only
       // reached when action.source !== 'tick', per the early return above)
       // brings in under-construction buildings this session's completion
@@ -11533,20 +11503,7 @@ function reduceCore(
       // this case never calls markSectorsDirty, so it commits `null` (AC-7's
       // own full-recompute fail-safe) for the returned state, exactly as a
       // loaded/hand-built state should.
-      if (notices.length === 0) {
-        rebuildCompletionScheduleFromScratch(hydrated);
-        return hydrated;
-      }
-      const purgedResult = {
-        ...hydrated,
-        buildings: purged,
-        funds: hydrated.funds + creditTotal,
-        fundsAtTickEnd: hydrated.fundsAtTickEnd + creditTotal,
-        lastFlows: { ...hydrated.lastFlows, inflows },
-        ledger,
-        nextLedgerId,
-        placeNotice: notices.join(' '),
-      };
+      const purgedResult = purgeSurplusOverCap(hydrated);
       rebuildCompletionScheduleFromScratch(purgedResult);
       return purgedResult;
     }
@@ -11586,6 +11543,72 @@ function reduceCore(
       };
     }
   }
+}
+
+/**
+ * BUG-1184: the ONE maxPerCity surplus enforcement. Aaron ruling 2026-09-04:
+ * an old save carrying more than maxPerCity of a now-capped spec has every
+ * surplus instance removed on load (oldest kept, 50% scrap credited through
+ * the ledger and lastFlows.inflows, one merged notice AFTER any tail replay).
+ * Shared by the 'hydrate' reducer case (chunked boot, IDB swap, snapshot
+ * loads) and by replay.ts's restoreFromSavepoint (the synchronous fallback
+ * restore, which never reaches a hydrate dispatch). Pure, deterministic
+ * (GR#21) and idempotent: returns the SAME reference when nothing is over
+ * cap. Does NOT rebuild the completion schedule - callers do that (see
+ * applyRestoreSurplusPurge).
+ */
+export function purgeSurplusOverCap(hydrated: SimState): SimState {
+  let purged = hydrated.buildings;
+  let creditTotal = 0;
+  let inflows = hydrated.lastFlows.inflows;
+  let ledger = hydrated.ledger;
+  let nextLedgerId = hydrated.nextLedgerId;
+  const notices: string[] = [];
+  for (const sp of Object.values(SPECS)) {
+    if (sp.maxPerCity == null) continue;
+    const surplus = surplusInstancesOf({ ...hydrated, buildings: purged }, sp);
+    if (surplus.length === 0) continue;
+    const removeIds = new Set(surplus.map((b) => b.id));
+    purged = purged.filter((b) => !removeIds.has(b.id));
+    const specCredit = surplus.reduce(
+      (sum, b) => sum + Math.round(placementCost(SPECS[b.spec] ?? sp) * CONSOLIDATOR_SCRAP_FRACTION),
+      0,
+    );
+    creditTotal += specCredit;
+    const scrapLabel = `Surplus ${sp.name} decommission scrap`;
+    inflows = [...inflows, { label: scrapLabel, value: specCredit }];
+    // Ledger entry too (mirrors sellAsset/bulldoze) — threaded through
+    // a running {ledger, nextLedgerId, tick} cursor since logEvent()
+    // takes a whole SimState and multiple capped specs can purge in the
+    // same load.
+    const ledgerUpdate = logEvent({ ...hydrated, ledger, nextLedgerId }, scrapLabel, specCredit);
+    ledger = ledgerUpdate.ledger;
+    nextLedgerId = ledgerUpdate.nextLedgerId;
+    notices.push(
+      `Removed ${surplus.length} surplus ${sp.name} — cap is ${sp.maxPerCity} per city; ${fmtMoney(specCredit)} scrap credited`,
+    );
+  }
+  if (notices.length === 0) return hydrated;
+  return {
+    ...hydrated,
+    buildings: purged,
+    funds: hydrated.funds + creditTotal,
+    fundsAtTickEnd: hydrated.fundsAtTickEnd + creditTotal,
+    lastFlows: { ...hydrated.lastFlows, inflows },
+    ledger,
+    nextLedgerId,
+    placeNotice: notices.join(' '),
+  };
+}
+
+/**
+ * BUG-1184: purgeSurplusOverCap plus the completion-schedule rebuild the
+ * hydrate case performs, for restore paths that return a state directly.
+ */
+export function applyRestoreSurplusPurge(state: SimState): SimState {
+  const purged = purgeSurplusOverCap(state);
+  rebuildCompletionScheduleFromScratch(purged);
+  return purged;
 }
 
 /**
