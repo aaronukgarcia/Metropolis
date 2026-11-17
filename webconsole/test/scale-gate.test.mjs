@@ -58,6 +58,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import { buildScaleFixture, DEFAULT_BUILDING_COUNT, DEFAULT_TARGET_POPULATION } from './scale/fixture.mjs';
 import { reducer, computeFlows } from '../src/sim/engine.ts';
 import { wellbeingOf } from '../src/sim/engine.ts';
@@ -164,9 +166,10 @@ const TICK_SAMPLE_COUNT = 30;
 // same-machine, same-run measurements, is immune to the CI/local hardware
 // gap the old absolute bound needed 30x of slack to survive.
 //
-// BOUND DERIVATION (house rule: MEDIAN of >=5 runs, never max — see file
-// header). Measured locally (Windows, Node 25.3.0, FIVE independent
-// 20-sample runs at each scale, straight after the BUG-653 activation-gate
+// BOUND DERIVATION (HISTORICAL, median era — superseded by the BUG-1117
+// re-derivation below; the gate now uses interleaved best-of-SELECTOR_SAMPLE_COUNT
+// (=12) samples, not the median). Measured locally (Windows, Node 25.3.0, FIVE independent
+// 20-sample (median-era) runs at each scale, straight after the BUG-653 activation-gate
 // fix): largePerBuilding/smallPerBuilding ratio per run (max column is the
 // highest of all five):
 //   buildingDisplayStates  1.008, 1.042, 0.805, 1.049, 1.190   max 1.190
@@ -186,6 +189,39 @@ const TICK_SAMPLE_COUNT = 30;
 // comfortably above every observed max (1.19) yet decisively below what a
 // real O(n²)-class regression produces (BUG-642's real-world shape blew this
 // same style of measurement by 100x-3750x — see file header).
+//
+// BUG-1117 RE-DERIVATION (statistic = INTERLEAVED best-of-SELECTOR_SAMPLE_COUNT = 12, see
+// interleavedStats). The median-era table above is superseded: the first
+// best-of build (non-interleaved) read powerStats 3.93x / wasteStatsOf 3.70x on
+// UNMODIFIED code on a quiet machine because slow drift between the large batch
+// and the small batch raised one whole side. With L/S samples interleaved,
+// measured on the unmodified selectors (Windows, Node 25.3.0, gc hook
+// available, 5 quiet full-file runs of the real gate, first measurement of
+// each run; ratio = large/small per-building cost):
+//   buildingDisplayStates  1.174 1.197 1.315 1.023 1.093   max 1.315
+//   computeFlows           1.054 0.981 0.966 1.029 1.147   max 1.147
+//   wellbeingOf            1.153 0.961 0.908 1.073 0.899   max 1.153
+//   crimeRateOf            0.821 0.985 1.057 1.031 0.875   max 1.057
+//   serviceCoverageOf      1.236 1.164 1.156 1.231 1.049   max 1.236
+//   waterCaps              1.246 1.292 1.068 1.212 1.072   max 1.292
+//   powerStats             1.057 1.355 1.208 1.132 1.088   max 1.355
+//   demandFixPlan          0.983 0.952 0.926 1.043 0.951   max 1.043
+//   wasteStatsOf           1.122 0.923 0.872 1.380 1.301   max 1.380
+// (Those tables predate duration matching; the DURATION-MATCHED re-measurement
+// is at the end of this comment.) Global max 1.38 (vs 2.6-3.9 before interleaving). Synthetic controls over the
+// same 5 runs (self-test, 50 / 25 measurements): O(n^2) min 3.66, typically
+// 5-6 (ideal 5.0); linear max 2.11 (tiny sub-ms synthetic, the noisiest case).
+// The 2.5 bound therefore keeps 1.8x headroom over the worst real selector
+// and is designed to sit below a selector that is truly 3x slower at the large
+// size only, and below any O(n^2)-class regression (waterCaps per-plant scan).
+// CLAIMS ARE LOAD-QUALIFIED: the earlier "catches a 3x slowdown" claim was shown
+// on a quiet machine only; r2 showed interleaved best-of-N falsely failed
+// unmodified code at 3.1-3.8x under 4 CPU spinners (duration bias), which is
+// indistinguishable from a true 3x. Duration-matched sampling (each small
+// sample = SIZE_RATIO cold calls / SIZE_RATIO) is the fix; the tallies measured
+// quiet and loaded are recorded in the BUG-1117 BOW comments. A 2x-at-large
+// slowdown (ratio ~2.2-2.6) is deliberately NOT guaranteed caught.
+// The size ratio was left at 5: the signal-to-noise is already ample.
 const SIZE_RATIO = 5;
 const SIZE_INVARIANCE_BOUND = 2.5;
 
@@ -201,11 +237,12 @@ const SELECTORS = [
   ['wasteStatsOf', wasteStatsOf],
 ];
 
-// BUG-654: 20 samples/selector at EACH scale (was 6, absolute-bound era) —
+// BUG-654 history: 20 samples/selector at EACH scale (was 6, absolute-bound era);
+// BUG-1117 later reduced this to 12 interleaved best-of samples (runtime) —
 // more samples damps the per-run jitter documented above (which tick phase,
 // relative to the periodic sweep, a disjoint sample window happens to land
 // on) at both the large and small scale.
-const SELECTOR_SAMPLE_COUNT = 20;
+const SELECTOR_SAMPLE_COUNT = 12;
 
 /** The SMALL side of the BUG-654 scale-invariance comparison — SIZE_RATIO
  * (5x) smaller than DEFAULT_BUILDING_COUNT, same composition/target-population
@@ -338,64 +375,194 @@ test('SCALE GATE half A: render-path derivations (wellbeingOf + serviceCoverageO
   );
 });
 
-/** Runs each selector in SELECTORS on its OWN disjoint slice of
- * freshly-ticked states drawn from `startState` — see the file header's
- * COLD-CALL METHODOLOGY comment for why disjoint-per-selector state is
- * required (a shared small set of states silently measures memo-cache HITS,
- * not real cold-call cost). Returns { medians: {name: ms}, endState }. */
-function sampleSelectorMedians(startState) {
+/** Force a GC before a timing batch (BUG-1117 hardening 2). The scoped runner
+ * does NOT pass --expose-gc, so global.gc is normally absent; fall back to
+ * enabling it at runtime via v8 flags + vm (works on Node 22/25). If neither
+ * route works this is a silent no-op: the gate then relies on best-of-N alone. */
+let gcFn = typeof global.gc === 'function' ? global.gc : null;
+if (!gcFn) {
+  try {
+    v8.setFlagsFromString('--expose-gc');
+    const g = vm.runInNewContext('gc');
+    if (typeof g === 'function') gcFn = g;
+  } catch {
+    gcFn = null;
+  }
+}
+function collectGarbage() {
+  if (gcFn) gcFn();
+}
+// Make the hook's status observable: on a runtime where neither route works
+// (e.g. an untested Node 22 build) the gate silently loses its GC cleanup.
+console.log('SCALE-GATE gc hook: ' + (gcFn ? 'AVAILABLE (gc() called before every sample pair)' : 'UNAVAILABLE (no-op; relying on interleaved best-of-N alone)') + ' node ' + process.version);
+
+/** BUG-1117: the BEST-OF-N (minimum) statistic, not the median. Noise only ever
+ * ADDS time to a sample, but the minimum is NOT automatically "least
+ * contaminated": its bias depends on sample DURATION (a short sample can land in
+ * an uncontended window, a long one rarely does), so a minimum is only fair
+ * across the two sides when their samples take similar wall time. That is why
+ * the small side is duration-matched (see interleavedStats). A real superlinear
+ * regression raises EVERY sample (the minimum included), so the large/small
+ * per-building ratio still climbs toward SIZE_RATIO. */
+
+/** Pre-ticks startState into one DISJOINT list of freshly-ticked states per
+ * selector (see the file header's COLD-CALL METHODOLOGY comment for why: a
+ * shared set of states silently measures memo-cache HITS, not cold-call cost).
+ * Returns { perSelector: State[][], endState }. */
+function tickStatesFor(startState, selectors, statesPerSelector = SELECTOR_SAMPLE_COUNT) {
   let s = startState;
-  const selectorStates = SELECTORS.map(() => []);
-  const totalTicksNeeded = SELECTORS.length * SELECTOR_SAMPLE_COUNT;
+  const perSelector = selectors.map(() => []);
+  const totalTicksNeeded = selectors.length * statesPerSelector;
   for (let n = 0; n < totalTicksNeeded; n++) {
     s = reducer(s, { type: 'tick' });
-    selectorStates[n % SELECTORS.length].push(s);
+    perSelector[n % selectors.length].push(s);
   }
-  const medians = {};
-  for (let i = 0; i < SELECTORS.length; i++) {
-    const [name, fn] = SELECTORS[i];
-    const times = selectorStates[i].map((st) => {
-      const t0 = performance.now();
-      fn(st);
-      return performance.now() - t0;
-    });
-    medians[name] = median(times);
-  }
-  return { medians, endState: s };
+  return { perSelector, endState: s };
 }
 
-test('SCALE GATE: per-selector scale-invariance table catches a single regressed selector, not just the whole tick (BUG-644 / BUG-654)', () => {
-  assert.ok(fixture, 'earlier tests must run first (node:test preserves file order)');
+const timeOnce = (fn, st) => {
+  const t0 = performance.now();
+  fn(st);
+  return performance.now() - t0;
+};
 
-  // LARGE side: continue ticking the already-settled 13k-building `fixture`.
-  const { medians: largeMedians, endState } = sampleSelectorMedians(fixture);
-  fixture = endState; // carry the settled state forward (HALF B reuses `fixture`)
+/** BUG-1117 DURATION-MATCHED + INTERLEAVED sampling.
+ * r1: large and small samples are interleaved (L S, S L ...) so slow drift hits
+ * both sides. r2 (REJECT) showed interleaving does not fix DURATION BIAS: under
+ * CPU contention a ~25ms large sample is almost never uncontended while a ~1.5ms
+ * small sample often is, so a minimum over samples inflates only the large side
+ * (false fails 3.1-3.8x on unmodified code under 4 CPU spinners). Fix: each
+ * small-side sample times SIZE_RATIO cold calls on SIZE_RATIO DISTINCT small
+ * states and divides by SIZE_RATIO, so a small sample and a large sample take
+ * about the same wall time and see the same contention. Both sides still use the
+ * minimum over SELECTOR_SAMPLE_COUNT samples. gc() runs before every pair.
+ * Returns { large: {name: ms}, small: {name: ms} }; `small` is already the
+ * per-call mean of one SIZE_RATIO-call sample, i.e. comparable to one small call.
+ * smallStates[i] holds SELECTOR_SAMPLE_COUNT * SIZE_RATIO states. */
+function timeSmallBatch(fn, states, from) {
+  const t0 = performance.now();
+  for (let j = 0; j < SIZE_RATIO; j++) fn(states[from + j]);
+  return (performance.now() - t0) / SIZE_RATIO;
+}
 
-  // SMALL side: an independent SIZE_RATIO-times-smaller fixture, same
-  // stampBuiltTick:true treatment (BUG-653) so the two are comparable — see
-  // SIZE_INVARIANCE_BOUND's derivation comment above for why this, not a
-  // same-run tick-cost ratio, is the fix BUG-654 needs.
-  const smallFixture = buildScaleFixture({
+function interleavedStats(largeStates, smallStates, selectors) {
+  const large = {};
+  const small = {};
+  for (let i = 0; i < selectors.length; i++) {
+    const [name, fn] = selectors[i];
+    let lMin = Infinity;
+    let sMin = Infinity;
+    for (let k = 0; k < SELECTOR_SAMPLE_COUNT; k++) {
+      collectGarbage(); // clean heap before every PAIR so neither side inherits the other's garbage
+      if (k % 2 === 0) {
+        lMin = Math.min(lMin, timeOnce(fn, largeStates[i][k]));
+        sMin = Math.min(sMin, timeSmallBatch(fn, smallStates[i], k * SIZE_RATIO));
+      } else {
+        sMin = Math.min(sMin, timeSmallBatch(fn, smallStates[i], k * SIZE_RATIO));
+        lMin = Math.min(lMin, timeOnce(fn, largeStates[i][k]));
+      }
+    }
+    large[name] = lMin;
+    small[name] = sMin;
+  }
+  return { large, small };
+}
+
+/** One FULL measurement: large side continued from largeStart, small side on
+ * a fresh SIZE_RATIO-times-smaller fixture (same stampBuiltTick:true treatment,
+ * BUG-653). Returns the selectors over the bound plus the end state. */
+function measureOverBound(selectors, largeStart, buildSmall, reuseStates = false) {
+  // reuseStates (self-test only): the synthetic selectors keep no memo, so the
+  // same state can be handed to every sample and no real ticks are paid for.
+  const mk = reuseStates
+    ? (start, sel, n) => ({ perSelector: sel.map(() => Array(n).fill(start)), endState: start })
+    : tickStatesFor;
+  const L = mk(largeStart, selectors, SELECTOR_SAMPLE_COUNT);
+  const S = mk(buildSmall(), selectors, SELECTOR_SAMPLE_COUNT * SIZE_RATIO);
+  const { large, small } = interleavedStats(L.perSelector, S.perSelector, selectors);
+  const endState = L.endState;
+  const over = {};
+  for (const [name] of selectors) {
+    const ratio = large[name] / DEFAULT_BUILDING_COUNT / (small[name] / SMALL_BUILDING_COUNT);
+    if (process.env.SCALE_GATE_VERBOSE) {
+      console.log('SCALE-GATE-RATIO ' + name + ' ' + ratio.toFixed(3) + ' large=' + large[name].toFixed(3) + ' small=' + small[name].toFixed(3));
+    }
+    if (!(ratio < SIZE_INVARIANCE_BOUND)) {
+      over[name] =
+        name + ': large ' + large[name].toFixed(2) + 'ms/' + DEFAULT_BUILDING_COUNT + ' vs ' +
+        'small ' + small[name].toFixed(2) + 'ms/' + SMALL_BUILDING_COUNT + ' buildings (interleaved duration-matched best-of-' + SELECTOR_SAMPLE_COUNT + ') — ' +
+        'per-building cost ratio ' + ratio.toFixed(2) + 'x exceeds the ' + SIZE_INVARIANCE_BOUND + 'x ' +
+        "scale-invariance bound (i.e. this selector's cost is NOT staying linear in buildings.length)";
+    }
+  }
+  return { over, endState, large, small };
+}
+
+/** BUG-1117 hardening 3: a selector fails only if it exceeds the bound on TWO
+ * consecutive full measurements. The second measurement runs only when the
+ * first found something over the bound (quiet runs pay one measurement). */
+function gateSelectors(selectors, largeStart, buildSmall, reuseStates = false) {
+  const first = measureOverBound(selectors, largeStart, buildSmall, reuseStates);
+  if (Object.keys(first.over).length === 0) {
+    return { regressed: [], endState: first.endState };
+  }
+  const second = measureOverBound(selectors, first.endState, buildSmall, reuseStates);
+  // Both measurements must exceed the bound AND so must the POOLED best-of
+  // (minimum across both measurements, 40 samples/side): sustained machine
+  // load that contaminated one side of a single measurement cannot also
+  // contaminate the other measurement's best sample, while a real superlinear
+  // selector raises every sample of both measurements.
+  const regressed = Object.keys(second.over)
+    .filter((name) => name in first.over)
+    .filter((name) => {
+      const pooledLarge = Math.min(first.large[name], second.large[name]);
+      const pooledSmall = Math.min(first.small[name], second.small[name]);
+      const pooled = pooledLarge / DEFAULT_BUILDING_COUNT / (pooledSmall / SMALL_BUILDING_COUNT);
+      return !(pooled < SIZE_INVARIANCE_BOUND);
+    })
+    .map((name) => second.over[name]);
+  return { regressed, endState: second.endState };
+}
+
+const buildSmallFixture = () =>
+  buildScaleFixture({
     buildingCount: SMALL_BUILDING_COUNT,
     targetPopulation: SMALL_TARGET_POPULATION,
     stampBuiltTick: true,
   });
-  const { medians: smallMedians } = sampleSelectorMedians(smallFixture);
 
-  const regressed = [];
-  for (const [name] of SELECTORS) {
-    const perBuildingLarge = largeMedians[name] / DEFAULT_BUILDING_COUNT;
-    const perBuildingSmall = smallMedians[name] / SMALL_BUILDING_COUNT;
-    const ratio = perBuildingLarge / perBuildingSmall;
-    if (!(ratio < SIZE_INVARIANCE_BOUND)) {
-      regressed.push(
-        `${name}: large ${largeMedians[name].toFixed(2)}ms/${DEFAULT_BUILDING_COUNT} vs ` +
-          `small ${smallMedians[name].toFixed(2)}ms/${SMALL_BUILDING_COUNT} buildings — ` +
-          `per-building cost ratio ${ratio.toFixed(2)}x exceeds the ${SIZE_INVARIANCE_BOUND}x ` +
-          `scale-invariance bound (i.e. this selector's cost is NOT staying linear in buildings.length)`
-      );
-    }
-  }
+let sink = 0;
+/** Synthetic selectors for the gate's self-test. Work is scaled (/50) only to
+ * keep the run short; the SHAPE (n^2 vs n) is what the ratio measures. */
+const SYNTH_QUADRATIC = [
+  'syntheticQuadratic',
+  (st) => {
+    const n = st.buildings.length;
+    let acc = 0;
+    for (let i = 0; i < (n * n) / 50; i++) acc = (acc + i) | 0;
+    sink ^= acc;
+  },
+];
+const SYNTH_LINEAR = [
+  'syntheticLinear',
+  (st) => {
+    const n = st.buildings.length;
+    let acc = 0;
+    for (let i = 0; i < n * 3000; i++) acc = (acc + i) | 0;
+    sink ^= acc;
+  },
+];
+
+test('SCALE GATE: per-selector scale-invariance table catches a single regressed selector, not just the whole tick (BUG-644 / BUG-654)', () => {
+  assert.ok(fixture, 'earlier tests must run first (node:test preserves file order)');
+
+  // LARGE side: continue ticking the already-settled 13k-building fixture;
+  // SMALL side: an independent SIZE_RATIO-times-smaller fixture — see
+  // SIZE_INVARIANCE_BOUND's derivation comment above for why this, not a
+  // same-run tick-cost ratio, is the fix BUG-654 needs.
+  const { regressed, endState } = gateSelectors(SELECTORS, fixture, buildSmallFixture);
+  fixture = endState; // carry the settled state forward (HALF B reuses fixture)
+
   // FAIL LOUD, naming every selector that regressed — never collapse this
   // into "the tick got slower" (the whole point of BUG-644's per-selector
   // table: a 3750x regression inside ONE selector must not hide under a
@@ -403,7 +570,7 @@ test('SCALE GATE: per-selector scale-invariance table catches a single regressed
   assert.equal(
     regressed.length,
     0,
-    `${regressed.length} selector(s) exceeded their scale-invariance bound:\n  ` + regressed.join('\n  ')
+    regressed.length + ' selector(s) exceeded their scale-invariance bound on two consecutive measurements:\n  ' + regressed.join('\n  ')
   );
 
   // Sanity check that the extra ticks didn't silently break the city.
@@ -413,6 +580,22 @@ test('SCALE GATE: per-selector scale-invariance table catches a single regressed
     0,
     'the fixture must remain internally consistent after the per-selector sampling ticks'
   );
+});
+
+test('SCALE GATE self-test (BUG-1117): the hardened gate still flags an injected O(n^2) selector 5/5 and never flags a linear one', () => {
+  assert.ok(fixture, 'earlier tests must run first (node:test preserves file order)');
+  let flagged = 0;
+  let linearFlagged = 0;
+  const smallOnce = buildSmallFixture(); // synthetic selectors are stateless: build once, reuse
+  for (let run = 0; run < 5; run++) {
+    const q = gateSelectors([SYNTH_QUADRATIC], fixture, () => smallOnce, true);
+    if (q.regressed.length === 1) flagged++;
+    const l = gateSelectors([SYNTH_LINEAR], fixture, () => smallOnce, true);
+    if (l.regressed.length > 0) linearFlagged++;
+  }
+  assert.equal(flagged, 5, 'injected O(n^2) selector must be flagged on every run, flagged ' + flagged + '/5');
+  assert.equal(linearFlagged, 0, 'a genuinely linear control selector must not be flagged, flagged ' + linearFlagged + '/5');
+  assert.ok(Number.isFinite(sink));
 });
 
 // ============================================================================
