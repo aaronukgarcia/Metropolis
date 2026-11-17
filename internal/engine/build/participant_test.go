@@ -55,6 +55,8 @@ func TestBuildAPIFieldsAllClassified(t *testing.T) {
 		"serviceByOrder": "derived runtime index (order id -> registered ServiceID), rebuildable from queue+catalogueEntries+engine.services state; " +
 			"NOT part of the save schema per FEAT-build-services-bridge-2026-09-02's own scope notes (composition-root save wiring for engine.services " +
 			"is separate follow-up work) -- resetForLoad clears it to empty so a load never carries a stale order->service reference forward",
+		"structEpoch": "derived runtime change counter (FEAT-2326609845): bumped on every structure add/remove and on restore so the composition root's " +
+			"housing feed re-reads the standing set; it is a function of structures (which IS saved), never round-tripped, and means only 'different from last time'",
 		"servicesSweepDirty": "derived runtime flag (BUG-586), not simulation state -- rederived fresh on every resetForLoad/SetServices call, " +
 			"never round-tripped through a save; it only gates WHEN the already-persisted registerCompletedServicesLocked sweep runs, not what it does",
 	}

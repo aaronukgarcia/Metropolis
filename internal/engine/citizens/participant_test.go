@@ -461,6 +461,10 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 		// mandatory shardIndex rebuild that closes the inc1.5-era KNOWN GAP
 		// this field used to be excluded under.
 		"deathQueue": true,
+		// FEAT-2326609845 r2: occupancy is derived from the Home column, but the
+		// ledger's last-applied capacity snapshot IS save state (meta.housingOn +
+		// citizens.housingcap records); housingRestore stages it across a load.
+		"housing": true, "housingRestore": true,
 	}
 	ct := reflect.TypeOf((*CitizensAPI)(nil)).Elem()
 	for i := 0; i < ct.NumField(); i++ {

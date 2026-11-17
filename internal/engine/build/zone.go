@@ -48,6 +48,10 @@ type zoneRecord struct {
 	materials        int64 // construction-materials quantity (tonnes)
 	labour           int64 // worker-days
 	baseLeadTimeDays int64 // simulation days
+	// residentCapacity / jobCapacity: citizens one completed structure houses /
+	// employs (FEAT-2326609845; PLACEHOLDER, AARON BALANCE PASS).
+	residentCapacity int64
+	jobCapacity      int64
 }
 
 // DemandReason is a §34 demand-bar cause code (US-2): why a zone's demand
@@ -158,6 +162,8 @@ func buildCatalogue(zones []data.ZoneEntry) (map[ZoneType]zoneRecord, error) {
 			materials:        materials,
 			labour:           z.Labour,
 			baseLeadTimeDays: z.BaseLeadTimeDays,
+			residentCapacity: z.ResidentCapacity,
+			jobCapacity:      z.JobCapacity,
 		}
 	}
 

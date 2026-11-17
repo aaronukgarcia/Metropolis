@@ -376,6 +376,7 @@ func (b *BuildAPI) resetForLoad() error {
 	b.queue = nil
 	b.zoneState = make(map[cellKey]ZoneType)
 	b.structures = make(map[cellKey]BuildOrderID)
+	b.structEpoch++
 	b.demand = make(map[ZoneType]DemandInput)
 	b.demolitions = nil
 	// serviceByOrder is NOT part of the save schema (out of scope per
@@ -451,6 +452,7 @@ func (b *BuildAPI) applyLoadRecord(rec serialize.Record) error {
 			return fmt.Errorf("build: decoding %s record: %w", rec.Kind, err)
 		}
 		b.structures[cellKey{tile: w.Tile, local: w.Local}] = w.OrderID
+		b.structEpoch++
 
 	case recBuildDemand:
 		var w buildDemandWire

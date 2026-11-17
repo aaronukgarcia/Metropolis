@@ -133,7 +133,17 @@ const (
 	recCitizensHousehold  = "citizens.household"
 	recCitizensFidelity   = "citizens.fidelity"
 	recCitizensDeathQueue = "citizens.deathqueue"
+	// recCitizensHousingCap is one entry of the housing ledger's last-applied
+	// capacity snapshot (FEAT-2326609845 r2). Emitted only when the ledger is
+	// on (citizensMetaWire.HousingOn); absent in saves that predate it.
+	recCitizensHousingCap = "citizens.housingcap"
 )
+
+// housingCapWire is one (cell, capacity) entry of the saved snapshot.
+type housingCapWire struct {
+	Cell     uint32 `json:"cell"`
+	Capacity int32  `json:"capacity"`
+}
 
 // coldPassParamsWire is ColdPassParams's wire projection (the mid-month
 // cold-pass parameter set). Explicit json tags; the domain struct is never
@@ -172,6 +182,9 @@ type citizensMetaWire struct {
 	LastMonthDeaths      int                `json:"lastMonthDeaths"`
 	MonthParams          coldPassParamsWire `json:"monthParams"`
 	EpochMonths          []int64            `json:"epochMonths"`
+	// HousingOn: the housing ledger was on at save (FEAT-2326609845 r2); the
+	// snapshot rides in citizens.housingcap records. Absent in old saves.
+	HousingOn bool `json:"housingOn,omitempty"`
 }
 
 // coldCitizenWire is one cold citizen on the wire: every ColdRecord field
@@ -369,6 +382,7 @@ type citizensHead struct {
 	households []householdWire // sorted by id (GR#21)
 	fidelity   []fidelityWire  // sorted by id (GR#21)
 	deathQueue deathQueueWire
+	housingCap []housingCapWire // sorted by cell (GR#21); only meaningful when meta.HousingOn
 }
 
 // snapshotHead copies the meta scalars, the households, and the hot Fidelity
@@ -435,6 +449,9 @@ func (c *CitizensAPI) snapshotHead() (citizensHead, error) {
 	// package only ever nests c.mu-then-q.mu, never q.mu-then-c.mu (see
 	// citizensHead's own doc comment).
 	head.deathQueue = toDeathQueueWire(c.deathQueue.Snapshot(errs.NewCorrelationID()))
+
+	// FEAT-2326609845 r2: the housing ledger's last-applied capacity snapshot.
+	head.housingCap, head.meta.HousingOn = c.housingSnapshotLocked()
 
 	return head, nil
 }
@@ -604,6 +621,14 @@ func (c *CitizensAPI) applyLoadRecord(rec serialize.Record) error {
 		if len(m.EpochMonths) != numColdShards {
 			return fmt.Errorf("citizens: decoding %s record: epochMonths has %d entries, want %d", rec.Kind, len(m.EpochMonths), numColdShards)
 		}
+		// FEAT-2326609845 r2: drop any ledger; if the save had one, stage an
+		// (empty) snapshot that the citizens.housingcap records fill and
+		// RestoreHousing materialises. Old saves (no flag) leave it off.
+		c.housing = nil
+		c.housingRestore = nil
+		if m.HousingOn {
+			c.housingRestore = map[uint32]int32{}
+		}
 		c.month = m.Month
 		c.dayTick = m.DayTick
 		c.nextHouseholdID = m.NextHouseholdID
@@ -687,6 +712,19 @@ func (c *CitizensAPI) applyLoadRecord(rec serialize.Record) error {
 			return fmt.Errorf("citizens: decoding %s record: %w", rec.Kind, err)
 		}
 
+	case recCitizensHousingCap:
+		var w housingCapWire
+		if err := json.Unmarshal(rec.Data, &w); err != nil {
+			return fmt.Errorf("citizens: decoding %s record: %w", rec.Kind, err)
+		}
+		if c.housingRestore == nil {
+			return fmt.Errorf("citizens: decoding %s record: housing capacity entry but the meta record says the ledger was off (corrupt save)", rec.Kind)
+		}
+		if w.Cell == 0 || w.Capacity <= 0 {
+			return fmt.Errorf("citizens: decoding %s record: invalid entry cell=%d capacity=%d", rec.Kind, w.Cell, w.Capacity)
+		}
+		c.housingRestore[w.Cell] = w.Capacity
+
 	default:
 		return fmt.Errorf("citizens: unknown citizens save record kind %q", rec.Kind)
 	}
@@ -754,7 +792,7 @@ func (p *SaveParticipant) Source() serialize.RecordSource {
 	cold := p.c.newColdStream()
 	metaEmitted := false
 	deathQueueEmitted := false
-	hi, fi := 0, 0
+	hi, fi, ci := 0, 0, 0
 	emit := func(kind string, value any) (serialize.Record, bool, error) {
 		data, err := json.Marshal(value)
 		if err != nil {
@@ -788,6 +826,11 @@ func (p *SaveParticipant) Source() serialize.RecordSource {
 			w := head.fidelity[fi]
 			fi++
 			return emit(recCitizensFidelity, w)
+		}
+		if ci < len(head.housingCap) {
+			w := head.housingCap[ci]
+			ci++
+			return emit(recCitizensHousingCap, w)
 		}
 		return serialize.Record{}, false, nil
 	}

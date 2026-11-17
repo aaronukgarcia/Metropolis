@@ -422,6 +422,10 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	if err := c.state.buildAPI.RegisterCompletedServices(); err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "build", "step": "register-completed-services"})
 	}
+	// FEAT-2326609845 r2: materialise the restored citizens housing ledger
+	// (saved capacity snapshot + Home columns). No assignment: the next daily
+	// sync does that, as in the uninterrupted run.
+	c.state.restoreHousing()
 
 	// MOD-034 (engine.wellbeing downstream-effect application): eagerly
 	// reconstruct st.wellbeingStatus here too — this is the single choke

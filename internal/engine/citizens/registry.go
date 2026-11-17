@@ -99,6 +99,15 @@ type CitizensAPI struct {
 	occ    *occupantIndex
 	occGen uint64
 
+	// housing is the OPT-IN home-occupancy ledger (housing.go,
+	// FEAT-2326609845): occupancy derived from the Home columns, last-applied
+	// capacity snapshot SAVED (citizens.housingcap). nil until the composition
+	// root first calls SetHomeCapacities. Guarded by mu.
+	housing *housingLedger
+	// housingRestore stages the saved last-applied capacity snapshot until the
+	// ledger is materialised after a load (housing.go, r2 ruling). Guarded by mu.
+	housingRestore map[uint32]int32
+
 	// mortalityModifier is MOD-034's OPTIONAL injected wellbeing seam
 	// (GR#25/GR#20: engine.citizens may NOT import engine.wellbeing — that
 	// edge is not registered and would cycle, since engine.wellbeing already
@@ -938,6 +947,7 @@ func (c *CitizensAPI) SeedColdRecords(records []ColdRecord, correlationID string
 			return errs.New(ErrDuplicateCitizenID, correlationID, map[string]any{"id": r.ID, "fidelity": "cold", "path": "SeedColdRecords"})
 		}
 		c.shardAt(shard).append(r)
+		c.housingAppendedLocked(r.ID, uint32(r.Home))
 	}
 	return nil
 }
@@ -1257,6 +1267,7 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 		}
 		r := hotToColdRecord(cmd.Citizen, districtOf(cmd.Citizen.Home))
 		c.shardAt(det.ShardForEntity(cmd.Citizen.ID)).append(r)
+		c.housingAppendedLocked(cmd.Citizen.ID, uint32(cmd.Citizen.Home))
 		if cmd.Citizen.Fidelity != FidelityCold {
 			cp := cmd.Citizen
 			cp.Month = c.month
@@ -1586,6 +1597,7 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 			// order (the survivor, not the departed id, is the one
 			// removeHouseholdMemberLocked reads).
 			delete(c.hot, d.citizenID)
+			c.housingReleaseLocked(d.citizenID, shardStore.homeCells[row])
 			shardStore.removeAt(row)
 			c.removeHouseholdMemberLocked(d.citizenID, d.householdID, d.partnerID)
 		}
@@ -1688,6 +1700,7 @@ func (c *CitizensAPI) PopulationHash(correlationID string) [32]byte {
 			putU64(uint64(r.Household))
 			putU64(uint64(r.Partner))
 			putU64(uint64(r.Home))
+			putU64(uint64(r.Workplace))
 			putU64(uint64(r.District))
 			putU64(uint64(r.Wealth))
 			h.Write([]byte{byte(r.EmploymentState), byte(r.Sector)})
@@ -1781,6 +1794,7 @@ func (c *CitizensAPI) removeColdLocked(id uint64) {
 	shard := det.ShardForEntity(id)
 	s := c.shardAt(shard)
 	if row := s.rowOf(id); row >= 0 {
+		c.housingReleaseLocked(id, s.homeCells[row])
 		s.removeAt(row)
 	}
 }

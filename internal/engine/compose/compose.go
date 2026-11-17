@@ -2129,6 +2129,13 @@ type simState struct {
 	buildRegistryCursor   build.BuildOrderID
 	buildDemolitionCursor build.BuildOrderID
 
+	// housingEpoch / housingSynced (FEAT-2326609845, compose_housing.go) are
+	// runtime-only: the build.StructureEpoch last pushed into citizens' housing
+	// ledger. Never persisted -- a restore leaves them zero so the first sync
+	// after a load always rebuilds the ledger.
+	housingEpoch  uint64
+	housingSynced bool
+
 	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): the composed
 	// engine.traffic dependency (traffic_wire.go). trafficTickHook calls
 	// AdvanceTick on it once per simulated day; extCommuteTrafficSeamAdapter
@@ -3108,6 +3115,8 @@ func (h *buildHook) ApplyEffect(eff core.Effect) {
 	// compose_buildregistry.go's package doc for the two-cursor recipe this
 	// call implements.
 	h.st.runDeathServiceBuildingRegistry()
+	// FEAT-2326609845: build -> citizens housing bridge (compose_housing.go).
+	h.st.syncHousing()
 
 	// FEAT-1972079927 inc2: accrue this tick's newly-drawn construction
 	// materials cost (split local-merchant vs imported) and settle the

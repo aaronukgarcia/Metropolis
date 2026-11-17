@@ -26,56 +26,72 @@
       "name": "Dwelling",
       "materialsBill": { "constructionMaterials": 100 },
       "labour": 40,
-      "baseLeadTimeDays": 45
+      "baseLeadTimeDays": 45,
+      "residentCapacity": 8,
+      "jobCapacity": 0
     },
     {
       "id": "shop",
       "name": "Shop",
       "materialsBill": { "constructionMaterials": 80 },
       "labour": 30,
-      "baseLeadTimeDays": 30
+      "baseLeadTimeDays": 30,
+      "residentCapacity": 0,
+      "jobCapacity": 10
     },
     {
       "id": "office",
       "name": "Office",
       "materialsBill": { "constructionMaterials": 150 },
       "labour": 50,
-      "baseLeadTimeDays": 60
+      "baseLeadTimeDays": 60,
+      "residentCapacity": 0,
+      "jobCapacity": 40
     },
     {
       "id": "entertainment",
       "name": "Entertainment",
       "materialsBill": { "constructionMaterials": 200 },
       "labour": 60,
-      "baseLeadTimeDays": 75
+      "baseLeadTimeDays": 75,
+      "residentCapacity": 0,
+      "jobCapacity": 15
     },
     {
       "id": "farming",
       "name": "Farming",
       "materialsBill": { "constructionMaterials": 60 },
       "labour": 20,
-      "baseLeadTimeDays": 20
+      "baseLeadTimeDays": 20,
+      "residentCapacity": 0,
+      "jobCapacity": 6
     },
     {
       "id": "manufacturing",
       "name": "Manufacturing",
       "materialsBill": { "constructionMaterials": 250 },
       "labour": 80,
-      "baseLeadTimeDays": 90
+      "baseLeadTimeDays": 90,
+      "residentCapacity": 0,
+      "jobCapacity": 50
     },
     {
       "id": "heavy_industry",
       "name": "Heavy Industry",
       "materialsBill": { "constructionMaterials": 400 },
       "labour": 120,
-      "baseLeadTimeDays": 150
+      "baseLeadTimeDays": 150,
+      "residentCapacity": 0,
+      "jobCapacity": 80
     },
     {
       "id": "mining",
       "name": "Mining",
       "materialsBill": { "constructionMaterials": 300 },
       "labour": 100,
-      "baseLeadTimeDays": 120
+      "baseLeadTimeDays": 120,
+      "residentCapacity": 0,
+      "jobCapacity": 30
     }
   ],
   "entries": [

@@ -30,9 +30,10 @@ import (
 // OccupantsPage re-verifies every returned id against the live store through
 // the indexed rowOf path (O(1) per id) and drops the dead, so a stale entry is
 // never presented as a live occupant. A citizen BORN mid-month appears at the
-// next rebuild trigger. Home and Workplace are only ever set at creation
-// (nothing in the engine moves a citizen), so an index built this month is exact
-// for the living.
+// next rebuild trigger. Home is assigned, changed and released by the housing
+// ledger (housing.go, FEAT-2326609845), and Workplace is still creation-only;
+// every path that moves a citizen bumps occGen, which is part of the stamp, so
+// an index is rebuilt whenever it could be stale and is exact for the living.
 
 // OccupantKind selects which relation OccupantsPage lists.
 type OccupantKind uint8

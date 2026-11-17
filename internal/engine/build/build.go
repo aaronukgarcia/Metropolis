@@ -244,6 +244,10 @@ type ZoneInfo struct {
 	Materials        int64
 	Labour           int64
 	BaseLeadTimeDays int64
+	// ResidentCapacity / JobCapacity: citizens one completed structure of this
+	// zone houses / employs (FEAT-2326609845; PLACEHOLDER, AARON BALANCE PASS).
+	ResidentCapacity int64
+	JobCapacity      int64
 }
 
 // BuildAPI is code.json's "engine.build" inbound contract (GUID
@@ -275,8 +279,14 @@ type BuildAPI struct {
 
 	zoneState  map[cellKey]ZoneType
 	structures map[cellKey]BuildOrderID
-	queue      []*buildOrder
-	nextOrder  BuildOrderID
+	// structEpoch increments whenever b.structures gains or loses an entry
+	// (completion, demolition, restore) -- FEAT-2326609845's O(1) "did the
+	// standing set change" probe for the composition root's housing feed.
+	// Derived runtime state: NOT persisted; a restore bumps it so the first
+	// poll after a load always re-reads the standing set.
+	structEpoch uint64
+	queue       []*buildOrder
+	nextOrder   BuildOrderID
 	// nextCompletionSeq is BUG-734 F1's monotonic completion-order counter,
 	// distinct from nextOrder (the submission-order counter): incremented
 	// exactly once per order transitioning to complete, in Tick's completion
@@ -572,6 +582,8 @@ func (b *BuildAPI) ZoneCatalogue() []ZoneInfo {
 			Materials:        rec.materials,
 			Labour:           rec.labour,
 			BaseLeadTimeDays: rec.baseLeadTimeDays,
+			ResidentCapacity: rec.residentCapacity,
+			JobCapacity:      rec.jobCapacity,
 		})
 	}
 	return out
@@ -626,7 +638,14 @@ func (b *BuildAPI) SubmitZoneCommand(cmd ZoneCommand) error {
 	if err := b.checkNotCopied("SubmitZoneCommand"); err != nil {
 		return err
 	}
-	b.zoneState[cellKey{tile: cmd.Tile, local: cmd.Local}] = cmd.Zone
+	key := cellKey{tile: cmd.Tile, local: cmd.Local}
+	// FEAT-2326609845 r2 (F3): rezoning a cell under a STANDING structure
+	// changes what that structure houses/employs (StandingCapacities reads
+	// zoneState), so the housing feed must see it: bump structEpoch.
+	if _, standing := b.structures[key]; standing && b.zoneState[key] != cmd.Zone {
+		b.structEpoch++
+	}
+	b.zoneState[key] = cmd.Zone
 	return nil
 }
 
@@ -728,6 +747,7 @@ func (b *BuildAPI) SubmitDemolishCommand(cmd DemolishCommand) (DemolishResult, e
 	}
 	delete(b.zoneState, key)
 	delete(b.structures, key)
+	b.structEpoch++
 	if serviceID, tracked := b.serviceByOrder[orderID]; tracked {
 		if b.services != nil {
 			if err := b.services.UnregisterService(serviceID); err != nil {
@@ -1002,6 +1022,7 @@ func (b *BuildAPI) Tick(month int64) error {
 			key := cellKey{tile: order.tile, local: order.local}
 			b.zoneState[key] = order.zone
 			b.structures[key] = order.id
+			b.structEpoch++
 			// Sync the structure reference to world.structureRef so the viewport publishes it
 			if err := b.world.SetStructure(order.tile, order.local, uint32(order.id), b.correlationID); err != nil {
 				return err
@@ -1462,4 +1483,67 @@ func (b *BuildAPI) Structure(tile world.TileCoord, local world.CellLocal) (Build
 	defer b.mu.RUnlock()
 	id, ok := b.structures[cellKey{tile: tile, local: local}]
 	return id, ok
+}
+
+// StructureEpoch returns a counter that changes whenever the set of standing
+// structures changes (a completion, a demolition or a restore). It is an O(1)
+// probe: the composition root compares it with the value it last saw and only
+// then pays for [BuildAPI.StandingCapacities] (FEAT-2326609845). The value is
+// derived runtime state, never persisted, and carries no meaning beyond
+// "different from last time".
+func (b *BuildAPI) StructureEpoch() uint64 {
+	if err := b.checkNotCopied("StructureEpoch"); err != nil {
+		return 0
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.structEpoch
+}
+
+// StandingCapacity is one standing structure's housing/job capacity
+// (FEAT-2326609845): its cell and the placeholder per-zone figures.
+type StandingCapacity struct {
+	Tile             world.TileCoord
+	Local            world.CellLocal
+	Zone             ZoneType
+	ResidentCapacity int64
+	JobCapacity      int64
+}
+
+// StandingCapacities returns every standing structure whose zone houses or
+// employs anyone, in ascending (tile.Y, tile.X, row, col) order -- a fixed
+// total order, never map order (GR#21). O(standing structures); callers gate
+// it on [BuildAPI.StructureEpoch].
+func (b *BuildAPI) StandingCapacities() []StandingCapacity {
+	if err := b.checkNotCopied("StandingCapacities"); err != nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]StandingCapacity, 0, len(b.structures))
+	for k := range b.structures {
+		zt := b.zoneState[k]
+		rec, ok := b.catalogue[zt]
+		if !ok || (rec.residentCapacity == 0 && rec.jobCapacity == 0) {
+			continue
+		}
+		out = append(out, StandingCapacity{
+			Tile: k.tile, Local: k.local, Zone: zt,
+			ResidentCapacity: rec.residentCapacity, JobCapacity: rec.jobCapacity,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, c := out[i], out[j]
+		if a.Tile.Y != c.Tile.Y {
+			return a.Tile.Y < c.Tile.Y
+		}
+		if a.Tile.X != c.Tile.X {
+			return a.Tile.X < c.Tile.X
+		}
+		if a.Local.Row != c.Local.Row {
+			return a.Local.Row < c.Local.Row
+		}
+		return a.Local.Col < c.Local.Col
+	})
+	return out
 }

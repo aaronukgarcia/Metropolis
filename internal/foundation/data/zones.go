@@ -72,7 +72,20 @@ type ZoneEntry struct {
 	// BaseLeadTimeDays is the base construction lead time in simulation
 	// days (before §9's seasonal construction-speed multiplier is applied).
 	BaseLeadTimeDays int64 `json:"baseLeadTimeDays"`
+	// ResidentCapacity is how many citizens one completed structure of this
+	// zone type houses (FEAT-2326609845). 0 = the zone houses nobody.
+	// PLACEHOLDER -- AARON BALANCE PASS (balance-number regime): tests assert
+	// direction (dwelling houses > 0, industry houses 0), never a figure.
+	ResidentCapacity int64 `json:"residentCapacity,omitempty"`
+	// JobCapacity is how many citizens one completed structure of this zone
+	// type employs (FEAT-2326609845). 0 = the zone employs nobody.
+	// PLACEHOLDER -- AARON BALANCE PASS.
+	JobCapacity int64 `json:"jobCapacity,omitempty"`
 }
+
+// maxZoneCapacity bounds a zone's per-structure resident/job capacity so the
+// engine's int32 occupancy ledger can never overflow (GR#16 type-safe storage).
+const maxZoneCapacity = 1_000_000
 
 // sortedZoneCommodityNames returns the materials-bill commodity names in
 // ascending order, so a validation or engine loop that ranges over the
@@ -138,6 +151,12 @@ func (b *Buildings) validateZones() error {
 		}
 		if z.BaseLeadTimeDays < 0 {
 			return fieldErr(idPrefix+".baseLeadTimeDays", fmt.Sprintf("must be >= 0, got %d", z.BaseLeadTimeDays))
+		}
+		if z.ResidentCapacity < 0 || z.ResidentCapacity > maxZoneCapacity {
+			return fieldErr(idPrefix+".residentCapacity", fmt.Sprintf("must be in [0,%d], got %d", maxZoneCapacity, z.ResidentCapacity))
+		}
+		if z.JobCapacity < 0 || z.JobCapacity > maxZoneCapacity {
+			return fieldErr(idPrefix+".jobCapacity", fmt.Sprintf("must be in [0,%d], got %d", maxZoneCapacity, z.JobCapacity))
 		}
 	}
 	return nil

@@ -466,6 +466,16 @@ func (c *CitizensAPI) birthChildLocked(parentA, parentB, householdID uint64, mon
 		Household:   householdID,
 		Personality: InitPersonality(c.seed, childID, month, pA, pB),
 	}
+	// FEAT-2326609845: while the housing ledger is on, a newborn lives with
+	// a parent (parent A's home, else parent B's). Off: Home stays 0 exactly
+	// as before.
+	if c.housing != nil {
+		if h := c.homeOfLocked(parentA); h != 0 {
+			child.Home = CellRef(h)
+		} else if h := c.homeOfLocked(parentB); h != 0 {
+			child.Home = CellRef(h)
+		}
+	}
 	if err := ValidateCitizen(child, c.householdExistsLocked, correlationID); err != nil {
 		// Never expected for a well-formed month/config, but logged loudly
 		// rather than silently dropped or allowed to corrupt the cold store
@@ -481,6 +491,7 @@ func (c *CitizensAPI) birthChildLocked(parentA, parentB, householdID uint64, mon
 
 	r := hotToColdRecord(child, districtOf(child.Home))
 	c.shardAt(det.ShardForEntity(childID)).append(r)
+	c.housingAppendedLocked(childID, uint32(child.Home))
 
 	// Write-through to both parents (cold childCount + hot Children, exactly
 	// mirroring the dual-store discipline LifeEventPartner/education-drift
