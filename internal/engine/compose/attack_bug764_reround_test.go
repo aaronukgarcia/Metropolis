@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -320,16 +321,40 @@ func TestAttackBUG764RR_ConcurrentReclaimRace(t *testing.T) {
 	}
 	_ = comp1 // stale holder, never closed
 
-	const openers = 8
-	var wg sync.WaitGroup
+	winners, codes, losers := rr764ReclaimRace(t, dir, 8)
+	t.Logf("concurrent reclaim: winners=%d codes=%v", winners, codes)
+	if winners != 1 {
+		t.Errorf("FINDING: %d concurrent reclaimers took the exclusive claim (want exactly 1) -- reclaim must be atomic; losers: %v", winners, losers)
+	}
+	// Every loser must be the clean claim refusal -- never a config/IO error
+	// (BUG-799: Windows sharing-violation noise from the remove/create gap).
+	for _, e := range losers {
+		// BUG-799 r3: a loser that meets the held takeover lock gets the
+		// distinct MET-G822 "takeover in progress" refusal.
+		if c := rr764CodeSafe(e); c != ErrCitizenPagingDirectoryClaimed && c != ErrCitizenPagingTakeoverInProgress {
+			t.Errorf("FINDING: reclaim loser refused with %v, want %s or %s", e, ErrCitizenPagingDirectoryClaimed, ErrCitizenPagingTakeoverInProgress)
+		}
+	}
+}
+
+// rr764ReclaimRace releases n reclaimers at once (barrier + a spin-up
+// handshake so all goroutines are parked on the barrier before it opens)
+// and returns the winner count, loser code tally and loser errors. Winning
+// compositions are kept alive until the test ends.
+func rr764ReclaimRace(t *testing.T, dir string, n int) (int, map[string]int, []error) {
+	t.Helper()
+	var wg, ready sync.WaitGroup
 	var mu sync.Mutex
 	winners := 0
 	codes := map[string]int{}
+	var losers []error
 	start := make(chan struct{})
-	for i := 0; i < openers; i++ {
+	for i := 0; i < n; i++ {
 		wg.Add(1)
+		ready.Add(1)
 		go func() {
 			defer wg.Done()
+			ready.Done()
 			<-start
 			comp, err := rr764Wire(t, dir, true)
 			mu.Lock()
@@ -340,13 +365,73 @@ func TestAttackBUG764RR_ConcurrentReclaimRace(t *testing.T) {
 				return
 			}
 			codes[rr764CodeSafe(err)]++
+			losers = append(losers, err)
 		}()
 	}
+	ready.Wait()
 	close(start)
 	wg.Wait()
-	t.Logf("concurrent reclaim: winners=%d codes=%v", winners, codes)
+	return winners, codes, losers
+}
+
+// BUG-799: a claim that a takeover JUST created (fresh, Reclaimed, by a
+// process that is alive -- here, this one) must never be stolen by another
+// concurrent reclaimer, however many pile on; the holder's claim record must
+// survive byte-for-byte, and the holder's own Close must still release it.
+func TestBUG799_FreshReclaimedClaimNeverStolenConcurrently(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := rr764Wire(t, dir, false); err != nil { // stale holder, never closed
+		t.Fatalf("Wire 1: %v", err)
+	}
+	holder, err := rr764Wire(t, dir, true) // the takeover winner: fresh Reclaimed claim
+	if err != nil {
+		t.Fatalf("holder reclaim: %v", err)
+	}
+	held, err := readPageClaim(filepath.Join(dir, pageClaimFileName))
+	if err != nil || !held.Reclaimed {
+		t.Fatalf("holder's claim unreadable or not marked Reclaimed: %+v err=%v", held, err)
+	}
+
+	winners, codes, losers := rr764ReclaimRace(t, dir, 16)
+	if winners != 0 {
+		t.Fatalf("FINDING: %d reclaimers stole a FRESH live reclaim claim (codes=%v)", winners, codes)
+	}
+	for _, e := range losers {
+		if c := rr764CodeSafe(e); c != ErrCitizenPagingDirectoryClaimed && c != ErrCitizenPagingTakeoverInProgress {
+			t.Errorf("loser refused with %v, want %s or %s", e, ErrCitizenPagingDirectoryClaimed, ErrCitizenPagingTakeoverInProgress)
+		}
+	}
+	after, err := readPageClaim(filepath.Join(dir, pageClaimFileName))
+	if err != nil || after != held {
+		t.Fatalf("FINDING: holder's claim record changed under contention: before=%+v after=%+v err=%v", held, after, err)
+	}
+	if err := holder.Close(); err != nil {
+		t.Fatalf("holder Close: %v", err)
+	}
+	if rr764ClaimExists(t, dir) {
+		t.Fatal("FINDING: holder's claim survived its own Close")
+	}
+}
+
+// BUG-799: once a Reclaimed claim is older than reclaimFreshWindow it is
+// stealable again (an operator re-running -citizen-paging-reclaim after a
+// second crash), exactly once even under contention. The clock is injected,
+// never slept.
+func TestBUG799_AgedReclaimedClaimIsStealableExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := rr764Wire(t, dir, false); err != nil {
+		t.Fatalf("Wire 1: %v", err)
+	}
+	if _, err := rr764Wire(t, dir, true); err != nil {
+		t.Fatalf("first reclaim: %v", err)
+	}
+	realNow := claimNow
+	t.Cleanup(func() { claimNow = realNow })
+	claimNow = func() time.Time { return realNow().Add(reclaimFreshWindow + time.Second) }
+
+	winners, codes, _ := rr764ReclaimRace(t, dir, 16)
 	if winners != 1 {
-		t.Errorf("FINDING: %d concurrent reclaimers all believed they took the exclusive claim (want 1) -- reclaim's remove-then-create is not atomic", winners)
+		t.Fatalf("FINDING: %d winners over an aged reclaimed claim (codes=%v), want exactly 1", winners, codes)
 	}
 }
 

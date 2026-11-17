@@ -1,12 +1,17 @@
 package compose
 
 import (
+	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
@@ -105,7 +110,43 @@ type pageClaimRecord struct {
 	// later claim attempt tell two successive claims of the same directory
 	// apart in a log/diagnostic, never to itself prove liveness.
 	Epoch int64 `json:"epoch"`
+	// Nonce (BUG-799) makes two claims taken by goroutines of the SAME
+	// process in the SAME clock tick unequal, so Release's ownership compare
+	// (and a reclaimer's "is this still the claim I judged stale" re-check)
+	// can never confuse them. Diagnostic + identity only.
+	Nonce string `json:"nonce,omitempty"`
+	// Reclaimed (BUG-799) marks a claim that was itself taken by a takeover
+	// (operator Reclaim or dead-pid auto-reclaim). A takeover refuses to steal
+	// a FRESH Reclaimed claim of a process that may still be alive: it is the
+	// previous takeover's winner, not the dead process's stale claim.
+	Reclaimed bool `json:"reclaimed,omitempty"`
 }
+
+// reclaimFreshWindow is how long a Reclaimed claim is presumed to belong to a
+// live takeover winner (BUG-799). Package var, not const, so tests can age a
+// claim deterministically via claimNow instead of sleeping.
+var reclaimFreshWindow = 30 * time.Second
+
+// claimNow is the clock claimPageDir stamps and ages claims with (tests swap
+// it; production is time.Now).
+var claimNow = time.Now
+
+// newClaimNonce returns 8 random bytes hex-encoded. A crypto/rand failure
+// falls back to a clock+counter-derived value rather than failing the claim:
+// the nonce only needs to differ between claims, and the O_EXCL create and the
+// takeover lock below remain the actual exclusion mechanism.
+func newClaimNonce() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		n := uint64(claimNow().UnixNano()) ^ (claimNonceFallback.Add(1) << 48)
+		for i := range b {
+			b[i] = byte(n >> (8 * i))
+		}
+	}
+	return hex.EncodeToString(b[:])
+}
+
+var claimNonceFallback atomic.Uint64
 
 // CitizenPagingOptions is BUG-764's Wire-time knob for enabling
 // citizens.CitizensAPI's disk-backed shard paging (BUG-664) in a real,
@@ -385,28 +426,35 @@ func wireCitizenPaging(c *citizens.CitizensAPI, opts CitizenPagingOptions, city 
 // within the same container.
 func claimPageDir(dir string, city persist.CityKey, reclaim bool, correlationID string) (*pageDirClaim, error) {
 	claimPath := filepath.Join(dir, pageClaimFileName)
-	rec := pageClaimRecord{PID: os.Getpid(), TenantID: city.TenantID, CityID: city.CityID, Epoch: time.Now().UnixNano()}
-	data, err := json.Marshal(rec)
-	if err != nil {
-		return nil, errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{"reason": "claim record encode failed"})
+	lockPath := claimPath + ".reclaim"
+	rec := pageClaimRecord{
+		PID: os.Getpid(), TenantID: city.TenantID, CityID: city.CityID,
+		Epoch: claimNow().UnixNano(), Nonce: newClaimNonce(),
 	}
 
-	tryCreate := func() error {
-		f, err := os.OpenFile(claimPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		_, werr := f.Write(data)
-		cerr := f.Close()
-		if werr != nil {
-			return werr
-		}
-		return cerr
-	}
+	// A reclaim=true opener's claim is Reclaimed from its FIRST create: it can
+	// land in the gap another takeover leaves between Remove and create (r5:
+	// that gap is now under the takeover lock every first create also takes,
+	// so this mark is defence in depth), and
+	// a late takeover must then see a fresh live reclaim, not a stealable
+	// stale claim (BUG-799: that steal let two openers both run Wire).
+	rec.Reclaimed = reclaim
 
-	if err := tryCreate(); err == nil {
+	// BUG-799 r5: the claim is PUBLISHED atomically (full record written to a
+	// unique temp file, then hard-linked into place), so a live claimant's
+	// claim.pid is never observable empty or partial. createWithRetry absorbs
+	// the Windows delete-pending ACCESS_DENIED (neither IsExist nor a real
+	// failure) so it resolves to a clean create or IsExist (a clean refusal).
+	createErr := createWithRetry(func() error { return publishClaimLocked(claimPath, lockPath, rec) })
+	if createErr == nil {
 		return &pageDirClaim{path: claimPath, record: rec}, nil
-	} else if !os.IsExist(err) {
+	} else if errors.Is(createErr, errTakeoverBusy) {
+		return nil, errs.New(ErrCitizenPagingTakeoverInProgress, correlationID, map[string]any{"dir": dir})
+	} else if errors.Is(createErr, errClaimPublishUnsupported) {
+		return nil, errs.Wrap(ErrCitizenPagingClaimPublishUnsupported, correlationID, createErr, map[string]any{
+			"dir": dir, "cause": createErr.Error(),
+		})
+	} else if err := createErr; !os.IsExist(err) {
 		return nil, errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{
 			"reason": "claim file create failed", "pageDir": dir, "cause": err.Error(),
 		})
@@ -416,56 +464,82 @@ func claimPageDir(dir string, city persist.CityKey, reclaim bool, correlationID 
 	// do next -- ctx on refusal should always show what's really there.
 	existing, readErr := readPageClaim(claimPath)
 
-	if reclaim {
-		if err := os.Remove(claimPath); err != nil && !os.IsNotExist(err) {
-			return nil, errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{
-				"reason": "reclaim: failed to remove stale claim", "pageDir": dir, "cause": err.Error(),
-			})
-		}
-		if err := tryCreate(); err != nil {
-			// Supply every MET-G819 template token (errs render gate): the
-			// racing claimant's record is whatever tryCreate lost to, so re-read
-			// it; on a read failure the fields say so rather than render as
-			// literal {tokens}.
-			// The ctx is an inline literal (not a named variable) so the errs
-			// render gate can prove the token set statically rather than
-			// classify the site as dynamic-ctx.
-			var racedPid, racedTenant, racedCity, racedEpoch any = "unreadable", "unreadable", "unreadable", "unreadable"
-			if raced, racedErr := readPageClaim(claimPath); racedErr == nil {
-				racedPid, racedTenant, racedCity, racedEpoch = raced.PID, raced.TenantID, raced.CityID, raced.Epoch
-			}
-			return nil, errs.Wrap(ErrCitizenPagingDirectoryClaimed, correlationID, err, map[string]any{
-				"dir":            dir,
-				"reason":         "reclaim raced a concurrent claimant",
-				"recordedPid":    racedPid,
-				"recordedTenant": racedTenant,
-				"recordedCity":   racedCity,
-				"recordedEpoch":  racedEpoch,
-			})
-		}
-		return &pageDirClaim{path: claimPath, record: rec}, nil
-	}
-
 	// pidLivenessKnown/processLooksAlive (citizen_paging_pid_*.go): on
 	// linux, and ONLY within the same container/PID-namespace, a
 	// confidently-dead pid auto-reclaims -- this is the same-container
 	// crash-restart case. Everything else (a live pid, an indeterminate
 	// GOOS, or a claim we could not even read) requires the operator's
 	// explicit Reclaim.
-	if readErr == nil && pidLivenessKnown && !processLooksAlive(existing.PID) {
-		if err := os.Remove(claimPath); err == nil || os.IsNotExist(err) {
-			if err := tryCreate(); err == nil {
-				return &pageDirClaim{path: claimPath, record: rec}, nil
+	autoReclaim := readErr == nil && pidLivenessKnown && !processLooksAlive(existing.PID)
+
+	if reclaim || autoReclaim {
+		// BUG-799: remove-then-create is two syscalls, so two takeovers could
+		// interleave (B's Remove deleting A's FRESH claim: both "hold" it, or
+		// all lose). The pair is serialised by an OS advisory takeover lock
+		// (LockFileEx / flock, released by the kernel on process death), and the claim is re-judged UNDER the lock, so a
+		// late takeover that observed the stale claim before the winner
+		// replaced it sees the winner's fresh Reclaimed claim and backs off.
+		stealable := func(cur pageClaimRecord, rerr error) bool {
+			if reclaim {
+				if rerr != nil {
+					// torn/corrupt: nothing live can be vouched for -- but an
+					// empty/truncated record may be a legacy (create-then-
+					// write) writer mid-write, so it is only stale once older
+					// than claimTornGrace (BUG-799 r5 F1; tornClaimStale). An
+					// I/O error (delete-pending, sharing) is NOT evidence of
+					// staleness: the file may be a rival's fresh claim.
+					return errors.Is(rerr, errClaimTorn) && tornClaimStale(rerr)
+				}
+				// A negative age (claim epoch in the FUTURE: clock stepped back
+				// or skewed writer) is STALE, never fresh, so the wedge stays
+				// bounded by reclaimFreshWindow (BUG-799 r1 F3).
+				age := claimNow().UnixNano() - cur.Epoch
+				fresh := age >= 0 && age < int64(reclaimFreshWindow)
+				return !cur.Reclaimed || !fresh || (pidLivenessKnown && !processLooksAlive(cur.PID))
 			}
+			return rerr == nil && pidLivenessKnown && !processLooksAlive(cur.PID)
 		}
-		// fall through to refuse if the auto-reclaim race lost
+		rec.Reclaimed = true
+		won, err := takeOverClaim(claimPath, lockPath, existing, readErr, stealable,
+			func() error { return publishClaim(claimPath, rec) })
+		if errors.Is(err, errTakeoverBusy) {
+			return nil, errs.New(ErrCitizenPagingTakeoverInProgress, correlationID, map[string]any{"dir": dir})
+		}
+		if errors.Is(err, errClaimPublishUnsupported) {
+			return nil, errs.Wrap(ErrCitizenPagingClaimPublishUnsupported, correlationID, err, map[string]any{
+				"dir": dir, "cause": err.Error(),
+			})
+		}
+		if err != nil {
+			return nil, errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{
+				"reason": "reclaim: takeover failed", "pageDir": dir, "cause": err.Error(),
+			})
+		}
+		if won {
+			return &pageDirClaim{path: claimPath, record: rec}, nil
+		}
+		// Lost the takeover (another takeover won, a plain opener slipped in,
+		// or the claim is a fresh live reclaim): refuse, showing what is
+		// really there now.
+		existing, readErr = readPageClaim(claimPath)
+	}
+
+	// A claim that exists but could not be read is NOT "claimed by another
+	// live composition" -- nothing live was read. Say so (BUG-799 r5 advisory),
+	// with every MET-G823 token filled inline (errs render gate).
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return nil, errs.Wrap(ErrCitizenPagingClaimUnreadable, correlationID, readErr, map[string]any{
+			"dir":            dir,
+			"claimReadError": readErr.Error(),
+		})
 	}
 
 	// Inline literal with every MET-G819 token on BOTH branches (the errs
 	// render gate proves inline literals statically; a named ctx var is only
 	// reported as dynamic-ctx, and the old else branch would have rendered
-	// literal {recordedPid}-style tokens).
-	var recPid, recTenant, recCity, recEpoch any = "unreadable", "unreadable", "unreadable", "unreadable"
+	// literal {recordedPid}-style tokens). The only non-nil readErr left here
+	// is NotExist: the claim existed at create time and was released since.
+	var recPid, recTenant, recCity, recEpoch any = "released", "released", "released", "released"
 	claimReadError := ""
 	if readErr == nil {
 		recPid, recTenant, recCity, recEpoch = existing.PID, existing.TenantID, existing.CityID, existing.Epoch
@@ -482,17 +556,415 @@ func claimPageDir(dir string, city persist.CityKey, reclaim bool, correlationID 
 	})
 }
 
+// transientRetries bounds the retry of filesystem ops that fail spuriously on
+// Windows while a sibling holds a file open or delete-pending
+// (ERROR_ACCESS_DENIED / sharing violation), which are not IsExist/IsNotExist.
+const transientRetries = 200
+
+// errTakeoverBusy: another opener holds the takeover lock right now.
+var errTakeoverBusy = errors.New("citizen paging: claim takeover lock is held by another opener")
+
+// takeOverClaim atomically (w.r.t. other takeovers) replaces the existing claim
+// at claimPath. BUG-799 r3: it takes an exclusive, non-blocking OS advisory
+// lock (LockFileEx / flock, see citizen_paging_lock_*.go) on the lock file at
+// lockPath, which is created once and NEVER deleted by the protocol, and holds
+// it across the whole re-read / decide / remove / create section (every
+// opener's first create takes the same lock, BUG-799 r5, so nothing can be
+// created in the remove->create gap). The kernel
+// releases the lock if the process dies, so there is no stale-lock concept
+// and no break path. A contended lock is waited for (bounded, see
+// lockTakeoverBounded), then reported as errTakeoverBusy. The claim is re-read UNDER the lock and
+// stealable decides whether it may be taken -- but only if it is still the very
+// claim (observed) the caller judged before locking. won=false with nil error means
+// "back off" (claim not stealable, or a plain opener created the claim first);
+// any other error is a hard filesystem failure.
+//
+// create is called while this function holds the takeover lock, so it must
+// NOT take the lock itself (publishClaim, never publishClaimLocked).
+func takeOverClaim(claimPath, lockPath string, observed pageClaimRecord, observedErr error, stealable func(pageClaimRecord, error) bool, create func() error) (won bool, err error) {
+	lf, err := openTakeoverLockFile(lockPath)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = lf.Close() }()
+
+	if err := lockTakeoverBounded(lf); err != nil {
+		return false, err
+	}
+	defer func() { _ = unlockFile(lf) }()
+
+	cur, rerr := readPageClaim(claimPath)
+	if rerr != nil && os.IsNotExist(rerr) {
+		// Released meanwhile: just create, with the same transient retry as
+		// every other create path (BUG-799 r4 advisory: this was one try).
+		if cerr := createWithRetry(create); cerr != nil {
+			if os.IsExist(cerr) {
+				return false, nil
+			}
+			return false, cerr
+		}
+		return true, nil
+	}
+	if rerr != nil && !errors.Is(rerr, errClaimTorn) {
+		// A transient I/O error (not NotExist, not torn): never take over a
+		// claim that could not be read -- it may be a rival's fresh claim
+		// (BUG-799 r4: delete-pending read errors let two reclaim/plain
+		// openers both hold).
+		return false, nil
+	}
+	if observedErr != nil && !errors.Is(observedErr, errClaimTorn) {
+		return false, nil // never examined the claim it would replace
+	}
+	// Only ever take the claim this opener actually JUDGED stealable. A
+	// different claim now (a plain opener landed in a rival takeover's
+	// pre-r5 remove->create gap, a Release then a fresh create, or the claim
+	// was rewritten) is a new holder this
+	// opener never examined: back off (BUG-799 r3 -- the lock retry makes a
+	// late taker common, and it must not steal a plain opener's claim).
+	if (observedErr == nil) != (rerr == nil) || (rerr == nil && cur != observed) {
+		return false, nil
+	}
+	if !stealable(cur, rerr) {
+		return false, nil
+	}
+	for i := 0; ; i++ {
+		rmErr := os.Remove(claimPath)
+		if rmErr == nil || os.IsNotExist(rmErr) {
+			break
+		}
+		if i >= transientRetries {
+			return false, rmErr
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cerr := createWithRetry(create)
+	if cerr == nil {
+		return true, nil
+	}
+	if os.IsExist(cerr) {
+		// Cannot happen while every exclusive create also holds the takeover
+		// lock (BUG-799 r5, publishClaimLocked); kept as a clean back-off.
+		return false, nil
+	}
+	return false, cerr
+}
+
+// createWithRetry runs create until it succeeds, reports IsExist (a clean
+// "someone else holds it"), reports that the filesystem cannot publish a claim
+// at all (errClaimPublishUnsupported: fail closed at once, never retried),
+// reports the takeover lock stayed busy past its bounded wait (errTakeoverBusy:
+// already waited, never retried), or
+// has failed transientRetries+1 times with a transient error (Windows
+// delete-pending ACCESS_DENIED / sharing violation, 1ms apart).
+func createWithRetry(create func() error) error {
+	for i := 0; ; i++ {
+		err := create()
+		if err == nil || os.IsExist(err) || errors.Is(err, errClaimPublishUnsupported) || errors.Is(err, errTakeoverBusy) || i >= transientRetries {
+			return err
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// claimTempInfix names the private temp files publishClaim stages a record
+// in: claim.pid.tmp-<pid>-<nonce>. A temp file is NEVER a claim: nothing reads
+// it, and only os.Link's success at claim.pid publishes anything. A temp left
+// behind by a crash is inert litter (it is not .page, not claim.pid, and is
+// never consulted by readPageClaim or countPageFiles).
+const claimTempInfix = ".tmp-"
+
+// errClaimPublishUnsupported: the filesystem has no hard links, so the claim
+// cannot be published atomically. Fail closed (MET-G824); never fall back to
+// create-then-write.
+var errClaimPublishUnsupported = errors.New("citizen paging: hard links unsupported, claim cannot be published atomically")
+
+// claimLink is the publishing link (os.Link); a test seam so the
+// unsupported-filesystem fail-closed path can be driven without a FAT volume.
+var claimLink = os.Link
+
+// claimPublishHook is a test seam: called the instant claim.pid becomes
+// visible at its path (immediately after the publishing link succeeds).
+var claimPublishHook atomic.Pointer[func(path string)]
+
+// publishClaim atomically AND exclusively creates claimPath holding r
+// (BUG-799 r5, lead ruling F1). The full record is written and fsynced to a
+// unique temp file in the same directory, then hard-linked to claimPath:
+// link(2) / CreateHardLinkW fail if the target exists (EEXIST /
+// ERROR_ALREADY_EXISTS, both os.IsExist), so the publish is exclusive like
+// O_EXCL, and the target appears with its complete content in one step, so no
+// reader can ever see a live claimant's claim.pid empty or partial (the r4 F1
+// two-holder window: create, then a reclaimer reads it empty, calls it torn
+// and steals it, then the first claimant writes and also holds). The temp is
+// removed on every path; if that removal itself keeps failing the temp stays
+// as inert litter (see claimTempInfix), never as a claim.
+//
+// Returns the os.Link error unwrapped on a link failure (so os.IsExist and
+// the transient-retry classification see it exactly), errClaimPublishUnsupported
+// (wrapping the cause) when the filesystem has no hard links, and a wrapped,
+// non-IsExist error when the temp could not be staged.
+func publishClaim(claimPath string, r pageClaimRecord) error {
+	tmp, err := stageClaimTemp(claimPath, r)
+	if err != nil {
+		return err
+	}
+	defer removeClaimTemp(tmp)
+	return linkClaim(tmp, claimPath)
+}
+
+// linkClaim publishes the staged temp at claimPath with one hard link.
+func linkClaim(tmp, claimPath string) error {
+	lerr := claimLink(tmp, claimPath)
+	if lerr == nil {
+		claimPublished(claimPath)
+		return nil
+	}
+	if !os.IsExist(lerr) && linkUnsupported(lerr) {
+		return fmt.Errorf("%w: %w", errClaimPublishUnsupported, lerr)
+	}
+	return lerr
+}
+
+// publishClaimLocked is the FIRST-create publish of every opener: publishClaim
+// with the hard link made while holding the takeover lock (BUG-799 r5). A
+// takeover's remove->link pair runs under that same lock, so no exclusive
+// create can land in the gap between them. Before r5 a plain opener could
+// link its claim into that gap; a second reclaimer then observed the plain
+// claim and stole it (live plain claims are stealable by an explicit Reclaim),
+// so the plain opener and both reclaimers all held
+// (TestBUG799R1_PlainOpenerVsTakeoverGapAgreement, 3 holders once publishing
+// grew its temp+fsync step). The record is staged (written + fsynced) BEFORE
+// the lock is taken, so the lock covers one link syscall. The lock wait is
+// bounded (claimLockWait): a holder is a live process inside a section of a
+// few syscalls (the kernel releases a dead holder's lock), so exceeding it
+// reports errTakeoverBusy (MET-G822) rather than hanging.
+func publishClaimLocked(claimPath, lockPath string, r pageClaimRecord) error {
+	// Fast refusal: a claim already present means the link would fail
+	// IsExist anyway, so skip staging (a temp write + fsync per attempt made
+	// spinning openers ~100x slower). Purely an optimisation: it never
+	// creates anything, and a claim that appears after this check is still
+	// caught by the exclusive link below.
+	if _, serr := os.Lstat(claimPath); serr == nil {
+		return &os.PathError{Op: "link", Path: claimPath, Err: os.ErrExist}
+	}
+	tmp, err := stageClaimTemp(claimPath, r)
+	if err != nil {
+		return err
+	}
+	defer removeClaimTemp(tmp)
+	lf, err := openTakeoverLockFile(lockPath)
+	if err != nil {
+		return fmt.Errorf("claim lock open %s: %w", lockPath, err)
+	}
+	defer func() { _ = lf.Close() }()
+	if err := lockTakeoverBounded(lf); err != nil {
+		if errors.Is(err, errTakeoverBusy) {
+			return err
+		}
+		return fmt.Errorf("claim lock %s: %w", lockPath, err)
+	}
+	defer func() { _ = unlockFile(lf) }()
+	return linkClaim(tmp, claimPath)
+}
+
+// lockTakeoverBounded takes the exclusive takeover lock on lf, polling every
+// 1ms for at most claimLockWait (BUG-799 r5; supersedes the r3 "one retry
+// after 5ms": once every first create also takes the lock, a single retry
+// let all reclaimers of a contended directory refuse at once -- zero holders,
+// TestBUG799R1_PlainOpenerVsTakeoverGapAgreement). Holders sit in sections of
+// a few syscalls and the kernel releases a dead holder's lock, so the bound is
+// only reached when a live holder is wedged: errTakeoverBusy (MET-G822).
+func lockTakeoverBounded(lf *os.File) error {
+	deadline := time.Now().Add(claimLockWait)
+	for {
+		held, err := tryLockFile(lf)
+		if err != nil {
+			return err
+		}
+		if held {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errTakeoverBusy
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// claimLockWait bounds how long a first-create publish waits for the
+// takeover lock (wall clock, locking path only -- never sim state).
+const claimLockWait = 2 * time.Second
+
+// openTakeoverLockFile opens (creating if needed) the never-deleted takeover
+// lock file, retrying Windows transient open failures.
+func openTakeoverLockFile(lockPath string) (*os.File, error) {
+	for i := 0; ; i++ {
+		lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+		if err == nil || i >= transientRetries {
+			return lf, err
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// stageClaimTemp writes r, fsynced, to a fresh unique temp file beside
+// claimPath and returns its path. Every error is wrapped with fmt, so a
+// (vanishingly unlikely) temp-name collision is never misread by os.IsExist
+// as "claim.pid exists"; a temp that failed mid-write is removed.
+func stageClaimTemp(claimPath string, r pageClaimRecord) (string, error) {
+	data, err := json.Marshal(r)
+	if err != nil {
+		return "", err
+	}
+	tmp := fmt.Sprintf("%s%s%d-%s", claimPath, claimTempInfix, os.Getpid(), newClaimNonce())
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return "", fmt.Errorf("claim temp create %s: %w", tmp, err)
+	}
+	_, werr := f.Write(data)
+	serr := f.Sync()
+	cerr := f.Close()
+	if werr == nil {
+		werr = serr
+	}
+	if werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		removeClaimTemp(tmp)
+		return "", fmt.Errorf("claim temp write %s: %w", tmp, werr)
+	}
+	return tmp, nil
+}
+
+// claimPublished fires claimPublishHook (test seam) the instant a claim
+// becomes visible at claimPath.
+func claimPublished(claimPath string) {
+	if h := claimPublishHook.Load(); h != nil {
+		(*h)(claimPath)
+	}
+}
+
+// removeClaimTemp removes a publishClaim temp, retrying the Windows transient
+// sharing/delete-pending failures (a scanner, or a reader holding the linked
+// claim.pid open without delete sharing, blocks deleting ANY name of the
+// file). Best-effort: a temp that cannot be removed is inert (claimTempInfix).
+func removeClaimTemp(tmp string) {
+	for i := 0; ; i++ {
+		err := os.Remove(tmp)
+		if err == nil || os.IsNotExist(err) || i >= transientRetries {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// claimTornGrace is how old (by file mtime) an EMPTY or TRUNCATED claim.pid
+// must be before a reclaim may treat it as crash residue (BUG-799 r5). With
+// atomic publish no writer of this code can leave such a file live, but a
+// legacy (create-then-write) writer or an odd filesystem could be mid-write;
+// several seconds is far beyond any real write. Package var so tests age a
+// file via claimNow/os.Chtimes rather than sleeping. Wall clock is allowed
+// here: this is the persistence/locking path, never sim state or a digest.
+var claimTornGrace = 10 * time.Second
+
+// errClaimTorn marks a claim file that exists and opened but does not decode
+// (torn/corrupt). Distinct from a transient I/O error opening it. readPageClaim
+// returns it inside a *claimTornError carrying the file's mtime and shape.
+var errClaimTorn = errors.New("citizen paging: claim file is torn or corrupt")
+
+// claimTornError is readPageClaim's decode failure. inFlight reports a shape
+// a writer could still be in the middle of producing (empty, or a strict
+// prefix of a JSON value: the decoder hit EOF mid-value); anything else (a
+// syntax error, a wrong-typed field) is corruption no writer is still making.
+type claimTornError struct {
+	path     string
+	modTime  time.Time
+	inFlight bool
+	cause    error
+}
+
+func (e *claimTornError) Error() string {
+	return fmt.Sprintf("%v: decode %s: %v", errClaimTorn, e.path, e.cause)
+}
+
+// Is makes errors.Is(err, errClaimTorn) hold (part (c): only a decode failure
+// is torn).
+func (e *claimTornError) Is(target error) bool { return target == errClaimTorn }
+
+func (e *claimTornError) Unwrap() error { return e.cause }
+
+// tornClaimStale reports whether a torn claim may be treated as crash residue.
+// Corrupt (not in-flight-shaped) content is stale at once: no writer of either
+// generation produces it. An empty/truncated claim is stale only once its
+// mtime is at least claimTornGrace away from now in EITHER direction (a mtime
+// far in the future -- clock stepped back, skewed server -- is stale, never
+// fresh forever, mirroring the r1 F3 epoch rule).
+func tornClaimStale(err error) bool {
+	var te *claimTornError
+	if !errors.As(err, &te) {
+		return false
+	}
+	if !te.inFlight {
+		return true
+	}
+	age := claimNow().Sub(te.modTime)
+	return age >= claimTornGrace || age <= -claimTornGrace
+}
+
+// claimReadOpenHook is a test seam: called while a claim read holds the file open.
+var claimReadOpenHook atomic.Pointer[func(path string)]
+
 // readPageClaim reads dir's claim record, if any.
 func readPageClaim(path string) (pageClaimRecord, error) {
-	data, err := os.ReadFile(path)
+	// A claim a takeover has deleted but a reader still holds open is
+	// delete-pending on Windows: opening it fails ERROR_ACCESS_DENIED until the
+	// reader closes. That is a transient I/O condition, NOT a torn claim, so
+	// retry it briefly and (if it persists) surface it as a plain I/O error.
+	var f *os.File
+	var err error
+	for i := 0; ; i++ {
+		f, err = openClaimForRead(path)
+		if err == nil || os.IsNotExist(err) || i >= transientRetries {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err != nil {
+		return pageClaimRecord{}, err
+	}
+	if h := claimReadOpenHook.Load(); h != nil {
+		(*h)(path)
+	}
+	data, err := io.ReadAll(f)
+	// mtime from the SAME open handle the bytes came from, so a torn verdict
+	// and its age always describe one file (BUG-799 r5 torn grace).
+	var modTime time.Time
+	if err == nil {
+		var fi os.FileInfo
+		if fi, err = f.Stat(); err == nil {
+			modTime = fi.ModTime()
+		}
+	}
+	_ = f.Close()
 	if err != nil {
 		return pageClaimRecord{}, err
 	}
 	var rec pageClaimRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
-		return pageClaimRecord{}, fmt.Errorf("decode %s: %w", path, err)
+		return pageClaimRecord{}, &claimTornError{path: path, modTime: modTime, inFlight: claimBytesInFlight(data), cause: err}
 	}
 	return rec, nil
+}
+
+// claimBytesInFlight reports whether data is a shape a create-then-write
+// writer could still be producing: empty/whitespace, or a strict prefix of a
+// JSON value (the decoder reaches EOF mid-value: io.ErrUnexpectedEOF).
+func claimBytesInFlight(data []byte) bool {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return true
+	}
+	var v any
+	return errors.Is(json.NewDecoder(bytes.NewReader(data)).Decode(&v), io.ErrUnexpectedEOF)
 }
 
 // countPageFiles counts entries with a .page extension directly under dir

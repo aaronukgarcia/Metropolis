@@ -2603,6 +2603,24 @@
       "message": "citizen disk paging directory {dir} claim.pid no longer matches the claim this composition took (recorded pid={recordedPid} epoch={recordedEpoch}; this composition's own pid={pid} epoch={epoch}) -- leaving the file in place rather than deleting another live holder's claim",
       "remedy": "this is expected after a Reclaim took over from this composition's stale claim; no action needed unless it recurs for a composition that was never reclaimed, which would indicate the claim file was tampered with externally"
     },
+    "MET-G822": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "citizen disk paging directory {dir} has a claim takeover in progress by another opener (the takeover lock is held right now) -- refusing this attempt rather than racing it",
+      "remedy": "retry shortly: the takeover lock is an OS advisory lock held for microseconds and released by the kernel even if its holder dies, so a persistent refusal means a live process is holding it; if the pid recorded in claim.pid is gone and this persists, check for a wedged process holding claim.pid.reclaim open"
+    },
+    "MET-G823": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "citizen disk paging directory {dir} holds a claim.pid that could not be read ({claimReadError}) -- refusing to open the directory, because a claim that cannot be read cannot be confirmed stale",
+      "remedy": "a transient read failure (a scanner or backup agent holding claim.pid open) clears on retry; an empty or truncated claim.pid younger than the torn-claim grace period may be a legacy writer mid-write and is refused until it ages past the grace, after which CitizenPagingOptions.Reclaim (metroserve -citizen-paging-reclaim) takes it; a claim.pid that is not a regular readable file (for example a directory) needs an operator to inspect and remove it by hand"
+    },
+    "MET-G824": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "citizen disk paging directory {dir} cannot take its claim: the filesystem does not support the hard link the claim is published with ({cause}) -- refusing rather than fall back to a non-atomic create-then-write claim",
+      "remedy": "put CitizenPagingOptions.PageDir on a filesystem with hard-link support (NTFS, ext4, xfs, most network mounts); FAT/exFAT volumes and some FUSE or object-store mounts do not support hard links"
+    },
     "MET-G900": {
       "severity": "error",
       "module": "engine.unlocks",

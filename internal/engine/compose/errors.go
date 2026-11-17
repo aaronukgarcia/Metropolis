@@ -249,6 +249,28 @@ const (
 	// warn, not error -- this is the EXPECTED shape after a legitimate
 	// Reclaim, not necessarily a defect.
 	ErrCitizenPagingClaimOwnershipMismatch = "MET-G821"
+
+	// ErrCitizenPagingTakeoverInProgress (BUG-799 r3): a claim takeover
+	// (reclaim) could not take the OS advisory takeover lock because another
+	// opener holds it right now, even after one short internal retry. The
+	// lock is held for microseconds and released by the kernel if its holder
+	// dies, so this is a retryable "someone else is mid-takeover", NOT the
+	// MET-G819 "directory claimed by a live composition" refusal.
+	ErrCitizenPagingTakeoverInProgress = "MET-G822"
+
+	// ErrCitizenPagingClaimUnreadable (BUG-799 r5): an opener was refused
+	// because the existing claim.pid could not be read (a transient or
+	// persistent I/O error, a non-file at the path, or an empty/truncated
+	// record still inside the torn-claim grace period). Distinct from MET-G819,
+	// which names a live claimant it actually read.
+	ErrCitizenPagingClaimUnreadable = "MET-G823"
+
+	// ErrCitizenPagingClaimPublishUnsupported (BUG-799 r5): the claim is
+	// published atomically with a hard link (os.Link: exclusive and atomic on
+	// Windows and POSIX), and this filesystem has no hard links. Fail closed:
+	// there is deliberately no create-then-write fallback, because that
+	// fallback is exactly the empty-claim window that let two openers hold.
+	ErrCitizenPagingClaimPublishUnsupported = "MET-G824"
 )
 
 // FEAT-2326609833 (wire engine.coastal): codes MET-G5480..G5484, claimed via
