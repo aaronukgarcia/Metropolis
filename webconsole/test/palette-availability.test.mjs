@@ -1,16 +1,15 @@
 // palette-availability.test.mjs — FEAT-1972079860:
-// Palette items sort available-first, locked by unlock level, placeholders last.
+// Locked-item requirements data + placeholder gating (the sort itself was removed: BUG-1192).
 // Click locked item opens requirements card showing unlock level and deliverables.
 //
 // Run with `npm test` (node --test); node's type-stripping imports the real
 // TypeScript modules, so assertions exercise the exact shipped data.ts and engine.ts.
 //
-// RED proof: delete sortPaletteItems() or reverse its sort order, and tests fail.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SPECS, PALETTE, PH, sortPaletteItems, isPlaceable } from '../src/sim/data.ts';
-import { initialState, specUnlocked, reducer, xpForLevel } from '../src/sim/engine.ts';
+import { SPECS, PH } from '../src/sim/data.ts';
+import { initialState, specUnlocked } from '../src/sim/engine.ts';
 
 // FEAT-9995385590: every roadmap placeholder is now a real building, so the shipped
 // catalogue has NONE. The sort/gate guarantees stay pinned against SYNTHETIC
@@ -18,99 +17,6 @@ import { initialState, specUnlocked, reducer, xpForLevel } from '../src/sim/engi
 // runner gives each file its own process, so this cannot leak into another suite).
 SPECS.ph_syn_a = PH('ph_syn_a', 'power', 'Synthetic Placeholder A', 'test-only', 2, 2, '#888888', 'services', 3);
 SPECS.ph_syn_b = PH('ph_syn_b', 'transport', 'Synthetic Placeholder B', 'test-only', 2, 2, '#888888', 'services', 1);
-
-// ---- AC-1: Available-first sort within each family ----
-
-test('AC-1: sortPaletteItems sorts items: available → locked (by unlock level) → placeholder', () => {
-  const state = initialState();
-  // At level 1, the palace starts with unlock level 1 already available.
-  // Build a test family: mix of available (unlock<=1), locked (unlock>1), and placeholders.
-  const testFamily = ['res_hut', 'res_block', 'pow_wind', 'pow_coal', 'ph_syn_a'];
-  // res_hut: unlock 1 (available)
-  // res_block: unlock 2 (locked at level 1)
-  // pow_wind: unlock 2 (locked at level 1)
-  // pow_coal: unlock 3 (locked at level 1)
-  // ph_syn_a: placeholder (locked)
-
-  const sorted = sortPaletteItems(state, testFamily);
-
-  // res_hut should come first (available).
-  // Then the locked real specs in unlock order: res_block (2), pow_wind (2), pow_coal (3).
-  // Then the placeholder: ph_syn_a.
-  const expected = ['res_hut', 'res_block', 'pow_wind', 'pow_coal', 'ph_syn_a'];
-  assert.deepEqual(sorted, expected, `at level 1, expected order: ${expected.join(', ')}`);
-});
-
-test('AC-1: sort order changes as city level advances (unlock thresholds cross)', () => {
-  // At level 3, res_block (unlock 2) and pow_wind (unlock 2) become available.
-  const state = { ...initialState(), xp: xpForLevel(3) };
-  const testFamily = ['res_hut', 'res_block', 'pow_wind', 'pow_coal'];
-
-  const sorted = sortPaletteItems(state, testFamily);
-
-  // At level 3: res_hut, res_block, pow_wind are available (unlock 1, 2, 2).
-  // pow_coal (unlock 3) is locked.
-  assert.deepEqual(sorted, ['res_hut', 'res_block', 'pow_wind', 'pow_coal']);
-});
-
-test('AC-1: all items available at high level (unlock thresholds all crossed)', () => {
-  const state = { ...initialState(), xp: xpForLevel(20) };
-  const testFamily = ['pow_coal', 'pow_nuke', 'pow_wind', 'res_hut'];
-
-  const sorted = sortPaletteItems(state, testFamily);
-
-  // All available at level 20 — no locked items, no placeholders, all in tier 1.
-  // Within tier 1, all items should remain (nothing moves to locked or placeholder tier).
-  const allAvailable = sorted.every((id) => {
-    const sp = SPECS[id];
-    return isPlaceable(state, sp) && !sp.placeholder;
-  });
-  assert.ok(allAvailable, 'all items remain in available tier');
-  assert.equal(sorted.length, testFamily.length, 'no items filtered out');
-});
-
-test('AC-1: placeholder specs always at bottom regardless of level', () => {
-  const state = { ...initialState(), xp: xpForLevel(20), unlockedAll: true };
-  const testFamily = ['pow_wind', 'ph_syn_a', 'pow_coal', 'ph_syn_b'];
-
-  const sorted = sortPaletteItems(state, testFamily);
-
-  // With unlockedAll, all REAL specs are available.
-  // Placeholders (ph_syn_a, ph_syn_b) sink to the bottom.
-  const available = sorted.filter((id) => !SPECS[id]?.placeholder);
-  const placeholders = sorted.filter((id) => SPECS[id]?.placeholder);
-
-  assert.equal(placeholders.length, 2, 'two placeholders in the family');
-  assert.ok(
-    sorted.indexOf(available[available.length - 1]) < sorted.indexOf(placeholders[0]),
-    'last available item comes before first placeholder'
-  );
-});
-
-test('AC-1: within locked tier, sort by unlock level ascending', () => {
-  const state = initialState(); // level 1
-  // All locked relative to level 1: unlock levels 2, 3, 5, 7, 8.
-  const testFamily = ['pow_coal', 'pow_nuke', 'pow_offshore', 'pow_ccgt', 'pow_fusion'];
-
-  const sorted = sortPaletteItems(state, testFamily);
-
-  // Verify ascending unlock order.
-  const unlocks = sorted.map((id) => SPECS[id].unlock);
-  for (let i = 1; i < unlocks.length; i++) {
-    assert.ok(unlocks[i] >= unlocks[i - 1], `unlock level must be non-decreasing: ${unlocks}`);
-  }
-});
-
-test('AC-1: stable sort — items in same tier preserve original order', () => {
-  const state = { ...initialState(), xp: xpForLevel(2) };
-  // All of these are available at level 2 (unlock levels 1, 2, 2).
-  const original = ['res_block', 'pow_wind', 'res_hut'];
-
-  const sorted = sortPaletteItems(state, original);
-
-  // All items are in the available tier; original order preserved (stable sort).
-  assert.deepEqual(sorted, original, 'available items preserve original order (stable sort within tier)');
-});
 
 // ---- AC-3: Locked items carry unlock level in data ----
 
@@ -154,104 +60,6 @@ test('AC-9: Spec properties used in card are ALWAYS read from data.ts SPECS, nev
   // hardcoded into SpecCard.tsx, grep will find it during code review.
 });
 
-// ---- AC-8: Sort determinism ----
-
-test('AC-8: sortPaletteItems is deterministic — same state always same sort order', () => {
-  const state = { ...initialState(), level: 5 };
-  const family = ['pow_wind', 'pow_coal', 'res_hut', 'pow_nuke', 'ph_syn_a'];
-
-  const sort1 = sortPaletteItems(state, family);
-  const sort2 = sortPaletteItems(state, family);
-  const sort3 = sortPaletteItems(state, family);
-
-  assert.deepEqual(sort1, sort2, 'same state produces same order on second call');
-  assert.deepEqual(sort2, sort3, 'same state produces same order on third call');
-});
-
-test('AC-8: sortPaletteItems returns a new array, does not mutate input', () => {
-  const state = initialState();
-  const original = ['pow_coal', 'res_hut', 'pow_wind'];
-  const originalCopy = [...original];
-
-  sortPaletteItems(state, original);
-
-  assert.deepEqual(original, originalCopy, 'original array is not mutated');
-});
-
-// ---- AC-14: Placeholders at bottom after locked real specs ----
-
-test('AC-14: placeholders always after locked real specs (not at top with available)', () => {
-  const state = initialState(); // level 1
-  // Mix: res_hut (available), pow_coal (locked), ph_syn_a (placeholder).
-  const family = ['ph_syn_a', 'pow_coal', 'res_hut'];
-
-  const sorted = sortPaletteItems(state, family);
-
-  const order = sorted.map((id) => {
-    const sp = SPECS[id];
-    if (sp.placeholder) return 'placeholder';
-    if (isPlaceable(state, sp)) return 'available';
-    return 'locked';
-  });
-
-  assert.deepEqual(order, ['available', 'locked', 'placeholder']);
-});
-
-// ---- Real-world palette families ----
-
-test('AC-1: Housing family sorts correctly at level 1 (mix of available and locked)', () => {
-  const state = initialState(); // level 1
-  const housingFamily = PALETTE.find((p) => p.title === 'Housing').items;
-
-  const sorted = sortPaletteItems(state, housingFamily);
-
-  // res_hut (unlock 1) should be first.
-  // res_block, res_terrace, etc. (unlock 2, 3, ...) follow in unlock order.
-  const first = sorted[0];
-  assert.equal(first, 'res_hut', 'Housing: res_hut (unlock 1) comes first at level 1');
-
-  const firstUnlock = sorted[0] ? SPECS[sorted[0]].unlock : null;
-  const secondUnlock = sorted[1] ? SPECS[sorted[1]].unlock : null;
-  assert.ok(secondUnlock >= firstUnlock, 'Housing: unlock levels are non-decreasing');
-});
-
-test('AC-1: Power family sorts correctly (multiple unlock levels)', () => {
-  const state = { ...initialState(), xp: xpForLevel(2) }; // pow_wind (unlock 2) now available
-  const powerFamily = PALETTE.find((p) => p.title === 'Power').items;
-
-  const sorted = sortPaletteItems(state, powerFamily);
-
-  // At level 2: pow_wind (2) should be in available tier.
-  // pow_coal (3), pow_nuke (5), etc. should be locked below.
-  const wind = sorted.indexOf('pow_wind');
-  const coal = sorted.indexOf('pow_coal');
-  assert.ok(wind < coal, 'Power: pow_wind (available at level 2) comes before pow_coal (locked)');
-});
-
-// ---- Edge cases ----
-
-test('edge case: empty family (no items)', () => {
-  const state = initialState();
-  const sorted = sortPaletteItems(state, []);
-  assert.deepEqual(sorted, []);
-});
-
-test('edge case: single item', () => {
-  const state = initialState();
-  const sorted = sortPaletteItems(state, ['res_hut']);
-  assert.deepEqual(sorted, ['res_hut']);
-});
-
-test('edge case: missing spec (id not in SPECS) — maintain order silently', () => {
-  const state = initialState();
-  const family = ['res_hut', 'nonexistent_spec', 'pow_wind'];
-
-  // sortPaletteItems should handle missing specs gracefully (return 0 comparison).
-  const sorted = sortPaletteItems(state, family);
-  assert.ok(sorted.includes('res_hut'), 'valid specs are included');
-  assert.ok(sorted.includes('nonexistent_spec'), 'missing spec is included (no error thrown)');
-});
-
 // ---- Unlock levels and tiers ----
 
 test('spec data: verify unlock levels used in tests actually exist', () => {
@@ -268,21 +76,6 @@ test('spec data: placeholder flag is set correctly', () => {
   assert.equal(SPECS.ph_syn_b.placeholder, true);
   assert.equal(SPECS.res_hut.placeholder, undefined);
   assert.equal(SPECS.pow_coal.placeholder, undefined);
-});
-
-// ---- isPlaceable gate (regression) ----
-
-test('regression: isPlaceable unchanged by sortPaletteItems (independent functions)', () => {
-  const state = initialState();
-  const testSpecs = ['res_hut', 'pow_wind', 'ph_syn_a'];
-
-  for (const id of testSpecs) {
-    const sp = SPECS[id];
-    const beforeSort = isPlaceable(state, sp);
-    sortPaletteItems(state, testSpecs);
-    const afterSort = isPlaceable(state, sp);
-    assert.equal(beforeSort, afterSort, `isPlaceable(${id}) unchanged by sortPaletteItems`);
-  }
 });
 
 // ---- AC-4 CRITICAL: Locked specs must be clickable (not disabled) ----

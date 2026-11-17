@@ -1790,55 +1790,6 @@ export function isPlaceable(s: SimState, sp: Spec): boolean {
 }
 
 /**
- * FEAT-1972079860 AC-1: Sort palette items available-first, locked by unlock
- * level, then placeholder. Pure, deterministic sort.
- *
- * Sort order:
- * 1. Available real specs (isPlaceable && !placeholder) — first
- * 2. Locked real specs (!specUnlocked && !placeholder) — by unlock level ascending
- * 3. At-cap real specs (FEAT-2326609761 AC-30: unlocked, but remainingAllowance
- *    exhausted — e.g. the Five Gorges Dam once built) — after locked, still
- *    before placeholders, because it IS built, not merely unavailable-forever.
- * 4. Placeholder specs (placeholder === true) — last
- *
- * Within each tier, original order is preserved (stable sort).
- */
-export function sortPaletteItems(state: SimState, items: string[]): string[] {
-  return items.slice().sort((aId, bId) => {
-    const a = SPECS[aId];
-    const b = SPECS[bId];
-    if (!a || !b) return 0; // Missing specs maintain relative order
-
-    const aPlaceholder = a.placeholder === true;
-    const bPlaceholder = b.placeholder === true;
-    const aUnlocked = !aPlaceholder && canEnterSim(a) && specUnlocked(state, a);
-    const bUnlocked = !bPlaceholder && canEnterSim(b) && specUnlocked(state, b);
-    const aAtCap = aUnlocked && remainingAllowance(state, a) <= 0;
-    const bAtCap = bUnlocked && remainingAllowance(state, b) <= 0;
-    const aPlaceable = aUnlocked && !aAtCap;
-    const bPlaceable = bUnlocked && !bAtCap;
-
-    // Tier 1: available real specs
-    // Tier 2: locked real specs (never unlocked)
-    // Tier 3: at-cap real specs (unlocked, but the unique-building cap is hit)
-    // Tier 4: placeholder specs
-    const aTier = aPlaceholder ? 4 : aAtCap ? 3 : aPlaceable ? 1 : 2;
-    const bTier = bPlaceholder ? 4 : bAtCap ? 3 : bPlaceable ? 1 : 2;
-
-    // Sort by tier first
-    if (aTier !== bTier) return aTier - bTier;
-
-    // Within tier 2 (locked real specs), sort by unlock level ascending
-    if (aTier === 2) {
-      return a.unlock - b.unlock;
-    }
-
-    // Within tiers 1, 3 and 4, maintain original order (stable sort via slice)
-    return 0;
-  });
-}
-
-/**
  * BUG-452 inc1 (2026-09-01, Aaron's approved GBP-scale anchors): the full
  * `cost`/`upkeep` catalogue below was rebased off toy £40-£560,000 figures
  * onto realistic UK capex, PRESERVING the cheap->expensive spread (the whole

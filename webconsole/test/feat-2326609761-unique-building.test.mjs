@@ -25,7 +25,6 @@ import assert from 'node:assert/strict';
 import {
   SPECS,
   isPlaceable,
-  sortPaletteItems,
   remainingAllowance,
   countOfSpec,
   findSpot,
@@ -358,37 +357,7 @@ test('remainingAllowance is a pure function of state — same state, same answer
 // AC-30: palette greying — a third, visually distinct state.
 // ---------------------------------------------------------------------------
 
-describe('AC-30: palette sort + gating logic for an at-cap unique building', () => {
-  test('sortPaletteItems: an at-cap real spec sorts AFTER available specs but BEFORE placeholders', () => {
-    const s = richState();
-    const withOne = {
-      ...s,
-      buildings: [...s.buildings, { id: 999107, spec: DAM, x: 300, y: 100, builtTick: 0 }],
-    };
-    // pow_wind: available; pow_hydro: at-cap; ph_syn_a: placeholder.
-    const family = ['ph_syn_a', DAM, 'pow_wind'];
-    const sorted = sortPaletteItems(withOne, family);
-    const tierOf = (id) => {
-      const sp = SPECS[id];
-      if (sp.placeholder) return 'placeholder';
-      if (!canEnterSim(sp) || !specUnlocked(withOne, sp)) return 'locked';
-      if (remainingAllowance(withOne, sp) <= 0) return 'atcap';
-      return 'available';
-    };
-    const order = sorted.map(tierOf);
-    assert.deepEqual(order, ['available', 'atcap', 'placeholder']);
-  });
-
-  test('sortPaletteItems: with NO dam built, the same family sorts pow_hydro as available (control)', () => {
-    const s = richState();
-    const family = ['ph_syn_a', DAM, 'pow_wind'];
-    const sorted = sortPaletteItems(s, family);
-    // Both real specs are available; original relative order preserved within tier 1.
-    assert.equal(sorted[0], DAM);
-    assert.equal(sorted[1], 'pow_wind');
-    assert.equal(sorted[2], 'ph_syn_a');
-  });
-
+describe('AC-30: palette gating logic for an at-cap unique building', () => {
   test('the BottomBar disabled/atCap boolean logic (mirrors the shipped component exactly)', () => {
     // Mirrors BottomBar.tsx's `atCap` derivation and `disabled` expression —
     // a pure-logic regression guard, same style as palette-availability.test.mjs's

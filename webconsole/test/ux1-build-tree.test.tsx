@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { PALETTE, SPECS, paletteByDomain, isPlaceable, sortPaletteItems } from '../src/sim/data.ts';
+import { PALETTE, SPECS, paletteByDomain, isPlaceable } from '../src/sim/data.ts';
 import { initialState, specUnlocked } from '../src/sim/engine.ts';
 import {
   buildTree,
@@ -151,15 +151,11 @@ test('AC-1.2: subtypes render INLINE under their family (same tree, nested group
 // ------------------------------------------------------------------ AC-1.3
 
 test('AC-1.3: subtype order is spec (PALETTE) order and does NOT change with availability', () => {
-  const st = initialState();
   for (const fam of PALETTE) {
     const open = new Set([...initialExpanded(), `f:${fam.title}`, ...paletteByDomain().map((d) => `d:${d.domain}`)]);
     const node = flattenVisible(buildTree(open, '', [])).find((n) => n.id === `f:${fam.title}`)!;
     assert.deepEqual(node.children.map((c) => c.specId), fam.items.filter((i) => SPECS[i]), fam.title);
   }
-  // Prove the reorder we removed would have differed: some family sorts differently.
-  const differs = PALETTE.some((f) => sortPaletteItems(st, f.items).join() !== f.items.join());
-  assert.ok(differs, 'sortPaletteItems would have reordered at least one family (so stable order is a real change)');
 });
 
 test('AC-1.3: locked chip + SpecCard-on-locked-click carry over; locked rows are not disabled', async () => {
