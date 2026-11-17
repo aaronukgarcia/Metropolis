@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reducer } from '../src/sim/engine.ts';
+import { initialState, reducer, levelOf, xpForLevel } from '../src/sim/engine.ts';
 import { demandFixPlan, orderedDemandFixPlan, SPECS, placementCost, AUTO_BUILD_DEMAND_FRACTION, AUTO_BUILD_DEMAND_PERCENT, RESOLVE_DEMAND_ALL_MAX_UNITS, type Spec, type DemandFixPlanItem } from '../src/sim/data.ts';
 import { demandFixMessage } from '../src/components/demandFixUi.ts';
 import type { SimState } from '../src/sim/types.ts';
@@ -413,4 +413,31 @@ test('GR#15 binding: AUTO_BUILD_DEMAND_PERCENT === AUTO_BUILD_DEMAND_FRACTION * 
   // "hardcoded 50 with 1.5 live and nothing failed" finding describes.
   assert.equal(typeof AUTO_BUILD_DEMAND_PERCENT, 'number');
   assert.ok(Number.isFinite(AUTO_BUILD_DEMAND_PERCENT));
+});
+
+// BUG-1190: the M1 test above cannot detect a demandFixPlan(cur) -> demandFixPlan(state)
+// swap (mutation C of round r1-bug1188 stayed green): demandFixPlan is capacity-only and
+// placePlanItem re-budgets against cur.funds itself, so funds depletion alone never
+// changes what the plan says. What DOES differ between the frozen `state` and `cur` is
+// the player's LEVEL: earlier services' placements earn xp, and a level-up mid-batch
+// unlocks bigger specs for the LATER services. This fixture starts one xp short of
+// level 4 (unlockedAll=false), so the earlier services' placements cross the line and the
+// fire service must be planned against `cur`: 1 x fire_station, never the stale 5 x fire_post.
+// RED-PROOF: swapping demandFixPlan(cur) for demandFixPlan(state) in resolveDemandAll
+// (engine.ts, the `const plan = demandFixPlan(cur).find(...)` line) turns this test red.
+test('BUG-1190 M1b: a mid-batch level-up unlocks a bigger fire spec - resolveDemandAll must plan against `cur`, not the frozen `state`', () => {
+  const s = { ...shortfallState(13_000, 1_000_000_000_000), unlockedAll: false, xp: xpForLevel(4) - 1 };
+  assert.equal(levelOf(s.xp), 3, 'precondition: the batch starts one xp short of level 4');
+  const stale = demandFixPlan(s).find((p) => p.serviceKey === 'fire');
+  assert.ok(stale);
+  assert.equal(stale.specId, 'fire_post', 'precondition: the frozen-state plan can only use the level-3 fire spec');
+  assert.ok(stale.count > 1, 'precondition: the stale plan is a multi-unit fire_post build');
+
+  const result = reducer(s, { type: 'resolveDemandAll' });
+  assert.ok(levelOf(result.xp) >= 4, 'precondition: earlier services placed enough to reach level 4 mid-batch');
+  const before = specCounts(s);
+  const after = specCounts(result);
+  const placed = (id: string) => (after.get(id) ?? 0) - (before.get(id) ?? 0);
+  assert.equal(placed('fire_station'), 1, 'fire must be planned against `cur` (level 4): 1 x fire_station');
+  assert.equal(placed('fire_post'), 0, 'a stale `state` plan would have placed fire_post units');
 });
