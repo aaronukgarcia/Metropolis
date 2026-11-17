@@ -660,10 +660,6 @@
     "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from AdvanceDayTick (guarded -- checkNotCopied before c.mu.Lock) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
   },
   {
-    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|allColdRecordsLocked|c|*CitizensAPI",
-    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from BuildSample/AdvanceDayTick/coldParamsLocked (all guarded or reached under held c.mu) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
-  },
-  {
     "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|coldRecord|c|*CitizensAPI",
     "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from CitizenAt/FidelityOf/HouseholdOf/ApplyFidelityCommand (each guarded -- checkNotCopied before c.mu) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
   },
@@ -2004,10 +2000,6 @@
     "reason": "FEAT-087 (mkey feat.deathwave) inc1.5 death-queue live-wiring round (2026-09-01, verified independently after an initial mis-report): SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for CitizensAPI's EVERY declared method the moment CitizensAPI gained the `deathQueue *DeathQueue` field (DeathQueue is itself a candidate type: mu sync.Mutex + pending/queued/realisedIDs/realisedAt reference fields, deathwave.go) -- by design it does not check whether the method body actually references the field (the same 'presence, not effect' scope this file's own internal/engine/core/commands.go|*Engine|HandleCommand|e.subs entry already documents). hotIDSetLocked's body was read in full; a whole-file grep for the literal substring 'deathQueue' across every non-test .go file in this package (coldpass.go, fertility.go, participant.go, registry.go) finds it in these non-test locations: the CitizensAPI struct field declaration itself, NewCitizensAPI's construction (`deathQueue: NewDeathQueue()`), AdvanceDayTick's realisation block (`c.deathQueue.Realise(...)`, and passing `c.deathQueue` to applyMonthly), and ApplyLifeEventCommand's emigration reconciliation (`c.deathQueue.IsQueued`/`c.deathQueue.RealiseByID` at registry.go:445-446) -- hotIDSetLocked is not among them. There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', identical to the HandleCommand|e.subs precedent."
   },
   {
-    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|allColdRecordsLocked|c.deathQueue|*CitizensAPI.deathQueue",
-    "reason": "FEAT-087 (mkey feat.deathwave) inc1.5 death-queue live-wiring round (2026-09-01, verified independently after an initial mis-report): SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for CitizensAPI's EVERY declared method the moment CitizensAPI gained the `deathQueue *DeathQueue` field (DeathQueue is itself a candidate type: mu sync.Mutex + pending/queued/realisedIDs/realisedAt reference fields, deathwave.go) -- by design it does not check whether the method body actually references the field (the same 'presence, not effect' scope this file's own internal/engine/core/commands.go|*Engine|HandleCommand|e.subs entry already documents). allColdRecordsLocked's body was read in full; a whole-file grep for the literal substring 'deathQueue' across every non-test .go file in this package (coldpass.go, fertility.go, participant.go, registry.go) finds it in these non-test locations: the CitizensAPI struct field declaration itself, NewCitizensAPI's construction (`deathQueue: NewDeathQueue()`), AdvanceDayTick's realisation block (`c.deathQueue.Realise(...)`, and passing `c.deathQueue` to applyMonthly), and ApplyLifeEventCommand's emigration reconciliation (`c.deathQueue.IsQueued`/`c.deathQueue.RealiseByID` at registry.go:445-446) -- allColdRecordsLocked is not among them. There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', identical to the HandleCommand|e.subs precedent."
-  },
-  {
     "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|coldRecord|c.deathQueue|*CitizensAPI.deathQueue",
     "reason": "FEAT-087 (mkey feat.deathwave) inc1.5 death-queue live-wiring round (2026-09-01, verified independently after an initial mis-report): SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for CitizensAPI's EVERY declared method the moment CitizensAPI gained the `deathQueue *DeathQueue` field (DeathQueue is itself a candidate type: mu sync.Mutex + pending/queued/realisedIDs/realisedAt reference fields, deathwave.go) -- by design it does not check whether the method body actually references the field (the same 'presence, not effect' scope this file's own internal/engine/core/commands.go|*Engine|HandleCommand|e.subs entry already documents). coldRecord's body was read in full; a whole-file grep for the literal substring 'deathQueue' across every non-test .go file in this package (coldpass.go, fertility.go, participant.go, registry.go) finds it in these non-test locations: the CitizensAPI struct field declaration itself, NewCitizensAPI's construction (`deathQueue: NewDeathQueue()`), AdvanceDayTick's realisation block (`c.deathQueue.Realise(...)`, and passing `c.deathQueue` to applyMonthly), and ApplyLifeEventCommand's emigration reconciliation (`c.deathQueue.IsQueued`/`c.deathQueue.RealiseByID` at registry.go:445-446) -- coldRecord is not among them. There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', identical to the HandleCommand|e.subs precedent."
   },
@@ -2314,10 +2306,6 @@
   {
     "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|hotIDSetLocked|c.pages|*CitizensAPI.pages",
     "reason": "BUG-664 paging wiring round (2026-09-05): SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for CitizensAPI's EVERY declared method the moment CitizensAPI gained the `pages *PageStore` field (PageStore is itself a candidate type: mu sync.Mutex + resident/order reference fields, paging.go) -- by design it does not check whether the method body actually references the field (the same \"presence, not effect\" scope this file's own internal/engine/core/commands.go|*Engine|HandleCommand|e.subs entry, and this package's own c.deathQueue entries, already document). A whole-package grep for the literal substring \".pages\" across every non-test .go file in this package finds it ONLY in registry.go (EnableDiskPaging's assignment; shardAt/acquireShard/releaseShard's nil-checks; loadShardLocked's Load call; evictOverBudgetLocked's Store call) and participant.go's resetForLoad (a nil-check) -- hotIDSetLocked is not among them; its body was read in full and contains zero references to c.pages. There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating \"declared on the wrapping type\" as \"reaches the field\", identical to the HandleCommand|e.subs precedent."
-  },
-  {
-    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|allColdRecordsLocked|c.pages|*CitizensAPI.pages",
-    "reason": "BUG-664 paging wiring round (2026-09-05): SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for CitizensAPI's EVERY declared method the moment CitizensAPI gained the `pages *PageStore` field (PageStore is itself a candidate type: mu sync.Mutex + resident/order reference fields, paging.go) -- by design it does not check whether the method body actually references the field (the same \"presence, not effect\" scope this file's own internal/engine/core/commands.go|*Engine|HandleCommand|e.subs entry, and this package's own c.deathQueue entries, already document). A whole-package grep for the literal substring \".pages\" across every non-test .go file in this package finds it ONLY in registry.go (EnableDiskPaging's assignment; shardAt/acquireShard/releaseShard's nil-checks; loadShardLocked's Load call; evictOverBudgetLocked's Store call) and participant.go's resetForLoad (a nil-check) -- allColdRecordsLocked is not among them; its body was read in full and contains zero references to c.pages. There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating \"declared on the wrapping type\" as \"reaches the field\", identical to the HandleCommand|e.subs precedent."
   },
   {
     "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|coldRecord|c.pages|*CitizensAPI.pages",
@@ -3306,5 +3294,245 @@
   {
     "finding": "internal/engine/core/commands.go|*Engine|field access chain|handleQuery|e.subs|*Engine.subs",
     "reason": "FEAT-2326609842 (citizen dummy-passport): SEC-049 field-access over-approximation. handleQuery never touches e.subs at all; the enumeration registers a ReachableFunc for every method of a type that merely HOLDS a candidate-typed field (presence, not effect), and only a e.subs.checkNotCopied() call would satisfy it, which would be nonsensical noise. handleQuery has its own direct e.checkNotCopied() guard and is reached only from dispatchCommand. Same shape as the existing entries for the sibling methods on this type."
+  },
+  {
+    "finding": "cmd/metroserve/sessiongate.go|*sessionGate|receiver method|gatedResolver|g|*sessionGate",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): gatedResolver only builds and returns a closure; the closure's every touch of the gate goes through g.claim/g.abandon/g.resolved, each of which calls checkNotCopied before touching mu/slots (sessiongate.go), so a copied sessionGate is refused at the first guarded call the first connection makes. gatedResolver itself never reads or writes a sessionGate field. Same shape as the accepted FEAT-2326609775 inc1 entries (a method/parameter that only defers into the type's already-guarded entry points, cf. NewMetricsHandler|reg|*Registry)."
+  },
+  {
+    "finding": "cmd/metroserve/sessiongate.go|*sessionGate|receiver method|gatedLifecycle|g|*sessionGate",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): gatedLifecycle only builds the wsserver lifecycle option; the open/close callbacks it returns touch the gate solely via g.opened/g.closed, both of which call checkNotCopied before the lock (sessiongate.go). It never reads or writes a sessionGate field directly. Same defer-into-guarded-methods precedent as gatedResolver above and the accepted NewMetricsHandler|reg|*Registry entry."
+  },
+  {
+    "finding": "cmd/metroserve/sessiongate.go||function (parameter)|hostedWSOptions|host|*CityHost",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): hostedWSOptions takes host *CityHost purely to call its own already-guarded methods (GetOrCreate, Acquire, Release each call h.checkNotCopied before the lock -- cityhost.go) inside closures; the function body never reads or writes a CityHost field. Mirrors the accepted buildCity|healthReg|*healthRegistry and NewMetricsHandler|reg|*Registry parameter precedents."
+  },
+  {
+    "finding": "cmd/metroserve/health.go|*healthHandler|field access chain|withBuildMismatch|h.registry|*healthHandler.registry",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): withBuildMismatch only assigns h.buildMismatch (a func field) and returns h; it never touches h.registry. SEC-049's field-access enumeration registers every declared method of healthHandler because the type has a registry *healthRegistry field, without checking the body references it. Identical over-approximation to the accepted healthHandler|ServeHTTP|h.registry entry."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|receiver method|housingLedgerLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): housingLedgerLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|receiver method|materializeHousingLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): materializeHousingLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|receiver method|housingSnapshotLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): housingSnapshotLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|receiver method|rebuildHousingFromColumnsLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): rebuildHousingFromColumnsLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|receiver method|evictHomesLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): evictHomesLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|receiver method|housingAppendedLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): housingAppendedLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|receiver method|housingReleaseLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): housingReleaseLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|receiver method|compactPendingLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): compactPendingLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|receiver method|homeOfLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): homeOfLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|streamSampleLocked|c|*CitizensAPI",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): streamSampleLocked is an unexported *Locked helper on *CitizensAPI, called only with c.mu already held by exported/guarded entry points (housing.go/registry.go/fertility.go/participant.go callers each run checkNotCopied before taking the lock); it never locks independently. astgate is syntactic (no call graph), so it cannot see the guarded caller above it -- the same blind spot as the accepted citizens *Locked helpers (e.g. allColdRecordsLocked, occupancy *Locked helpers) and the persist cityDir/ensureCityMeta precedents. A copied CitizensAPI is rejected at every exported boundary before this helper is reached."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|HousingEnabled|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): HousingEnabled now has its own direct checkNotCopied guard (BUG-1206) and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|HousingEnabled|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): HousingEnabled now has its own direct checkNotCopied guard (BUG-1206) and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|housingLedgerLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): housingLedgerLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|housingLedgerLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): housingLedgerLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|materializeHousingLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): materializeHousingLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|materializeHousingLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): materializeHousingLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|RestoreHousing|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): RestoreHousing calls checkNotCopied itself and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|RestoreHousing|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): RestoreHousing calls checkNotCopied itself and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|housingSnapshotLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): housingSnapshotLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|housingSnapshotLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): housingSnapshotLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|HomeOccupancy|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): HomeOccupancy now has its own direct checkNotCopied guard (BUG-1206) and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|HomeOccupancy|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): HomeOccupancy now has its own direct checkNotCopied guard (BUG-1206) and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|HomelessCount|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): HomelessCount now has its own direct checkNotCopied guard (BUG-1206) and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|HomelessCount|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): HomelessCount now has its own direct checkNotCopied guard (BUG-1206) and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|SetHomeCapacities|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): SetHomeCapacities calls checkNotCopied itself and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|SetHomeCapacities|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): SetHomeCapacities calls checkNotCopied itself and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|rebuildHousingFromColumnsLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): rebuildHousingFromColumnsLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|rebuildHousingFromColumnsLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): rebuildHousingFromColumnsLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|evictHomesLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): evictHomesLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|evictHomesLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): evictHomesLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|AssignHomes|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): AssignHomes calls checkNotCopied itself and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|AssignHomes|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): AssignHomes calls checkNotCopied itself and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|housingAppendedLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): housingAppendedLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|housingAppendedLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): housingAppendedLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|housingReleaseLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): housingReleaseLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|housingReleaseLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): housingReleaseLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|compactPendingLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): compactPendingLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|compactPendingLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): compactPendingLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|homeOfLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): homeOfLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/housing.go|*CitizensAPI|field access chain|homeOfLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): homeOfLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|GatherInShardOrderSeq|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): GatherInShardOrderSeq calls checkNotCopied itself and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|GatherInShardOrderSeq|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): GatherInShardOrderSeq calls checkNotCopied itself and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|streamSampleLocked|c.deathQueue|*CitizensAPI.deathQueue",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): streamSampleLocked is an unexported *Locked helper reached only from guarded callers and never touches c.deathQueue (the DeathQueue field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a DeathQueue field, and only a c.deathQueue.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|field access chain|streamSampleLocked|c.pages|*CitizensAPI.pages",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation (KindFieldAccess, findFieldReachableFuncs): streamSampleLocked is an unexported *Locked helper reached only from guarded callers and never touches c.pages (the PageStore field) at all -- the enumeration registers every declared method of *CitizensAPI because the type has a PageStore field, and only a c.pages.checkNotCopied() call would satisfy it, which would be nonsensical noise. Same shape as the accepted SeedColdRecords|c.deathQueue and allColdRecordsLocked|c.pages entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose.go|*simState|field access chain|eachLiveResidentID|st.coastalW|*simState.coastalW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: eachLiveResidentID on *simState never reads st.coastalW (the coastalWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a coastalWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose.go|*simState|field access chain|eachLiveResidentID|st.socialW|*simState.socialW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: eachLiveResidentID on *simState never reads st.socialW (the socialWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a socialWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose.go|*simState|field access chain|eachLiveResidentID|st.defenceW|*simState.defenceW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: eachLiveResidentID on *simState never reads st.defenceW (the defenceWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a defenceWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose.go|*simState|field access chain|gatherLiveResidents|st.coastalW|*simState.coastalW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: gatherLiveResidents on *simState never reads st.coastalW (the coastalWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a coastalWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose.go|*simState|field access chain|gatherLiveResidents|st.socialW|*simState.socialW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: gatherLiveResidents on *simState never reads st.socialW (the socialWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a socialWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose.go|*simState|field access chain|gatherLiveResidents|st.defenceW|*simState.defenceW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: gatherLiveResidents on *simState never reads st.defenceW (the defenceWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a defenceWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose_housing.go|*simState|field access chain|restoreHousing|st.coastalW|*simState.coastalW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: restoreHousing on *simState never reads st.coastalW (the coastalWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a coastalWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose_housing.go|*simState|field access chain|restoreHousing|st.socialW|*simState.socialW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: restoreHousing on *simState never reads st.socialW (the socialWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a socialWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose_housing.go|*simState|field access chain|restoreHousing|st.defenceW|*simState.defenceW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: restoreHousing on *simState never reads st.defenceW (the defenceWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a defenceWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose_housing.go|*simState|field access chain|syncHousing|st.coastalW|*simState.coastalW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: syncHousing on *simState never reads st.coastalW (the coastalWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a coastalWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose_housing.go|*simState|field access chain|syncHousing|st.socialW|*simState.socialW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: syncHousing on *simState never reads st.socialW (the socialWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a socialWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
+  },
+  {
+    "finding": "internal/engine/compose/compose_housing.go|*simState|field access chain|syncHousing|st.defenceW|*simState.defenceW",
+    "reason": "BUG-1206 (2026-11-17, approvedBy Bev/lead): SEC-049 field-access over-approximation: syncHousing on *simState never reads st.defenceW (the defenceWiring field) -- it only drives the citizens module through its own guarded methods (GatherInShardOrderSeq/RestoreHousing/SetHomeCapacities/AssignHomes/HousingEnabled, each calling checkNotCopied) or, for eachLiveResidentID, reads simState counters. The enumeration registers every declared simState method because simState has a defenceWiring field. Same shape as the accepted closeLedgerForTick|st.coastalW / snapshot|st.coastalW entries."
   }
 ]

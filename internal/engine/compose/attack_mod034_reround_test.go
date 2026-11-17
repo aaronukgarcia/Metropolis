@@ -203,13 +203,25 @@ func TestAttackMOD034_MidRunEmptyCohortFlipsBackToNoData(t *testing.T) {
 		t.Fatalf("after one month NoData=%v SampleSize=%d, want a real cohort", mid.NoData, mid.SampleSize)
 	}
 
-	// Empty the cohort: a cache full of unresolvable ids. Keys are set to the
-	// live counter values so the cache is HIT rather than recomputed.
+	// Empty the cohort through the CURRENT enumeration path (BUG-1198: the
+	// wellbeing hook walks eachLiveResidentID, which does not read the
+	// liveResidentIDs cache). The base range [1,nextCitizenID) is emptied and
+	// the static seed range is pointed at one id that resolves to nothing, so
+	// every id eachLiveResidentID yields fails CitizenAt's !ok check -- the
+	// state the skip produces when every enumerated id has died. The
+	// migrant/child ranges must contribute nothing for the cohort to be empty,
+	// which is asserted rather than assumed.
 	st := comp.state
-	st.liveResidentIDsCache = []uint64{citizens.FertilityChildIDBase - 1}
-	st.liveResidentIDsCacheMigrants = st.attract.MigrantsAdmitted()
-	st.liveResidentIDsCacheChildren = st.citizens.FertilityChildrenBorn(st.cid)
-	st.liveResidentIDsCacheNextID = st.nextCitizenID
+	if st.attract.MigrantsAdmitted() >= 2 || st.citizens.FertilityChildrenBorn(st.cid) != 0 {
+		t.Fatalf("fixture drifted: migrants=%d children=%d would keep resolvable ids in the cohort",
+			st.attract.MigrantsAdmitted(), st.citizens.FertilityChildrenBorn(st.cid))
+	}
+	st.nextCitizenID = 1
+	st.seedResidentIDBase = citizens.FertilityChildIDBase - 2
+	st.seedResidentIDCount = 1
+	if _, ok := st.citizens.CitizenAt(st.seedResidentIDBase+1, st.cid); ok {
+		t.Fatal("the poisoned seed id resolves to a citizen -- the cohort would not be empty")
+	}
 
 	month, err := st.currentMonth()
 	if err != nil {

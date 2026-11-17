@@ -137,6 +137,9 @@ func (l *housingLedger) pushFreeIfRoom(cell uint32) {
 
 // HousingEnabled reports whether the housing ledger has been switched on.
 func (c *CitizensAPI) HousingEnabled() bool {
+	if err := c.checkNotCopied("", "HousingEnabled"); err != nil {
+		return false
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.housing != nil || c.housingRestore != nil
@@ -210,6 +213,9 @@ func (c *CitizensAPI) housingSnapshotLocked() ([]housingCapWire, bool) {
 // HomeOccupancy returns how many citizens the ledger records at cell (0 when
 // the ledger is off). Diagnostic/test accessor.
 func (c *CitizensAPI) HomeOccupancy(cell CellRef) int {
+	if err := c.checkNotCopied("", "HomeOccupancy"); err != nil {
+		return 0
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	l := c.housingLedgerLocked()
@@ -222,6 +228,9 @@ func (c *CitizensAPI) HomeOccupancy(cell CellRef) int {
 // HomelessCount returns the number of living citizens with no Home. It walks
 // the home column (O(N)); diagnostic/test accessor, never called per tick.
 func (c *CitizensAPI) HomelessCount() int {
+	if err := c.checkNotCopied("", "HomelessCount"); err != nil {
+		return 0
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	n := 0

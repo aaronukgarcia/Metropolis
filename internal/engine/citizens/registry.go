@@ -566,6 +566,9 @@ func (c *CitizensAPI) PinForBatch(ids []uint64) (unpin func()) {
 // for every id in ITS OWN original order via a plain CitizenAt loop -- the
 // exact pre-BUG-775, zero-extra-allocation behaviour.
 func (c *CitizensAPI) GatherInShardOrder(ids []uint64, correlationID string, fn func(id uint64, cit Citizen, ok bool)) {
+	if err := c.checkNotCopied(correlationID, "GatherInShardOrder"); err != nil {
+		return
+	}
 	c.GatherInShardOrderSeq(func(yield func(id uint64) bool) {
 		for _, id := range ids {
 			if !yield(id) {
