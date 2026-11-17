@@ -15,7 +15,7 @@ import (
 // engine.finance pilot and the inc2..inc8 examples. It is the CAPSTONE of
 // the per-module serialization epic: the population is the single most
 // save-critical state in the engine (up to 100M persistent individuals,
-// ~6.7GB of cold records), so this participant is the one that actually
+// ~11.3GB of cold records), so this participant is the one that actually
 // exercises int.serializer's streaming contract at scale.
 //
 // Serialization here is DATA-ONLY, like every prior inc. engine.citizens
@@ -93,9 +93,9 @@ import (
 //
 // int.serializer's RecordSource contract is "nothing holds more than one
 // record's bytes at once", and save.Participant forbids buffering the whole
-// record set before Source starts yielding. The cold store is up to ~6.7GB,
+// record set before Source starts yielding. The cold store is up to ~11.3GB,
 // so Source MUST NOT copy it wholesale (the existing read-all
-// allColdRecordsLocked() is exactly what NOT to use here). Instead the cold
+// a flat all-records slice is exactly what NOT to use here). Instead the cold
 // records stream through coldStream, a lazy enumerator that snapshots ONE of
 // the 256 shards at a time under a fresh read lock (a bounded per-shard
 // collect — at 100M that is ~26MB for a single shard, never the whole
@@ -442,7 +442,7 @@ func (c *CitizensAPI) snapshotHead() (citizensHead, error) {
 // snapshotColdShard copies ONE cold shard's rows into a bounded slice of
 // wire records under the read lock, then releases the lock. This is the
 // per-shard collect coldStream walks the 256 shards through — bounded to a
-// single shard (~26MB at 100M citizens), never the whole 6.7GB population.
+// single shard (~26MB at 100M citizens), never the whole 11.3GB population.
 // Rows are yielded in the shard's own index order, which is stable for a
 // fixed population (removeAt is swap-with-last, but nothing mutates during a
 // quiescent save), so the emitted order is deterministic.
@@ -731,7 +731,7 @@ func (p *SaveParticipant) Kind() string {
 // Source returns a fresh pull-iterator over the citizen state. It snapshots
 // the small resident head (meta + death queue + households + fidelity) under
 // the lock once, up front, then streams the cold population shard-by-shard
-// through coldStream — never buffering the whole 6.7GB cold store before the
+// through coldStream — never buffering the whole 11.3GB cold store before the
 // first yield. The emission order is meta, then the FEAT-087 AC-20 death
 // queue record, then every cold citizen (shard 0→255, row order), then
 // households (sorted), then the hot fidelity set (sorted). A copied-value

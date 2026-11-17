@@ -323,10 +323,11 @@ func (st *simState) reconstructWellbeing(month int64) {
 	// — so taking the slice's first N elements IS taking the first N ids in
 	// ascending numeric order, with no separate O(n log n) sort needed every
 	// month as population grows toward the 100M northstar.
-	ids := st.liveResidentIDs()
-	if len(ids) > wellbeingSampleCap {
-		ids = ids[:wellbeingSampleCap]
-	}
+	ids := make([]uint64, 0, wellbeingSampleCap)
+	st.eachLiveResidentID(func(id uint64) bool {
+		ids = append(ids, id)
+		return len(ids) < wellbeingSampleCap
+	})
 
 	var (
 		sumPhysical float64

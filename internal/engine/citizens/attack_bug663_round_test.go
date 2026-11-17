@@ -548,7 +548,7 @@ func TestBUG663SamplerBuilderDoesNotAliasCallerBuffer(t *testing.T) {
 
 // TestBUG663ColdParamsLockedMatchesFlatMaterialisation: the live
 // coldParamsLocked (shard-streamed) must equal the old
-// allColdRecordsLocked()-then-BuildStratifiedSample shape, over a
+// flat-slice-then-BuildStratifiedSample shape, over a
 // population with empty shards, single-citizen shards, and full ones.
 func TestBUG663ColdParamsLockedMatchesFlatMaterialisation(t *testing.T) {
 	api, err := NewCitizensAPI(4242, "attack")
@@ -570,7 +570,7 @@ func TestBUG663ColdParamsLockedMatchesFlatMaterialisation(t *testing.T) {
 	api.mu.Lock()
 	api.month = month
 	got := api.coldParamsLocked("attack")
-	flat := api.allColdRecordsLocked()
+	flat := flatColdRecordsForTest(api)
 	api.mu.Unlock()
 
 	want := DeriveColdPassParams(oracleBuildStratifiedSample(flat, month, api.seed, 1))

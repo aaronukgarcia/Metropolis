@@ -333,7 +333,6 @@ func desiredEmployment(seed, id uint64, age int64, cur citizens.Employment) (cit
 // liveResidentIDs' doc comment for why a migrant/child was previously
 // invisible to this pass regardless of its Employment.State.
 func (st *simState) markEmploymentAndCount(month int64) (employed int, employedPublic int, err error) {
-	ids := st.liveResidentIDs()
 	// BUG-775 round REJECT (opus-round-bug775, F2 re-measurement): reading
 	// AND writing in a single shard-order pass (rather than a shard-order
 	// gather followed by a SEPARATE id-order apply loop) so a shard is
@@ -360,7 +359,7 @@ func (st *simState) markEmploymentAndCount(month int64) (employed int, employedP
 	// "which ids got mutated before the abort" byte-for-byte should that
 	// unreachable path ever somehow fire.
 	var firstErr error
-	st.citizens.GatherInShardOrder(ids, st.cid, func(id uint64, cit citizens.Citizen, ok bool) {
+	st.gatherLiveResidents(func(id uint64, cit citizens.Citizen, ok bool) {
 		if !ok || firstErr != nil {
 			return // departed, or a prior citizen already aborted this walk
 		}
@@ -401,7 +400,7 @@ func (st *simState) employedResidentCount() int {
 	// BUG-775: a pure, order-independent (commutative) integer count -- safe
 	// to fold directly inside the shard-order gather callback, no separate
 	// apply pass needed.
-	st.citizens.GatherInShardOrder(st.liveResidentIDs(), st.cid, func(id uint64, cit citizens.Citizen, ok bool) {
+	st.gatherLiveResidents(func(id uint64, cit citizens.Citizen, ok bool) {
 		if ok && cit.Employment.State == citizens.EmploymentEmployed {
 			n++
 		}
@@ -448,7 +447,6 @@ func (st *simState) monthlyRentForHouseholds(householdIDs []uint64) int64 {
 // paired once one exists without a household — this is what unblocks
 // BUG-535's "births never happen because Partner stays 0" finding.
 func (st *simState) formResidentHouseholds(month int64) error {
-	ids := st.liveResidentIDs()
 	// BUG-775 round REJECT (opus-round-bug775): gather (which citizens have
 	// Household==0) in shard order via GatherInShardOrder -- each shard
 	// loads at most once, peak residency stays within the paging budget --
@@ -457,8 +455,8 @@ func (st *simState) formResidentHouseholds(month int64) error {
 	// identical to the pre-BUG-775 id-ascending walk (pairing is the one
 	// order-DEPENDENT step here: unlike a simple count, changing which ids
 	// land adjacent in unpaired changes who actually ends up married).
-	unpaired := make([]uint64, 0, len(ids))
-	st.citizens.GatherInShardOrder(ids, st.cid, func(id uint64, cit citizens.Citizen, ok bool) {
+	var unpaired []uint64
+	st.gatherLiveResidents(func(id uint64, cit citizens.Citizen, ok bool) {
 		if !ok {
 			return // departed (death/emigration) — not a corruption, just skip
 		}
@@ -506,7 +504,6 @@ func (st *simState) formResidentHouseholds(month int64) error {
 // Public-sector residents are unaffected by this gate: their wage is paid
 // via PostWages (treasury), a separate leg this ticket does not attack.
 func (st *simState) distributeWagesToResidents(creditPrivateSector bool) error {
-	ids := st.liveResidentIDs()
 	// BUG-775 round REJECT (opus-round-bug775, F2 re-measurement): single
 	// shard-order gather+apply pass, exactly like markEmploymentAndCount's
 	// doc comment above -- this was the single largest contributor in the
@@ -519,7 +516,7 @@ func (st *simState) distributeWagesToResidents(creditPrivateSector bool) error {
 	// (no-error) path; see markEmploymentAndCount's doc comment for the one
 	// (structurally unreachable) error-ordering caveat this shares.
 	var firstErr error
-	st.citizens.GatherInShardOrder(ids, st.cid, func(id uint64, cit citizens.Citizen, ok bool) {
+	st.gatherLiveResidents(func(id uint64, cit citizens.Citizen, ok bool) {
 		if !ok || firstErr != nil {
 			return
 		}

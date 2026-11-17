@@ -116,8 +116,8 @@ func scaleName(n int) string {
 // It ALSO reports a second, narrower figure, steadyStateMsPerTick: the
 // average over ticks 6-25 of the month only, deliberately excluding tick 0
 // (registry.go's AdvanceDayTick recomputes monthParams via
-// coldParamsLocked -> allColdRecordsLocked, an O(N) full-population
-// materialisation — §3.5 of the proving plan, a SEPARATE, already-flagged
+// coldParamsLocked (formerly an O(N) full-population
+// materialisation, since streamed: BUG-1198) — §3.5 of the proving plan, a SEPARATE, already-flagged
 // finding, Track-B item 7, not this ticket's fix) and tick 29 (the
 // once-per-month death-queue realisation drain). Both of those ticks pay a
 // cost that is O(N) or O(D) regardless of BUG-666's fix, so folding them

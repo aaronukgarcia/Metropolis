@@ -112,7 +112,7 @@ func (st *simState) civilServiceWageBill() (finance.Money, error) {
 // shard-order pass, like employedResidentCount).
 func (st *simState) unemployedResidentCount() int64 {
 	var n int64
-	st.citizens.GatherInShardOrder(st.liveResidentIDs(), st.cid, func(_ uint64, cit citizens.Citizen, ok bool) {
+	st.gatherLiveResidents(func(_ uint64, cit citizens.Citizen, ok bool) {
 		if ok && cit.Employment.State == citizens.EmploymentUnemployed {
 			n++
 		}

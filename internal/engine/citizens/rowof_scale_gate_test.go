@@ -13,6 +13,20 @@ import (
 // HeapAlloc) are byte counts, not time. Nothing here detects a rowOf scan
 // regression: that is TestAttackFEAT830RowOfIsIndexOnly's job.
 
+// flatColdRecordsForTest materialises every cold record into one slice. It
+// exists ONLY as the allocation control / oracle input for the streaming
+// gates (BUG-1198: the production allColdRecordsLocked was removed).
+func flatColdRecordsForTest(c *CitizensAPI) []ColdRecord {
+	var out []ColdRecord
+	for shard := range c.cold {
+		s := c.shardAt(shard)
+		for i := 0; i < s.count(); i++ {
+			out = append(out, s.recordAt(i))
+		}
+	}
+	return out
+}
+
 // allocDelta returns TotalAlloc consumed by f.
 func allocDelta(f func()) uint64 {
 	var a, b runtime.MemStats
@@ -38,10 +52,10 @@ func TestRowOfScale_AC5_MonthlyParamsDoNotMaterialisePopulation(t *testing.T) {
 	api.mu.Lock()
 	got := allocDelta(func() { _ = api.coldParamsLocked("ac5") })
 	// Positive control: the full materialisation this AC forbids.
-	ctl := allocDelta(func() { _ = api.allColdRecordsLocked() })
+	ctl := allocDelta(func() { _ = flatColdRecordsForTest(api) })
 	api.mu.Unlock()
 	ratio := float64(got) / float64(full)
-	t.Logf("AC-5 N=%d sizeof(ColdRecord)=%d full=%d B: coldParamsLocked allocated %d B (%.2f%% of full); control allColdRecordsLocked allocated %d B (%.1f%% of full)",
+	t.Logf("AC-5 N=%d sizeof(ColdRecord)=%d full=%d B: coldParamsLocked allocated %d B (%.2f%% of full); control flatColdRecordsForTest allocated %d B (%.1f%% of full)",
 		n, unsafe.Sizeof(ColdRecord{}), full, got, 100*ratio, ctl, 100*float64(ctl)/float64(full))
 	if float64(ctl) < 0.9*float64(full) {
 		t.Fatalf("control invalid: full materialisation allocated only %d B of expected >= %d", ctl, full)

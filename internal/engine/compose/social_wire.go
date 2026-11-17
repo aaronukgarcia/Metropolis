@@ -258,7 +258,7 @@ func (h *socialHook) RunShard(shard int) ([]core.Effect, error) {
 	}
 	eff := socialEffect{month: clock.Month()}
 	if h.st.citizens != nil {
-		h.st.citizens.GatherInShardOrder(h.st.liveResidentIDs(), h.st.cid, func(_ uint64, cit citizens.Citizen, ok bool) {
+		h.st.gatherLiveResidents(func(_ uint64, cit citizens.Citizen, ok bool) {
 			if !ok {
 				return
 			}

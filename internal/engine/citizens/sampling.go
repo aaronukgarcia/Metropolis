@@ -93,8 +93,8 @@ func BuildStratifiedSample(records []ColdRecord, month int64, seed uint64, minPe
 // stratifiedSampleBuilder is BuildStratifiedSample's incremental core
 // (BUG-663 §3.5): grouping records into byStratum can be fed a shard at a
 // time instead of requiring the caller to first materialise every citizen
-// into one giant []ColdRecord slice (registry.go's allColdRecordsLocked,
-// which the 100M proving plan measured as a >12GB transient allocation,
+// into one giant []ColdRecord slice (the removed
+// allColdRecordsLocked, which the 100M proving plan measured as a >12GB transient allocation,
 // once per month, at 100M). The grouping itself is ORDER-INDEPENDENT (a
 // map keyed by stratum, populated by whatever order addRecords is called
 // in) and the final result is fully re-sorted in build() exactly as

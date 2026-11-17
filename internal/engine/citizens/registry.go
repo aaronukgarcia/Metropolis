@@ -557,25 +557,47 @@ func (c *CitizensAPI) PinForBatch(ids []uint64) (unpin func()) {
 // for every id in ITS OWN original order via a plain CitizenAt loop -- the
 // exact pre-BUG-775, zero-extra-allocation behaviour.
 func (c *CitizensAPI) GatherInShardOrder(ids []uint64, correlationID string, fn func(id uint64, cit Citizen, ok bool)) {
+	c.GatherInShardOrderSeq(func(yield func(id uint64) bool) {
+		for _, id := range ids {
+			if !yield(id) {
+				return
+			}
+		}
+	}, correlationID, fn)
+}
+
+// GatherInShardOrderSeq is GatherInShardOrder over an id SOURCE instead of
+// a materialised []uint64 (BUG-1198): seq calls yield once per id, in the
+// order the caller wants ids treated as "input order", and stops early when
+// yield returns false. Visit order is byte-identical to GatherInShardOrder
+// over the equivalent slice: with paging disabled the ids are visited in
+// seq's own order with ZERO extra allocation (no id slice is ever built);
+// with paging enabled they are bucketed by shard (one []uint64 per shard,
+// the unavoidable shard-grouping cost -- det.ShardForEntity is a hash, so a
+// shard's ids cannot be enumerated arithmetically) and visited shard
+// ascending, ids within a shard in seq order. seq is called exactly once.
+func (c *CitizensAPI) GatherInShardOrderSeq(seq func(yield func(id uint64) bool), correlationID string, fn func(id uint64, cit Citizen, ok bool)) {
 	if err := c.checkNotCopied(correlationID, "GatherInShardOrder"); err != nil {
 		return
 	}
-	if c.pages == nil || len(ids) == 0 {
-		for _, id := range ids {
+	if c.pages == nil {
+		seq(func(id uint64) bool {
 			cit, ok := c.CitizenAt(id, correlationID)
 			fn(id, cit, ok)
-		}
+			return true
+		})
 		return
 	}
-	byShard := make(map[int][]uint64, min(len(ids), numColdShards))
-	shards := make([]int, 0, min(len(ids), numColdShards))
-	for _, id := range ids {
+	byShard := make(map[int][]uint64, numColdShards)
+	shards := make([]int, 0, numColdShards)
+	seq(func(id uint64) bool {
 		s := det.ShardForEntity(id)
 		if _, ok := byShard[s]; !ok {
 			shards = append(shards, s)
 		}
 		byShard[s] = append(byShard[s], id)
-	}
+		return true
+	})
 	sort.Ints(shards)
 
 	budget := c.maxResidentShards
@@ -1126,15 +1148,15 @@ func (c *CitizensAPI) FertilityChildrenBorn(correlationID string) uint64 {
 
 // BuildSample builds the A7 stratified rotating sample from the full cold
 // population (the single source of truth), independent of the viewport —
-// this is what makes cold-pass parameter estimates camera-invariant.
+// this is what makes cold-pass parameter estimates camera-invariant. It
+// streams shard by shard (BUG-1198): no whole-population []ColdRecord.
 func (c *CitizensAPI) BuildSample(correlationID string) *StratifiedSample {
 	if err := c.checkNotCopied(correlationID, "BuildSample"); err != nil {
 		return &StratifiedSample{counts: map[Stratum]int{}}
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	records := c.allColdRecordsLocked()
-	return BuildStratifiedSample(records, c.month, c.seed, 1)
+	return c.streamSampleLocked()
 }
 
 // ColdParams derives the cold-pass parameters from the sample (AC-8/AC-9).
@@ -1725,15 +1747,25 @@ func (c *CitizensAPI) hotIDSetLocked() map[uint64]bool {
 	return set
 }
 
-func (c *CitizensAPI) allColdRecordsLocked() []ColdRecord {
-	var out []ColdRecord
+// streamSampleLocked builds the stratified sample by streaming the cold
+// population ONE SHARD AT A TIME through stratifiedSampleBuilder, reusing
+// one scratch buffer (BUG-663/BUG-1198). Caller holds c.mu.
+func (c *CitizensAPI) streamSampleLocked() *StratifiedSample {
+	b := newStratifiedSampleBuilder(c.month, c.seed, 1)
+	var buf []ColdRecord
 	for shard := range c.cold {
 		s := c.shardAt(shard)
-		for i := 0; i < s.count(); i++ {
-			out = append(out, s.recordAt(i))
+		n := s.count()
+		if cap(buf) < n {
+			buf = make([]ColdRecord, n)
 		}
+		buf = buf[:n]
+		for i := 0; i < n; i++ {
+			buf[i] = s.recordAt(i)
+		}
+		b.addRecords(buf)
 	}
-	return out
+	return b.build()
 }
 
 func (c *CitizensAPI) coldRecord(id uint64) (ColdRecord, bool) {
@@ -1926,7 +1958,7 @@ func refreshDerivedLeisure(cit *Citizen) {
 // coldParamsLocked measures this month's ColdPassParams from the A7
 // stratified sample WITHOUT first materialising the whole population into
 // one []ColdRecord slice (BUG-663 §3.5 of the 100M proving plan: the old
-// allColdRecordsLocked()-then-BuildStratifiedSample shape allocated a
+// flat-slice-then-BuildStratifiedSample shape allocated a
 // >12GB transient slice, once per month, at 100M). Instead it streams the
 // population through stratifiedSampleBuilder ONE SHARD AT A TIME, reusing
 // a single per-shard scratch buffer across all 256 shards — peak transient
@@ -1935,21 +1967,7 @@ func refreshDerivedLeisure(cit *Citizen) {
 // order-independent and build() fully re-sorts, exactly as
 // BuildStratifiedSample always has — see that type's doc comment).
 func (c *CitizensAPI) coldParamsLocked(correlationID string) ColdPassParams {
-	b := newStratifiedSampleBuilder(c.month, c.seed, 1)
-	var buf []ColdRecord
-	for shard := range c.cold {
-		s := c.shardAt(shard)
-		n := s.count()
-		if cap(buf) < n {
-			buf = make([]ColdRecord, n)
-		}
-		buf = buf[:n]
-		for i := 0; i < n; i++ {
-			buf[i] = s.recordAt(i)
-		}
-		b.addRecords(buf)
-	}
-	params := DeriveColdPassParams(b.build())
+	params := DeriveColdPassParams(c.streamSampleLocked())
 
 	// MOD-034 seam: fold the injected wellbeing mortality modifier in
 	// multiplicatively with the sample-derived age multiplier, consulted

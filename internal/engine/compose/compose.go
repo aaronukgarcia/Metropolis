@@ -4155,6 +4155,53 @@ func (st *simState) liveResidentIDs() []uint64 {
 	return ids
 }
 
+// eachLiveResidentID is liveResidentIDs() as a visitor (BUG-1198): it yields
+// EXACTLY the same ids in EXACTLY the same order (base [1,nextCitizenID),
+// the static seed range, admitted migrants [MigrantIDBase+2..+migrants],
+// fertility children [FertilityChildIDBase+0..children-1]) but never
+// builds or caches the full-population []uint64 (8 B/citizen, ~800 MB at
+// 100M, plus the cache copy). yield returning false stops the walk. Feed
+// it to citizens.GatherInShardOrderSeq. TestEachLiveResidentIDMatchesSlice
+// pins equality with liveResidentIDs().
+func (st *simState) eachLiveResidentID(yield func(id uint64) bool) {
+	// Snapshot every live counter up front, exactly as liveResidentIDs()
+	// read them once: a callback that mutates state mid-walk must not
+	// change which ids are enumerated.
+	nextID := st.nextCitizenID
+	migrants := st.attract.MigrantsAdmitted()
+	children := st.citizens.FertilityChildrenBorn(st.cid)
+	for id := uint64(1); id < nextID; id++ {
+		if !yield(id) {
+			return
+		}
+	}
+	if st.seedResidentIDCount > 0 {
+		for i := uint64(1); i <= uint64(st.seedResidentIDCount); i++ {
+			if !yield(st.seedResidentIDBase + i) {
+				return
+			}
+		}
+	}
+	if migrants > 0 {
+		for i := uint64(2); i <= migrants; i++ {
+			if !yield(attract.MigrantIDBase + i) {
+				return
+			}
+		}
+	}
+	for i := uint64(0); i < children; i++ {
+		if !yield(citizens.FertilityChildIDBase + i) {
+			return
+		}
+	}
+}
+
+// gatherLiveResidents walks the live-resident set through
+// citizens.GatherInShardOrderSeq with no id slice (BUG-1198).
+func (st *simState) gatherLiveResidents(fn func(id uint64, cit citizens.Citizen, ok bool)) {
+	st.citizens.GatherInShardOrderSeq(st.eachLiveResidentID, st.cid, fn)
+}
+
 // currentMonth returns the engine clock's current simulation month.
 func (st *simState) currentMonth() (int64, error) {
 	clock, err := st.e.Clock()
