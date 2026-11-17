@@ -90,7 +90,7 @@ describe('ProtocolClient handshake (AC per Aaron DD: refuse, never degrade)', ()
     assert.equal(events.refusals.length, 0);
   });
 
-  test('mismatched version handshake is refused, not degraded — connection is closed', () => {
+  test('a server refusal frame (e.g. MET-P020 below-floor) surfaces as a refused handshake, not degraded — connection is closed', () => {
     const { socket, events } = makeClient();
     socket.emit('open', {});
     socket.serverSends({

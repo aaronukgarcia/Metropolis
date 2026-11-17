@@ -183,7 +183,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	knockCfg := readPortKnockConfig()
 	mux := http.NewServeMux()
 	mux.Handle("/ws", wrapPortKnock(knockCfg, wsHandler))
-	mux.Handle("/health", newHealthHandler("single", healthReg))
+	mux.Handle("/health", newHealthHandler("single", healthReg).withBuildMismatch(wsHandler.BuildMismatchHandshakes))
 	httpSrv := &http.Server{Addr: *addr, Handler: mux}
 
 	serveErr := make(chan error, 1)
@@ -286,7 +286,7 @@ func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snap
 	knockCfg := readPortKnockConfig()
 	mux := http.NewServeMux()
 	mux.Handle("/ws", wrapPortKnock(knockCfg, wsHandler))
-	mux.Handle("/health", newHealthHandler("hosted", host.HealthRegistry()))
+	mux.Handle("/health", newHealthHandler("hosted", host.HealthRegistry()).withBuildMismatch(wsHandler.BuildMismatchHandshakes))
 	httpSrv := &http.Server{Addr: addr, Handler: mux}
 
 	serveErr := make(chan error, 1)

@@ -35,8 +35,9 @@
 //   --client-version <v> the clientVersion the handshake sends. Defaults
 //                        to the /health response's own `version` field
 //                        (fetched first) -- matching the running server's
-//                        build exactly, since wsserver's handshake
-//                        refuses ANY mismatch (MET-P010, server.go).
+//                        build exactly. wsserver no longer refuses a build
+//                        mismatch (BUG-1097, Q100145: MET-P010 retired); it logs
+//                        a warn-level MET-P050 audit entry instead.
 //   --rounds <n>         number of minimal round-trips for step 3.
 //                        Default 1000 (design doc §6.5 step 3).
 //   --ticks <n>          size of the single batch for step 4. Default 360
@@ -328,7 +329,7 @@ async function main() {
     });
   } catch (err) {
     console.error(`FAIL: handshake refused: ${err.message} (code=${err.code || 'n/a'})`);
-    console.error('If code=MET-P010, --client-version does not match the server build -- omit --client-version to auto-detect from /health, or pass it explicitly.');
+    console.error('A build-string mismatch is no longer a refusal (MET-P010 retired, BUG-1097); a refusal here is a protocol-version-window or other handshake error -- check the code.');
     process.exit(1);
   }
   const handshakeMs = performance.now() - tHandshakeStart;

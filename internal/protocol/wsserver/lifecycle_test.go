@@ -152,7 +152,8 @@ func TestLifecycle_AbruptDropFiresClose(t *testing.T) {
 }
 
 // TestLifecycle_RefusedHandshakeNoHooks (AC-1): a handshake that never binds (a
-// version mismatch, refused before any transport bind) fires NEITHER hook — the
+// malformed handshake missing clientVersion, refused before any transport bind;
+// BUG-1097 retired the build-string mismatch refusal this test used to rely on) fires NEITHER hook — the
 // close hook is armed only after onOpen, so an unbound connection is inert.
 func TestLifecycle_RefusedHandshakeNoHooks(t *testing.T) {
 	rec := newLifecycleRec(8)
@@ -161,8 +162,8 @@ func TestLifecycle_RefusedHandshakeNoHooks(t *testing.T) {
 
 	conn := dial(t, url)
 	defer func() { _ = conn.Close() }()
-	if resp := sendHandshake(t, conn, "v9.9.9"); resp.Error == nil {
-		t.Fatal("expected a version-mismatch refusal, got acceptance")
+	if resp := sendHandshake(t, conn, ""); resp.Error == nil {
+		t.Fatal("expected a malformed-handshake refusal, got acceptance")
 	}
 
 	// Neither hook may fire for a refused (never-bound) connection.

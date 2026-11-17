@@ -20,15 +20,12 @@
 // connection that never sends one within HandshakeTimeout). Two
 // INDEPENDENT checks then run, in order:
 //
-//  1. Build-string identity (engineVersion, GR#2 git-describe): this check
-//     is UNCHANGED since the package's original DD and remains a strict
-//     equality refusal (MET-P010, ErrHandshakeVersionMismatch) — it exists
-//     to catch a same-commit-expected dev loopback (metroserve + webconsole
-//     built from the same tree) drifting apart, which the wire-version
-//     window below deliberately does NOT cover (Aaron ruling 5: the build
-//     string stays a separate, informational-turned-gating field for this
-//     one purpose; normalizeVersion strips only the volatile "-dirty"
-//     suffix, BAR-4).
+//  1. Build-string comparison (engineVersion, GR#2 git-describe): RETIRED as
+//     a gate by Aaron ruling Q100145 (BUG-1097). A differing build string
+//     never refuses; both builds are still exchanged and a differing pair
+//     is audited with MET-P050 (warn) and counted for /health. MET-P010 is
+//     reserved and no longer emitted. normalizeVersion strips only the
+//     volatile "-dirty" suffix so a same-commit pair is not even audited.
 //  2. Wire-version negotiation (protocol.WireVersion, wireversion.go): this
 //     is the part Aaron's 2026-08-31 superseding DD (docs/planning/
 //     acceptance/feat-1972079936-phase0-protocol-versioning.md) replaced
@@ -203,6 +200,14 @@ type handshakeResult struct {
 	// see handshakeParams.Capabilities's doc comment for why this is
 	// exercised today only via the empty-set case.
 	Capabilities []string `json:"capabilities,omitempty"`
+
+	// BuildMismatchCorrelationID (BUG-1097 / Q100145, AC-3) is present ONLY
+	// when the client build string differed from the engine build: it is the
+	// correlation id of the MET-P050 audit record the server wrote for this
+	// handshake, so the two sides can be joined. Absent (omitted) on a
+	// matching build, keeping the matching-build response byte-identical to
+	// before this change (AC-10).
+	BuildMismatchCorrelationID string `json:"buildMismatchCorrelationId,omitempty"`
 }
 
 // TransportResolver maps a connection's handshake-declared (tenantID,
@@ -264,6 +269,21 @@ type Server struct {
 	// these to CityHost.Acquire/Release for idle-city refcounting.
 	onConnOpen  func(tenantID, cityID string)
 	onConnClose func(tenantID, cityID string)
+	// buildMismatchCount counts accepted handshakes whose normalised
+	// client build string differed from engineVersion (BUG-1097 / Q100145,
+	// AC-5). A pointer, allocated in New, so Server stays freely passable
+	// without copying an atomic. Reported on /health; monotonic since boot.
+	buildMismatchCount *atomic.Uint64
+}
+
+// BuildMismatchHandshakes returns how many accepted handshakes since this
+// Server was constructed carried a client build string different from the
+// engine build (MET-P050). Monotonic; zero at boot (BUG-1097 AC-5).
+func (s *Server) BuildMismatchHandshakes() uint64 {
+	if s.buildMismatchCount == nil {
+		return 0
+	}
+	return s.buildMismatchCount.Load()
 }
 
 // Option configures a Server at construction time (New's variadic
@@ -355,7 +375,8 @@ func New(transport protocol.Transport, engineVersion string, handshakeTimeout ti
 			// open per the acceptance doc).
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
-		newCorrelationID: func() string { return string(errs.NewCorrelationID()) },
+		newCorrelationID:   func() string { return string(errs.NewCorrelationID()) },
+		buildMismatchCount: new(atomic.Uint64),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -536,14 +557,11 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		return protocol.WireVersion{}, nil, nil, "", "", false
 	}
 
-	if normalizeVersion(params.ClientVersion) != normalizeVersion(s.engineVersion) {
-		e := errs.New(protocol.ErrHandshakeVersionMismatch, s.newCorrelationID(), map[string]any{
-			"clientVersion": params.ClientVersion,
-			"serverVersion": s.engineVersion,
-		})
-		s.writeRefusal(conn, msg.ID, e)
-		return protocol.WireVersion{}, nil, nil, "", "", false
-	}
+	// BUG-1097 / Q100145: the build-string equality REFUSAL (MET-P010) is
+	// retired. A differing build string never blocks; the protocol semver
+	// window below is the compatibility contract. The difference is audited
+	// (MET-P050, warn) once the handshake has actually been accepted.
+	buildMismatch := normalizeVersion(params.ClientVersion) != normalizeVersion(s.engineVersion)
 
 	// FEAT-1972079936 Phase 0 inc3 (AC-4, the below-floor half): a client
 	// whose declared wire-version CEILING is older than the server's
@@ -612,12 +630,18 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		connTransport = resolved
 	}
 
-	resultBytes, _ := json.Marshal(handshakeResult{
+	result := handshakeResult{
 		Accepted:          true,
 		ServerVersion:     s.engineVersion,
 		NegotiatedVersion: negotiated,
 		Capabilities:      negotiatedCaps,
-	})
+	}
+	mismatchCorrelationID := ""
+	if buildMismatch {
+		mismatchCorrelationID = s.newCorrelationID()
+		result.BuildMismatchCorrelationID = mismatchCorrelationID
+	}
+	resultBytes, _ := json.Marshal(result)
 	reply := rpcMessage{JSONRPC: rpcVersion, ID: msg.ID, Result: resultBytes}
 	if err := conn.WriteJSON(reply); err != nil {
 		// Bound the transport but never told the client: treat as an unbound
@@ -625,7 +649,32 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		// keeps onOpen/onClose exactly-once-paired (AC-1).
 		return protocol.WireVersion{}, nil, nil, "", "", false
 	}
+	if buildMismatch {
+		s.auditBuildMismatch(conn, mismatchCorrelationID, params.ClientVersion, negotiated, tenantID, cityID)
+	}
 	return negotiated, negotiatedCaps, connTransport, tenantID, cityID, true
+}
+
+// auditBuildMismatch writes the ONE MET-P050 warn-level registry record for
+// an accepted handshake whose build string differed (BUG-1097 AC-3) and
+// bumps the /health counter (AC-5). Never fatal, never blocks.
+func (s *Server) auditBuildMismatch(conn *websocket.Conn, correlationID, clientVersion string, negotiated protocol.WireVersion, tenantID, cityID string) {
+	remote := ""
+	if conn != nil && conn.RemoteAddr() != nil {
+		remote = conn.RemoteAddr().String()
+	}
+	_ = errs.New(protocol.ErrHandshakeBuildMismatch, correlationID, map[string]any{
+		"clientVersion":     clientVersion,
+		"serverVersion":     s.engineVersion,
+		"negotiatedVersion": negotiated.String(),
+		"remoteAddr":        remote,
+		"tenantId":          tenantID,
+		"cityId":            cityID,
+		"at":                time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if s.buildMismatchCount != nil {
+		s.buildMismatchCount.Add(1)
+	}
 }
 
 // writeRefusal sends a JSON-RPC error response carrying e's registry code

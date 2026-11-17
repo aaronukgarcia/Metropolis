@@ -216,9 +216,11 @@ one point. **Verify the wiring, not just each half in isolation.**
   the concrete exposure to check before treating this as fully private —
   proportionate for Aaron-only access (Q100025/Q100144) but not once a
   second person has the link (Q100144's own trigger for real auth).
-- **The build-string handshake gate (`MET-P010`) is UNCHANGED by this
-  increment.** A deploy of ANY new commit locks out every open browser tab
-  running the old build — Q100145 is still open. Warn Aaron before the
+- **The build-string handshake gate is RELAXED to a warning (Q100145,
+  BUG-1097); `MET-P010` is retired.** A deploy of a new commit no longer locks
+  out open browser tabs on the old build: the server logs a warn-level
+  `MET-P050` audit entry per mismatched client and the LIVE ENGINE badge shows
+  an amber warning. Only the protocol semver window refuses. Warn Aaron before the
   first real deploy if he has a tab open against a local dev server built
   from a different commit than what's being deployed (they are different
   processes/ports so this is only a concern if he later points a local tab

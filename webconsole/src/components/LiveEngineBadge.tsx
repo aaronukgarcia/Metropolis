@@ -17,6 +17,7 @@ import {
 } from '../sim/protocolClient.ts';
 import { decodeFinanceBalanceSheetPatch, FINANCE_VIEW_NAME, type Delta } from '../sim/wire.ts';
 import { versionRaw } from '../sim/version.ts';
+import { setLiveEngineBuild, resetLiveEngineBuild } from '../sim/liveEngineBuild.ts';
 import { isLiveEngineEnabled, resolveLiveEngineUrl } from '../sim/liveEngineFlag.ts';
 import { financeStatusTracker } from '../sim/financeStatusTracker.ts';
 
@@ -55,6 +56,9 @@ export function LiveEngineBadge() {
   // rejection is surfaced via commandNote below without touching this).
   const [speedIndex, setSpeedIndex] = useState(0);
   const [commandNote, setCommandNote] = useState<string | null>(null);
+  // BUG-1097: the engine build from the accepted handshake + whether it
+  // differs from this client's build (a warning state, never a block).
+  const [buildPair, setBuildPair] = useState<{ engine: string; mismatch: boolean } | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -62,7 +66,12 @@ export function LiveEngineBadge() {
       url: resolveLiveEngineUrl(),
       clientVersion: versionRaw,
       onStateChange: setConnState,
-      onLive: () => {
+      onLive: (serverVersion) => {
+        // BUG-1097 / Q100145: both builds are exchanged; a difference is a
+        // warning (badge + debug files), never a refusal.
+        const mismatch = client.isBuildMismatch();
+        setLiveEngineBuild({ engineBuild: serverVersion, clientBuild: versionRaw, mismatch });
+        setBuildPair({ engine: serverVersion, mismatch });
         client.subscribe(FINANCE_VIEW_NAME);
       },
       onRefused: (code, msg) => setRefusal({ code, msg }),
@@ -103,6 +112,7 @@ export function LiveEngineBadge() {
     return () => {
       client.close();
       financeStatusTracker.reset();
+      resetLiveEngineBuild();
     };
   }, [enabled]);
 
@@ -142,11 +152,20 @@ export function LiveEngineBadge() {
           ? 'LIVE ENGINE unreachable'
           : `LIVE ENGINE ${connState}`;
 
+  const buildWarn = connState === 'live' && buildPair?.mismatch === true;
+  const title = refusal
+    ? refusal.msg
+    : buildWarn
+      ? `engine ${buildPair?.engine} / client ${versionRaw}`
+      : 'Dev indicator: live Go engine feed (FEAT-1972079852 inc1)';
+
   return (
     <span
-      className="live-engine-badge mono"
-      title={refusal ? refusal.msg : 'Dev indicator: live Go engine feed (FEAT-1972079852 inc1)'}
+      className={buildWarn ? 'live-engine-badge mono live-engine-badge--build-mismatch' : 'live-engine-badge mono'}
+      title={title}
       data-conn-state={connState}
+      data-build-mismatch={buildWarn ? 'true' : undefined}
+      style={buildWarn ? { color: '#b45309', borderBottom: '2px solid #f59e0b' } : undefined}
     >
       {label}
       {connState === 'live' && (

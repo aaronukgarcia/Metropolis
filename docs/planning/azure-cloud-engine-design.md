@@ -90,7 +90,9 @@ It serves **exactly one route: `/ws`** — `mux.Handle("/ws", wsserver.New(trans
 
 *(Noted for the edge-lint backlog: the Phase 1 architect decision intended `engine.core`→`int.persist`, `engine.checkpoint`→`int.persist` and `cmd.metroserve`→`int.persist` to be registered; only `feat.compositionroot` appears. A GR#25 completeness gap, not a blocker for this design.)*
 
-### 1.3 ⚠ The handshake enforces **build-string equality**, not just protocol semver
+### 1.3 ⚠ The handshake enforced **build-string equality**, not just protocol semver (RELAXED 2026-09-11, Q100145, BUG-1097)
+
+> **Status:** the build-string gate is now relaxed to a warning. A build-string difference no longer refuses the connection; `MET-P010` is retired. The server records a warn-level `MET-P050` audit entry per mismatched client, the LIVE ENGINE badge shows a warning, and both builds are stamped in debug.json and converge reports. Only the protocol semver window refuses. The text below is the original problem statement.
 
 Phase 0 shipped semver negotiation, a 3-major version window and fine-grained capability flags — all correct. But `wsserver` **also** compares the client's engine build string to the server's via `normalizeVersion()`, and **refuses the connection with `MET-P010` on any mismatch.**
 

@@ -67,6 +67,12 @@ const (
 	// NOT attempt to serve a possibly-incompatible session.
 	ErrHandshakeVersionMismatch = "MET-P010"
 
+	// ErrHandshakeBuildMismatch (MET-P050, warn, BUG-1097 / Q100145): an
+	// ACCEPTED handshake whose client build string differs from the engine
+	// build. Audit only -- never a refusal. MET-P010 above is retired and no
+	// longer emitted.
+	ErrHandshakeBuildMismatch = "MET-P050"
+
 	// ErrHandshakeInvalid: the first frame received on a new connection
 	// was not a well-formed handshake message (bad JSON, wrong Kind,
 	// missing ClientVersion). Distinct from a version mismatch: this is a

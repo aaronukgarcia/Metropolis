@@ -251,6 +251,10 @@ type healthResponse struct {
 	// city, which may be zero right after boot before the pre-created
 	// default city finishes building.
 	Cities []healthCityInfo `json:"cities"`
+	// BuildMismatchHandshakes (BUG-1097 / Q100145, AC-5): monotonic count
+	// since process start of accepted handshakes whose client build string
+	// differed from this engine build (MET-P050). Always present; zero at boot.
+	BuildMismatchHandshakes uint64 `json:"buildMismatchHandshakes"`
 }
 
 // healthHandler serves GET /health. It never blocks on the engine or the
@@ -264,6 +268,15 @@ type healthHandler struct {
 	// inject a buffer or a failing writer), defaulting to os.Stderr in
 	// production (newHealthHandler).
 	stderr io.Writer
+	// buildMismatch reports the wsserver mismatch counter; nil reads as 0.
+	// Installed via withBuildMismatch so newHealthHandler keeps its signature.
+	buildMismatch func() uint64
+}
+
+// withBuildMismatch installs the BUG-1097 build-mismatch counter source.
+func (h *healthHandler) withBuildMismatch(f func() uint64) *healthHandler {
+	h.buildMismatch = f
+	return h
 }
 
 func newHealthHandler(mode string, registry *healthRegistry) *healthHandler {
@@ -282,6 +295,9 @@ func (h *healthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Mode:      h.mode,
 		CityCount: len(cities),
 		Cities:    cities,
+	}
+	if h.buildMismatch != nil {
+		resp.BuildMismatchHandshakes = h.buildMismatch()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

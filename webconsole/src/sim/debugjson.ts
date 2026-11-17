@@ -121,6 +121,15 @@ import {
 } from './fiscal.ts';
 import { getPerformanceSnapshot } from './perfhud.ts';
 import { getLiveVersion } from './liveVersionRef.ts';
+import { getLiveEngineBuild } from './liveEngineBuild.ts';
+
+/** BUG-1097: the three live-engine build keys, or NOTHING when no handshake
+ * has completed (so the keys are absent, not null/false). */
+function liveEngineBuildMeta(): { engineBuild?: string; clientBuild?: string; engineBuildMismatch?: boolean } {
+  const b = getLiveEngineBuild();
+  if (!b) return {};
+  return { engineBuild: b.engineBuild, clientBuild: b.clientBuild, engineBuildMismatch: b.mismatch };
+}
 
 /** Bumped when the serialized shape changes incompatibly. */
 export const DEBUG_JSON_FORMAT = 'metropolis-debug/1';
@@ -261,6 +270,13 @@ export interface DebugJson {
     tick: number;
     speed: SimState['speed'];
     tickMs: number;
+    /** BUG-1097 / Q100145: present ONLY when a live-engine handshake has
+     * completed in this session (absent otherwise, never null/false): the
+     * engine's build string, this client's build string, and whether they
+     * differ. A mismatch is a warning, never a block. */
+    engineBuild?: string;
+    clientBuild?: string;
+    engineBuildMismatch?: boolean;
   };
   sim: {
     tick: number;
@@ -1013,6 +1029,7 @@ export function buildDebugJson(
       tick: s.tick,
       speed: s.speed,
       tickMs: SPEED_MS[s.speed],
+      ...liveEngineBuildMeta(),
     },
     sim: {
       tick: s.tick,

@@ -46,4 +46,9 @@ const (
 	// deliberately-uncovered op (place_utility_ts_only) is recorded as a
 	// SkippedOp instead, not routed through this code.
 	codeActionOpFailed = "MET-H505"
+
+	// codeBuildStampMissing: CompareStamped was given an empty reference or
+	// candidate build string (BUG-1097 AC-8) -- a validation error, never a
+	// silently unstamped report.
+	codeBuildStampMissing = "MET-H506"
 )

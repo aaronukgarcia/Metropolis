@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
 // FieldDiff names one divergence Compare found: a field, the tick it
@@ -37,6 +40,43 @@ type Report struct {
 	Domain string
 	Pass   bool
 	Diffs  []FieldDiff
+	// ReferenceBuild / CandidateBuild (BUG-1097 AC-8) stamp which builds were
+	// compared (reference = Go engine, candidate = browser). Set only by
+	// CompareStamped; plain Compare leaves them empty.
+	ReferenceBuild string
+	CandidateBuild string
+}
+
+// CompareStamped is Compare plus build stamps: it refuses (validation
+// error, MET-H506) when either build string is empty, then returns the
+// Compare report carrying both stamps. Text() prints them.
+func CompareStamped(domain, referenceBuild, candidateBuild string, ref, candidate Trajectory, contract Contract) (*Report, error) {
+	if referenceBuild == "" || candidateBuild == "" {
+		return nil, errs.New(codeBuildStampMissing, errs.NewCorrelationID(), map[string]any{
+			"domain":         domain,
+			"referenceBuild": referenceBuild,
+			"candidateBuild": candidateBuild,
+		})
+	}
+	rep := Compare(domain, ref, candidate, contract)
+	rep.ReferenceBuild = referenceBuild
+	rep.CandidateBuild = candidateBuild
+	return rep, nil
+}
+
+// Text renders the report for humans: domain, both build stamps (when
+// set), the verdict and every diff line, in Diffs order (deterministic).
+func (r *Report) Text() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "domain=%s pass=%t\n", r.Domain, r.Pass)
+	if r.ReferenceBuild != "" || r.CandidateBuild != "" {
+		fmt.Fprintf(&b, "referenceBuild=%s\ncandidateBuild=%s\n", r.ReferenceBuild, r.CandidateBuild)
+	}
+	for _, d := range r.Diffs {
+		b.WriteString(d.String())
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func (r *Report) addDiff(d FieldDiff) {

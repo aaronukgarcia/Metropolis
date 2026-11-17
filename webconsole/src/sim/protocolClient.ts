@@ -38,6 +38,7 @@ import {
   CURRENT_WIRE_VERSION,
   FINANCE_SCHEMA_VERSION,
   PROTOCOL_VERSION,
+  normalizeProtocolVersion,
   type Command,
   type CommandResult,
   type CorrelationID,
@@ -200,6 +201,10 @@ export class ProtocolClient {
   /** Set once an accepted handshake response arrives (FEAT-1972079936
    * Phase 0 inc1). null until then. */
   private negotiatedVersion: WireVersion | null = null;
+  /** BUG-1097 / Q100145: the engine build string from the accepted handshake
+   * response, or null before one has completed. Informational only. */
+  private serverVersion: string | null = null;
+  private buildMismatch = false;
   /** Negotiated (intersected) capability set from the accepted handshake
    * response — see getCapabilities/hasCapability below. Empty (never
    * null) so callers never need a null-check to iterate/query it. */
@@ -237,6 +242,19 @@ export class ProtocolClient {
    * AC-1/AC-2). */
   getNegotiatedVersion(): WireVersion | null {
     return this.negotiatedVersion;
+  }
+
+  /** The engine build string the last accepted handshake reported, or null
+   * before one has completed (BUG-1097). */
+  getServerVersion(): string | null {
+    return this.serverVersion;
+  }
+
+  /** True when the engine build differs from this client build (compared
+   * after stripping the volatile -dirty suffix, mirroring the server). A
+   * WARNING signal only: the handshake never refuses on it (Q100145). */
+  isBuildMismatch(): boolean {
+    return this.buildMismatch;
   }
 
   /** The negotiated (intersected, AC-5) capability set — empty before a
@@ -602,6 +620,9 @@ export class ProtocolClient {
     // server still behaves exactly as it did before this change.
     this.negotiatedVersion = result.negotiatedVersion ?? CURRENT_WIRE_VERSION;
     this.capabilities = result.capabilities ?? [];
+    this.serverVersion = result.serverVersion;
+    this.buildMismatch =
+      normalizeProtocolVersion(result.serverVersion) !== normalizeProtocolVersion(this.opts.clientVersion);
     this.setState('live');
     this.opts.onLive?.(result.serverVersion, this.negotiatedVersion, this.capabilities);
   }

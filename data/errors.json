@@ -167,7 +167,8 @@
       "G5500-G5599": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
       "G5490-G5499": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
       "V970-V979": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "G5600-G5609": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")"
+      "G5600-G5609": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "P050-P059": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5336,8 +5337,8 @@
     "MET-P010": {
       "severity": "error",
       "module": "protocol",
-      "message": "WebSocket handshake rejected: client protocol/build version {clientVersion} does not match engine version {serverVersion}",
-      "remedy": "Rebuild/redeploy the webconsole against the same engine build, or vice versa. The server refuses the connection rather than degrading to a possibly-incompatible session (Aaron DD, 2026-08-31: version mismatch = refuse to connect)."
+      "message": "Reserved - build-string refusal retired by Q100145 (BUG-1097); no longer emitted (client {clientVersion}, engine {serverVersion})",
+      "remedy": "Retired: protocol-compatible builds now connect and MET-P050 records the build difference at warn level (Aaron ruling Q100145, BUG-1097)."
     },
     "MET-P011": {
       "severity": "error",
@@ -5476,6 +5477,12 @@
       "module": "harness.converge",
       "message": "finance A/B bridge could not apply action {index} op {op}: {reason}",
       "remedy": "check the op name and args against the actionList schema and the composed engine command vocabulary"
+    },
+    "MET-H506": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge comparison for domain {domain} needs both build stamps: reference build {referenceBuild}, candidate build {candidateBuild}",
+      "remedy": "Pass the non-empty reference (Go engine) and candidate (browser) build strings to CompareStamped; an unstamped comparison cannot be traced to the builds it judged."
     },
     "MET-P035": {
       "severity": "error",
@@ -6324,6 +6331,12 @@
       "module": "feat.compositionroot",
       "message": "Citizen query {kind} failed: {cause}",
       "remedy": "The composed engine could not answer the query; check that engine.citizens is wired and the citizen store is readable, then retry."
+    },
+    "MET-P050": {
+      "severity": "warn",
+      "module": "int.protocol",
+      "message": "WebSocket handshake accepted with differing builds: client {clientVersion} / engine {serverVersion} (wire {negotiatedVersion}, tenant {tenantId}, city {cityId}, at {at})",
+      "remedy": "Informational only (Q100145): protocol-compatible builds connect; the badge shows a warning. Redeploy the webconsole or engine so both report the same build when convenient."
     }
   }
 }

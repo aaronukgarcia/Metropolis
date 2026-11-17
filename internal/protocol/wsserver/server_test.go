@@ -80,47 +80,9 @@ func TestHandshake_MatchAccepts(t *testing.T) {
 	}
 }
 
-// TestHandshake_MismatchRefusesAndCloses is the core AC: a version
-// mismatch must REFUSE (typed error, MET-P010) and close the connection
-// -- never degrade or serve the session anyway. This is the test the
-// mutation-proof below targets: an "accept anyway" mutation of handshake()
-// must turn this test RED.
-func TestHandshake_MismatchRefusesAndCloses(t *testing.T) {
-	url, _, cleanup := newTestServer(t, "v1.2.3", time.Second)
-	defer cleanup()
-
-	conn := dial(t, url)
-	defer func() { _ = conn.Close() }()
-
-	resp := sendHandshake(t, conn, "v9.9.9")
-	if resp.Error == nil {
-		t.Fatalf("expected a refusal error, got acceptance %+v", resp.Result)
-	}
-	if resp.Error.Code != protocol.ErrHandshakeVersionMismatch {
-		t.Fatalf("expected code %s, got %s", protocol.ErrHandshakeVersionMismatch, resp.Error.Code)
-	}
-	if resp.Error.Data["clientVersion"] != "v9.9.9" {
-		t.Fatalf("expected clientVersion in error data, got %+v", resp.Error.Data)
-	}
-	if resp.Error.Data["serverVersion"] != "v1.2.3" {
-		t.Fatalf("expected serverVersion in error data, got %+v", resp.Error.Data)
-	}
-
-	// The connection must actually be closed by the server -- attempting
-	// to send a command afterward must fail (read returns an error), not
-	// silently succeed as if the session were live.
-	cmdParams, _ := json.Marshal(protocol.Command{
-		ProtocolVersion: protocol.ProtocolVersion,
-		CorrelationID:   "test-corr",
-		Kind:            "advanceTicks",
-		Payload:         nil,
-	})
-	id := int64(2)
-	_ = conn.WriteJSON(rpcMessage{JSONRPC: rpcVersion, ID: &id, Method: methodCommand, Params: cmdParams})
-	if _, _, err := conn.ReadMessage(); err == nil {
-		t.Fatalf("expected the connection to be closed after a refused handshake, but a message was read")
-	}
-}
+// (BUG-1097 / Q100145: the former TestHandshake_MismatchRefusesAndCloses was
+// retired with the gate; see bug1097_test.go for the replacement, which
+// proves a differing build CONNECTS and is audited.)
 
 // TestHandshake_DirtySuffixIgnored_Accepts is BAR-4's core AC: two builds
 // of the SAME commit where one carries git describe's volatile "-dirty"
@@ -142,26 +104,6 @@ func TestHandshake_DirtySuffixIgnored_Accepts(t *testing.T) {
 	}
 	if !result.Accepted {
 		t.Fatalf("expected Accepted=true, got %+v", result)
-	}
-}
-
-// TestHandshake_DifferentCommit_StillRefuses proves BAR-4 does not
-// over-loosen the compare: two builds of genuinely DIFFERENT commits
-// (different commit count AND different short sha) must still be
-// refused, dirty suffix or not.
-func TestHandshake_DifferentCommit_StillRefuses(t *testing.T) {
-	url, _, cleanup := newTestServer(t, "v0.3.0-153-gABCD", time.Second)
-	defer cleanup()
-
-	conn := dial(t, url)
-	defer func() { _ = conn.Close() }()
-
-	resp := sendHandshake(t, conn, "v0.3.0-154-gEFGH")
-	if resp.Error == nil {
-		t.Fatalf("expected a refusal for a genuinely different commit, got acceptance %+v", resp.Result)
-	}
-	if resp.Error.Code != protocol.ErrHandshakeVersionMismatch {
-		t.Fatalf("expected %s, got %+v", protocol.ErrHandshakeVersionMismatch, resp.Error)
 	}
 }
 
