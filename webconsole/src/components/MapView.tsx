@@ -76,10 +76,10 @@ import { buildingProfile, specClassLabel, buildingCopyPayload, type ProfileLine 
 import { useBlockingOverlay, useEscapeKey } from './overlayManager';
 import { BLOCKING_OVERLAY_ID, BLOCKING_OVERLAY_RANK } from './overlayLayers';
 import {
-  formatBuildingCount,
   DEMAND_FIX_SERVICE_LABELS,
   worstDemandFix,
   demandFixMessage,
+  formatMixText,
   zoneDemandFix,
   zoneDemandMessage,
 } from './demandFixUi';
@@ -1326,7 +1326,7 @@ export function MapView() {
         // BUG-587: "N x <Name>" (formatBuildingCount), matching the placeNotice
         // wording BUG-583 landed for the same reason — no English pluralisation
         // rule survives the full SPECS catalogue (e.g. "Water Works").
-        const buildingLabel = formatBuildingCount(sp.name, fix.count);
+        const buildingLabel = formatMixText(fix);
         // BUG-606 (Aaron, 2026-09-03: "'citizens want shops' no help - how
         // much what type ... is this one hypermarket or 50?"): append the
         // SIZED, plan-derived detail (raw shortfall + the chosen pick's cost
