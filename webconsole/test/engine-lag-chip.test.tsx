@@ -17,7 +17,7 @@
 // (imagining a naive constant label) and the "reflects a real backlog"
 // assertion goes red (label stays "Engine: OK" despite a fed backlog).
 
-import { test } from 'node:test';
+import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 // BUG-721 (P2): the 500ms setInterval this file's tests mount (TopBar.tsx's
@@ -70,6 +70,30 @@ import assert from 'node:assert/strict';
 // leaves zero live Timeout resources after a throw-before-unmount while a
 // mutant reverting to the bare-global timer leaks exactly one.
 const HARD_DEADLINE_MS = 15_000;
+
+// BUG-1191: why the first test used to take 13 s (87 s on a loaded local box)
+// against its 15 s deadline: the FIRST `import('jsdom')` in the process is a
+// ~9 s cold load of jsdom's CJS tree (measured with per-import timers; the
+// app's own TopBar graph is ~1.5 s, a JSDOM construction ~0.2 s), and that
+// cold load was being charged to the first test's behaviour deadline. The
+// load cannot be made smaller, so it is warmed ONCE in a `before` hook that has
+// its own explicit bound; every test's 15 s deadline now measures behaviour
+// only (the first test runs in ~100 ms like its siblings) and still fails
+// fast if the chip stops rendering or a timer leaks. No fake timers are
+// needed: nothing in these tests waits on the clock.
+before(
+  async () => {
+    await import('jsdom');
+    await import('react');
+    await import('react-dom/client');
+    await import('react-dom/test-utils');
+    await import('../src/sim/simContext.ts');
+    await import('../src/sim/engine.ts');
+    await import('../src/sim/engineLag.ts');
+    await import('../src/components/TopBar.tsx');
+  },
+  { timeout: 120_000 }
+);
 
 function installJsdom() {
   return import('jsdom').then(({ JSDOM }) => {
