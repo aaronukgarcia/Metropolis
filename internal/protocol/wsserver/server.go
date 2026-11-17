@@ -85,6 +85,10 @@ import (
 // carry).
 const DefaultHandshakeTimeout = 5 * time.Second
 
+// closeGracePeriod bounds how long the server waits for a peer's close reply
+// after sending the 1001 going-away frame on transport end (BUG-1212).
+const closeGracePeriod = time.Second
+
 // rpcVersion is the fixed "jsonrpc" field value this package emits and
 // requires, per JSON-RPC 2.0 (int.protocol's INT-005 transport shape,
 // Architect DD 2026-08-31).
@@ -888,12 +892,31 @@ func (s *Server) pump(conn *websocket.Conn, transport protocol.Transport, negoti
 	// existing teardown runs. When the inbound side ended first, done is
 	// already closed and this is a harmless second Close (ServeHTTP's own
 	// deferred Close does the same); the watcher always exits.
+	//
+	// BUG-1212: the watcher must NOT hard-close right after writing the close
+	// frame - tearing the TCP connection down before the peer has read the
+	// frame can surface at the peer as a bare connection abort instead of the
+	// 1001 close. Instead it bounds the inbound read with a short deadline:
+	// ReadMessage then returns when the peer's close reply arrives (gorilla's
+	// default close handler echoes it, the normal close handshake) or when the
+	// deadline passes (a peer that never answers). Either way the inbound loop
+	// returns and ServeHTTP's deferred conn.Close() closes the socket, so the
+	// connection is closed within closeGracePeriod and onClose fires once.
+	// SetReadDeadline is called here while the inbound goroutine is blocked in
+	// ReadMessage: gorilla/websocket delegates it to the underlying net.Conn,
+	// whose deadline setters are safe for concurrent use and take effect on an
+	// in-flight Read.
 	go func() {
 		<-done
-		_ = conn.WriteControl(websocket.CloseMessage,
+		if err := conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseGoingAway, "transport closed"),
-			time.Now().Add(time.Second))
-		_ = conn.Close()
+			time.Now().Add(time.Second)); err != nil {
+			// The frame could not be sent (peer already gone): nothing to
+			// wait for, close now so the inbound loop unblocks.
+			_ = conn.Close()
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(closeGracePeriod))
 	}()
 
 	// Inbound: socket -> transport, on this goroutine (the caller's).
