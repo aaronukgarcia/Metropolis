@@ -296,10 +296,37 @@ jobs:
 
       - name: Deploy or update the Container App (metroserve ONLY — never whatsapp-session, MOD-069 AC-4)
         shell: bash
+        env:
+          # BUG-719: optional repo secret used ONLY to seed the Container App secret
+          # when the app already exists but lacks it (app created outside this workflow).
+          METROSERVE_SECRET_SEED: ${{ secrets.METROSERVE_SHARED_SECRET }}
         run: |
           set -euo pipefail
           if az containerapp show --name "${{ env.CONTAINER_APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" --output none 2>/dev/null; then
             echo "Container App exists — updating image + env vars only (no ingress/scale drift on every deploy)."
+            # BUG-719: the env var below is a secretref, which fails
+            # ContainerAppSecretRefNotFound if the app has no such secret (e.g. it was
+            # created outside this workflow). Set it ONLY if absent - never overwrite an
+            # existing real value, never write the create-path placeholder.
+            SECRET_PRESENT="$(az containerapp secret list \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --query "[?name=='metroserve-shared-secret'].name" -o tsv)"
+            if [ -z "$SECRET_PRESENT" ]; then
+              if [ -z "${METROSERVE_SECRET_SEED:-}" ]; then
+                echo "::error::Container App has no 'metroserve-shared-secret' secret and the METROSERVE_SHARED_SECRET GitHub secret is not configured. Configure it (or set the app secret manually) and re-run; refusing to write a placeholder."
+                exit 1
+              fi
+              echo "::add-mask::$METROSERVE_SECRET_SEED"
+              echo "Secret metroserve-shared-secret absent - setting it from the GitHub secret."
+              az containerapp secret set \
+                --name "${{ env.CONTAINER_APP_NAME }}" \
+                --resource-group "${{ env.RESOURCE_GROUP }}" \
+                --secrets "metroserve-shared-secret=$METROSERVE_SECRET_SEED" \
+                --output none
+            else
+              echo "Secret metroserve-shared-secret already present - leaving its value untouched."
+            fi
             az containerapp update \
               --name "${{ env.CONTAINER_APP_NAME }}" \
               --resource-group "${{ env.RESOURCE_GROUP }}" \
