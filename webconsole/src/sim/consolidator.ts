@@ -666,6 +666,36 @@ export function isConsolidationSuccessor(a: Spec, b: Spec): boolean {
   const bPollutes = b.tag === ('pollution' as Tag);
   const aPollutes = a.tag === ('pollution' as Tag);
   if (bPollutes && !aPollutes) return false;
+  if (!secondaryCapacityConserved(a, b)) return false;
+  return true;
+}
+
+/**
+ * BUG-1186: the ladder conserves the PRIMARY capacity field only (AC-8 rule
+ * 4), so a rung could silently drop a SECONDARY capacity the player relies on:
+ * lei_stables -> lei_arena/museum/themepark and lei_gym -> lei_leisure lost
+ * every wage job because the successor spec has no `jobs` field (88/32/208/48
+ * jobs gone). A rung is a valid successor only if, for EVERY capacity field
+ * other than the one that keyed the family (jobs, residents, served, mw, ...),
+ * the successor covers the whole group: `groupSize * a.field <= b.field`.
+ * Design choice: REFUSE the rung rather than inflate the group or invent jobs
+ * on the target. Raising groupSize cannot help (the target has no jobs field
+ * at all), and giving arena/museum/themepark jobs is a balance decision that
+ * belongs to Aaron's pass. Refusing is also the only option that guards
+ * future catalogue edits automatically (the ladder is derived, GR#3/GR#15).
+ * Tier-0 values, like the primary rule. Iterates the fixed
+ * CAPACITY_FIELD_ORDER array, never an object/Map key order (GR#21).
+ */
+export function secondaryCapacityConserved(a: Spec, b: Spec): boolean {
+  const primary = capacityFieldOf(a);
+  const group = groupSizeOf(a, b);
+  for (const field of CAPACITY_FIELD_ORDER) {
+    if (field === primary) continue;
+    const av = (a as unknown as Record<string, unknown>)[field];
+    if (typeof av !== 'number' || av <= 0) continue;
+    const bv = (b as unknown as Record<string, unknown>)[field];
+    if (typeof bv !== 'number' || bv < group * av) return false;
+  }
   return true;
 }
 

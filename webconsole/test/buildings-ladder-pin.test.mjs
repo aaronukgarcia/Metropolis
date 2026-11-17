@@ -6,13 +6,14 @@
 // deliberately consolidate with nothing. Changing the set is allowed, but only deliberately:
 // edit EXPECTED_RUNGS in the same commit.
 //
+// RED proof (BUG-1186): stub secondaryCapacityConserved to return true and the no-capacity-loss and unit tests fail.
 // RED proof (BUG-1183): drop the isStaySpec or transportModeOf segment from familyKeyOf and the stay/transport tests fail.
 // RED proof: drop isFarmSpec from familyKeyOf (farm/industry rungs reappear) or remove
 // harbour_fishing / pow_hvdc from CONSOLIDATION_EXEMPT_SPEC_IDS and tests 2 and 3 fail.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consolidationLadder, familyKeyOf, isFarmSpec, isStaySpec, transportModeOf } from '../src/sim/consolidator.ts';
+import { consolidationLadder, secondaryCapacityConserved, familyKeyOf, isFarmSpec, isStaySpec, transportModeOf } from '../src/sim/consolidator.ts';
 import { SPECS } from '../src/sim/data.ts';
 
 const FORMER_PLACEHOLDERS = new Set([
@@ -115,6 +116,9 @@ const FORMER_PLACEHOLDERS = new Set([
 //   lei_stables -> stay_luxury x7, lei_stables -> stay_resort x18, lei_theatre -> stay_resort x6,
 //   stay_bb -> lei_arena x11, stay_bb -> lei_museum x4, stay_bb -> lei_themepark x26,
 //   stay_caravan -> lei_arena x5, stay_caravan -> lei_themepark x11, stay_hotel -> lei_themepark x8.
+// BUG-1186: secondaryCapacityConserved removed the four rungs that dropped every wage job
+// (the successor has no jobs field): lei_gym -> lei_leisure x4, lei_stables -> lei_arena x11,
+// lei_stables -> lei_museum x4, lei_stables -> lei_themepark x26.
 const EXPECTED_RUNGS = [
   'com_darkstore -> com_hypermarket x44',
   'com_darkstore -> com_mall x12',
@@ -126,10 +130,6 @@ const EXPECTED_RUNGS = [
   'ind_chemworks -> ind_estate x14',
   'ind_refinery -> ind_estate x5',
   'ind_warehouse -> ind_fulfilment x4',
-  'lei_gym -> lei_leisure x4',
-  'lei_stables -> lei_arena x11',
-  'lei_stables -> lei_museum x4',
-  'lei_stables -> lei_themepark x26',
   'mine_chalk -> mine_deep x4',
   'stay_bb -> stay_luxury x7',
   'stay_bb -> stay_resort x18',
@@ -190,4 +190,42 @@ test('BUG-1183: no cross-mode transport rung exists', () => {
   }
   const keys = [...modes].map((id) => familyKeyOf(SPECS[id]));
   assert.equal(new Set(keys).size, 4, 'four depot modes, four families');
+});
+// BUG-1186: no rung may lose ANY capacity field (not just the family's primary one).
+const CAPACITY_FIELDS = ['residents', 'children', 'served', 'mw', 'wasteCapacity', 'processCapacity', 'tourism', 'capacity', 'jobs'];
+
+test('BUG-1186: no ladder rung loses any capacity field', () => {
+  const ladder = consolidationLadder();
+  assert.ok(ladder.length > 0);
+  for (const e of ladder) {
+    const a = SPECS[e.from];
+    const b = SPECS[e.to];
+    for (const f of CAPACITY_FIELDS) {
+      const av = typeof a[f] === 'number' ? a[f] : 0;
+      if (av <= 0) continue;
+      const bv = typeof b[f] === 'number' ? b[f] : 0;
+      assert.ok(bv >= e.groupSize * av, `${rungLabel(e)} loses ${f}: ${e.groupSize * av} -> ${bv}`);
+    }
+  }
+});
+
+test('BUG-1186: the four job-dropping rungs are absent', () => {
+  const labels = new Set(consolidationLadder().map(rungLabel));
+  for (const l of ['lei_gym -> lei_leisure x4', 'lei_stables -> lei_arena x11', 'lei_stables -> lei_museum x4', 'lei_stables -> lei_themepark x26']) {
+    assert.equal(labels.has(l), false, l);
+  }
+});
+
+test('BUG-1186: secondaryCapacityConserved unit cases', () => {
+  const mk = (o) => ({ id: 'x', ...o });
+  // positive: successor covers the secondary field for the whole group
+  assert.equal(secondaryCapacityConserved(mk({ residents: 10, jobs: 5 }), mk({ residents: 40, jobs: 20 })), true);
+  // positive: source has no secondary field
+  assert.equal(secondaryCapacityConserved(mk({ residents: 10 }), mk({ residents: 40 })), true);
+  // negative: successor has no jobs field at all
+  assert.equal(secondaryCapacityConserved(mk({ residents: 10, jobs: 5 }), mk({ residents: 40 })), false);
+  // negative: successor jobs below groupSize * a.jobs (group of 4 needs 20)
+  assert.equal(secondaryCapacityConserved(mk({ residents: 10, jobs: 5 }), mk({ residents: 40, jobs: 19 })), false);
+  // boundary: exactly group * a.jobs passes
+  assert.equal(secondaryCapacityConserved(mk({ residents: 10, jobs: 5 }), mk({ residents: 40, jobs: 20 })), true);
 });
