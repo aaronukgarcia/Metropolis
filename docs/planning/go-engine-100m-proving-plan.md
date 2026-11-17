@@ -3,6 +3,13 @@
 > **Status:** measurement + gap analysis + increment plan. Docs-only, no code.
 > **Author:** Bev lane, 2026-09-04.
 > **Drives:** FEAT-083 (Baseline One finish line), FEAT-1972079936 (Azure compute offload), FEAT-2326609775 (Azure Phase-4 increments).
+> **Status update, 2026-11-17 (Bev). The numbers below are as of 2026-09-04. Corrections from the code-grounded review in `a2.md` (repo root):**
+> - **The +12 GB monthly transient (§2.3, §3) is gone from the tick path.** `coldParamsLocked` now streams one shard at a time through `stratifiedSampleBuilder` (`internal/engine/citizens/registry.go:~1926-1950`, `sampling.go:~96-130`), with an O(N/256) peak.
+> - **`allColdRecordsLocked` has moved** to `registry.go:~1728`. It is reachable only through `BuildSample`/`ColdParams`, which have no production caller. Removal is tracked as BUG-1198. The line references `registry.go:945-953` / `:668` / `:1141-1144` below are stale.
+> - **The 82.9 B/citizen live heap predates the BUG-666 index.** As built, the index is a per-shard `map[uint64]int32` measured at **38 B/citizen** (`coldshard.go:~386-403`), not the 6–8 B estimated in §2.2. `bytesPerCitizen()` now reports **~113 B** (75 B of columns plus 38 B of index), about 11.3 GB at 100M. Re-measure the live heap before sizing.
+> - **The day-tick table (§1) is pre-BUG-666.** Post-fix timings are not yet recorded. `perf-population-probe` now asserts probe counts, not wall time.
+> - **The cap and hosting are ruled** (Aaron, 2026-11-17, `A2Bev001.md` v23 Q100154): steady-state 1M–10M on Consumption inside £20, metered. 30M/100M proving runs go on pix (RAM to be confirmed) or are budgeted Spot one-offs, each cost-gated.
+>
 > **GR#25:** every module named below already exists in `code.json` / on disk. Nothing here asserts a new cross-module edge; where an increment needs one, it is listed explicitly as a **prerequisite registration**, not as prose.
 
 ---

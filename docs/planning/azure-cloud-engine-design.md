@@ -9,6 +9,29 @@
 **Related, and read before writing this:** `docs/cloud.md` (provider decision), `docs/planning/phase3-convergence-plan.md` (the tolerance contract — §5.2), `docs/planning/acceptance/FEAT-2326609764.md` (the 100M spatial-partition spec — §2), `MOD-069` (Azure tiers).
 
 **Linked from:** `A2Bev001.md` v22, questions **Q100138–Q100152**.
+
+> **Status update, 2026-11-17 (Bev). Read this before the body.** Aaron's rulings in `A2Bev001.md` v23 and the code-grounded review in `a2.md` (repo root) supersede these parts of this document:
+> - **`BUG-480` no longer blocks anything.** It closed on 2026-09-04 (f9dd209): restore walks back through older snapshots, and a journal-dirty latch refuses a snapshot after a swallowed append. Every "blocked on BUG-480" below (§5.3, inc2, ASM-1504, Q100143, §12 item 4) is historical.
+> - **The cost cap is £20/month, not £50.** Aaron set it on 2026-09-04 (Q100139); this document recommended £50. The inc4 estimate of **£33–71/month** in §8 is replaced by a **metered** 10M rung inside £20: an in-app active-hours meter caps warm 2 vCPU / 4 GiB play at ~125 h/month, plus the Budget + Automation kill-switch runbook and a Log Analytics daily cap (Q100154). The 30M/100M proving runs are one-offs on pix or budgeted Spot, each cost-gated.
+> - **Rulings now in force:**
+>   - Q100138: per-domain cut-over.
+>   - Q100145: relax the build-string gate (BUG-1097).
+>   - Q100147: turbo 6.25 days/s.
+>   - Q100149: 30-day snapshots, then one per game-year; journal never deleted, cool/archive tier.
+>   - Q100153: 10M wake p95 ≤ 15 s.
+>   - Q100155: payroll by shard-day.
+>   - Q100156: gzip first, zstd only if needed.
+>   - Q100157: hibernate after 15 min, hidden tabs after 5 min.
+>   - Q100158: long-running engine sessions on pix.
+> - **Sequencing changes from `a2.md` §4.1:**
+>   - The ownership lease and writer epoch move ahead of deploy-on-green, out of inc4.
+>   - Snapshot-on-hibernate/SIGTERM and server hibernation land before any long-lived session.
+>   - Pre-cloud defects to fix first:
+>     - BUG-1196: a second connection to a hosted city races.
+>     - BUG-1197: no snapshot is written on shutdown.
+>     - BUG-1198: dead full-population materialisers.
+>     - BUG-1097: the handshake build gate.
+>     - BUG-719: the deploy secret.
 **BOW item carrying the increment plan:** **`FEAT-2326609775`** (GUID `81834f57-ad8a-4b13-b86f-c8e3c11c246c`).
 
 ---
