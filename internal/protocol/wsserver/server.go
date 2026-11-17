@@ -880,6 +880,22 @@ func (s *Server) pump(conn *websocket.Conn, transport protocol.Transport, negoti
 		}
 	}()
 
+	// BUG-1209: when the transport ends (outbound goroutine returns and fires
+	// done) the inbound loop below is blocked in conn.ReadMessage() and would
+	// never see it, leaving the socket open and onClose unfired. This watcher
+	// sends a going-away close frame (WriteControl is safe concurrently with
+	// the single writer) and closes the conn so ReadMessage returns and the
+	// existing teardown runs. When the inbound side ended first, done is
+	// already closed and this is a harmless second Close (ServeHTTP's own
+	// deferred Close does the same); the watcher always exits.
+	go func() {
+		<-done
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, "transport closed"),
+			time.Now().Add(time.Second))
+		_ = conn.Close()
+	}()
+
 	// Inbound: socket -> transport, on this goroutine (the caller's).
 	for {
 		_, data, err := conn.ReadMessage()

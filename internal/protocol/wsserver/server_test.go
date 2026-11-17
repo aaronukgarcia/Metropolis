@@ -366,6 +366,13 @@ func TestCommandFailures_DistinctCodesAndCorrelationIDs(t *testing.T) {
 		}
 		var resp rpcMessage
 		if err := conn.ReadJSON(&resp); err != nil {
+			// BUG-1209: a transport that ends now also closes the socket
+			// (going-away close frame), so the server may win the race
+			// against this write; the closed socket is then the correct
+			// outcome. The send-failure reply below is the other legal one.
+			if websocket.IsCloseError(err, websocket.CloseGoingAway) {
+				return
+			}
 			t.Fatalf("read response: %v", err)
 		}
 		if resp.Error == nil || resp.Error.Code != protocol.ErrCommandSendFailed {
