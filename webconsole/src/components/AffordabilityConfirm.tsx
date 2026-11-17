@@ -108,8 +108,54 @@ export function AffordabilityConfirm({ message, onConfirm, onCancel, slotId = 'a
       if (prev && typeof prev.focus === 'function' && prev.isConnected) prev.focus();
     };
   }, []);
+  // BUG-1200: a real modal traps focus and Esc cancels. The listener is on
+  // the document (not the panel) so it still works if focus has fallen to
+  // <body> (e.g. a backdrop click). Latest callbacks are read through a ref
+  // so the listener is attached once per mount.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const cancelRef = useRef(onCancel);
+  cancelRef.current = onCancel;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // r2: the confirm owns Esc while open. Capture phase + stop, so MapView's
+        // window keydown (cancelToSelect) never sees it and the player's tool,
+        // move or road tracker survives.
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        cancelRef.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      e.stopPropagation();
+      const panelEl = panelRef.current;
+      if (!panelEl) return;
+      const items = Array.from(panelEl.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      const inside = !!active && panelEl.contains(active);
+      if (!inside) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, []);
   const panel = (
-    <div style={hosted ? { ...panelStyle, pointerEvents: 'auto', position: 'relative', zIndex: 1, maxHeight: '100%', overflowY: 'auto' } : panelStyle} role="dialog" aria-modal="true" aria-label="Confirm expensive placement">
+    <div ref={panelRef} style={hosted ? { ...panelStyle, pointerEvents: 'auto', position: 'relative', zIndex: 1, maxHeight: '100%', overflowY: 'auto' } : panelStyle} role="dialog" aria-modal="true" aria-label="Confirm expensive placement">
       <h2 style={{ margin: '0 0 8px', fontSize: '15px', color: '#e0a33e' }}>Big commitment</h2>
       <p style={{ margin: '0 0 8px' }}>{message}</p>
       <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
