@@ -5544,6 +5544,12 @@
       "message": "metroserve: connection to {path} refused before WebSocket upgrade: Origin {origin} is not in the configured allow-list",
       "remedy": "Add the connecting Origin to METROSERVE_ALLOWED_ORIGINS (comma-separated exact-match list) on the server, or omit that env var entirely to accept every origin unchanged (local dev default)."
     },
+    "MET-P043": {
+      "severity": "error",
+      "module": "int.protocol",
+      "message": "metroserve: connection to city {cityId} (tenant {tenantId}) refused: another connection is already live on this city and a city serves one live connection at a time",
+      "remedy": "Close the other tab or client connected to this city, or connect to a different city. Reconnect once the first connection has closed. Session fan-out (several viewers per city) is not yet supported."
+    },
     "MET-V856": {
       "severity": "warn",
       "module": "ui.webconsole",

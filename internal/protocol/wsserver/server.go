@@ -619,11 +619,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 	if s.resolveTransport != nil {
 		resolved, err := s.resolveTransport(tenantID, cityID)
 		if err != nil {
-			e := errs.New(protocol.ErrHandshakeCityUnavailable, s.newCorrelationID(), map[string]any{
-				"tenantId": tenantID,
-				"cityId":   cityID,
-				"reason":   err.Error(),
-			})
+			e := s.resolverRefusal(err, tenantID, cityID)
 			s.writeRefusal(conn, msg.ID, e)
 			return protocol.WireVersion{}, nil, nil, "", "", false
 		}
@@ -675,6 +671,23 @@ func (s *Server) auditBuildMismatch(conn *websocket.Conn, correlationID, clientV
 	if s.buildMismatchCount != nil {
 		s.buildMismatchCount.Add(1)
 	}
+}
+
+// resolverRefusal maps a transport-resolver error to the handshake refusal
+// (BUG-1196). A resolver that returns a registry error (*errs.E) chooses its
+// own refusal code (metroserve's MET-P043 "city already has a live
+// connection"); that code and context pass through under a fresh correlation
+// id. Any other error is wrapped in MET-P030 exactly as before.
+func (s *Server) resolverRefusal(err error, tenantID, cityID string) *errs.E {
+	var re *errs.E
+	if errors.As(err, &re) && re != nil && re.Code != "" {
+		return errs.New(re.Code, s.newCorrelationID(), re.Ctx)
+	}
+	return errs.New(protocol.ErrHandshakeCityUnavailable, s.newCorrelationID(), map[string]any{
+		"tenantId": tenantID,
+		"cityId":   cityID,
+		"reason":   err.Error(),
+	})
 }
 
 // writeRefusal sends a JSON-RPC error response carrying e's registry code

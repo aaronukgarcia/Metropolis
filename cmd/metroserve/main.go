@@ -174,7 +174,9 @@ func run(args []string, stdout, stderr *os.File) int {
 
 	tickDone := tickLoop(ctx, e, transport, *tickInterval, correlationID)
 
-	wsHandler := wsserver.New(transport, buildinfo.Version, wsserver.DefaultHandshakeTimeout)
+	// BUG-1196: the legacy path has the same one-pump-per-Transport hazard; the
+	// same gate admits one live connection and refuses the rest (MET-P043).
+	wsHandler := wsserver.New(transport, buildinfo.Version, wsserver.DefaultHandshakeTimeout, legacyWSOptions(transport)...)
 	// FEAT-2326609775 inc1: port-knock hardening (portknock.go) in front of
 	// /ws only -- /health stays open (Container Apps' probe, and a human
 	// checking liveness, must never need the secret). Both env vars unset
@@ -249,37 +251,10 @@ func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snap
 		return 1
 	}
 
-	resolver := func(tenant, city string) (protocol.Transport, error) {
-		// The city outlives the connection that triggered its build (it runs
-		// under the host's root context), so build under Background here, not
-		// the request context — the passed ctx only bounds the rehydrate work,
-		// which is fine to run to completion for a durable city.
-		rc, err := host.GetOrCreate(context.Background(), persist.CityKey{TenantID: tenant, CityID: city})
-		if err != nil {
-			return nil, err
-		}
-		return rc.Transport(), nil
-	}
-
-	// FEAT-1972079942 AC-2: refcount live connections per city so the host's
-	// idle evictor can unload a city once its last connection closes. onOpen
-	// pins the city (Acquire), onClose releases it (Release); the (tenant, city)
-	// the hooks receive are the SAME default-applied strings the resolver keyed
-	// on, so the refcount and the routing agree. The resolver's GetOrCreate runs
-	// before onOpen, so the city is always live by the time Acquire is called.
-	lifecycle := wsserver.WithConnectionLifecycle(
-		func(tenant, city string) {
-			host.Acquire(tenant, city)
-		},
-		func(tenant, city string) {
-			host.Release(tenant, city)
-		},
-	)
-
 	// transport is nil: with a resolver installed the Server never touches its
 	// single wrapped transport field (every connection binds to a resolved
 	// per-city transport instead).
-	wsHandler := wsserver.New(nil, buildinfo.Version, wsserver.DefaultHandshakeTimeout, wsserver.WithTransportResolver(resolver), lifecycle)
+	wsHandler := wsserver.New(nil, buildinfo.Version, wsserver.DefaultHandshakeTimeout, hostedWSOptions(host)...)
 	// FEAT-2326609775 inc1: same port-knock wrapping as the legacy path
 	// (main.go's run()) — see its comment there for the byte-identical-
 	// when-unconfigured proof. /health stays open.
