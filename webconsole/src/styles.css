@@ -262,24 +262,10 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .palette-group .lbl { min-width: 58px; }
 .palette { display: flex; flex-wrap: wrap; gap: 6px; }
 
-.tree-wrap { display: flex; gap: 12px; height: 100%; min-height: 0; }
-.tree-fams { display: flex; flex-direction: column; gap: 3px; width: 168px; flex-shrink: 0; }
-.tree-fam { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border: 1px solid transparent; border-radius: 8px; padding: 7px 10px; color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left; }
-.tree-fam:hover { background: var(--accent-soft); }
-.tree-fam.open { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-.tree-fam.has-active { border-color: var(--done); }
 .tree-title { flex: 1; }
 .tree-n { font-size: 11px; color: var(--muted); }
-/* FEAT-2326609748: domain headers grouping the tree-fam buttons (Utilities,
-   Education, Health, Industry & Economy, ...) — each domain is its own
-   column segment so the existing 3px inter-button gap still applies within
-   a domain, not just between domains. */
-.tree-domain { display: flex; flex-direction: column; gap: 3px; }
-.tree-domain-label { margin: 6px 0 2px; padding-left: 2px; }
-.tree-domain:first-child .tree-domain-label { margin-top: 0; }
-.tree-detail { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; overflow-y: auto; min-width: 0; }
 .pal-item { display: flex; align-items: center; gap: 7px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 10px; color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
-.pal-item:hover:not(:disabled) { border-color: var(--accent); }
+.pal-item:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--accent); }
 .pal-item.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .pal-item.locked { opacity: 0.5; cursor: not-allowed; }
 .pal-item.placeholder { border-color: var(--warn); color: var(--warn); }
@@ -1175,3 +1161,29 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .qd-total { display: flex; align-items: center; gap: 6px; margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border); }
 .qd-total b { color: var(--ink); }
 .qd-worker-line { font-size: 10px; margin: 4px 0 0; padding-top: 4px; border-top: 1px solid var(--border); color: var(--muted); }
+
+/* ---------- FEAT-9995385591 UX-1: tree-nodal build browser ---------- */
+.bt-wrap { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 0; --bt-dom-h: 28px; }
+.bt-search { flex: 0 0 auto; }
+.bt-input { width: 100%; box-sizing: border-box; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px; padding: 5px 10px; color: var(--ink); font: inherit; font-size: 12.5px; }
+.bt-input:focus { outline: none; border-color: var(--accent); }
+.bt-tree { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.bt-node { display: flex; flex-direction: column; }
+.bt-group { display: flex; flex-direction: column; gap: 3px; padding-left: 14px; margin: 2px 0 4px; }
+.bt-head { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; background: var(--surface-2); border: 1px solid transparent; border-radius: 8px; padding: 6px 10px; color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left; }
+.bt-head:hover, .bt-head:focus-visible { background: var(--accent-soft); outline: none; }
+.bt-head.open { border-color: var(--accent); color: var(--accent); }
+.bt-head.has-active { border-color: var(--done); }
+.bt-domain > .bt-head { position: sticky; top: 0; z-index: 3; height: var(--bt-dom-h); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; }
+.bt-family > .bt-head { position: sticky; top: var(--bt-dom-h); z-index: 2; }
+.bt-recent > .bt-head { position: sticky; top: 0; z-index: 2; }
+.bt-caret { width: 10px; color: var(--muted); }
+.bt-spec { display: flex; align-items: flex-start; width: 100%; box-sizing: border-box; text-align: left; }
+.bt-spec:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.bt-spec .pal-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.bt-spec .pal-name { white-space: normal; overflow-wrap: break-word; }
+.bt-spec .pal-cap { font-size: 11px; color: var(--muted); white-space: normal; overflow-wrap: break-word; word-break: normal; }
+.bt-spec .pal-cost { flex: 0 0 auto; min-width: 84px; text-align: right; white-space: nowrap; }
+.pal-item[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+.pal-item.atcap[aria-disabled="true"] { opacity: 0.65; }
+.pal-item.broke { opacity: 0.6; }

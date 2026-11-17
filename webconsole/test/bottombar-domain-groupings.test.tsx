@@ -102,6 +102,7 @@ test('BottomBar renders the expected domain headers, each containing its familie
   const { renderToString } = await import('react-dom/server');
   const { SimProvider } = await import('../src/sim/store.tsx');
   const { BottomBar } = await import('../src/components/bottom/BottomBar.tsx');
+  const { paletteByDomain } = await import('../src/sim/data.ts');
 
   const html = renderToString(
     React.default.createElement(SimProvider, { children: React.default.createElement(BottomBar) }),
@@ -111,17 +112,15 @@ test('BottomBar renders the expected domain headers, each containing its familie
   for (const domain of ['Utilities', 'Education', 'Health', 'Industry &amp; Economy', 'Safety']) {
     assert.ok(html.includes(`>${domain}<`), `domain header "${domain}" must render`);
   }
-  // Utilities groups Power + Water & Waste (Aaron's example, verbatim).
-  const utilitiesIdx = html.indexOf('>Utilities<');
-  const powerIdx = html.indexOf('>Power<');
-  const waterIdx = html.indexOf('>Water &amp; Waste<');
-  const educationHeaderIdx = html.indexOf('>Education<');
-  assert.ok(utilitiesIdx >= 0 && powerIdx > utilitiesIdx, 'Power family must render after the Utilities header');
-  assert.ok(waterIdx > utilitiesIdx, 'Water & Waste family must render after the Utilities header');
-  assert.ok(
-    (educationHeaderIdx < 0 || powerIdx < educationHeaderIdx) && waterIdx < (educationHeaderIdx < 0 ? Infinity : educationHeaderIdx),
-    'Power and Water & Waste must both fall inside Utilities, before the next domain header',
-  );
+  // UX-1 (FEAT-9995385591): domains now render COLLAPSED (only the first is open), so
+  // families are checked on the tree model with every domain open instead of in the SSR
+  // html. Utilities groups Power + Water & Waste (Aaron's example, verbatim).
+  const { buildTree } = await import('../src/components/bottom/buildTree.ts');
+  const allOpen = new Set(paletteByDomain().flatMap((d) => [`d:${d.domain}`, ...d.families.map((f) => `f:${f.title}`)]));
+  const tree = buildTree(allOpen, '', []);
+  const util = tree.find((n) => n.label === 'Utilities')!;
+  assert.deepEqual(util.children.map((f) => f.label), ['Power', 'Water & Waste']);
+  assert.deepEqual(tree.map((n) => n.label), paletteByDomain().map((d) => d.domain), 'domains in DOMAIN_ORDER');
 });
 
 // ---------------------------------------------------------------------------
@@ -173,41 +172,50 @@ test('BottomBar: clicking a family in one domain then another preserves the clic
       );
     });
 
+    // UX-1: the tree is click-to-expand (hover is inert); open the domain, then the family.
     const findFamButton = (title: string) =>
-      Array.from(container.querySelectorAll('.tree-fam')).find(
+      Array.from(container.querySelectorAll('.bt-head')).find(
         (el: any) => el.querySelector('.tree-title')?.textContent === title,
       ) as any;
+    const clickEl = async (el: any) =>
+      act(async () => {
+        el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+      });
 
     // Default family is PALETTE[0] ('Network', under the Transport domain).
     const networkBtn = findFamButton('Network');
     assert.ok(networkBtn, 'Network family button must render');
     assert.ok(networkBtn.className.includes('open'), 'Network is the default open family');
 
-    // Click Health (Health domain) — a different domain from Network's (Transport).
-    const healthBtn = findFamButton('Health');
-    assert.ok(healthBtn, 'Health family button must render under the Health domain');
-    await act(async () => {
-      healthBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
-    });
-    assert.ok(healthBtn.className.includes('open'), 'Health must become the open family after clicking it');
+    // Click Health (Health domain) - a different domain from Network's (Transport).
+    // The Health domain and the Health family share a label; the domain header is first.
+    const healthDomain = findFamButton('Health');
+    assert.ok(healthDomain, 'Health domain header must render');
+    await clickEl(healthDomain);
+    const healthBtn = Array.from(container.querySelectorAll('.bt-head')).filter(
+      (el: any) => el.querySelector('.tree-title')?.textContent === 'Health',
+    )[1] as any;
+    assert.ok(healthBtn, 'Health family button must render once its domain is open');
+    await clickEl(healthBtn);
+    assert.ok(healthBtn.className.includes('open'), 'Health must become open after clicking it');
     assert.ok(
-      !findFamButton('Network').className.includes('open'),
-      'Network must lose the open class once a different domain\'s family is selected',
+      findFamButton('Network').className.includes('open'),
+      'UX-1 AC-1.1: opening another family does NOT collapse Network (expansion is independent)',
     );
     assert.ok(
-      container.querySelector('.tree-detail')?.textContent?.length > 0,
-      'tree-detail must render the newly selected family\'s items',
+      healthBtn.parentElement.querySelector('[role=group]')?.textContent?.length > 0,
+      "the family's items render inline under it",
     );
 
     // Now click Power (Utilities domain) — proves selection keeps working
     // across a THIRD domain, not just a one-time switch.
+    await clickEl(findFamButton('Utilities'));
     const powerBtn = findFamButton('Power');
     assert.ok(powerBtn, 'Power family button must render under the Utilities domain');
-    await act(async () => {
-      powerBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
-    });
-    assert.ok(powerBtn.className.includes('open'), 'Power must become the open family after clicking it');
-    assert.ok(!findFamButton('Health').className.includes('open'), 'Health must lose the open class once Power is selected');
+    await clickEl(powerBtn);
+    assert.ok(powerBtn.className.includes('open'), 'Power must become open after clicking it');
+    await clickEl(powerBtn);
+    assert.ok(!findFamButton('Power').className.includes('open'), 'a second click collapses Power again');
 
     await act(async () => {
       root.unmount();
