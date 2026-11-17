@@ -505,8 +505,12 @@ func (c *CitizensAPI) newColdStream() *coldStream {
 // exhausted, or immediately (fail-closed) if the wrapped CitizensAPI is a
 // struct copy (SEC-020).
 func (cs *coldStream) next() (coldCitizenWire, bool) {
-	if err := cs.c.checkNotCopied(errs.NewCorrelationID(), "coldStream.next"); err != nil {
-		return coldCitizenWire{}, false
+	// BUG-1205: the copy-guard still runs on every call, but the correlation
+	// id is only minted on the (rare) failing path.
+	if cs.c.self.Load() != cs.c {
+		if err := cs.c.checkNotCopied(errs.NewCorrelationID(), "coldStream.next"); err != nil {
+			return coldCitizenWire{}, false
+		}
 	}
 	for cs.pos >= len(cs.buf) {
 		if cs.shard >= numColdShards {

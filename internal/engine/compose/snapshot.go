@@ -868,7 +868,13 @@ func zipDir(dir string) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		w, err := zw.Create(filepath.ToSlash(rel))
+		// BUG-1205: shard files are already gzip streams; re-deflating them
+		// burns CPU for nothing, so they are Stored. Small metadata is deflated.
+		method := zip.Deflate
+		if strings.HasSuffix(rel, ".gz") {
+			method = zip.Store
+		}
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: filepath.ToSlash(rel), Method: method})
 		if err != nil {
 			return err
 		}

@@ -67,6 +67,12 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// ShardGzipLevel is the stdlib gzip level used for every shard write
+// (BUG-1205, Q100156): BestSpeed. BestCompression cost ~70 percent of a 1M
+// Save for a modest size gain. The reader is level-agnostic, so saves written
+// at any level still load.
+const ShardGzipLevel = gzip.BestSpeed
+
 // WriteShard implements StateSerializer. It streams: each record is
 // marshalled to one line and written to the gzip stream as soon as it's
 // produced; nothing is buffered beyond a single record and gzip's own
@@ -75,7 +81,7 @@ func (NDJSONSerializer) WriteShard(w io.Writer, meta ShardMeta, next RecordSourc
 	hasher := sha256.New()
 	counter := &countingWriter{w: io.MultiWriter(w, hasher)}
 
-	gz, err := gzip.NewWriterLevel(counter, gzip.BestCompression)
+	gz, err := gzip.NewWriterLevel(counter, ShardGzipLevel)
 	if err != nil {
 		return meta, fmt.Errorf("serialize: creating gzip writer for shard %q: %w", meta.Name, err)
 	}
