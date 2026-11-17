@@ -89,14 +89,28 @@ test('M1: resolveDemandAll re-derives demandFixPlan against the depleted treasur
   const staleFire = demandFixPlan(s).find((p) => p.serviceKey === 'fire');
   assert.ok(staleFire);
   assert.equal(staleFire.specId, 'fire_hq', 'precondition: the STALE upfront plan must pick fire_hq (largest-first, capacity-driven)');
-  const staleMixSpecIds = new Set(staleFire.mix.map((m) => m.specId));
+  // RETUNE (BUG-1188, FEAT-9995385590 87-building landing): the placed-fire
+  // count used to be summed over the STALE MIX's own spec ids. That was only
+  // sound while the stale mix's tail happened to contain a spec the
+  // depleted-treasury self-heal (placePlanItem substitution) could afford.
+  // Measured at this fixture: at b5c50b9 the stale mix was fire_hq x7 +
+  // fire_station x2 and the real build placed 2 fire_station (in the mix, so
+  // counted); at HEAD air_fire_helibase (now a real spec, no longer Soon)
+  // wins the one-shot remainder, so the mix is fire_hq x7 + air_fire_helibase
+  // x1, and the real build — with only ~£20M left after Health/water —
+  // substitutes 2 fire_station + 1 fire_post, neither in the stale mix, so
+  // the old sum read 0. The substitution is the designed RR-1 behaviour, not
+  // a defect, and fire still gets reached and funds-limited. So count what
+  // the fire SERVICE actually received (every fire-kind building, the same
+  // DEMAND_FIX_PROVIDERS.fire match), derived from SPECS, never a spec list.
+  const fireKinds = new Set(Object.values(SPECS).filter((sp) => sp.kind === 'fire').map((sp) => sp.id));
 
   const before = specCounts(s);
   const result = reducer(s, { type: 'resolveDemandAll' });
   const after = specCounts(result);
 
   let firePlaced = 0;
-  for (const specId of staleMixSpecIds) {
+  for (const specId of fireKinds) {
     firePlaced += (after.get(specId) ?? 0) - (before.get(specId) ?? 0);
   }
 
