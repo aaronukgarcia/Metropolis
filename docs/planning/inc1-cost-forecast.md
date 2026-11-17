@@ -1,5 +1,7 @@
 # inc1 cost-gate forecast: one engine up, one round trip measured
 
+> **Status, 2026-11-17 (later the same day): held as the FALLBACK plan.** Aaron ruled Q100161: **pix first** (8 GB, on 24/7), **Azure as fallback**. inc1 now runs `metroserve` on pix behind Cloudflare Tunnel + Access (Q100160), with R2 as the store (Q100159). The Azure resources below are provisioned only if pix cannot carry a city, or as the managed fallback. Nothing here is to be provisioned now. The pix inc1 needs its own small cost-gate step: enabling Cloudflare R2 requires a payment method, even though the expected cost is £0 inside the free allowance.
+
 **Date:** 2026-11-17 · **Author:** Bev · **For:** Aaron's Authorise through `/cost-gate`, before **any** Azure resource is provisioned.
 **Authority:**
 - `A2Bev001.md` v23: Q100154, £20/month hard cap; Q100157, hibernation.
