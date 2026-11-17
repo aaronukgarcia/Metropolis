@@ -22,7 +22,7 @@ const { execFileSync, spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const OUT = path.join(__dirname, 'index.html');
-const MYSQL_BIN = process.env.MYSQL_BIN || 'C:\\Program Files\\MariaDB 12.2\\bin\\mysql.exe';
+const MYSQL_BIN = process.env.MYSQL_BIN || 'C:\\Program Files\\MariaDB 13.0\\bin\\mysql.exe';
 const GO_TEST_TIMEOUT_MS = 600000;
 
 // File extensions that count as "code" for line counts / the build stage.
