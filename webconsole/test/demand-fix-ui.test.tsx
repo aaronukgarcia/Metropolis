@@ -352,10 +352,13 @@ test('BUG-587 (d): "Water Works" x4 renders as "4 x Water Works" (never "Water W
     const { ctx: mapCtx } = makeCtx(state);
     const map = await mountReal(MapView, mapCtx);
     const advisorText = map.container.querySelector('.advisor')?.textContent ?? '';
+    // BUG-1194: the advisor names the whole Fix mix, exactly as the DemandDock
+    // button below does - never the mix total (4) glued to mix[0]'s name.
     assert.ok(
-      advisorText.includes('place 4 x Water Works'),
-      `advisor text must read "place 4 x Water Works", got: "${advisorText}"`,
+      advisorText.includes('place 1 x Water Works + 3 x Water Tower'),
+      `advisor text must read "place 1 x Water Works + 3 x Water Tower", got: "${advisorText}"`,
     );
+    assert.ok(!advisorText.includes('4 x Water Works'), `advisor text must not glue the mix total to the first building: "${advisorText}"`);
     assert.ok(!/Water Workses/.test(advisorText), `advisor text must not double-pluralise "Water Works": "${advisorText}"`);
     await map.act(async () => {
       map.root.unmount();
