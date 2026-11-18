@@ -1,0 +1,13 @@
+tick 0: treasury(micropounds)=1500000000 pop=64
+tick 30 (month 1 close): treasury=972996000 (delta -527004000) pop=62
+  city.treasury      benefits.unemployment=-3000000  tax.corp=440000  tax.council=1504000  tax.income=42000000  tax.sales=352000  wages=-16800000
+  households.wealth  benefits.unemployment=3000000  spend=-1760000  tax.council=-1504000  tax.income=-42000000  wages=150000000
+  firms.cash         spend=1760000  tax.corp=-440000  tax.sales=-352000  wages=-133200000
+tick 60 (month 2 close): treasury=444322500 (delta -528673500) pop=74
+  city.treasury      benefits.unemployment=-3600000  tax.corp=522500  tax.council=1786000  tax.income=42000000  tax.sales=418000  wages=-16800000
+  households.wealth  benefits.unemployment=3600000  spend=-2090000  tax.council=-1786000  tax.income=-42000000  wages=150000000
+  firms.cash         spend=2090000  tax.corp=-522500  tax.sales=-418000  wages=-133200000
+tick 90 (month 3 close): treasury=210779500 (delta -233543000) pop=86
+  city.treasury      benefits.unemployment=-4800000  tax.corp=605000  tax.council=2068000  tax.income=42000000  tax.sales=484000  wages=-18900000
+  households.wealth  benefits.unemployment=4800000  spend=-2420000  tax.council=-2068000  tax.income=-42000000  wages=150000000
+  firms.cash         spend=2420000  tax.corp=-605000  tax.sales=-484000  wages=-131100000

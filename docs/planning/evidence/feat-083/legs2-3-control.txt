@@ -1,0 +1,168 @@
+===== CONTROL F2 start | engine ticks completed 0 =====
+Jan Y1 | cycle 0/30 | money 1500000 | pop 64 | rating 1000/1000
+PROFIT & LOSS ()                                                      BALANCE SHEET
+unavailable
+                                                                      Assets:
+                                                                        Treasury                 £ 1500000.00
+                                                                        Reserves                       £ 0.00
+
+                                                                      Liabilities:
+                                                                        Outstanding Debt               £ 0.00
+
+                                                                      Net Worth: £ 1500000.00
+
+
+
+
+
+
+
+
+
+LOANS & CREDIT                                                        TAX INSTRUMENTS & ELASTICITY
+unavailable                                                           unavailable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TICK 0  MONTH 0  SPEED 1x  PAUSED  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== CONTROL F2 after month 1 | engine ticks completed 30 =====
+Feb Y1 | cycle 0/30 | money 972996 | pop 62 | rating 1000/1000
+PROFIT & LOSS ()                                                      BALANCE SHEET
+unavailable
+                                                                      Assets:
+                                                                        Treasury                  £ 972996.00
+                                                                        Reserves                       £ 0.00
+
+                                                                      Liabilities:
+                                                                        Outstanding Debt               £ 0.00
+
+                                                                      Net Worth: £ 972996.00
+
+
+
+
+
+
+
+
+
+LOANS & CREDIT                                                        TAX INSTRUMENTS & ELASTICITY
+unavailable                                                           unavailable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TICK 30  MONTH 1  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== CONTROL F2 after month 2 | engine ticks completed 60 =====
+Mar Y1 | cycle 0/30 | money 444322 | pop 74 | rating 1000/1000
+PROFIT & LOSS ()                                                      BALANCE SHEET
+unavailable
+                                                                      Assets:
+                                                                        Treasury                  £ 444322.50
+                                                                        Reserves                       £ 0.00
+
+                                                                      Liabilities:
+                                                                        Outstanding Debt               £ 0.00
+
+                                                                      Net Worth: £ 444322.50
+
+
+
+
+
+
+
+
+
+LOANS & CREDIT                                                        TAX INSTRUMENTS & ELASTICITY
+unavailable                                                           unavailable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TICK 60  MONTH 2  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== CONTROL F2 after month 3 | engine ticks completed 90 =====
+Apr Y1 | cycle 0/30 | money 210779 | pop 86 | rating 1000/1000
+PROFIT & LOSS ()                                                      BALANCE SHEET
+unavailable
+                                                                      Assets:
+                                                                        Treasury                  £ 210779.50
+                                                                        Reserves                       £ 0.00
+
+                                                                      Liabilities:
+                                                                        Outstanding Debt               £ 0.00
+
+                                                                      Net Worth: £ 210779.50
+
+
+
+
+
+
+
+
+
+LOANS & CREDIT                                                        TAX INSTRUMENTS & ELASTICITY
+unavailable                                                           unavailable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TICK 90  MONTH 3  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+

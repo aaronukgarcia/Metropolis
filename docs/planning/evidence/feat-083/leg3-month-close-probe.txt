@@ -1,0 +1,9 @@
+tick 30: treasury 1500000000 -> 972996000 (delta -527004000)
+    log city.treasury  benefits.unemployment=-3000000  tax.corp=440000  tax.council=1504000  tax.income=42000000  tax.sales=352000  wages=-16800000
+    log city.debt      
+    log city.reserves  
+
+COASTAL-QUIET composition (consumption/wage/tax legs alone):
+  month 1 close (tick 30): treasury 1522996000 delta 22996000
+  month 2 close (tick 60): treasury 1544322500 delta 21326500
+  month 3 close (tick 90): treasury 1560779500 delta 16457000

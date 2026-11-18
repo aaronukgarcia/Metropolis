@@ -1,0 +1,378 @@
+===== BUILD F3 after buy, before build | engine ticks completed 0 =====
+Jan Y1 | cycle 0/30 | money 1500000 | pop 64 | rating 1000/1000
+F3 Land & Construction
+Zones (§34)                                                           Build queue
+  Dwelling  materials 100t  labour 40d  lead 45d                      no build orders
+  Entertainment  materials 200t  labour 60d  lead 75d
+  Farming  materials 60t  labour 20d  lead 20d
+  Heavy Industry  materials 400t  labour 120d  lead 150d
+  Manufacturing  materials 250t  labour 80d  lead 90d
+  Mining  materials 300t  labour 100d  lead 120d
+  Office  materials 150t  labour 50d  lead 60d
+  Shop  materials 80t  labour 30d  lead 30d
+
+
+
+
+
+
+
+
+
+Building catalogue
+  Dwelling (zone)  cost   cap   [unlocked]
+  Entertainment (zone)  cost   cap   [unlocked]
+  Farming (zone)  cost   cap   [unlocked]
+  Heavy Industry (zone)  cost   cap   [unlocked]
+  Manufacturing (zone)  cost   cap   [unlocked]
+  Mining (zone)  cost   cap   [unlocked]
+  Office (zone)  cost   cap   [unlocked]
+  Shop (zone)  cost   cap   [unlocked]
+
+
+
+
+
+
+
+
+
+
+TICK 0  MONTH 0  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== BUILD F3 after b-key | engine ticks completed 0 =====
+Jan Y1 | cycle 0/30 | money 1500000 | pop 64 | rating 1000/1000
+F3 Land & Construction
+Zones (§34)                                                           Build queue
+  Dwelling  materials 100t  labour 40d  lead 45d                        #1 dwelling  materials 0/100t  labour 40d  lead 57d  [materials-pend
+  Entertainment  materials 200t  labour 60d  lead 75d
+  Farming  materials 60t  labour 20d  lead 20d
+  Heavy Industry  materials 400t  labour 120d  lead 150d
+  Manufacturing  materials 250t  labour 80d  lead 90d
+  Mining  materials 300t  labour 100d  lead 120d
+  Office  materials 150t  labour 50d  lead 60d
+  Shop  materials 80t  labour 30d  lead 30d
+
+
+
+
+
+
+
+
+
+Building catalogue
+  Dwelling (zone)  cost   cap   [unlocked]
+  Entertainment (zone)  cost   cap   [unlocked]
+  Farming (zone)  cost   cap   [unlocked]
+  Heavy Industry (zone)  cost   cap   [unlocked]
+  Manufacturing (zone)  cost   cap   [unlocked]
+  Mining (zone)  cost   cap   [unlocked]
+  Office (zone)  cost   cap   [unlocked]
+  Shop (zone)  cost   cap   [unlocked]
+
+
+
+
+
+
+
+
+
+
+TICK 0  MONTH 0  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== BUILD F2 after b-key | engine ticks completed 0 =====
+Jan Y1 | cycle 0/30 | money 1500000 | pop 64 | rating 1000/1000
+PROFIT & LOSS ()                                                      BALANCE SHEET
+unavailable
+                                                                      Assets:
+                                                                        Treasury                 £ 1500000.00
+                                                                        Reserves                       £ 0.00
+
+                                                                      Liabilities:
+                                                                        Outstanding Debt               £ 0.00
+
+                                                                      Net Worth: £ 1500000.00
+
+
+
+
+
+
+
+
+
+LOANS & CREDIT                                                        TAX INSTRUMENTS & ELASTICITY
+unavailable                                                           unavailable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TICK 0  MONTH 0  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== BUILD F3 after month 1 | engine ticks completed 30 =====
+Feb Y1 | cycle 0/30 | money 972996 | pop 62 | rating 1000/1000
+F3 Land & Construction
+Zones (§34)                                                           Build queue
+  Dwelling  materials 100t  labour 40d  lead 45d                        #1 dwelling  materials 100/100t  labour 10d  lead 27d  [labour-pendi
+  Entertainment  materials 200t  labour 60d  lead 75d
+  Farming  materials 60t  labour 20d  lead 20d
+  Heavy Industry  materials 400t  labour 120d  lead 150d
+  Manufacturing  materials 250t  labour 80d  lead 90d
+  Mining  materials 300t  labour 100d  lead 120d
+  Office  materials 150t  labour 50d  lead 60d
+  Shop  materials 80t  labour 30d  lead 30d
+
+
+
+
+
+
+
+
+
+Building catalogue
+  Dwelling (zone)  cost   cap   [unlocked]
+  Entertainment (zone)  cost   cap   [unlocked]
+  Farming (zone)  cost   cap   [unlocked]
+  Heavy Industry (zone)  cost   cap   [unlocked]
+  Manufacturing (zone)  cost   cap   [unlocked]
+  Mining (zone)  cost   cap   [unlocked]
+  Office (zone)  cost   cap   [unlocked]
+  Shop (zone)  cost   cap   [unlocked]
+
+
+
+
+
+
+
+
+
+
+TICK 30  MONTH 1  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== BUILD F2 after month 1 | engine ticks completed 30 =====
+Feb Y1 | cycle 0/30 | money 972996 | pop 62 | rating 1000/1000
+PROFIT & LOSS ()                                                      BALANCE SHEET
+unavailable
+                                                                      Assets:
+                                                                        Treasury                  £ 972996.00
+                                                                        Reserves                       £ 0.00
+
+                                                                      Liabilities:
+                                                                        Outstanding Debt               £ 0.00
+
+                                                                      Net Worth: £ 972996.00
+
+
+
+
+
+
+
+
+
+LOANS & CREDIT                                                        TAX INSTRUMENTS & ELASTICITY
+unavailable                                                           unavailable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TICK 30  MONTH 1  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== BUILD F3 after month 2 | engine ticks completed 60 =====
+Mar Y1 | cycle 0/30 | money 444322 | pop 74 | rating 1000/1000
+F3 Land & Construction
+Zones (§34)                                                           Build queue
+  Dwelling  materials 100t  labour 40d  lead 45d                        #1 dwelling  materials 100/100t  labour 0d  lead 0d  [complete] 0s
+  Entertainment  materials 200t  labour 60d  lead 75d
+  Farming  materials 60t  labour 20d  lead 20d
+  Heavy Industry  materials 400t  labour 120d  lead 150d
+  Manufacturing  materials 250t  labour 80d  lead 90d
+  Mining  materials 300t  labour 100d  lead 120d
+  Office  materials 150t  labour 50d  lead 60d
+  Shop  materials 80t  labour 30d  lead 30d
+
+
+
+
+
+
+
+
+
+Building catalogue
+  Dwelling (zone)  cost   cap   [unlocked]
+  Entertainment (zone)  cost   cap   [unlocked]
+  Farming (zone)  cost   cap   [unlocked]
+  Heavy Industry (zone)  cost   cap   [unlocked]
+  Manufacturing (zone)  cost   cap   [unlocked]
+  Mining (zone)  cost   cap   [unlocked]
+  Office (zone)  cost   cap   [unlocked]
+  Shop (zone)  cost   cap   [unlocked]
+
+
+
+
+
+
+
+
+
+
+TICK 60  MONTH 2  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== BUILD F2 after month 2 | engine ticks completed 60 =====
+Mar Y1 | cycle 0/30 | money 444322 | pop 74 | rating 1000/1000
+PROFIT & LOSS ()                                                      BALANCE SHEET
+unavailable
+                                                                      Assets:
+                                                                        Treasury                  £ 444322.50
+                                                                        Reserves                       £ 0.00
+
+                                                                      Liabilities:
+                                                                        Outstanding Debt               £ 0.00
+
+                                                                      Net Worth: £ 444322.50
+
+
+
+
+
+
+
+
+
+LOANS & CREDIT                                                        TAX INSTRUMENTS & ELASTICITY
+unavailable                                                           unavailable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TICK 60  MONTH 2  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== BUILD F3 after month 3 | engine ticks completed 90 =====
+Apr Y1 | cycle 0/30 | money 195779 | pop 86 | rating 1000/1000
+F3 Land & Construction
+Zones (§34)                                                           Build queue
+  Dwelling  materials 100t  labour 40d  lead 45d                        #1 dwelling  materials 100/100t  labour 0d  lead 0d  [complete] 0s
+  Entertainment  materials 200t  labour 60d  lead 75d
+  Farming  materials 60t  labour 20d  lead 20d
+  Heavy Industry  materials 400t  labour 120d  lead 150d
+  Manufacturing  materials 250t  labour 80d  lead 90d
+  Mining  materials 300t  labour 100d  lead 120d
+  Office  materials 150t  labour 50d  lead 60d
+  Shop  materials 80t  labour 30d  lead 30d
+
+
+
+
+
+
+
+
+
+Building catalogue
+  Dwelling (zone)  cost   cap   [unlocked]
+  Entertainment (zone)  cost   cap   [unlocked]
+  Farming (zone)  cost   cap   [unlocked]
+  Heavy Industry (zone)  cost   cap   [unlocked]
+  Manufacturing (zone)  cost   cap   [unlocked]
+  Mining (zone)  cost   cap   [unlocked]
+  Office (zone)  cost   cap   [unlocked]
+  Shop (zone)  cost   cap   [unlocked]
+
+
+
+
+
+
+
+
+
+
+TICK 90  MONTH 3  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
+===== BUILD F2 after month 3 | engine ticks completed 90 =====
+Apr Y1 | cycle 0/30 | money 195779 | pop 86 | rating 1000/1000
+PROFIT & LOSS ()                                                      BALANCE SHEET
+unavailable
+                                                                      Assets:
+                                                                        Treasury                  £ 195779.50
+                                                                        Reserves                       £ 0.00
+
+                                                                      Liabilities:
+                                                                        Outstanding Debt               £ 0.00
+
+                                                                      Net Worth: £ 195779.50
+
+
+
+
+
+
+
+
+
+LOANS & CREDIT                                                        TAX INSTRUMENTS & ELASTICITY
+unavailable                                                           unavailable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+TICK 90  MONTH 3  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slower  [F1/F2/F4] screens  [q] quit
+
