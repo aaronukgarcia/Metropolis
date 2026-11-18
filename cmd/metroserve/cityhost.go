@@ -806,6 +806,64 @@ func (h *CityHost) Acquire(tenantID, cityID string) {
 	e.idleSince = time.Time{} // in use: never a candidate for eviction (AC-2)
 }
 
+// ownedTransport is the per-connection view of a city's transport (BUG-1225).
+// It stamps the connection's epoch on every command before it enters the
+// city's command queue, so the engine can tell whose Subscribe it is applying
+// whenever it applies it -- including after the connection has gone. The
+// epoch travels out of band (protocol.Command.Owner is never serialised, so
+// nothing journaled or hashed changes) and is overwritten on every send: a
+// client cannot choose it. Every other Transport method is the embedded
+// transport's own.
+//
+// It implements wsserver.ConnectionScoped: wsserver calls ConnectionEnded on
+// THIS connection's exit path, so the detach carries this connection's own
+// epoch and can touch nothing else.
+type ownedTransport struct {
+	protocol.Transport
+	owner uint64
+	end   sync.Once
+	// detach removes owner from the engine; nil for a transport with no engine.
+	detach func(owner uint64) int
+}
+
+// SendCommand implements protocol.Transport.
+func (t *ownedTransport) SendCommand(cmd protocol.Command) error {
+	cmd.Owner = t.owner
+	return t.Transport.SendCommand(cmd)
+}
+
+// ConnectionEnded implements wsserver.ConnectionScoped: it removes exactly the
+// subscriptions this connection created, once. Journals nothing; safe after
+// the engine has stopped.
+func (t *ownedTransport) ConnectionEnded() {
+	t.end.Do(func() {
+		if t.detach != nil {
+			t.detach(t.owner)
+		}
+	})
+}
+
+// newOwnedTransport mints a fresh epoch from eng and wraps tr with it.
+func newOwnedTransport(tr protocol.Transport, eng *core.Engine) *ownedTransport {
+	return &ownedTransport{Transport: tr, owner: eng.NewSubscriptionOwner(), detach: eng.DetachSubscriptionOwner}
+}
+
+// BindConnection is the hosted resolver's body (BUG-1225): it gets or builds
+// the city and returns its transport wrapped for ONE connection, carrying that
+// connection's own subscription epoch. wsserver ends the epoch on every exit
+// path of the connection (including a handshake that fails after this call),
+// so the engine's live-owner set is bounded by live connections.
+func (h *CityHost) BindConnection(ctx context.Context, tenantID, cityID string) (protocol.Transport, error) {
+	if err := h.checkNotCopied(); err != nil {
+		return nil, err
+	}
+	rc, err := h.GetOrCreate(ctx, persist.CityKey{TenantID: tenantID, CityID: cityID})
+	if err != nil {
+		return nil, err
+	}
+	return newOwnedTransport(rc.Transport(), rc.engine), nil
+}
+
 // Release records that one connection bound to cityKey has ended
 // (FEAT-1972079942 AC-2): it decrements the active-connection count under the
 // host lock and, when the count reaches 0, starts the idle clock so the evictor

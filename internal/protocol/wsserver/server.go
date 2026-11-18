@@ -214,6 +214,24 @@ type handshakeResult struct {
 	BuildMismatchCorrelationID string `json:"buildMismatchCorrelationId,omitempty"`
 }
 
+// ConnectionScoped is implemented by a transport a resolver hands out for ONE
+// connection (BUG-1225). wsserver calls ConnectionEnded exactly once on every
+// exit path of a connection that got that transport: normal close, read error,
+// shutdown, and a handshake that failed after the resolver succeeded (reply
+// write error). It lets the host tie per-connection state to the connection
+// itself rather than to the city, so the order of binds and closes cannot
+// make one connection's cleanup touch another's state. It runs on the
+// connection's own goroutine, BEFORE the onConnClose lifecycle hook.
+type ConnectionScoped interface {
+	ConnectionEnded()
+}
+
+func connectionEnded(t protocol.Transport) {
+	if cs, ok := t.(ConnectionScoped); ok {
+		cs.ConnectionEnded()
+	}
+}
+
 // TransportResolver maps a connection's handshake-declared (tenantID,
 // cityID) -- defaults already applied -- to the protocol.Transport that
 // connection should be bound to for its whole life (FEAT-1972079936 Phase 2
@@ -435,6 +453,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.onConnClose != nil {
 		defer s.onConnClose(tenantID, cityID)
 	}
+	// BUG-1225: deferred after onConnClose, so (LIFO) the connection's own
+	// state is ended before the close hook can free the city for a successor.
+	defer connectionEnded(connTransport)
 	s.pump(conn, connTransport, negotiated, negotiatedCaps)
 }
 
@@ -641,6 +662,14 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		}
 		connTransport = resolved
 	}
+	// BUG-1225: from here every return that is not a bound connection must
+	// still end a connection-scoped transport exactly once.
+	bound := false
+	defer func() {
+		if !bound {
+			connectionEnded(connTransport)
+		}
+	}()
 
 	result := handshakeResult{
 		Accepted:          true,
@@ -674,6 +703,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 	if buildMismatch {
 		s.auditBuildMismatch(conn, mismatchCorrelationID, params.ClientVersion, negotiated, tenantID, cityID)
 	}
+	bound = true
 	return negotiated, negotiatedCaps, connTransport, tenantID, cityID, true
 }
 

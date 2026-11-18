@@ -732,7 +732,7 @@ func (e *Engine) handleSubscribe(cmd protocol.Command, correlationID string) pro
 	if !ok {
 		return e.reject(cmd, errs.New(ErrUnhandledCommandKind, correlationID, map[string]any{"kind": string(cmd.Kind)}))
 	}
-	if _, err := e.subs.Subscribe(payload.ViewName, payload.Params, cmd.CorrelationID, correlationID); err != nil {
+	if _, err := e.subs.subscribeOwned(cmd.Owner, payload.ViewName, payload.Params, cmd.CorrelationID, correlationID); err != nil {
 		return e.reject(cmd, err)
 	}
 	// The subscription's first delta is pushed asynchronously off this

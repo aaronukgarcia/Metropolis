@@ -770,8 +770,19 @@ func engineTick(e *core.Engine, correlationID string) (int64, error) {
 // fatal restore error rather than silently skipping it (a silently-dropped
 // journal command is restore-side data loss, exactly the class GR#27 and
 // this whole epic exist to kill).
+//
+// Subscribe / Unsubscribe are SESSION state, not simulation state (BUG-1225):
+// a live subscription belongs to one connection (its owner epoch is process-
+// local and never journaled), and a restored city has no connection attached,
+// so replaying a journaled Subscribe would create a subscription no live
+// connection owns and nothing could ever remove. They are skipped here; they
+// touch no hashed state (proved by the restore-digest tests), so every replay
+// reaches the same simulation state as before.
 func replayCommands(e *core.Engine, cmds []protocol.Command) error {
 	for _, cmd := range cmds {
+		if cmd.Kind == protocol.KindSubscribe || cmd.Kind == protocol.KindUnsubscribe {
+			continue
+		}
 		res := e.HandleCommand(cmd)
 		if !res.Accepted {
 			return errs.New(ErrSnapshotTailReplayRejected, string(cmd.CorrelationID), map[string]any{

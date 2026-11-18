@@ -25,8 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
-	"github.com/aaronukgarcia/Metropolis/internal/persist"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol/wsserver"
 )
@@ -245,11 +245,9 @@ func hostedWSOptions(host *CityHost) []wsserver.Option {
 		// under the host's root context), so build under Background here, not
 		// the request context -- the passed ctx only bounds the rehydrate
 		// work, which is fine to run to completion for a durable city.
-		rc, err := host.GetOrCreate(context.Background(), persist.CityKey{TenantID: tenant, CityID: city})
-		if err != nil {
-			return nil, err
-		}
-		return rc.Transport(), nil
+		// BUG-1225: the transport handed back is this connection's own view,
+		// stamping its subscription epoch on every command.
+		return host.BindConnection(context.Background(), tenant, city)
 	}
 	gate := newSessionGate()
 	return []wsserver.Option{
@@ -270,11 +268,19 @@ func singleEngineKey(string, string) (string, string) { return "single", "single
 // legacyWSOptions is the single-engine wsserver wiring (run()): every
 // handshake, whatever city it names, resolves to the one transport and shares
 // ONE gate slot, so a second connection is refused while the first is live.
-func legacyWSOptions(transport protocol.Transport) []wsserver.Option {
+//
+// BUG-1225: eng (optional) is the single engine behind transport; each
+// connection gets its own subscription epoch, stamped on its commands and
+// ended by wsserver on that connection's own exit path.
+func legacyWSOptions(transport protocol.Transport, eng ...*core.Engine) []wsserver.Option {
 	gate := newSessionGate()
+	resolve := func(string, string) (protocol.Transport, error) { return transport, nil }
+	if len(eng) > 0 && eng[0] != nil {
+		e := eng[0]
+		resolve = func(string, string) (protocol.Transport, error) { return newOwnedTransport(transport, e), nil }
+	}
 	return []wsserver.Option{
-		wsserver.WithTransportResolver(gate.gatedResolver(
-			func(string, string) (protocol.Transport, error) { return transport, nil }, singleEngineKey)),
+		wsserver.WithTransportResolver(gate.gatedResolver(resolve, singleEngineKey)),
 		gate.gatedLifecycle(singleEngineKey, nil, nil),
 	}
 }

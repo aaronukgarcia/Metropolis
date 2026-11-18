@@ -182,7 +182,7 @@ func run(args []string, stdout, stderr *os.File) int {
 
 	// BUG-1196: the legacy path has the same one-pump-per-Transport hazard; the
 	// same gate admits one live connection and refuses the rest (MET-P043).
-	wsHandler := wsserver.New(transport, buildinfo.Version, wsserver.DefaultHandshakeTimeout, legacyWSOptions(transport)...)
+	wsHandler := wsserver.New(transport, buildinfo.Version, wsserver.DefaultHandshakeTimeout, legacyWSOptions(transport, e)...)
 	// FEAT-2326609775 inc1: port-knock hardening (portknock.go) in front of
 	// /ws only -- /health stays open (Container Apps' probe, and a human
 	// checking liveness, must never need the secret). Both env vars unset

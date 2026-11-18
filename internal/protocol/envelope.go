@@ -106,6 +106,13 @@ type Command struct {
 	IssuedAtTick    Tick           `json:"issuedAtTick"`
 	Kind            Kind           `json:"kind"`
 	Payload         CommandPayload `json:"payload"`
+
+	// Owner is the connection epoch the host stamped on this command
+	// (BUG-1225). It is process-local routing metadata: json:"-" keeps it off
+	// the wire and out of the journal, a client cannot set it, and no
+	// simulation path reads it -- only the subscription server, to decide
+	// which subscriptions a detached connection owned. 0 = no connection.
+	Owner uint64 `json:"-"`
 }
 
 // Validate checks that cmd is well-formed enough to enqueue: correct

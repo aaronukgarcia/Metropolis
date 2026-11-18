@@ -556,6 +556,22 @@
     "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type -- by design it does not check whether the method body actually references the field (same \"presence, not effect\" scope isGuarded's doc comment already discloses for the receiver/parameter paths, gate.go). EngineStatusView's body (internal/engine/core) was read in full and contains zero references to e.subs anywhere -- grep-confirmed against the whole package (only three call sites of e.subs exist in the entire package, none inside this function). There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating \"declared on the wrapping type\" as \"reaches the field\", not the WorldAPI-shaped hazard (a.w.mu touched directly) SEC-049 was built to close."
   },
   {
+    "finding": "internal/engine/core/subscribe.go|*Engine|field access chain|DetachSubscriptionOwner|e.subs|*Engine.subs",
+    "reason": "BUG-1225 (2026-11-18): DetachSubscriptionOwner calls e.checkNotCopied first, then detachOwner; the delegate (SubscriptionServer.detachOwner) calls s.checkNotCopied BEFORE touching s.mu or its state (SEC-019 pattern, identical to Subscribe/Unsubscribe). There is no unguarded field-then-method chain; SEC-049's field-access enumeration flags every declared method on Engine by presence, not effect (same over-approximation as the EngineStatusView and SubscriptionCount entries)."
+  },
+  {
+    "finding": "internal/engine/core/subscribe.go|*Engine|field access chain|NewSubscriptionOwner|e.subs|*Engine.subs",
+    "reason": "BUG-1225 (2026-11-18): NewSubscriptionOwner calls e.checkNotCopied first, then delegates to SubscriptionServer.registerOwner, which calls s.checkNotCopied BEFORE touching s.mu or s.liveOwners (SEC-019 pattern). Same by-presence over-approximation as the SubscriptionCount entry."
+  },
+  {
+    "finding": "internal/engine/core/subscribe.go|*Engine|field access chain|SubscriptionCount|e.subs|*Engine.subs",
+    "reason": "BUG-1225 (2026-11-18): SubscriptionCount calls e.checkNotCopied first, then delegates to SubscriptionServer.count, which itself calls s.checkNotCopied BEFORE touching s.mu or s.subs (SEC-019 pattern, identical to Subscribe/Unsubscribe). It never reads a SubscriptionServer field directly, so there is no unguarded field-then-method chain; SEC-049's field-access enumeration flags every declared method on Engine by presence, not effect (same over-approximation as the EngineStatusView entry above)."
+  },
+  {
+    "finding": "internal/engine/core/subscribe.go|*Engine|field access chain|LiveSubscriptionOwners|e.subs|*Engine.subs",
+    "reason": "BUG-1225 (2026-11-18): LiveSubscriptionOwners calls e.checkNotCopied first, then delegates to SubscriptionServer.liveCount, which calls s.checkNotCopied BEFORE touching s.mu or s.liveOwners (SEC-019 pattern). Same by-presence over-approximation as the SubscriptionCount entry."
+  },
+  {
     "finding": "internal/engine/invariant/hook.go|*Hook|field access chain|ApplyEffect|h.registry|*Hook.registry",
     "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type -- by design it does not check whether the method body actually references the field (same \"presence, not effect\" scope isGuarded's doc comment already discloses for the receiver/parameter paths, gate.go). ApplyEffect's body (internal/engine/invariant/hook.go) was read in full and contains zero references to h.registry anywhere -- grep-confirmed against the whole package (only three call sites of h.registry exist in the entire package, none inside this function). There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating \"declared on the wrapping type\" as \"reaches the field\", not the WorldAPI-shaped hazard (a.w.mu touched directly) SEC-049 was built to close."
   },
@@ -2094,6 +2110,10 @@
   {
     "finding": "cmd/metroserve/cityhost.go|*CityHost|field access chain|Release|h.health|*CityHost.health",
     "reason": "FEAT-2326609775 inc1 (2026-09-04): healthRegistry (health.go) carries its own sync.Mutex + SEC-020 self atomic.Pointer copy guard, enforced inside its OWN entry points (register/unregister/snapshot all call checkNotCopied FIRST, before touching mu or states -- see health.go). SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for CityHost's EVERY declared method once CityHost has a health *healthRegistry field -- by design it does not check whether the method body actually calls a guarded method on that field (gate.go's isGuarded doc comment: \"presence, not effect\"). This mirrors the already-accepted internal/foundation/integration/queue.go QueuedTransport|*tierQueue field-access-chain precedent in this SAME registry exactly, one layer up: CityHost never accesses h.health's internal fields directly, only through its own already-guarded register/unregister/HealthRegistry() calls."
+  },
+  {
+    "finding": "cmd/metroserve/cityhost.go|*CityHost|field access chain|BindConnection|h.health|*CityHost.health",
+    "reason": "BUG-1225 (2026-11-18): same false positive for the new BindConnection method; it touches only h.mu, h.cities and the engine (NewSubscriptionOwner), never h.health, and calls h.checkNotCopied first. Original rationale -- FEAT-2326609775 inc1 (2026-09-04): healthRegistry (health.go) carries its own sync.Mutex + SEC-020 self atomic.Pointer copy guard, enforced inside its OWN entry points (register/unregister/snapshot all call checkNotCopied FIRST, before touching mu or states -- see health.go). SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for CityHost's EVERY declared method once CityHost has a health *healthRegistry field -- by design it does not check whether the method body actually calls a guarded method on that field (gate.go's isGuarded doc comment: \"presence, not effect\"). This mirrors the already-accepted internal/foundation/integration/queue.go QueuedTransport|*tierQueue field-access-chain precedent in this SAME registry exactly, one layer up: CityHost never accesses h.health's internal fields directly, only through its own already-guarded register/unregister/HealthRegistry() calls."
   },
   {
     "finding": "cmd/metroserve/cityhost.go|*CityHost|field access chain|runEvictor|h.health|*CityHost.health",

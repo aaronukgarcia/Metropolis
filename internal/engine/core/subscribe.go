@@ -184,6 +184,7 @@ type subscription struct {
 	view          string
 	seq           uint64
 	pendingCorrID protocol.CorrelationID // echoed on the next delta only, then cleared
+	owner         uint64                 // BUG-1225: connection epoch that created it; 0 = in-process, never detached
 }
 
 // SubscriptionServer is T-SUBSCR. It is safe for concurrent use: the
@@ -220,6 +221,16 @@ type SubscriptionServer struct {
 	// resulting prohibition (a DeltaSink must never call back into
 	// Publish — self-deadlock on publishMu).
 	publishMu sync.Mutex
+
+	// BUG-1225: per-connection ownership. ownerSeq mints connection epochs
+	// (monotonic, never reused); liveOwners is the set of epochs whose
+	// connection has not detached yet -- bounded by the number of live
+	// connections, because every minted epoch is detached on every exit path.
+	// A Subscribe for a non-zero owner outside the set creates nothing.
+	// liveOwners is guarded by mu together with subs, which is what makes
+	// "drop a Subscribe from a dead owner" atomic with the insert.
+	ownerSeq   atomic.Uint64
+	liveOwners map[uint64]struct{}
 
 	alloc *protocol.SubscriptionAllocator
 	subs  map[protocol.SubscriptionID]*subscription
@@ -343,6 +354,17 @@ func (s *SubscriptionServer) checkNotCopied(correlationID string, ctx map[string
 // checkNotCopied's doc comment for why the pre-lock check must be
 // lock-free and must run first).
 func (s *SubscriptionServer) Subscribe(viewName string, params map[string]string, causingCorrID protocol.CorrelationID, correlationID string) (protocol.SubscriptionID, error) {
+	if err := s.checkNotCopied(correlationID, map[string]any{"view": viewName}); err != nil {
+		return "", err
+	}
+	return s.subscribeOwned(0, viewName, params, causingCorrID, correlationID)
+}
+
+// subscribeOwned is Subscribe for a subscription created on behalf of the
+// connection epoch owner (0 = in-process). BUG-1225: when owner is not in the
+// live-owner set (already detached), nothing is created and ("", nil) is returned -- the command was
+// legitimately accepted off the wire but its connection is gone.
+func (s *SubscriptionServer) subscribeOwned(owner uint64, viewName string, params map[string]string, causingCorrID protocol.CorrelationID, correlationID string) (protocol.SubscriptionID, error) {
 	if err := protocol.ValidateViewName(viewName); err != nil {
 		return "", errs.Wrap(ErrInvalidViewName, correlationID, err, map[string]any{"view": viewName})
 	}
@@ -362,9 +384,118 @@ func (s *SubscriptionServer) Subscribe(viewName string, params map[string]string
 	if _, ok := s.views[viewName]; !ok {
 		return "", errs.New(ErrUnknownView, correlationID, map[string]any{"view": viewName})
 	}
+	if owner != 0 {
+		if _, live := s.liveOwners[owner]; !live {
+			return "", nil // BUG-1225: owner not live (detached or never minted) -- drop, do not allocate an id
+		}
+	}
 	id := s.alloc.Allocate()
-	s.subs[id] = &subscription{id: id, view: viewName, pendingCorrID: causingCorrID}
+	s.subs[id] = &subscription{id: id, view: viewName, pendingCorrID: causingCorrID, owner: owner}
 	return id, nil
+}
+
+// NewSubscriptionOwner mints a connection epoch (BUG-1225). The host calls it
+// once per attached connection and stamps the result on every command that
+// connection sends (protocol.Command.Owner, never serialised); epochs rise
+// monotonically from 1 and are never reused. Owner 0 is the in-process
+// subscriber: it is never detached.
+func (e *Engine) NewSubscriptionOwner() uint64 {
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	return e.subs.registerOwner()
+}
+
+// registerOwner mints an epoch and adds it to the live-owner set.
+func (s *SubscriptionServer) registerOwner() uint64 {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := s.ownerSeq.Add(1)
+	if s.liveOwners == nil {
+		s.liveOwners = make(map[uint64]struct{})
+	}
+	s.liveOwners[id] = struct{}{}
+	return id
+}
+
+// LiveSubscriptionOwners returns how many connection epochs are currently
+// live (BUG-1225); tests use it to prove the set is bounded by live
+// connections.
+func (e *Engine) LiveSubscriptionOwners() int {
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	return e.subs.liveCount()
+}
+
+// liveCount is LiveSubscriptionOwners's SubscriptionServer half.
+func (s *SubscriptionServer) liveCount() int {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.liveOwners)
+}
+
+// DetachSubscriptionOwner removes owner from the live-owner set and deletes
+// exactly the subscriptions that owner created, returning how many were
+// removed (BUG-1225). A Subscribe from that owner applied later -- it was
+// still queued when the connection dropped -- is dropped at the insert, so the
+// order of detach and apply does not matter. Subscriptions of every other
+// epoch and of the in-process owner 0 are never touched, whatever the order
+// of binds and closes. Takes only the subscription server's
+// own mutex, journals nothing and changes no simulation state; idempotent.
+func (e *Engine) DetachSubscriptionOwner(owner uint64) int {
+	if owner == 0 {
+		return 0
+	}
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	return e.subs.detachOwner(owner)
+}
+
+// detachOwner is DetachSubscriptionOwner's SubscriptionServer half (SEC-019:
+// identity-checked before s.mu is touched).
+func (s *SubscriptionServer) detachOwner(owner uint64) int {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.liveOwners, owner)
+	n := 0
+	for id, sub := range s.subs {
+		if sub.owner == owner {
+			delete(s.subs, id)
+			n++
+		}
+	}
+	return n
+}
+
+// count is SubscriptionCount's SubscriptionServer half.
+func (s *SubscriptionServer) count() int {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.subs)
+}
+
+// SubscriptionCount returns the number of live view subscriptions held by
+// this engine (BUG-1225). Read-only; used by hosts and tests to prove that a
+// detached connection's subscriptions do not linger.
+func (e *Engine) SubscriptionCount() int {
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	return e.subs.count()
 }
 
 // Unsubscribe closes a live subscription. Deltas stop for it
