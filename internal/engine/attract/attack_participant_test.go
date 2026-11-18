@@ -145,14 +145,15 @@ func TestAttack_LoadRejectsMalformedRecords(t *testing.T) {
 func TestAttack_DuplicateMetaRecordIsLastWriteWins(t *testing.T) {
 	a, _, _, _ := newAPI(t, validConfig())
 	h := NewSaveParticipant(a).Handler()
+	formulaV1 := leverFormulaVersion
 
 	first := serialize.Record{Kind: recAttractMeta, Data: mustJSON(t, attractMetaWire{
 		Reputation:        reputationStateWire{HasBaseline: true, Baseline: 10, Value: 1},
-		LastAdvancedMonth: 3, HasAdvanced: true, NextMigrantID: 11,
+		LastAdvancedMonth: 3, HasAdvanced: true, NextMigrantID: 11, LeverFormula: &formulaV1,
 	})}
 	second := serialize.Record{Kind: recAttractMeta, Data: mustJSON(t, attractMetaWire{
 		Reputation:        reputationStateWire{HasBaseline: true, Baseline: 20, Value: 2},
-		LastAdvancedMonth: 4, HasAdvanced: true, NextMigrantID: 22,
+		LastAdvancedMonth: 4, HasAdvanced: true, NextMigrantID: 22, LeverFormula: &formulaV1,
 	})}
 	if err := h(first); err != nil {
 		t.Fatalf("first record: %v", err)
@@ -268,10 +269,7 @@ func TestAttack_PostRestoreMigrantIDsDisjointOverManyMonths(t *testing.T) {
 	}
 
 	for month := int64(4); month <= 6; month++ {
-		if err := reloaded.SetTermInputs(TermInputs{
-			JobAvailability: 90, ServiceCoverage: 90, Environment: 90,
-			LeisureFit: 90, Safety: 90,
-		}); err != nil {
+		if err := reloaded.SetTermInputs(uniformTI(90, nil, 0)); err != nil {
 			t.Fatalf("SetTermInputs: %v", err)
 		}
 		if _, err := reloaded.ApplyMigration(MigrationCommand{

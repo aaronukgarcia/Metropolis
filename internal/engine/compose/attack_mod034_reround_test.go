@@ -178,7 +178,14 @@ func TestAttackMOD034_SampleSizeIsExactlyTheCappedLiveCount(t *testing.T) {
 // the CitizenAt !ok skip produces.
 func TestAttackMOD034_MidRunEmptyCohortFlipsBackToNoData(t *testing.T) {
 	e := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t)})
+	// Restated 2026-11 (FEAT-9995385616 fallout): under the ten-lever migration
+	// formula migrants are admitted from month 1 whenever there is housing
+	// room, and their ids would stay resolvable in the cohort. The test needs
+	// a city whose cohort can be emptied, so the fixture removes the room:
+	// SeedHomeCapacityPeople=1 leaves the home stock below the seed population,
+	// housing vacancy is 0, and attract's capacity term admits nobody. The
+	// guard below still proves this (admitted migrants < 2).
+	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t), SeedHomeCapacityPeople: 1})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}

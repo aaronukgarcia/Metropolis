@@ -76,7 +76,7 @@ func TestMigrantIDsFromCount_MatchesRealMintedRange(t *testing.T) {
 		_, comp := newTestEngine(t, 5001+uint64(housingVacancy))
 		st := comp.state
 		if err := st.attract.SetTermInputs(attract.TermInputs{
-			JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80,
+			Levers: allLevers80(), Modifiers: allMods80(),
 		}); err != nil {
 			t.Fatalf("SetTermInputs: %v", err)
 		}
@@ -142,7 +142,7 @@ func TestBUG380_EmigrationMechanismDepartsMigrant(t *testing.T) {
 	// mechanism, so it must not rely on the production enumeration it is
 	// separately testing above).
 	if err := st.attract.SetTermInputs(attract.TermInputs{
-		JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80,
+		Levers: allLevers80(), Modifiers: allMods80(),
 	}); err != nil {
 		t.Fatalf("SetTermInputs(positive): %v", err)
 	}
@@ -231,7 +231,7 @@ func TestBUG380_ResidentIDs_IncludesAdmittedMigrants(t *testing.T) {
 	st := comp.state
 
 	if err := st.attract.SetTermInputs(attract.TermInputs{
-		JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80,
+		Levers: allLevers80(), Modifiers: allMods80(),
 	}); err != nil {
 		t.Fatalf("SetTermInputs: %v", err)
 	}
@@ -430,4 +430,32 @@ func TestBUG380_SurvivalIsFairAcrossIDBands(t *testing.T) {
 	if spread >= maxSpreadPoints {
 		t.Fatalf("survival spread across the three MIGRANT id bands (identical ambition=50 hazard by construction) is %.1f points (>= %.1f) — bands: %+v. This is the BUG-380 fourth-re-round scan-position bias (lowest ids emptied first under a binding cap) reproducing.", spread, maxSpreadPoints, migrantBands)
 	}
+}
+
+// levVal and modVal read a pushed lever/modifier value (0 when not built),
+// replacing the per-term accessors of the seven-term formula
+// (FEAT-9995385616 lane A1 mechanical adaptation).
+func levVal(a *attract.AttractAPI, id attract.LeverID) float64 {
+	v, _ := a.LeverValue(id)
+	return v
+}
+
+func modVal(a *attract.AttractAPI, id attract.ModifierID) float64 {
+	v, _ := a.ModifierValue(id)
+	return v
+}
+
+// allLevers80 / allMods80 are the old "five terms at 80" fixture in the
+// ten-lever shape: housing (computed by attract), jobs, services and parks
+// built at 80, the other six levers not built.
+func allLevers80() [attract.LeverCount]attract.LeverTerm {
+	var l [attract.LeverCount]attract.LeverTerm
+	for _, id := range []attract.LeverID{attract.LeverHousing, attract.LeverJobs, attract.LeverServices, attract.LeverParks} {
+		l[id] = attract.LeverTerm{Value: 80, Built: true}
+	}
+	return l
+}
+
+func allMods80() [attract.ModifierCount]attract.LeverTerm {
+	return [attract.ModifierCount]attract.LeverTerm{{Value: 80, Built: true}, {Value: 80, Built: true}}
 }

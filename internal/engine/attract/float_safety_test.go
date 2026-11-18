@@ -118,7 +118,7 @@ func TestFiniteScoreNeverEscapesNonFinite(t *testing.T) {
 	if err := ca.SeedColdRecords(maxAmbitionRecords(ids), "corr-attract"); err != nil {
 		t.Fatalf("SeedColdRecords: %v", err)
 	}
-	_ = a.SetTermInputs(TermInputs{JobAvailability: 60, ServiceCoverage: 60, Environment: 60, LeisureFit: 60, Safety: 60})
+	_ = a.SetTermInputs(uniformTI(60, nil, 0))
 	for m := int64(0); m < 5; m++ {
 		res, err := a.ApplyMigration(MigrationCommand{Month: m, ResidentIDs: ids, HousingVacancy: 100, JunctionThroughput: 100})
 		if err != nil {

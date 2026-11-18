@@ -2444,8 +2444,8 @@
     "MET-G700": {
       "severity": "error",
       "module": "engine.attract",
-      "message": "invalid §11 attractiveness weight {field}={value} (must be finite, in [0,1], and the seven weights sum to 1)",
-      "remedy": "Fix the weight in the attract config data so each of the seven weights is a finite fraction in [0,1] and they sum to 1 (within 1e-6). engine.attract rejects an invalid weight config rather than silently defaulting to an unweighted or zero-weighted term (AC-10)."
+      "message": "invalid §11 attractiveness weight {field}={value} (must be finite, in [0,1], and the ten lever weights sum to 1)",
+      "remedy": "Fix the weight in the attract config data so each of the ten lever weights (and the three extra weights) is a finite fraction in [0,1] and they sum to 1 (within 1e-6). engine.attract rejects an invalid weight config rather than silently defaulting to an unweighted or zero-weighted term (AC-10)."
     },
     "MET-G701": {
       "severity": "error",
@@ -6378,6 +6378,12 @@
       "module": "feat.compositionroot",
       "message": "Citizen query {kind} failed: {cause}",
       "remedy": "The composed engine could not answer the query; check that engine.citizens is wired and the citizen store is readable, then retry."
+    },
+    "MET-G5603": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "the saved wellbeing status in the compose ledger is not one this engine can produce: field {field} = {value} ({rule}); the whole load is refused and nothing was installed",
+      "remedy": "The save's compose-ledger wellbeing record was damaged or hand-edited. Restore the save from a backup, or delete the wellbeing record from the compose ledger shard (an absent record is the old-save path: the status is rebuilt from the population). The bounds come from the wellbeing module's own configuration (TrackEnvelope and the modifier functions)."
     },
     "MET-P050": {
       "severity": "warn",

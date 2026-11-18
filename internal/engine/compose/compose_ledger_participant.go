@@ -219,6 +219,31 @@ type composeLedgerWire struct {
 	ConstructionAccrualExternal int64  `json:"constructionAccrualExternal,omitempty"`
 	ConstructionSettledLocal    int64  `json:"constructionSettledLocal,omitempty"`
 	ConstructionSettledExternal int64  `json:"constructionSettledExternal,omitempty"`
+	// Wellbeing (BUG-1231): the month-start cohort status the consumer seams
+	// (mortality, migration satisfaction/emigration, firm productivity) read.
+	// It is a few floats of cohort MEAN, never per-citizen attribution, so
+	// AC-18's reconstruct-on-demand contract is untouched. Without it a load
+	// re-derived the status from the population as it stands at the save
+	// tick, which differs from the value the running engine held since its
+	// last month hook (and from the neutral no-data value held before the
+	// first one), so the first monthly mortality draw and migration step
+	// after a mid-month load diverged. A pointer: ABSENT (a bundle written
+	// before this fix) keeps the old behaviour, reconstructing at the
+	// restored month, because nothing else is known.
+	Wellbeing *wellbeingStatusWire `json:"wellbeing,omitempty"`
+}
+
+// wellbeingStatusWire is the durable subset of WellbeingStatus (Seams is a
+// Wire-time report and is never saved).
+type wellbeingStatusWire struct {
+	SampleSize           int     `json:"sampleSize"`
+	NoData               bool    `json:"noData"`
+	MeanPhysical         float64 `json:"meanPhysical"`
+	MeanMental           float64 `json:"meanMental"`
+	MortalityModifier    float64 `json:"mortalityModifier"`
+	ProductivityModifier float64 `json:"productivityModifier"`
+	SatisfactionModifier float64 `json:"satisfactionModifier"`
+	EmigrationModifier   float64 `json:"emigrationModifier"`
 }
 
 // composeLedgerToWire projects the durable ledger fields off the live
@@ -226,7 +251,9 @@ type composeLedgerWire struct {
 // recomputed from the finance module on load (see the file doc comment).
 func composeLedgerToWire(st *simState) composeLedgerWire {
 	drawn := st.materialsDrawnCumulative
+	ws := st.wellbeingStatus
 	return composeLedgerWire{
+		Wellbeing:                   &wellbeingStatusWire{SampleSize: ws.SampleSize, NoData: ws.NoData, MeanPhysical: ws.MeanPhysical, MeanMental: ws.MeanMental, MortalityModifier: ws.MortalityModifier, ProductivityModifier: ws.ProductivityModifier, SatisfactionModifier: ws.SatisfactionModifier, EmigrationModifier: ws.EmigrationModifier},
 		MaterialsDrawnCumulative:    &drawn,
 		ConstructionAccrualLocal:    st.constructionAccrualLocal,
 		ConstructionAccrualExternal: st.constructionAccrualExternal,
@@ -292,6 +319,17 @@ func composeLedgerFromWire(st *simState, w composeLedgerWire) {
 	st.constructionAccrualExternal = w.ConstructionAccrualExternal
 	st.constructionSettledLocal = w.ConstructionSettledLocal
 	st.constructionSettledExternal = w.ConstructionSettledExternal
+	// BUG-1231: an absent record clears any status a previous load installed.
+	st.wellbeingSaved = nil
+	if w.Wellbeing != nil {
+		ww := *w.Wellbeing
+		st.wellbeingSaved = &WellbeingStatus{
+			SampleSize: ww.SampleSize, NoData: ww.NoData,
+			MeanPhysical: ww.MeanPhysical, MeanMental: ww.MeanMental,
+			MortalityModifier: ww.MortalityModifier, ProductivityModifier: ww.ProductivityModifier,
+			SatisfactionModifier: ww.SatisfactionModifier, EmigrationModifier: ww.EmigrationModifier,
+		}
+	}
 }
 
 // composeLedgerParticipant adapts the composition root's own simState ledgers

@@ -43,22 +43,13 @@ func TestReputationAsymmetry(t *testing.T) {
 
 // TestReputationAsymmetricMigration is AC-5's end-to-end form: the same
 // asymmetric momentum driven through ApplyMigration's once-per-month
-// advance, with equal-magnitude opposite shocks on the five pushed terms
-// (housing stays fixed). The migration itself is capacity/emigrant-capped to
+// advance, with equal-magnitude opposite shocks on the nine pushed levers and
+// both modifiers (housing stays fixed). The migration itself is capacity/emigrant-capped to
 // zero side effects so only reputation moves.
 func TestReputationAsymmetricMigration(t *testing.T) {
-	steady := TermInputs{
-		JobAvailability:        50,
-		ServiceCoverage:        50,
-		Environment:            50,
-		LeisureFit:             50,
-		Safety:                 50,
-		MonthlyRentMicroPounds: 0,
-	}
-	up := steady
-	up.JobAvailability, up.ServiceCoverage, up.Environment, up.LeisureFit, up.Safety = 70, 70, 70, 70, 70
-	down := steady
-	down.JobAvailability, down.ServiceCoverage, down.Environment, down.LeisureFit, down.Safety = 30, 30, 30, 30, 30
+	steady := uniformTI(50, nil, 0)
+	up := uniformTI(70, nil, 0)
+	down := uniformTI(30, nil, 0)
 
 	run := func(shock TermInputs) float64 {
 		a, _, _, _ := newAPI(t, validConfig())

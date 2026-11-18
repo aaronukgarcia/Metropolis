@@ -2,6 +2,7 @@ package compose
 
 import (
 	"errors"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"math"
 	"os"
 	"path/filepath"
@@ -316,7 +317,7 @@ func TestFEAT167_TermsDeterministicAcrossRuns(t *testing.T) {
 	run := func() (safety, leisureFit, environment float64) {
 		e, comp := newTestEngine(t, 55)
 		advanceInChunks(t, e, testTicks)
-		return comp.state.attract.Safety(), comp.state.attract.LeisureFit(), comp.state.attract.Environment()
+		return modVal(comp.state.attract, attract.ModifierSafety), levVal(comp.state.attract, attract.LeverParks), modVal(comp.state.attract, attract.ModifierEnvironment)
 	}
 	s1, l1, en1 := run()
 	s2, l2, en2 := run()
@@ -386,7 +387,7 @@ func TestFEAT167_WorsenPopulation_LowersSafety_LowersNetMigration(t *testing.T) 
 			t.Fatalf("Wire (extra=%d): %v", extraPopulation, err)
 		}
 		advanceInChunks(t, e, feat167WorsenedRunMonths*int64(core.DailyTicksPerMonth))
-		return comp.NetMigration(), comp.state.attract.Safety()
+		return comp.NetMigration(), modVal(comp.state.attract, attract.ModifierSafety)
 	}
 
 	baseMigration, baseSafety := run(0)

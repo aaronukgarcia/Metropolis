@@ -3,8 +3,10 @@ package compose
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -70,6 +72,85 @@ func bundleFiles(t *testing.T, data []byte) (header, meta []byte) {
 	return nil, nil
 }
 
+// headerContentKeys are the per-shard header values that are a count, size or
+// digest of shard CONTENT. They change whenever a daily simulation formula
+// changes what the simulation produces (a formula replaces the old one and
+// gets no rule version), so the header golden must not pin them:
+//   - RecordCount: number of records in the shard
+//   - ByteSize:    compressed size of the shard file
+//   - SHA256:      digest of the shard file
+//
+// Everything else in header.json is FORMAT and is compared exactly: key set
+// and order at every level, formatVersion, worldSeed, createdAtTick,
+// gameMonth, appVersion, debugTouched, the set and order of shards and each
+// shard's Name, Kind and Encoding. A rule-version field at version 0 would
+// add a key and fail. journal.golden and save-meta.json.golden stay raw
+// byte comparisons.
+var headerContentKeys = map[string]bool{"RecordCount": true, "ByteSize": true, "SHA256": true}
+
+// headerShape decodes JSON preserving key order and every value, returning a
+// flat token list in which the values of headerContentKeys are blanked.
+func headerShape(b []byte) ([]string, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var out []string
+	var walk func(path string, blank bool) error
+	walk = func(path string, blank bool) error {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		switch v := tok.(type) {
+		case json.Delim:
+			out = append(out, path+" "+string(v))
+			if v == '{' {
+				for dec.More() {
+					kt, err := dec.Token()
+					if err != nil {
+						return err
+					}
+					k := kt.(string)
+					out = append(out, path+" key "+k)
+					if err := walk(path+"."+k, headerContentKeys[k]); err != nil {
+						return err
+					}
+				}
+			} else {
+				for i := 0; dec.More(); i++ {
+					if err := walk(fmt.Sprintf("%s[%d]", path, i), false); err != nil {
+						return err
+					}
+				}
+			}
+			end, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			out = append(out, path+" "+fmt.Sprint(end))
+		default:
+			if blank {
+				out = append(out, path+" = <content-dependent>")
+			} else {
+				out = append(out, fmt.Sprintf("%s = %T %v", path, v, v))
+			}
+		}
+		return nil
+	}
+	if err := walk("$", false); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("trailing data after header JSON: %v", err)
+	}
+	return out, nil
+}
+
+// TestRuleVersion_V0_ByteIdenticalToGoldens proves that at rule version 0 the
+// SAVE FORMAT is unchanged by the rule-version feature (C5-C7). Pinned: the
+// journal bytes, save-meta.json bytes, and the header.json structure (see
+// headerContentKeys). Deliberately NOT pinned: simulation outcomes held in
+// the header's per-shard counts, sizes and digests, because daily formulas
+// change outcomes without a rule version.
 func TestRuleVersion_V0_ByteIdenticalToGoldens(t *testing.T) {
 	run := func(t *testing.T) {
 		ctx := context.Background()
@@ -101,6 +182,18 @@ func TestRuleVersion_V0_ByteIdenticalToGoldens(t *testing.T) {
 			want, err := os.ReadFile(filepath.Join("testdata", "rules", "golden-v0", name))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if name == "header.json.golden" {
+				w, werr := headerShape(want)
+				g, gerr := headerShape(got)
+				if werr != nil || gerr != nil {
+					t.Fatalf("header decode: golden %v, got %v", werr, gerr)
+				}
+				if !reflect.DeepEqual(w, g) {
+					t.Errorf("%s format differs from the pre-change golden:\n--- want\n%s\n--- got\n%s",
+						name, strings.Join(w, "\n"), strings.Join(g, "\n"))
+				}
+				continue
 			}
 			if !bytes.Equal(bytes.TrimSpace(want), bytes.TrimSpace(got)) {
 				t.Errorf("%s differs from the pre-change golden:\n--- want\n%s\n--- got\n%s", name, want, got)

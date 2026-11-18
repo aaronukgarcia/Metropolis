@@ -1292,7 +1292,15 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "households", "step": "ReportStock", "typology": typ.ID})
 		}
 	}
-	attractAPI, err := attract.New(baselineOneAttractConfig(), e.WorldSeed(), cid)
+	attractTermsBytes, _, err := readAttractTermsFile(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract_terms_data"})
+	}
+	attractCfg, err := baselineOneAttractConfig(attractTermsBytes, cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract"})
+	}
+	attractAPI, err := attract.New(attractCfg, e.WorldSeed(), cid)
 	if err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract"})
 	}
@@ -1342,7 +1350,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "refuse"})
 	}
 
-	attractTerms, err := loadAttractTermsData(cid)
+	attractTerms, err := parseAttractTermsData(attractTermsBytes, cid)
 	if err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract_terms_data"})
 	}
@@ -2118,6 +2126,9 @@ type simState struct {
 	wellbeingAPI    *wellbeing.WellbeingAPI
 	wellbeingSeams  []wellbeingSeamStatus
 	wellbeingStatus WellbeingStatus
+	// wellbeingSaved is the status a load installed from the save (BUG-1231);
+	// nil when the save predates it. Read only by reconstructWellbeingForRestore.
+	wellbeingSaved *WellbeingStatus
 
 	// coastalW is the FEAT-2326609833 engine.coastal wiring (coastal_wire.go).
 	coastalW *coastalWiring
@@ -3314,20 +3325,17 @@ func (h *attractHook) ApplyEffect(eff core.Effect) {
 // Effect ever emitted comes from shard 0.
 func (h *attractHook) SingleShard() bool { return true }
 
-// applyMigration pushes all five compose-owned §11 terms, then runs one
-// monthly migration step. Safety/LeisureFit/Environment are real, computed
-// this same month from engine.crime/engine.leisure/engine.refuse (FEAT-167
-// wave 1, docs/planning/icd/engine.attract-terms.md). ServiceCoverage/
-// JobAvailability are ALSO now real (FEAT-167 completion,
-// docs/planning/icd/engine.services-coverage.md /
-// engine.firms-labourmarket.md), computed from engine.services/
-// engine.firms — see serviceCoverageTerm/jobAvailabilityTerm
-// (servicesfirms_wire.go) for the honest scope-limit each carries (no
-// automatic build->services/firm-founding bridge is wired into compose
-// yet, so both read their formula's zero-signal edge case until that
-// separate integration lands). HousingVacancy/JunctionThroughput are
-// unbounded placeholders until households/logistics produce real capacity
-// signals.
+// applyMigration runs one monthly migration step on the ten-lever formula. It
+// computes this month's inputs and pushes them to attract: the housing lever
+// (attract computes the value itself from the households affordability, so only
+// its Built flag is pushed), the safety and environment modifiers outside the
+// ten (real, from engine.crime and engine.refuse), the leisure-fit input from
+// engine.leisure, the household-id set and citywide rent. Levers that are not
+// built contribute exactly neutral (FEAT-9995385616: jobs and services coverage
+// are no longer read here; each moves into its own lever file). The wellbeing
+// satisfaction and emigration modifiers are NOT pushed here: attract reads
+// them through its own seam (SetWellbeingModifiers) once per call. The
+// reputation momentum is advanced inside attract.
 func (st *simState) applyMigration(month int64) (attract.MigrationResult, error) {
 	safety, err := st.safetyTerm(month)
 	if err != nil {
@@ -3341,14 +3349,9 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 	if err != nil {
 		return attract.MigrationResult{}, err
 	}
-	serviceCoverage, err := st.serviceCoverageTerm()
-	if err != nil {
-		return attract.MigrationResult{}, err
-	}
-	jobAvailability, err := st.jobAvailabilityTerm()
-	if err != nil {
-		return attract.MigrationResult{}, err
-	}
+	// FEAT-9995385616 lane A1: jobs and services coverage are NOT built levers
+	// yet (their terms read dead zero/hundred), so they are no longer read
+	// here; lane A2 moves each into its own lever file.
 
 	// FEAT-1972079927 Q1: form households monthly from resident citizens —
 	// real ASM-247 wiring (moneycirc.go's formResidentHouseholds), BEFORE
@@ -3362,15 +3365,15 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 	// engine.households' real HousingAffordability (attract/api.go) — it
 	// only ever needed a non-nil household-id set and a non-zero rent,
 	// both supplied now that Q1 forms real households.
-	if err := st.attract.SetTermInputs(attract.TermInputs{
-		JobAvailability:        jobAvailability,
-		ServiceCoverage:        serviceCoverage,
-		Environment:            environment,
-		LeisureFit:             leisureFit,
-		Safety:                 safety,
+	in := attract.TermInputs{
 		HouseholdIDs:           householdIDs,
 		MonthlyRentMicroPounds: st.monthlyRentForHouseholds(householdIDs),
-	}); err != nil {
+	}
+	in.Levers[attract.LeverHousing] = attract.LeverTerm{Built: true} // value computed inside attract
+	in.Levers[attract.LeverParks] = attract.LeverTerm{Value: leisureFit, Built: true}
+	in.Modifiers[attract.ModifierSafety] = attract.LeverTerm{Value: safety, Built: true}
+	in.Modifiers[attract.ModifierEnvironment] = attract.LeverTerm{Value: environment, Built: true}
+	if err := st.attract.SetTermInputs(in); err != nil {
 		return attract.MigrationResult{}, err
 	}
 	// Capture affordability RIGHT NOW, immediately after SetTermInputs —
@@ -4474,22 +4477,19 @@ func baselineOneNetwork(kind consumption.Utility, sourceType consumption.SourceT
 	return n, nil
 }
 
-// baselineOneAttractConfig builds attract's runtime Config from the
-// documented baseline-one placeholders (the attract module has no data file
-// yet; the S6 scenario constructs the same shape inline).
-func baselineOneAttractConfig() attract.Config {
+// baselineOneAttractConfig builds attract's runtime Config: the ten-lever
+// weights come from the bytes of data/attract_terms.json (attract.ParseWeights,
+// GR#15; Wire reads the file once and passes the bytes), the rest are the
+// documented baseline-one placeholders.
+func baselineOneAttractConfig(b []byte, correlationID string) (attract.Config, error) {
+	w, err := attract.ParseWeights(b, correlationID)
+	if err != nil {
+		return attract.Config{}, err
+	}
 	return attract.Config{
-		Weights: attract.Weights{
-			JobAvailability:      0.2,
-			HousingAffordability: 0.2,
-			ServiceCoverage:      0.15,
-			Environment:          0.1,
-			LeisureFit:           0.1,
-			Safety:               0.1,
-			Reputation:           0.15,
-		},
+		Weights:       w,
 		World:         attract.NewStaticWorldPool(baselineOneAWorld),
 		MigrationRate: baselineOneMigrationRate,
 		Reputation:    attract.ReputationConfig{RiseRate: baselineOneRepRise, FallRate: baselineOneRepFall, Max: baselineOneRepMax},
-	}
+	}, nil
 }

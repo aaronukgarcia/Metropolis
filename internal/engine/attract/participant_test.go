@@ -125,15 +125,7 @@ func driveAttract(t *testing.T, a *AttractAPI) {
 	terms := []float64{80, 60, 90}
 	for i, term := range terms {
 		month := int64(i + 1)
-		ckA(t, a.SetTermInputs(TermInputs{
-			JobAvailability:        term,
-			ServiceCoverage:        term,
-			Environment:            term,
-			LeisureFit:             term,
-			Safety:                 term,
-			HouseholdIDs:           nil, // empty set -> HousingAffordability reads 100 (households.affordabilityIndex's total==0 branch)
-			MonthlyRentMicroPounds: 0,
-		}))
+		ckA(t, a.SetTermInputs(uniformTI(term, nil, 0)))
 		_, err := a.ApplyMigration(MigrationCommand{
 			Month:              month,
 			ResidentIDs:        nil,
@@ -347,15 +339,7 @@ func TestAttractParticipant_RoundTrip(t *testing.T) {
 // totals.
 func continueAttract(t *testing.T, a *AttractAPI) {
 	t.Helper()
-	ckA(t, a.SetTermInputs(TermInputs{
-		JobAvailability:        70,
-		ServiceCoverage:        70,
-		Environment:            70,
-		LeisureFit:             70,
-		Safety:                 70,
-		HouseholdIDs:           nil,
-		MonthlyRentMicroPounds: 0,
-	}))
+	ckA(t, a.SetTermInputs(uniformTI(70, nil, 0)))
 	_, err := a.ApplyMigration(MigrationCommand{
 		Month:              4,
 		ResidentIDs:        nil,

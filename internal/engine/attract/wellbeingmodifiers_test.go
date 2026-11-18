@@ -9,9 +9,7 @@ import "testing"
 // application seam).
 func TestSetWellbeingModifiers_DefaultNeutral(t *testing.T) {
 	unwired, _, _, _ := newAPI(t, validConfig())
-	if err := unwired.SetTermInputs(TermInputs{
-		JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80,
-	}); err != nil {
+	if err := unwired.SetTermInputs(uniformTI(80, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs(unwired): %v", err)
 	}
 	resUnwired, err := unwired.ApplyMigration(MigrationCommand{Month: 0, HousingVacancy: 100, JunctionThroughput: 100})
@@ -23,9 +21,7 @@ func TestSetWellbeingModifiers_DefaultNeutral(t *testing.T) {
 	if err := wiredNeutral.SetWellbeingModifiers(func() (float64, float64) { return 1.0, 1.0 }); err != nil {
 		t.Fatalf("SetWellbeingModifiers: %v", err)
 	}
-	if err := wiredNeutral.SetTermInputs(TermInputs{
-		JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80,
-	}); err != nil {
+	if err := wiredNeutral.SetTermInputs(uniformTI(80, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs(wired): %v", err)
 	}
 	resWired, err := wiredNeutral.ApplyMigration(MigrationCommand{Month: 0, HousingVacancy: 100, JunctionThroughput: 100})
@@ -50,9 +46,7 @@ func TestSetWellbeingModifiers_SatisfactionScalesScore(t *testing.T) {
 	if err := full.SetWellbeingModifiers(func() (float64, float64) { return 1.0, 1.0 }); err != nil {
 		t.Fatalf("SetWellbeingModifiers(full): %v", err)
 	}
-	if err := full.SetTermInputs(TermInputs{
-		JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80,
-	}); err != nil {
+	if err := full.SetTermInputs(uniformTI(80, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs(full): %v", err)
 	}
 	resFull, err := full.ApplyMigration(MigrationCommand{Month: 0, HousingVacancy: 100, JunctionThroughput: 100})
@@ -64,9 +58,7 @@ func TestSetWellbeingModifiers_SatisfactionScalesScore(t *testing.T) {
 	if err := halved.SetWellbeingModifiers(func() (float64, float64) { return 0.5, 1.0 }); err != nil {
 		t.Fatalf("SetWellbeingModifiers(halved): %v", err)
 	}
-	if err := halved.SetTermInputs(TermInputs{
-		JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80,
-	}); err != nil {
+	if err := halved.SetTermInputs(uniformTI(80, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs(halved): %v", err)
 	}
 	resHalved, err := halved.ApplyMigration(MigrationCommand{Month: 0, HousingVacancy: 100, JunctionThroughput: 100})
@@ -102,9 +94,7 @@ func TestSetWellbeingModifiers_EmigrationScalesHazard(t *testing.T) {
 	if err := a.SetWellbeingModifiers(func() (float64, float64) { return 1.0, 0.0 }); err != nil {
 		t.Fatalf("SetWellbeingModifiers: %v", err)
 	}
-	if err := a.SetTermInputs(TermInputs{
-		JobAvailability: 0, ServiceCoverage: 0, Environment: 0, LeisureFit: 0, Safety: 0,
-	}); err != nil {
+	if err := a.SetTermInputs(uniformTI(0, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs: %v", err)
 	}
 	res, err := a.ApplyMigration(MigrationCommand{

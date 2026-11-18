@@ -4,9 +4,10 @@ package attract
 // slow-moving term that makes the Detroit trap a mechanic rather than a
 // marketing description (US-2/AC-5).
 //
-// Model (v1): reputation is a signed momentum value that lags the
-// deviation of the six-term fundamentals (the mean of the six non-
-// reputation terms) from a baseline anchored at the first observed value.
+// Model (v2, FEAT-9995385616): reputation is a signed momentum value that
+// lags the deviation of the fundamentals (the mean of the ten EFFECTIVE
+// lever values, a lever that is not built counting as A_world, plus any
+// built reinforcer) from a baseline anchored at the first observed value.
 // The convergence rate is asymmetric: a positive deviation (fundamentals
 // above baseline — a rising city) is chased at RiseRate, while an equal
 // negative deviation (a falling city) is chased at the strictly-larger
@@ -18,8 +19,8 @@ package attract
 // rule is enforced at Config validation (config.go) and exercised by the
 // reputation asymmetry test.
 //
-// reputation contributes w₇·reputation to A, signed: positive reputation
-// adds beyond the six fundamentals, negative reputation subtracts. At
+// reputation contributes w_reputation·reputation to the score, signed:
+// positive reputation adds beyond the ten levers, negative subtracts. At
 // steady state reputation converges to zero and contributes nothing.
 type reputationState struct {
 	hasBaseline bool
@@ -27,7 +28,7 @@ type reputationState struct {
 	value       float64
 }
 
-// advance updates the momentum from the current six-term fundamentals mean
+// advance updates the momentum from the current ten-lever fundamentals mean
 // f, using the config's asymmetric rates and clamp. The first advance
 // anchors the baseline and leaves value at zero (a neutral start); each
 // later advance moves value toward (f − baseline) at the direction-

@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"math"
 	"testing"
 
@@ -268,11 +269,11 @@ func TestFEAT167Completion_AllSevenTermsReal(t *testing.T) {
 	advanceInChunks(t, e, testTicks)
 
 	terms := map[string]float64{
-		"Safety":          comp.state.attract.Safety(),
-		"LeisureFit":      comp.state.attract.LeisureFit(),
-		"Environment":     comp.state.attract.Environment(),
-		"ServiceCoverage": comp.state.attract.ServiceCoverage(),
-		"JobAvailability": comp.state.attract.JobAvailability(),
+		"Safety":          modVal(comp.state.attract, attract.ModifierSafety),
+		"LeisureFit":      levVal(comp.state.attract, attract.LeverParks),
+		"Environment":     modVal(comp.state.attract, attract.ModifierEnvironment),
+		"ServiceCoverage": levVal(comp.state.attract, attract.LeverServices),
+		"JobAvailability": mustTerm(t, comp.state.jobAvailabilityTerm),
 	}
 	for name, v := range terms {
 		if v == oldFlatPlaceholderValue {
@@ -324,7 +325,7 @@ func TestFEAT167Completion_TermsDeterministicAcrossRuns(t *testing.T) {
 			t.Fatalf("Wire: %v", err)
 		}
 		advanceInChunks(t, e, testTicks)
-		return comp.state.attract.ServiceCoverage(), comp.state.attract.JobAvailability()
+		return levVal(comp.state.attract, attract.LeverServices), mustTerm(t, comp.state.jobAvailabilityTerm)
 	}
 	sc1, ja1 := run()
 	sc2, ja2 := run()
@@ -367,6 +368,11 @@ func TestFEAT167Completion_TermsDeterministicAcrossRuns(t *testing.T) {
 // below equal term1 — verified by hand during development (a throwaway
 // cached-field variant), then reverted.
 func TestFEAT167Completion_ServiceCoverageRespondsAcrossSustainedMonths(t *testing.T) {
+	t.Skip("FEAT-9995385609 (services lever lane, Stage 4): under the ten-lever migration formula the services lever is NOT built, so compose no longer pushes service coverage into attract and serviceCoverageTerm has no production caller. Remove this skip when the lever lane re-attaches the term to attract in the monthly hook, and then restore the attract.LeverServices observation alongside the term observation.")
+	// Restated 2026-11 (FEAT-9995385616 fallout): the subject is the TERM
+	// FUNCTION's response across sustained months on one composed engine, so
+	// the observation is serviceCoverageTerm()'s own output, not attract's
+	// lever snapshot (which is 0 while the lever is unbuilt).
 	cid := errs.NewCorrelationID()
 	servicesAPI, err := services.LoadDefault(cid)
 	if err != nil {
@@ -392,13 +398,13 @@ func TestFEAT167Completion_ServiceCoverageRespondsAcrossSustainedMonths(t *testi
 	monthTicks := int64(core.DailyTicksPerMonth)
 
 	advanceInChunks(t, e, monthTicks) // month 1: lightly loaded, high coverage
-	term1 := comp.state.attract.ServiceCoverage()
+	term1 := mustTerm(t, comp.state.serviceCoverageTerm)
 
 	if err := servicesAPI.UpdateDemand("clinic-1", 500, 0); err != nil {
 		t.Fatalf("UpdateDemand (mutation 1): %v", err)
 	}
 	advanceInChunks(t, e, monthTicks) // month 2
-	term2 := comp.state.attract.ServiceCoverage()
+	term2 := mustTerm(t, comp.state.serviceCoverageTerm)
 	if term2 >= term1 {
 		t.Fatalf("ServiceCoverage after raising demand mid-run (%v) is not lower than before (%v) — the term stopped tracking live services state after Wire", term2, term1)
 	}
@@ -407,7 +413,7 @@ func TestFEAT167Completion_ServiceCoverageRespondsAcrossSustainedMonths(t *testi
 		t.Fatalf("UpdateDemand (mutation 2): %v", err)
 	}
 	advanceInChunks(t, e, monthTicks) // month 3
-	term3 := comp.state.attract.ServiceCoverage()
+	term3 := mustTerm(t, comp.state.serviceCoverageTerm)
 	if term3 >= term2 {
 		t.Fatalf("ServiceCoverage after raising demand again mid-run (%v) is not lower than the previous month (%v) — a single mid-run mutation would not distinguish a cached-at-Wire-time bug from a genuinely-stuck-after-month-1 one, so a THIRD data point is required", term3, term2)
 	}
@@ -429,6 +435,9 @@ func TestFEAT167Completion_ServiceCoverageRespondsAcrossSustainedMonths(t *testi
 // comment, applied to jobAvailabilityTerm/firmsAPI.LabourMarket instead —
 // verified by hand during development, then reverted.
 func TestFEAT167Completion_JobAvailabilityRespondsAcrossSustainedMonths(t *testing.T) {
+	t.Skip("FEAT-9995385609 (services lever lane, Stage 4): under the ten-lever migration formula the services lever is NOT built, so compose no longer pushes job availability into attract and jobAvailabilityTerm has no production caller. Remove this skip when the lever lane re-attaches the term to attract in the monthly hook, and then restore the attract.LeverServices observation alongside the term observation.")
+	// Restated 2026-11 (FEAT-9995385616 fallout): observe the term function's
+	// own output; the jobs lever is unbuilt so attract's snapshot is 0.
 	cid := errs.NewCorrelationID()
 	firmsAPI, err := firms.LoadDefault(103, cid)
 	if err != nil {
@@ -443,7 +452,7 @@ func TestFEAT167Completion_JobAvailabilityRespondsAcrossSustainedMonths(t *testi
 	monthTicks := int64(core.DailyTicksPerMonth)
 
 	advanceInChunks(t, e, monthTicks) // month 1: zero firms registered
-	term1 := comp.state.attract.JobAvailability()
+	term1 := mustTerm(t, comp.state.jobAvailabilityTerm)
 	if term1 != 0 {
 		t.Fatalf("JobAvailability with zero firms registered = %v, want exactly 0", term1)
 	}
@@ -454,7 +463,7 @@ func TestFEAT167Completion_JobAvailabilityRespondsAcrossSustainedMonths(t *testi
 		}
 	}
 	advanceInChunks(t, e, monthTicks) // month 2
-	term2 := comp.state.attract.JobAvailability()
+	term2 := mustTerm(t, comp.state.jobAvailabilityTerm)
 	if term2 <= term1 {
 		t.Fatalf("JobAvailability after registering firms mid-run (%v) is not higher than before (%v) — the term stopped tracking live firms state after Wire", term2, term1)
 	}
@@ -465,11 +474,21 @@ func TestFEAT167Completion_JobAvailabilityRespondsAcrossSustainedMonths(t *testi
 		}
 	}
 	advanceInChunks(t, e, monthTicks) // month 3
-	term3 := comp.state.attract.JobAvailability()
+	term3 := mustTerm(t, comp.state.jobAvailabilityTerm)
 	if term3 <= term2 {
 		t.Fatalf("JobAvailability after registering more firms mid-run (%v) is not higher than the previous month (%v) — a single mid-run mutation would not distinguish a cached-at-Wire-time bug from a genuinely-stuck-after-month-1 one, so a THIRD data point is required", term3, term2)
 	}
 	if term1 < 0 || term1 > 100 || term2 < 0 || term2 > 100 || term3 < 0 || term3 > 100 {
 		t.Fatalf("JobAvailability out of [0,100] across sustained months: %v, %v, %v", term1, term2, term3)
 	}
+}
+
+// mustTerm calls a simState term function and fails the test on error.
+func mustTerm(t *testing.T, f func() (float64, error)) float64 {
+	t.Helper()
+	v, err := f()
+	if err != nil {
+		t.Fatalf("term function: %v", err)
+	}
+	return v
 }

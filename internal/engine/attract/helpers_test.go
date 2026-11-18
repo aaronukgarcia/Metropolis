@@ -11,24 +11,49 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
-// validConfig returns a balanced, valid Config: seven weights summing to 1,
-// a static A_world of 50, unit migration rate, and asymmetric reputation
-// rates (fallRate > riseRate — the Detroit-trap asymmetry).
+// validWeights returns the shipped ten-lever shape: ten lever weights of
+// 0.1 (sum 1), the two modifiers at 0.1 each, reputation 0.15, and the
+// seven momentum reinforcers at 0.02.
+func validWeights() Weights {
+	var w Weights
+	for i := range w.Levers {
+		w.Levers[i] = 0.1
+	}
+	for i := range w.Modifiers {
+		w.Modifiers[i] = 0.1
+	}
+	w.Reputation = 0.15
+	for i := range w.Reinforcers {
+		w.Reinforcers[i] = 0.02
+	}
+	return w
+}
+
+// validConfig returns a balanced, valid Config: the ten-lever weights, a
+// static A_world of 50, unit migration rate, and asymmetric reputation
+// rates (fallRate > riseRate - the Detroit-trap asymmetry).
 func validConfig() Config {
 	return Config{
-		Weights: Weights{
-			JobAvailability:      0.2,
-			HousingAffordability: 0.2,
-			ServiceCoverage:      0.15,
-			Environment:          0.1,
-			LeisureFit:           0.1,
-			Safety:               0.1,
-			Reputation:           0.15,
-		},
+		Weights:       validWeights(),
 		World:         NewStaticWorldPool(50),
 		MigrationRate: 1.0,
 		Reputation:    ReputationConfig{RiseRate: 0.2, FallRate: 0.8, Max: 100},
 	}
+}
+
+// uniformTI returns TermInputs with the housing gate built (attract
+// computes its value), the nine pushed levers and both modifiers built at
+// value v, and the given household context. It is the ten-lever
+// replacement for the old "five terms all at v" fixtures.
+func uniformTI(v float64, ids []uint64, rent int64) TermInputs {
+	in := TermInputs{HouseholdIDs: ids, MonthlyRentMicroPounds: rent}
+	for i := 0; i < LeverCount; i++ {
+		in.Levers[i] = LeverTerm{Value: v, Built: true}
+	}
+	for i := 0; i < ModifierCount; i++ {
+		in.Modifiers[i] = LeverTerm{Value: v, Built: true}
+	}
+	return in
 }
 
 // newAPI builds a wired AttractAPI over a config, with optional residents
@@ -145,3 +170,20 @@ func isErr(t *testing.T, err error, code string) {
 		t.Fatalf("expected error code %s, got %s", code, e.Code)
 	}
 }
+
+// weightsBlockJSON is the shipped "weights" block shape (ten levers at 0.1,
+// two modifiers at 0.1, reputation 0.15, seven reinforcers at 0.02), as a
+// JSON value for embedding in config documents.
+const weightsBlockJSON = `{
+	"levers": [
+		{"id":"housing","weight":0.1},{"id":"jobs","weight":0.1},{"id":"services","weight":0.1},
+		{"id":"healthcare","weight":0.1},{"id":"policy","weight":0.1},{"id":"shops","weight":0.1},
+		{"id":"parks","weight":0.1},{"id":"transport","weight":0.1},{"id":"congestion","weight":0.1},
+		{"id":"tourism","weight":0.1}],
+	"modifiers": [{"id":"safety","weight":0.1},{"id":"environment","weight":0.1}],
+	"reputation": 0.15,
+	"reinforcers": [
+		{"id":"sports","weight":0.02},{"id":"welfare","weight":0.02},{"id":"education","weight":0.02},
+		{"id":"prospects","weight":0.02},{"id":"wellpaidjobs","weight":0.02},{"id":"hospitals","weight":0.02},
+		{"id":"parks","weight":0.02}]
+}`

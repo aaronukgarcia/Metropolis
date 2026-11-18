@@ -53,7 +53,7 @@ type ReputationConfig struct {
 }
 
 // Config is engine.attract's runtime configuration, loaded from data
-// (GR#15) — the seven weights, the §4 world-pool seam, the migration-rate
+// (GR#15) — the ten-lever weights, the §4 world-pool seam, the migration-rate
 // coefficient, and the reputation-momentum parameters. No field carries a
 // literal default in this package's source; every value arrives through
 // [New] or [ParseConfig].
@@ -121,17 +121,9 @@ func (c Config) validate(correlationID string) error {
 // nil WorldPool (rejected as ErrWorldPoolMissing, AC-11), the latter a
 // StaticWorldPool{0}.
 type configJSON struct {
-	Weights struct {
-		JobAvailability      float64 `json:"jobAvailability"`
-		HousingAffordability float64 `json:"housingAffordability"`
-		ServiceCoverage      float64 `json:"serviceCoverage"`
-		Environment          float64 `json:"environment"`
-		LeisureFit           float64 `json:"leisureFit"`
-		Safety               float64 `json:"safety"`
-		Reputation           float64 `json:"reputation"`
-	} `json:"weights"`
-	AWorld        *float64 `json:"aWorld"`
-	MigrationRate float64  `json:"migrationRate"`
+	Weights       weightsJSON `json:"weights"`
+	AWorld        *float64    `json:"aWorld"`
+	MigrationRate float64     `json:"migrationRate"`
 	Reputation    struct {
 		RiseRate float64 `json:"riseRate"`
 		FallRate float64 `json:"fallRate"`
@@ -153,16 +145,12 @@ func ParseConfig(data []byte, correlationID string) (Config, error) {
 			"cause": err.Error(),
 		})
 	}
+	weights, err := raw.Weights.toWeights(correlationID)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
-		Weights: Weights{
-			JobAvailability:      raw.Weights.JobAvailability,
-			HousingAffordability: raw.Weights.HousingAffordability,
-			ServiceCoverage:      raw.Weights.ServiceCoverage,
-			Environment:          raw.Weights.Environment,
-			LeisureFit:           raw.Weights.LeisureFit,
-			Safety:               raw.Weights.Safety,
-			Reputation:           raw.Weights.Reputation,
-		},
+		Weights:       weights,
 		MigrationRate: raw.MigrationRate,
 		Reputation: ReputationConfig{
 			RiseRate: raw.Reputation.RiseRate,

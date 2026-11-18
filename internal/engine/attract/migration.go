@@ -167,19 +167,53 @@ type MigrationCommand struct {
 	JunctionThroughput int64
 }
 
-// MigrationResult is ApplyMigration's return: the decomposed A score, the
+// MigrationResult is ApplyMigration's return: the decomposed score, the
 // A_world baseline, the raw (pre-capacity) net migration, the applied
 // inflow/outflow citizen counts, and the reputation after the step. The
-// conservation invariant "net population change == Inflow − Outflow" is
+// conservation invariant "net population change == Inflow - Outflow" is
 // exactly checkable against CitizensAPI's reported population.
+//
+// The ten-lever decomposition (FEAT-9995385616) is carried in full so the
+// panel never recomputes anything:
+//
+//	sum(Levers[i].Points) + sum(Modifiers[i].Points) + ReputationPoints
+//	  + WellbeingPoints == Net / migrationRate
+//
+// (identity within float rounding). A is the final score (after the
+// wellbeing factor); A - AWorld == Net / migrationRate.
 type MigrationResult struct {
 	Month      int64
 	A          float64
 	AWorld     float64
-	Net        float64 // g(A − A_world), signed, pre-capacity
+	Net        float64 // g(A - A_world), signed, pre-capacity
 	Inflow     int64   // citizens admitted (0 when Net <= 0)
 	Outflow    int64   // citizens departed (0 when Net >= 0)
 	Reputation float64 // reputation after this month's advance
+
+	// Levers is the ten lever lines in fixed LeverID order. A lever that is
+	// not built has Built false, Value 0 and Points exactly 0.
+	Levers [LeverCount]LeverResult
+	// Modifiers is the safety and environment lines (outside the ten), in
+	// ModifierID order, same conventions as Levers.
+	Modifiers [ModifierCount]LeverResult
+	// ReputationPoints is w_reputation * Reputation (the momentum line).
+	ReputationPoints float64
+	// WellbeingFactor is the satisfaction multiplier applied to the score
+	// (1 when no wellbeing getter is wired). WellbeingPoints is the points
+	// it added or removed: score - score before the factor.
+	WellbeingFactor float64
+	WellbeingPoints float64
+
+	// Wanted is the whole-person net before any cap: positive people who
+	// want to arrive, negative people who want to leave (truncated toward
+	// zero from Net). Room is the arrivals cap in people:
+	// min(JunctionThroughput, HousingVacancy x household size). LimitedBy
+	// is LimitHomes when free homes is the tighter (or tied) cap, else
+	// LimitTransport. Inflow = min(Wanted, Room) rounded down to whole
+	// households when Wanted > 0.
+	Wanted    int64
+	Room      int64
+	LimitedBy string
 }
 
 // NetApplied returns Inflow − Outflow — the signed population change this
@@ -190,9 +224,9 @@ func (r MigrationResult) NetApplied() int64 {
 
 // ApplyMigration runs one monthly migration step:
 //
-//  1. snapshot the six-term fundamentals and advance the reputation
+//  1. snapshot the pushed lever inputs and advance the reputation
 //     momentum once for this month (idempotent per month);
-//  2. compute A = weighted seven-term score;
+//  2. compute A = weighted ten-lever score with the safety and environment modifiers;
 //  3. compute net = g(A − A_world), signed (AC-4);
 //  4. apply: a positive net admits capacity-capped migrant households
 //     (AC-7), a negative net removes residents by personality-weighted
@@ -248,17 +282,18 @@ func (a *AttractAPI) ApplyMigration(cmd MigrationCommand) (MigrationResult, erro
 		return MigrationResult{}, err
 	}
 
-	terms, err := a.snapshotTerms()
+	levers, mods, fundamentals, err := a.snapshotLevers(aWorld)
 	if err != nil {
 		return MigrationResult{}, err
 	}
 
 	// Advance reputation once for this month (momentum reacts to this
-	// month's fundamentals). Idempotent per month: re-running the same
+	// month's fundamentals: the mean of the ten effective lever values plus
+	// any built reinforcer). Idempotent per month: re-running the same
 	// month does not double-advance (GR#21 determinism).
 	a.mu.Lock()
 	if !a.hasAdvanced || cmd.Month != a.lastAdvancedMonth {
-		a.reputation.advance(terms.fundamentals(), a.repCfg.RiseRate, a.repCfg.FallRate, a.repCfg.Max)
+		a.reputation.advance(fundamentals, a.repCfg.RiseRate, a.repCfg.FallRate, a.repCfg.Max)
 		a.hasAdvanced = true
 		a.lastAdvancedMonth = cmd.Month
 	}
@@ -266,22 +301,20 @@ func (a *AttractAPI) ApplyMigration(cmd MigrationCommand) (MigrationResult, erro
 	w := a.weights
 	a.mu.Unlock()
 
-	score := weightedSum(w, terms, rep)
-
 	// MOD-034 seam: fold the injected wellbeing satisfaction modifier into
 	// the attractiveness score multiplicatively (SatisfactionModifier is
-	// 1.0 at perfect health, falling as the cohort's wellbeing worsens —
+	// 1.0 at perfect health, falling as the cohort's wellbeing worsens -
 	// wellbeing.WellbeingAPI.SatisfactionModifier's own doc comment), so a
 	// declining-wellbeing city becomes less attractive to migrants exactly
 	// the way a declining reputation or job market already does. Consulted
 	// once here per ApplyMigration call, which is itself the once-per-month
-	// migration step (see this file's package doc) — never re-consulted
-	// mid-month. nil getter (the default) leaves score unchanged, i.e.
-	// today's behaviour.
+	// migration step - never re-consulted mid-month. nil getter (the
+	// default) is the neutral factor 1.
 	satisfactionMod, emigrationMod := a.wellbeingModifierPair()
-	score *= satisfactionMod
+	b := composeBreakdown(w, levers, mods, fundamentals, rep, satisfactionMod, aWorld)
+	score := b.score
 
-	if !num.IsFinite(score) {
+	if !num.IsFinite(score) || !num.IsFinite(b.wellbeingPts) {
 		return MigrationResult{}, errs.New(ErrConfigInvalid, a.correlationID, map[string]any{
 			"field": "A",
 			"value": score,
@@ -293,12 +326,29 @@ func (a *AttractAPI) ApplyMigration(cmd MigrationCommand) (MigrationResult, erro
 		return MigrationResult{}, err
 	}
 
+	// Arrivals cap, reported whether or not it binds this month.
+	vacancyPeople, _ := num.SafeMul(cmd.HousingVacancy, migrantHouseholdSize)
+	room := minI64(cmd.JunctionThroughput, vacancyPeople)
+	limitedBy := LimitTransport
+	if vacancyPeople <= cmd.JunctionThroughput {
+		limitedBy = LimitHomes
+	}
+	wanted := num.ClampInt64FromFloat(net)
+
 	res := MigrationResult{
-		Month:      cmd.Month,
-		A:          score,
-		AWorld:     aWorld,
-		Net:        net,
-		Reputation: rep,
+		Month:            cmd.Month,
+		A:                score,
+		AWorld:           aWorld,
+		Net:              net,
+		Reputation:       rep,
+		Levers:           b.levers,
+		Modifiers:        b.modifiers,
+		ReputationPoints: b.reputationPts,
+		WellbeingFactor:  b.wellbeingFactor,
+		WellbeingPoints:  b.wellbeingPts,
+		Wanted:           wanted,
+		Room:             room,
+		LimitedBy:        limitedBy,
 	}
 
 	switch {

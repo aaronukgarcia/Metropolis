@@ -90,17 +90,33 @@ type attractTermsServiceCoverage struct {
 // on a bad data file" discipline for a module-owned file outside the §24
 // set.
 func loadAttractTermsData(correlationID string) (attractTermsData, error) {
-	dir, err := data.ResolveDataDir(correlationID)
+	b, _, err := readAttractTermsFile(correlationID)
 	if err != nil {
 		return attractTermsData{}, err
+	}
+	return parseAttractTermsData(b, correlationID)
+}
+
+// readAttractTermsFile reads attract_terms.json once; Wire passes the bytes to
+// both the weights parser and the terms parser (BUG-1231 r2 tidy: the file was
+// read twice per Wire).
+func readAttractTermsFile(correlationID string) ([]byte, string, error) {
+	dir, err := data.ResolveDataDir(correlationID)
+	if err != nil {
+		return nil, "", err
 	}
 	path := filepath.Join(dir, attractTermsFile)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return attractTermsData{}, errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{
+		return nil, path, errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{
 			"module": "attract_terms_data", "path": path,
 		})
 	}
+	return b, path, nil
+}
+
+// parseAttractTermsData validates the bytes of attract_terms.json.
+func parseAttractTermsData(b []byte, correlationID string) (attractTermsData, error) {
 	var d attractTermsData
 	if err := json.Unmarshal(b, &d); err != nil {
 		return attractTermsData{}, moduleFailedWrapped(correlationID, "attract_terms_data", err)

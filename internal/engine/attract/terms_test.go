@@ -1,47 +1,32 @@
 package attract
 
 import (
+	"math"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/households"
 )
 
-// TestTermDrillThroughIsolation is AC-1: the seven §11 terms are
-// independently queryable, and changing one term's input changes only that
-// term's accessor output and the composite A(), never the other six
-// accessors. The five pushed terms and the composite are asserted; the
-// HousingAffordability term is exercised separately (it needs the
-// households+finance wiring).
+// TestTermDrillThroughIsolation is AC-1: the lever and modifier lines are
+// independently readable, and changing one lever's input changes only that
+// lever's points and the composite A(), never another lever's line, the
+// reputation, or the housing value. A (housing built at 100, empty city),
+// jobs 10, services 20, parks 40, safety 50, environment 30 at A_world 50:
+//
+//	50 + 0.1*(100-50) + 0.1*(10-50) + 0.1*(20-50) + 0.1*(40-50)
+//	   + 0.1*(50-50) + 0.1*(30-50) + 0.15*0 = 50 + 5 - 4 - 3 - 1 + 0 - 2 = 45
 func TestTermDrillThroughIsolation(t *testing.T) {
 	a, _, _, _ := newAPI(t, validConfig())
 
-	base := TermInputs{
-		JobAvailability:        10,
-		ServiceCoverage:        20,
-		Environment:            30,
-		LeisureFit:             40,
-		Safety:                 50,
-		HouseholdIDs:           nil, // empty → housing affordability reads 100
-		MonthlyRentMicroPounds: 0,
-	}
+	var base TermInputs
+	base.Levers[LeverHousing] = LeverTerm{Built: true} // value computed by attract
+	base.Levers[LeverJobs] = LeverTerm{Value: 10, Built: true}
+	base.Levers[LeverServices] = LeverTerm{Value: 20, Built: true}
+	base.Levers[LeverParks] = LeverTerm{Value: 40, Built: true}
+	base.Modifiers[ModifierSafety] = LeverTerm{Value: 50, Built: true}
+	base.Modifiers[ModifierEnvironment] = LeverTerm{Value: 30, Built: true}
 	if err := a.SetTermInputs(base); err != nil {
 		t.Fatalf("SetTermInputs: %v", err)
-	}
-
-	if got := a.JobAvailability(); got != 10 {
-		t.Fatalf("JobAvailability = %v, want 10", got)
-	}
-	if got := a.ServiceCoverage(); got != 20 {
-		t.Fatalf("ServiceCoverage = %v, want 20", got)
-	}
-	if got := a.Environment(); got != 30 {
-		t.Fatalf("Environment = %v, want 30", got)
-	}
-	if got := a.LeisureFit(); got != 40 {
-		t.Fatalf("LeisureFit = %v, want 40", got)
-	}
-	if got := a.Safety(); got != 50 {
-		t.Fatalf("Safety = %v, want 50", got)
 	}
 	if got := a.Reputation(); got != 0 {
 		t.Fatalf("Reputation = %v, want 0 before any month advances", got)
@@ -57,47 +42,28 @@ func TestTermDrillThroughIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("A: %v", err)
 	}
-	// 0.2*10 + 0.2*100 + 0.15*20 + 0.1*30 + 0.1*40 + 0.1*50 + 0.15*0 = 37
-	if want := 37.0; a0 != want {
+	if want := 45.0; math.Abs(a0-want) > 1e-9 {
 		t.Fatalf("A = %v, want %v", a0, want)
 	}
 
-	// Change exactly one pushed term's input.
+	// Change exactly one lever's input (jobs 10 -> 90): +8 points.
 	changed := base
-	changed.JobAvailability = 90
+	changed.Levers[LeverJobs].Value = 90
 	if err := a.SetTermInputs(changed); err != nil {
 		t.Fatalf("SetTermInputs (changed): %v", err)
-	}
-
-	if got := a.JobAvailability(); got != 90 {
-		t.Fatalf("JobAvailability after change = %v, want 90", got)
-	}
-	// The other six accessors are untouched.
-	if got := a.ServiceCoverage(); got != 20 {
-		t.Fatalf("ServiceCoverage changed by JobAvailability edit: %v", got)
-	}
-	if got := a.Environment(); got != 30 {
-		t.Fatalf("Environment changed by JobAvailability edit: %v", got)
-	}
-	if got := a.LeisureFit(); got != 40 {
-		t.Fatalf("LeisureFit changed by JobAvailability edit: %v", got)
-	}
-	if got := a.Safety(); got != 50 {
-		t.Fatalf("Safety changed by JobAvailability edit: %v", got)
 	}
 	if got := a.Reputation(); got != 0 {
 		t.Fatalf("Reputation changed by a term-input edit (reputation only advances on migration): %v", got)
 	}
 	if got, err := a.HousingAffordability(); err != nil || got != 100 {
-		t.Fatalf("HousingAffordability changed by JobAvailability edit: %v, %v", got, err)
+		t.Fatalf("HousingAffordability changed by a jobs edit: %v, %v", got, err)
 	}
-	// The composite changed.
 	a1, err := a.A()
 	if err != nil {
 		t.Fatalf("A (changed): %v", err)
 	}
-	if a1 == a0 {
-		t.Fatalf("A did not change when a term input changed")
+	if want := a0 + 8; math.Abs(a1-want) > 1e-9 {
+		t.Fatalf("A after jobs 10->90 = %v, want %v (only the jobs line moves, by 0.1 x 80)", a1, want)
 	}
 }
 
@@ -136,15 +102,7 @@ func TestHousingAffordabilityUsesHouseholdsAndFinance(t *testing.T) {
 		}
 	}
 
-	if err := a.SetTermInputs(TermInputs{
-		JobAvailability:        80,
-		ServiceCoverage:        80,
-		Environment:            80,
-		LeisureFit:             80,
-		Safety:                 80,
-		HouseholdIDs:           []uint64{hid},
-		MonthlyRentMicroPounds: 1000,
-	}); err != nil {
+	if err := a.SetTermInputs(uniformTI(80, []uint64{hid}, 1000)); err != nil {
 		t.Fatalf("SetTermInputs: %v", err)
 	}
 

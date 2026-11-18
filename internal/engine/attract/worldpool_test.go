@@ -19,8 +19,7 @@ func TestMissingWorldPool(t *testing.T) {
 
 	// A JSON config that omits aWorld entirely is the same missing case.
 	doc := []byte(`{
-		"weights": {"jobAvailability": 0.2, "housingAffordability": 0.2, "serviceCoverage": 0.15,
-		            "environment": 0.1, "leisureFit": 0.1, "safety": 0.1, "reputation": 0.15},
+		"weights": ` + weightsBlockJSON + `,
 		"migrationRate": 1.0,
 		"reputation": {"riseRate": 0.2, "fallRate": 0.8, "max": 100}
 	}`)

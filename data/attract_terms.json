@@ -1,5 +1,34 @@
 {
-  "version": 2,
+  "version": 3,
+  "weights": {
+    "comment": "The ten-lever migration formula (FEAT-9995385616, Aaron 2026-11-18). levers: ten equal weights of 0.1 (must sum to 1 within 1e-6; equal is the data, not a code rule, so a balance pass is a data edit); one entry per lever, each named once. modifiers: safety and environment stay OUTSIDE the ten at full strength (0.1 each, same slope per point as the old seven-term formula), each its own panel line, each contributing weight x (value - A_world). reputation: the weight of the momentum / pride kick (0.15, unchanged). reinforcers: weights of the named momentum inputs (sports, welfare, education, prospects, wellpaidjobs, hospitals, parks) - inert today because none is built; each, once built, moves the momentum's target by weight x (value - A_world) (0.02 each is a directional placeholder). Balance pass pending (Aaron's balance-number regime, 2026-08-13).",
+    "levers": [
+      {"id": "housing", "weight": 0.1},
+      {"id": "jobs", "weight": 0.1},
+      {"id": "services", "weight": 0.1},
+      {"id": "healthcare", "weight": 0.1},
+      {"id": "policy", "weight": 0.1},
+      {"id": "shops", "weight": 0.1},
+      {"id": "parks", "weight": 0.1},
+      {"id": "transport", "weight": 0.1},
+      {"id": "congestion", "weight": 0.1},
+      {"id": "tourism", "weight": 0.1}
+    ],
+    "modifiers": [
+      {"id": "safety", "weight": 0.1},
+      {"id": "environment", "weight": 0.1}
+    ],
+    "reputation": 0.15,
+    "reinforcers": [
+      {"id": "sports", "weight": 0.02},
+      {"id": "welfare", "weight": 0.02},
+      {"id": "education", "weight": 0.02},
+      {"id": "prospects", "weight": 0.02},
+      {"id": "wellpaidjobs", "weight": 0.02},
+      {"id": "hospitals", "weight": 0.02},
+      {"id": "parks", "weight": 0.02}
+    ]
+  },
   "environment": {
     "pollutionHalfSaturationKg": 50000,
     "comment": "Directional placeholder (GR#15): total uncollected+disposal-backlog waste (kg, summed general+recycling+food) at which engine.attract's Environment term reads 50/100. Mirrors data/crime.json's safety.halfSaturationActiveCrime curve shape (see internal/engine/crime/api.go's SafetyTerm). Balance pass pending (Aaron's balance-number regime, 2026-08-13)."

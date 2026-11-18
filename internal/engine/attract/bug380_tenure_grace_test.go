@@ -27,9 +27,7 @@ import "testing"
 // exactly one pair — a setup failure, not a tenure-grace result.
 func bug380AdmitOnePair(t *testing.T, a *AttractAPI) (idA, idB uint64) {
 	t.Helper()
-	if err := a.SetTermInputs(TermInputs{
-		JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80,
-	}); err != nil {
+	if err := a.SetTermInputs(uniformTI(80, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs(positive): %v", err)
 	}
 	// HousingVacancy=1 household (2 people) caps admission at exactly one
@@ -60,7 +58,7 @@ func bug380AdmitOnePair(t *testing.T, a *AttractAPI) (idA, idB uint64) {
 // (decline saturates at 1 — see applyEmigration's own doc comment).
 func bug380ForceSevereDecline(t *testing.T, a *AttractAPI) {
 	t.Helper()
-	if err := a.SetTermInputs(TermInputs{}); err != nil {
+	if err := a.SetTermInputs(uniformTI(0, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs(severe decline): %v", err)
 	}
 }

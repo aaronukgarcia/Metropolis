@@ -25,8 +25,8 @@ func TestMigrationConservation(t *testing.T) {
 		t.Fatalf("SeedColdRecords: %v", err)
 	}
 
-	high := TermInputs{JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80}
-	low := TermInputs{JobAvailability: 0, ServiceCoverage: 0, Environment: 0, LeisureFit: 0, Safety: 0}
+	high := uniformTI(80, nil, 0)
+	low := uniformTI(0, nil, 0)
 
 	// Months alternate: positive (admit), negative (depart the seeded set).
 	script := []struct {
@@ -80,7 +80,7 @@ func TestConservationNoPopulationLeak(t *testing.T) {
 	a, ca, _, _ := newAPI(t, validConfig())
 
 	// Positive month.
-	if err := a.SetTermInputs(TermInputs{JobAvailability: 80, ServiceCoverage: 80, Environment: 80, LeisureFit: 80, Safety: 80}); err != nil {
+	if err := a.SetTermInputs(uniformTI(80, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs: %v", err)
 	}
 	res, err := a.ApplyMigration(MigrationCommand{Month: 0, HousingVacancy: 100, JunctionThroughput: 100})

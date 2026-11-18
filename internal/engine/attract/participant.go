@@ -127,7 +127,20 @@ type attractMetaWire struct {
 	HasAdvanced           bool                      `json:"hasAdvanced"`
 	NextMigrantID         uint64                    `json:"nextMigrantID"`
 	MigrantAdmittedMonths *[]migrantTenureEntryWire `json:"migrantAdmittedMonths,omitempty"`
+
+	// LeverFormula is the formula-version marker (FEAT-9995385616). A
+	// pointer so absence means an OLD record written under the seven-term
+	// formula, whose reputation baseline was a mean of six terms and so
+	// means nothing under the ten-lever formula: on such a record the
+	// reputation re-anchors once (hasBaseline false, value 0) and no
+	// seven-term path is kept (Aaron, 2026-11-18, ruling 3). A modern save
+	// writes leverFormulaVersion and keeps its reputation exactly.
+	LeverFormula *int `json:"leverFormula,omitempty"`
 }
+
+// leverFormulaVersion is the formula marker snapshotForSave writes: 1 is
+// the ten-lever formula with safety/environment modifiers and momentum.
+const leverFormulaVersion = 1
 
 // attractSnapshot is a point-in-time copy of AttractAPI's mutable runtime
 // state, taken under the read lock in one shot. There is only ever a
@@ -195,6 +208,7 @@ func (a *AttractAPI) snapshotForSave() (attractSnapshot, error) {
 		tenureWire = append(tenureWire, migrantTenureEntryWire{ID: id, AdmittedMonth: a.migrantAdmittedMonth[id]})
 	}
 
+	formula := leverFormulaVersion
 	return attractSnapshot{
 		meta: attractMetaWire{
 			Reputation: reputationStateWire{
@@ -211,6 +225,7 @@ func (a *AttractAPI) snapshotForSave() (attractSnapshot, error) {
 			// code writes: a nil decode is what marks a record as
 			// pre-BUG-380 legacy and triggers the backfill loop.
 			MigrantAdmittedMonths: &tenureWire,
+			LeverFormula:          &formula,
 		},
 	}, nil
 }
@@ -287,6 +302,11 @@ func (a *AttractAPI) applyLoadRecord(rec serialize.Record) error {
 			hasBaseline: m.Reputation.HasBaseline,
 			baseline:    m.Reputation.Baseline,
 			value:       m.Reputation.Value,
+		}
+		if m.LeverFormula == nil {
+			// OLD seven-term record: re-anchor the momentum once (see
+			// attractMetaWire.LeverFormula).
+			a.reputation = reputationState{}
 		}
 		a.lastAdvancedMonth = m.LastAdvancedMonth
 		a.hasAdvanced = m.HasAdvanced

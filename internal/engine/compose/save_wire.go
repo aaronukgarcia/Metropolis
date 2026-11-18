@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"encoding/json"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
@@ -316,9 +317,22 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	loadOpts = append(loadOpts, save.WithExpectedWorldSeed(int64(c.state.seed)))
 	loadOpts = append(loadOpts, opts...)
 	loadOpts = append(loadOpts, save.WithExpectedGameMode(gameMode)) // BUG-737 P2: always last, always wins
+	// BUG-1231 r2: validate the saved wellbeing record BEFORE any participant
+	// installs state. save.Manager.Load applies shards one after another, and the
+	// compose ledger is decoded after most of them, so checking inside the
+	// ledger handler would leave the composition half-loaded on a refusal.
+	if err := c.prevalidateComposeLedger(dir); err != nil {
+		return err
+	}
+	// A bundle with no compose-ledger shard never reaches the ledger handler, so
+	// the status a previous load installed must be dropped here, not only there.
+	// Restored if the load is refused, so a refused load changes nothing.
+	prevSaved := c.state.wellbeingSaved
+	c.state.wellbeingSaved = nil
 	mgr := save.NewManager(root, c.Participants(), c.state.cid)
 	header, _, err := mgr.Load(dir, loadOpts...)
 	if err != nil {
+		c.state.wellbeingSaved = prevSaved
 		// A refused load (seed mismatch, corrupt bundle, ...) must leave
 		// every participant untouched (TestBUG479_Load_SeedMismatch_...'s
 		// pristine-digest proof) — so the F1 reset below runs ONLY after
@@ -480,6 +494,15 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 // (SetMortalityModifier/SetWellbeingModifiers/SetProductivityModifier)
 // read it every month.
 func (c *Composition) reconstructWellbeingForRestore() error {
+	// BUG-1231: the save carried the status the running engine held; install
+	// it as is. Only a bundle without it (written before the fix) falls
+	// through to the reconstruction below.
+	if saved := c.state.wellbeingSaved; saved != nil {
+		status := *saved
+		status.Seams = c.state.wellbeingSeams
+		c.state.wellbeingStatus = status
+		return nil
+	}
 	clock, err := c.state.e.Clock()
 	if err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "wellbeing", "step": "reconstruct-on-load"})
@@ -604,4 +627,58 @@ func (c *Composition) LoadAt(root string, tick int64, opts ...save.LoadOption) e
 	// possibly a different month than Load's own month-0 call used — this
 	// is the authoritative one for LoadAt's restored tick.
 	return c.reconstructWellbeingForRestore()
+}
+
+// prevalidateComposeLedger reads the bundle's compose-ledger shard (header and
+// that one shard only, no state touched) and refuses a damaged saved wellbeing
+// record, so a refusal leaves the composition exactly as it was. A bundle
+// without the shard, or a record without the wellbeing field (an old save), has
+// nothing to check. A shard that cannot be opened or decoded is refused here
+// too, with the same error class Load uses for a failed shard read, rather than
+// after earlier shards have been applied.
+func (c *Composition) prevalidateComposeLedger(dir string) error {
+	hdr, err := serialize.ReadHeader(dir)
+	if err != nil {
+		return nil // the real load reports a bad header with its own error
+	}
+	for _, sm := range hdr.ShardIndex {
+		if sm.Kind != kindComposeLedger {
+			continue
+		}
+		f, err := serialize.OpenShardReader(dir, sm)
+		if err != nil {
+			return nil // the real load reports it
+		}
+		var vErr error
+		readErr := serialize.NDJSONSerializer{}.ReadShard(f, 0, func(rec serialize.Record) error {
+			if rec.Kind != recComposeLedger {
+				return nil // the handler rejects unknown kinds in the real load
+			}
+			var w composeLedgerWire
+			if err := json.Unmarshal(rec.Data, &w); err != nil {
+				return err
+			}
+			if w.Wellbeing != nil {
+				if e := validateSavedWellbeing(c.state.wellbeingAPI, c.state.cid, *w.Wellbeing); e != nil {
+					vErr = e
+					return e
+				}
+			}
+			return nil
+		})
+		_ = f.Close()
+		if vErr != nil {
+			return vErr
+		}
+		if readErr != nil {
+			// A checksum-bad bundle is refused by the real load before any
+			// handler runs, with its own error; only a bundle whose bytes are
+			// intact but whose record does not decode is refused here.
+			if _, vErr := serialize.ValidateBundle(dir); vErr != nil {
+				return nil
+			}
+			return errs.Wrap(ErrModuleFailed, c.state.cid, readErr, map[string]any{"module": "save", "step": "load", "dir": dir, "cause": "pre-validating compose ledger"})
+		}
+	}
+	return nil
 }

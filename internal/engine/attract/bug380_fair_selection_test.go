@@ -48,7 +48,7 @@ func TestBUG380_AmbitionStillDrivesSelectionUnderCap(t *testing.T) {
 	allIDs = append(allIDs, lowIDs...)
 	allIDs = append(allIDs, highID)
 
-	if err := a.SetTermInputs(TermInputs{}); err != nil { // severe decline: every term at its floor
+	if err := a.SetTermInputs(uniformTI(0, nil, 0)); err != nil { // severe decline: every term at its floor
 		t.Fatalf("SetTermInputs: %v", err)
 	}
 

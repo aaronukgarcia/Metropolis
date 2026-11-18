@@ -326,15 +326,36 @@ func TestHeadless_TwelveMonthsLedgerMatchesSimState(t *testing.T) {
 // finance hook must open the monthly tick, keeping the figure at exactly
 // one month's wage bill.
 func TestBUG355_WagesPosted_IsPerMonthNotCumulative(t *testing.T) {
+	// Restated 2026-11 (FEAT-9995385616 fallout): the old body pinned the
+	// literal monthlyWagesFloor, which only held while no migrant arrived.
+	// Under the ten-lever migration formula migrants arrive from month 1, so
+	// the wage bill grows with the employed headcount. BUG-355's subject is
+	// unchanged: each month's WagesPosted is THAT month's bill, not the
+	// running sum. The expected bill is derived from the engine's own
+	// employed count and wage constant, exactly as financeHook sizes it
+	// (max(floor, employed x gross wage)), never from a literal.
 	e, comp := newTestEngine(t, 42)
-	wantWage := int64(monthlyWagesFloor)
+	var posted [4]int64
 	for m := int64(1); m <= 3; m++ {
 		if err := e.AdvanceTicks(errs.NewCorrelationID(), core.DailyTicksPerMonth); err != nil {
 			t.Fatalf("AdvanceTicks(month %d): %v", m, err)
 		}
-		if got := int64(comp.state.finance.WagesPosted()); got != wantWage {
-			t.Fatalf("WagesPosted after month %d = %d, want exactly one month's wage bill %d (per-month, not cumulative)", m, got, wantWage)
+		got := int64(comp.state.finance.WagesPosted())
+		posted[m] = got
+		want := int64(comp.state.employedResidentCount()) * monthlyWageGrossPerEmployedMicropounds
+		if want < monthlyWagesFloor {
+			want = monthlyWagesFloor
 		}
+		if got != want {
+			t.Fatalf("WagesPosted after month %d = %d, want one month's wage bill %d (max(floor %d, employed %d x %d)) — per-month, not cumulative",
+				m, got, want, int64(monthlyWagesFloor), comp.state.employedResidentCount(), int64(monthlyWageGrossPerEmployedMicropounds))
+		}
+	}
+	// Direct statement of the property: a cumulative figure would be at least
+	// the sum of the earlier months' postings (each >= the floor) plus this
+	// month's; a per-month figure is nowhere near that.
+	if posted[3] >= posted[1]+posted[2] {
+		t.Fatalf("WagesPosted month 3 = %d is not below month1+month2 = %d — looks cumulative", posted[3], posted[1]+posted[2])
 	}
 }
 

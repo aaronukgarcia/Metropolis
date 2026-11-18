@@ -40,14 +40,7 @@ func admitManyMigrants(t *testing.T, seed uint64, month int64) (*AttractAPI, *ci
 	if err := a.SetFinance(f); err != nil {
 		t.Fatalf("SetFinance: %v", err)
 	}
-	if err := a.SetTermInputs(TermInputs{
-		JobAvailability:        90,
-		ServiceCoverage:        90,
-		Environment:            90,
-		LeisureFit:             90,
-		Safety:                 90,
-		MonthlyRentMicroPounds: 0,
-	}); err != nil {
+	if err := a.SetTermInputs(uniformTI(90, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs: %v", err)
 	}
 	res, err := a.ApplyMigration(MigrationCommand{

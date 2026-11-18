@@ -1,5 +1,5 @@
 // Package attract is the attractiveness & migration module (engine.attract,
-// MOD-029): the §11 "master dial" — the seven-term attractiveness score A,
+// MOD-029): the §11 "master dial" — the ten-lever attractiveness score A,
 // the signed monthly net-migration response g(A − A_world), the §4
 // static/infinite world pool, per-resident personality-weighted emigration,
 // and the asymmetric reputation-momentum term that makes the Detroit trap a
@@ -11,47 +11,56 @@
 // Migration — the master dial); §4 (Population Scale — growth is
 // migration-dominated, pulling migrants from an abstract world pool).
 //
-// # The seven-term formula (AC-1/AC-2)
+// # The ten-lever formula (FEAT-9995385616, Aaron's rulings 2026-11-18)
 //
-//	A = w₁·jobAvailability + w₂·housingAffordability + w₃·serviceCoverage
-//	    + w₄·environment + w₅·leisureFit + w₆·safety + w₇·reputation(momentum)
+// Attractiveness is one line per lever. The ten levers (housing, jobs,
+// services, health care, policy, shops, parks, transport links, congestion,
+// tourism, in that fixed order) each carry the weight data/attract_terms.json
+// gives them (ten equal weights of 0.1; ParseWeights, never a literal, GR#15).
+// Each lever input is a [LeverTerm]: a 0..100 value and whether the lever is
+// built. A lever that is not built contributes EXACTLY neutral (A_world) and
+// reports itself as not built; its value is ignored but still validated.
 //
-// The seven weights are loaded from config data ([Config]/[ParseConfig]),
-// never literals in this package's source (GR#15): rebalancing is a data
-// edit. Each term is independently queryable ([AttractAPI.JobAvailability],
-// [AttractAPI.HousingAffordability], [AttractAPI.ServiceCoverage],
-// [AttractAPI.Environment], [AttractAPI.LeisureFit], [AttractAPI.Safety],
-// [AttractAPI.Reputation]) and [AttractAPI.A] returns the composite — the
-// code.json "term-decomposed A score, every term drill-through" pattern.
+//	points_i = w_i · (value_i − A_world)        built lever, exactly 0 when not
+//	pre      = A_world + Σ lever points + Σ modifier points + w_rep · reputation
+//	score    = pre · wellbeingFactor
+//	net      = migrationRate · (score − A_world)
 //
-// # Registered-edge terms vs pushed-input terms (AC-3, ASM-243/BUG-058)
+// so a city with every lever neutral, reputation 0 and wellbeing 1 scores
+// exactly A_world and moves nobody. Two extra modifiers, safety and
+// environment, stay OUTSIDE the ten at full strength (0.1 each) as their own
+// lines, using the same (value − A_world) form. Reputation is a momentum
+// line outside the ten (below). The panel prints every line and they add up:
 //
-// Five of the seven terms have no registered outbound call edge from
-// engine.attract in code.json (no edge to engine.firms/market,
-// engine.services, engine.world, engine.leisure, or engine.crime), so this
-// package does NOT silently call those modules — that would be a GR#20
-// violation disguised as a working feature. Those five (JobAvailability,
-// ServiceCoverage, Environment, LeisureFit, Safety) are accepted as pushed
-// input through the documented [TermInputs] struct via
-// [AttractAPI.SetTermInputs]. HousingAffordability is the one term computed
-// for real today: it calls engine.households' HousingAffordability
-// (engine.households AC-9) combined with engine.finance's wage/income
-// context — both registered outbound edges. When BUG-058 wires the five
-// missing edges, this package's pushed-input surface and the end-to-end
-// scenario both need a revision pass (AC-3's escalation).
+//	Σ lever points + Σ modifier points + reputation points + wellbeing points
+//	  = net / migrationRate
+//
+// where wellbeing points = score − pre. Lever values and points are
+// "attractiveness points" on the 0..100 scale. The housing lever is the one
+// attract computes itself (engine.households' HousingAffordability combined
+// with engine.finance's wage context, both registered edges); the caller
+// supplies only its Built flag and the household context. Every other lever
+// value, and the two modifiers, arrive as pushed input through [TermInputs]
+// and [AttractAPI.SetTermInputs] (the engine.attract call edges to the source
+// modules are not registered, GR#20). [AttractAPI.A] returns the composite
+// before the wellbeing factor; [MigrationResult] carries every line.
 //
 // # Reputation momentum — asymmetric, the Detroit trap (AC-5, US-2)
 //
-// Reputation is a slow-moving, signed momentum term: it lags the deviation
-// of the six-term fundamentals from a baseline anchored at the first
-// observed value, converging at a strictly-larger rate toward negative
+// Reputation is a slow-moving, signed momentum (pride) with big inertia: it
+// lags the deviation of the mean of the ten EFFECTIVE lever values (a lever
+// that is not built counts as A_world) from a baseline anchored at the
+// first observed value, converging at a strictly-larger rate toward negative
 // deviations than positive ones. "Cities rising attract beyond
 // fundamentals; cities falling repel beyond fundamentals" — and the repel
 // is stronger. That asymmetry is structural: Config validation rejects a
-// symmetric or reversed rate pair (fallRate ≤ riseRate), so a build can
+// symmetric or reversed rate pair (fallRate <= riseRate), so a build can
 // never silently ship a one-way dial that makes the Detroit spiral
 // (engine.spiral, MOD-030) a marketing description instead of a reachable
-// failure state.
+// failure state. Seven named reinforcer slots (sports, welfare, education,
+// prospects, well-paying jobs, hospitals, parks; Aaron's words) feed the
+// momentum's target; none is built yet so each is exactly neutral. An old
+// save (no leverFormula marker) re-anchors the momentum once on load.
 //
 // # Migration (AC-4/AC-6/AC-7)
 //

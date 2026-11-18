@@ -97,15 +97,7 @@ func TestS6EndToEnd(t *testing.T) {
 	}
 
 	// --- Step 2: Migrate (positive branch) ------------------------------------
-	if err := att.SetTermInputs(attract.TermInputs{
-		JobAvailability:        80,
-		ServiceCoverage:        80,
-		Environment:            80,
-		LeisureFit:             80,
-		Safety:                 80,
-		HouseholdIDs:           founderHouseholds,
-		MonthlyRentMicroPounds: 1000,
-	}); err != nil {
+	if err := att.SetTermInputs(uniform(80, founderHouseholds, 1000)); err != nil {
 		t.Fatalf("SetTermInputs (positive): %v", err)
 	}
 
@@ -198,15 +190,7 @@ func TestS6EndToEnd(t *testing.T) {
 	// their members emigrate (engine.citizens' departure command removes the
 	// citizen but not their household membership — a pre-existing citizens
 	// gap), so the affordability aggregation must not re-query them.
-	if err := att.SetTermInputs(attract.TermInputs{
-		JobAvailability:        0,
-		ServiceCoverage:        0,
-		Environment:            0,
-		LeisureFit:             0,
-		Safety:                 0,
-		HouseholdIDs:           nil,
-		MonthlyRentMicroPounds: 1000,
-	}); err != nil {
+	if err := att.SetTermInputs(uniform(0, nil, 1000)); err != nil {
 		t.Fatalf("SetTermInputs (negative): %v", err)
 	}
 	beforeDecline := ca.TotalPopulation(corr)
@@ -231,15 +215,7 @@ func TestS6EndToEnd(t *testing.T) {
 // attractConfig is the balanced master-dial config used by the scenario.
 func attractConfig() attract.Config {
 	return attract.Config{
-		Weights: attract.Weights{
-			JobAvailability:      0.2,
-			HousingAffordability: 0.2,
-			ServiceCoverage:      0.15,
-			Environment:          0.1,
-			LeisureFit:           0.1,
-			Safety:               0.1,
-			Reputation:           0.15,
-		},
+		Weights:       scenarioWeights(),
 		World:         attract.NewStaticWorldPool(50),
 		MigrationRate: 1.0,
 		Reputation:    attract.ReputationConfig{RiseRate: 0.2, FallRate: 0.8, Max: 100},
@@ -414,4 +390,34 @@ func buildingsFixtureJSON() string {
 	}
 	sb.WriteString(`],"entries":[]}`)
 	return sb.String()
+}
+
+// scenarioWeights is the shipped ten-lever shape: ten levers at 0.1, two
+// modifiers at 0.1, reputation 0.15, reinforcers at 0.02.
+func scenarioWeights() attract.Weights {
+	var w attract.Weights
+	for i := range w.Levers {
+		w.Levers[i] = 0.1
+	}
+	for i := range w.Modifiers {
+		w.Modifiers[i] = 0.1
+	}
+	w.Reputation = 0.15
+	for i := range w.Reinforcers {
+		w.Reinforcers[i] = 0.02
+	}
+	return w
+}
+
+// uniform returns TermInputs with the housing gate built and the nine
+// pushed levers and both modifiers built at v.
+func uniform(v float64, ids []uint64, rent int64) attract.TermInputs {
+	in := attract.TermInputs{HouseholdIDs: ids, MonthlyRentMicroPounds: rent}
+	for i := range in.Levers {
+		in.Levers[i] = attract.LeverTerm{Value: v, Built: true}
+	}
+	for i := range in.Modifiers {
+		in.Modifiers[i] = attract.LeverTerm{Value: v, Built: true}
+	}
+	return in
 }

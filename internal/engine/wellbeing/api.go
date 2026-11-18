@@ -1,6 +1,7 @@
 package wellbeing
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -439,4 +440,51 @@ func (w *WellbeingAPI) EmigrationModifier(physical, mental float64) float64 {
 		return 0
 	}
 	return emigrationModifier(w.cfg, physical, mental)
+}
+
+// TrackEnvelope returns the closed range each track's per-citizen Total can
+// take for this configuration, including the most negative seasonal health
+// wave engine.season reports over a full calendar year (the wave is <= 0, so
+// it only lowers the physical lower bound). BUG-1231: composition uses it to refuse a
+// saved cohort mean that no engine run could have produced. Derived term by
+// term from AttributeCitizen (attribute.go:31-58) and the driver functions
+// (drivers.go): the baseline jitter is [-3,+3] (attribute.go:114); every
+// clamp01-driven delta lies between 0 and its weight (drivers.go:55-84);
+// the age curve is piecewise linear so its extremes are at the anchors
+// (drivers.go:35-52); commute stress peaks at the larger of its two anchors
+// (drivers.go:96-109). The crowding delta (unbounded in persons per room) is
+// taken as 0, because composition always passes ContextInputs{} (zero
+// persons per room); a caller that starts feeding real crowding must widen
+// this envelope. Isolation and unemployment terms use their full weight.
+func (w *WellbeingAPI) TrackEnvelope() (physLo, physHi, mentLo, mentHi float64) {
+	if err := w.checkNotCopied("TrackEnvelope"); err != nil {
+		return 0, 0, 0, 0
+	}
+	f := w.cfg
+	ageMin, ageMax := f.Physical.AgeCurve[0].Delta, f.Physical.AgeCurve[0].Delta
+	for _, p := range f.Physical.AgeCurve {
+		ageMin = math.Min(ageMin, p.Delta)
+		ageMax = math.Max(ageMax, p.Delta)
+	}
+	physHi = f.Baseline.Physical + 3 + ageMax + f.Physical.HealthcareAccessWeight + f.Physical.DietWeight +
+		f.Physical.ActiveTravelWeight + f.Physical.SportParticipationWeight
+	physLo = f.Baseline.Physical - 3 + ageMin - f.Physical.PollutionWeight
+	w.mu.RLock()
+	seasonSrc := w.season
+	w.mu.RUnlock()
+	if seasonSrc != nil {
+		worst := 0.0
+		for mi := int64(0); mi < 12; mi++ {
+			if v, err := seasonSrc.HealthWaveModifier(mi); err == nil && v < worst {
+				worst = v
+			}
+		}
+		physLo += worst
+	}
+	m := f.Mental
+	mentHi = f.Baseline.Mental + 3 + m.GreenSpaceWeight + m.LeisureFitWeight
+	stress := math.Max(m.CommuteStressAtThreshold, m.CommuteStressAt100Minutes)
+	mentLo = f.Baseline.Mental - 3 - m.CommuteWeight*stress - m.JobAmbitionMismatchWeight -
+		m.IsolationWeight - m.NoiseWeight - m.FinancialStressWeight - m.UnemploymentWeight
+	return physLo, physHi, mentLo, mentHi
 }

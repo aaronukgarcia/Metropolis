@@ -25,14 +25,7 @@ func maxAmbitionRecords(ids []uint64) []citizens.ColdRecord {
 func TestBidirectionalMigration(t *testing.T) {
 	// Positive branch: a large positive gap admits migrants.
 	aPos, caPos, _, _ := newAPI(t, validConfig())
-	if err := aPos.SetTermInputs(TermInputs{
-		JobAvailability:        80,
-		ServiceCoverage:        80,
-		Environment:            80,
-		LeisureFit:             80,
-		Safety:                 80,
-		MonthlyRentMicroPounds: 0,
-	}); err != nil {
+	if err := aPos.SetTermInputs(uniformTI(80, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs(pos): %v", err)
 	}
 	resPos, err := aPos.ApplyMigration(MigrationCommand{
@@ -65,14 +58,7 @@ func TestBidirectionalMigration(t *testing.T) {
 	if err := caNeg.SeedColdRecords(maxAmbitionRecords(residents), "corr-attract"); err != nil {
 		t.Fatalf("SeedColdRecords: %v", err)
 	}
-	if err := aNeg.SetTermInputs(TermInputs{
-		JobAvailability:        0,
-		ServiceCoverage:        0,
-		Environment:            0,
-		LeisureFit:             0,
-		Safety:                 0,
-		MonthlyRentMicroPounds: 0,
-	}); err != nil {
+	if err := aNeg.SetTermInputs(uniformTI(0, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs(neg): %v", err)
 	}
 	resNeg, err := aNeg.ApplyMigration(MigrationCommand{
@@ -113,14 +99,7 @@ func TestPopulationDecline(t *testing.T) {
 	if err := ca.SeedColdRecords(maxAmbitionRecords(ids), "corr-attract"); err != nil {
 		t.Fatalf("SeedColdRecords: %v", err)
 	}
-	if err := a.SetTermInputs(TermInputs{
-		JobAvailability:        0,
-		ServiceCoverage:        0,
-		Environment:            0,
-		LeisureFit:             0,
-		Safety:                 0,
-		MonthlyRentMicroPounds: 0,
-	}); err != nil {
+	if err := a.SetTermInputs(uniformTI(0, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs: %v", err)
 	}
 	before := ca.TotalPopulation("corr-attract")
@@ -168,14 +147,7 @@ func TestPersonalityWeightedEmigration(t *testing.T) {
 // and throughput, not by g() alone.
 func TestCapacityConstraint(t *testing.T) {
 	a, ca, _, _ := newAPI(t, validConfig())
-	if err := a.SetTermInputs(TermInputs{
-		JobAvailability:        100,
-		ServiceCoverage:        100,
-		Environment:            100,
-		LeisureFit:             100,
-		Safety:                 100,
-		MonthlyRentMicroPounds: 0,
-	}); err != nil {
+	if err := a.SetTermInputs(uniformTI(100, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs: %v", err)
 	}
 
@@ -215,7 +187,7 @@ func TestMigrationDeterminism(t *testing.T) {
 		if err := ca.SeedColdRecords(maxAmbitionRecords(ids), "corr-attract"); err != nil {
 			t.Fatalf("SeedColdRecords: %v", err)
 		}
-		_ = a.SetTermInputs(TermInputs{JobAvailability: 60, ServiceCoverage: 60, Environment: 60, LeisureFit: 60, Safety: 60})
+		_ = a.SetTermInputs(uniformTI(60, nil, 0))
 		for m := int64(0); m < 5; m++ {
 			if _, err := a.ApplyMigration(MigrationCommand{
 				Month:              m,

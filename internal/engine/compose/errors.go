@@ -343,3 +343,9 @@ const (
 	// line was rejected by the ledger (logged, not retried).
 	ErrDefenceFacilityUnposted = "MET-G5499"
 )
+
+// ErrSavedWellbeingInvalid (MET-G5603, owner feat.compositionroot, BUG-1231):
+// the wellbeing status saved in the compose ledger record is outside what the
+// engine can produce (a damaged or hand-edited save); the whole load is
+// refused before any module state is installed. Names the field and value.
+const ErrSavedWellbeingInvalid = "MET-G5603"

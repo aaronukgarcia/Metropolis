@@ -17,7 +17,7 @@ import (
 // never invents or destroys citizens beyond the reported counts.
 func TestMigrationNumericFuzzing(t *testing.T) {
 	a, ca, _, _ := newAPI(t, validConfig())
-	if err := a.SetTermInputs(TermInputs{JobAvailability: 100, ServiceCoverage: 100, Environment: 100, LeisureFit: 100, Safety: 100}); err != nil {
+	if err := a.SetTermInputs(uniformTI(100, nil, 0)); err != nil {
 		t.Fatalf("SetTermInputs: %v", err)
 	}
 
@@ -52,12 +52,12 @@ func TestMigrationNumericFuzzing(t *testing.T) {
 		isErr(t, err, ErrInvalidCapacity)
 	}
 	// Out-of-range / non-finite term inputs are rejected, never clamped silently.
-	if err := a.SetTermInputs(TermInputs{JobAvailability: math.Inf(1)}); err == nil {
+	if err := a.SetTermInputs(TermInputs{Levers: [LeverCount]LeverTerm{LeverJobs: {Value: math.Inf(1)}}}); err == nil {
 		t.Fatal("+Inf term accepted")
 	} else {
 		isErr(t, err, ErrInvalidTermInput)
 	}
-	if err := a.SetTermInputs(TermInputs{JobAvailability: 150}); err == nil {
+	if err := a.SetTermInputs(TermInputs{Levers: [LeverCount]LeverTerm{LeverJobs: {Value: 150}}}); err == nil {
 		t.Fatal("out-of-range term accepted")
 	} else {
 		isErr(t, err, ErrInvalidTermInput)
