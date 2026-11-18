@@ -57,4 +57,14 @@ type Meta struct {
 	// Load treats an absent value as a fail-closed mismatch rather than
 	// a silent default to "unlimited" (AC-5).
 	GameMode string `json:"gameMode,omitempty"`
+
+	// RuleVersion is FEAT-9995385612's rule version the bundle was made
+	// under: how the engine judged player commands (accepted or refused,
+	// and what they cost) when this state was reached. Omitted when 0, so
+	// a version-0 bundle is byte-identical to one written before rule
+	// versions existed; an absent value therefore means version 0, never
+	// the current version. It is a plain int here (this package does not
+	// import engine/rules); the composition classifies it on load, before
+	// any participant is touched. Never hashed into the state digest.
+	RuleVersion int `json:"ruleVersion,omitempty"`
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/save"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
@@ -217,6 +218,10 @@ func (c *Composition) Save(root string) error {
 		GameMonth:     clock.Month(),
 		AppVersion:    compositionSaveAppVersion,
 		GameMode:      gameMode,
+		// FEAT-9995385612: the rule version the state being saved was
+		// reached under. 0 writes nothing (a version-0 bundle is
+		// byte-identical to one written before rule versions).
+		RuleVersion: int(c.state.rv.get()),
 	}
 	mgr := save.NewManager(root, c.Participants(), c.state.cid)
 	return mgr.SaveManual(ctx, compositionSaveName)
@@ -292,6 +297,17 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	// all) fails closed with save.ErrGameModeMismatch before any
 	// participant runs (save/load.go's own check happens before the shard
 	// loop).
+	// FEAT-9995385612: classify the bundle's rule version BEFORE any
+	// participant is touched (the same place and discipline as the
+	// game-mode check). A bundle from a newer build is refused, never
+	// clamped; one older than OldestSupported is refused; an absent stamp
+	// is version 0.
+	savedRuleVersion, haveRuleVersion := readBundleRuleVersion(dir)
+	if haveRuleVersion {
+		if err := checkSnapshotVersion(c.state.cid, savedRuleVersion); err != nil {
+			return err
+		}
+	}
 	gameMode, err := c.state.gameInit.GameModeWire(c.state.cid)
 	if err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "gameinit", "step": "GameModeWire"})
@@ -309,6 +325,11 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 		// mgr.Load has actually succeeded, never on this path.
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "save", "step": "load", "dir": dir})
 	}
+	// The state is loaded as saved. What it was made under is recorded for
+	// the tail replay; new commands are judged by the current rules from
+	// here on (a replay pins each frame's own version while it runs).
+	c.state.rv.loaded.Store(int64(savedRuleVersion))
+	c.state.rv.live.Store(int64(rules.Effective()))
 	// BUG-689 round follow-up F1: save.Manager.Load only calls a
 	// Participant's Handler for shards its bundle header actually lists
 	// (load.go's shard loop ranges over header.ShardIndex, never the

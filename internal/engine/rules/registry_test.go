@@ -162,8 +162,27 @@ func validate(entries []Rule, consts map[string]int, current Version, root strin
 			p = append(p, "constant "+name+" has no registry entry")
 		}
 	}
-	if last := entries[len(entries)-1].Number; current != last {
-		p = append(p, "Current is "+strconv.Itoa(int(current))+", the last entry is "+strconv.Itoa(int(last)))
+	// Current is the highest WIRED entry (0 when none), never a pending one;
+	// wired entries come before pending ones, and the first pending entry is
+	// exactly Current+1.
+	var highestWired Version
+	seenPending := false
+	for _, e := range entries {
+		switch e.Status {
+		case StatusWired:
+			if seenPending {
+				p = append(p, "entry "+strconv.Itoa(int(e.Number))+": wired after a pending entry; wire rules in order")
+			}
+			highestWired = e.Number
+		case StatusPendingWiring:
+			if !seenPending && e.Number != current+1 {
+				p = append(p, "first pending entry "+strconv.Itoa(int(e.Number))+" is not Current+1 ("+strconv.Itoa(int(current)+1)+")")
+			}
+			seenPending = true
+		}
+	}
+	if current != highestWired {
+		p = append(p, "Current is "+strconv.Itoa(int(current))+", the highest wired entry is "+strconv.Itoa(int(highestWired)))
 	}
 	sort.Strings(p)
 	return p
@@ -215,6 +234,12 @@ func scanTree(root string, names map[string]bool) (scanResult, error) {
 					if imp.Name != nil {
 						alias = imp.Name.Name
 					}
+					if alias == "." {
+						// A dot import hides every rules.Has call and rules.Current
+						// read from the checks below (lane 2 blind spot 1).
+						pos := fset.Position(imp.Pos())
+						res.problems = append(res.problems, rel+":"+strconv.Itoa(pos.Line)+": dot import of the rules package is refused; import it by name")
+					}
 				}
 			}
 			if alias == "" {
@@ -226,10 +251,14 @@ func scanTree(root string, names map[string]bool) (scanResult, error) {
 				return perr
 			}
 			isTest := strings.HasSuffix(path, "_test.go")
+			callFuns := map[*ast.SelectorExpr]bool{}
 			ast.Inspect(f, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.CallExpr:
 					sel, ok := x.Fun.(*ast.SelectorExpr)
+					if ok {
+						callFuns[sel] = true
+					}
 					if !ok || sel.Sel.Name != "Has" || !isIdent(sel.X, alias) {
 						return true
 					}
@@ -244,13 +273,26 @@ func scanTree(root string, names map[string]bool) (scanResult, error) {
 						res.problems = append(res.problems, where+": rules.Has second argument must be a named rule constant from the registry, never a literal or expression")
 					}
 				case *ast.SelectorExpr:
-					if !isIdent(x.X, alias) || isTest {
+					if !isIdent(x.X, alias) {
 						return true
+					}
+					if x.Sel.Name == "Has" && !callFuns[x] {
+						// f := rules.Has, or passing it as a value, slips past the
+						// literal check at the later call (lane 2 blind spot 2).
+						pos := fset.Position(x.Pos())
+						res.problems = append(res.problems, rel+":"+strconv.Itoa(pos.Line)+": rules.Has used as a value; call it directly with a named rule constant")
+					}
+					if isTest {
+						return true
+					}
+					if x.Sel.Name == "SetOldestSupportedForTest" || x.Sel.Name == "SetCurrentForTest" {
+						pos := fset.Position(x.Pos())
+						res.problems = append(res.problems, rel+":"+strconv.Itoa(pos.Line)+": rules."+x.Sel.Name+" is for tests only")
 					}
 					if names[x.Sel.Name] {
 						res.used[x.Sel.Name] = true
 					}
-					if x.Sel.Name == "Current" {
+					if x.Sel.Name == "Current" || x.Sel.Name == "Effective" {
 						allowed := false
 						for _, pre := range currentReaders {
 							if strings.HasPrefix(rel, pre) {
@@ -329,63 +371,63 @@ func TestValidate_CanFail(t *testing.T) {
 		wantSub string
 	}{
 		{"baseline passes", func() ([]Rule, map[string]int, Version, map[string]bool) {
-			return []Rule{goodEntry()}, map[string]int{"A": 1}, 1, nil
+			return []Rule{goodEntry()}, map[string]int{"A": 1}, 0, nil
 		}, ""},
 		{"gap in numbers", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			a, b := goodEntry(), goodEntry()
 			b.Number, b.Const = 3, "B"
-			return []Rule{a, b}, map[string]int{"A": 1, "B": 3}, 3, nil
+			return []Rule{a, b}, map[string]int{"A": 1, "B": 3}, 0, nil
 		}, "contiguous"},
 		{"duplicate number", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			a, b := goodEntry(), goodEntry()
 			b.Const = "B"
-			return []Rule{a, b}, map[string]int{"A": 1, "B": 1}, 1, nil
+			return []Rule{a, b}, map[string]int{"A": 1, "B": 1}, 0, nil
 		}, "contiguous"},
 		{"current not last", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			return []Rule{goodEntry()}, map[string]int{"A": 1}, 2, nil
-		}, "Current is 2"},
+		}, "Current is 2, the highest wired"},
 		{"date backwards", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := two()
 			e[1].Date = "2026-11-17"
-			return e, map[string]int{"A": 1, "B": 2}, 2, nil
+			return e, map[string]int{"A": 1, "B": 2}, 0, nil
 		}, "goes backwards"},
 		{"bad date", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := goodEntry()
 			e.Date = "18/11/2026"
-			return []Rule{e}, map[string]int{"A": 1}, 1, nil
+			return []Rule{e}, map[string]int{"A": 1}, 0, nil
 		}, "not an ISO date"},
 		{"bad item", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := goodEntry()
 			e.Item = "1224"
-			return []Rule{e}, map[string]int{"A": 1}, 1, nil
+			return []Rule{e}, map[string]int{"A": 1}, 0, nil
 		}, "not a BOW code"},
 		{"empty old", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := goodEntry()
 			e.Old = " "
-			return []Rule{e}, map[string]int{"A": 1}, 1, nil
+			return []Rule{e}, map[string]int{"A": 1}, 0, nil
 		}, "non-empty"},
 		{"empty new", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := goodEntry()
 			e.New = ""
-			return []Rule{e}, map[string]int{"A": 1}, 1, nil
+			return []Rule{e}, map[string]int{"A": 1}, 0, nil
 		}, "non-empty"},
 		{"multi-line old", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := goodEntry()
 			e.Old = "a\nb"
-			return []Rule{e}, map[string]int{"A": 1}, 1, nil
+			return []Rule{e}, map[string]int{"A": 1}, 0, nil
 		}, "one line"},
 		{"empty fixture path", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := goodEntry()
 			e.Fixture = ""
-			return []Rule{e}, map[string]int{"A": 1}, 1, nil
+			return []Rule{e}, map[string]int{"A": 1}, 0, nil
 		}, "empty Fixture"},
 		{"pending without item", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := goodEntry()
 			e.PendingItem = ""
-			return []Rule{e}, map[string]int{"A": 1}, 1, nil
+			return []Rule{e}, map[string]int{"A": 1}, 0, nil
 		}, "PendingItem"},
 		{"pending but used", func() ([]Rule, map[string]int, Version, map[string]bool) {
-			return []Rule{goodEntry()}, map[string]int{"A": 1}, 1, map[string]bool{"A": true}
+			return []Rule{goodEntry()}, map[string]int{"A": 1}, 0, map[string]bool{"A": true}
 		}, "mark it wired"},
 		{"wired but unused", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := goodEntry()
@@ -403,15 +445,36 @@ func TestValidate_CanFail(t *testing.T) {
 			return []Rule{e}, map[string]int{"A": 1}, 1, map[string]bool{"A": true}
 		}, ""},
 		{"constant value differs", func() ([]Rule, map[string]int, Version, map[string]bool) {
-			return []Rule{goodEntry()}, map[string]int{"A": 7}, 1, nil
+			return []Rule{goodEntry()}, map[string]int{"A": 7}, 0, nil
 		}, "not the entry number"},
 		{"constant without entry", func() ([]Rule, map[string]int, Version, map[string]bool) {
-			return []Rule{goodEntry()}, map[string]int{"A": 1, "Z": 2}, 1, nil
+			return []Rule{goodEntry()}, map[string]int{"A": 1, "Z": 2}, 0, nil
 		}, "no registry entry"},
+		{"pending number is not Current+1", func() ([]Rule, map[string]int, Version, map[string]bool) {
+			return []Rule{goodEntry()}, map[string]int{"A": 1}, 1, nil
+		}, "Current is 1"},
+		{"pending raises nothing: wired then pending ok", func() ([]Rule, map[string]int, Version, map[string]bool) {
+			a, b := goodEntry(), goodEntry()
+			a.Status, a.PendingItem, a.Fixture = StatusWired, "", "has/v1"
+			b.Number, b.Const = 2, "B"
+			return []Rule{a, b}, map[string]int{"A": 1, "B": 2}, 1, map[string]bool{"A": true}
+		}, ""},
+		{"second pending skipping Current+1", func() ([]Rule, map[string]int, Version, map[string]bool) {
+			a, b := goodEntry(), goodEntry()
+			a.Status, a.PendingItem, a.Fixture = StatusWired, "", "has/v1"
+			b.Number, b.Const = 2, "B"
+			return []Rule{a, b}, map[string]int{"A": 1, "B": 2}, 0, map[string]bool{"A": true}
+		}, "highest wired entry is 1"},
+		{"wired after pending", func() ([]Rule, map[string]int, Version, map[string]bool) {
+			a, b := goodEntry(), goodEntry()
+			b.Number, b.Const = 2, "B"
+			b.Status, b.PendingItem, b.Fixture = StatusWired, "", "has/v1"
+			return []Rule{a, b}, map[string]int{"A": 1, "B": 2}, 2, map[string]bool{"B": true}
+		}, "wire rules in order"},
 		{"unknown status", func() ([]Rule, map[string]int, Version, map[string]bool) {
 			e := goodEntry()
 			e.Status = "done"
-			return []Rule{e}, map[string]int{"A": 1}, 1, nil
+			return []Rule{e}, map[string]int{"A": 1}, 0, nil
 		}, "unknown status"},
 	}
 	for _, c := range cases {
@@ -446,13 +509,16 @@ func TestScanTree_CanFail(t *testing.T) {
 	write("internal/engine/build/cur.go", hdr+"func i() rules.Version { return rules.Current }\n")
 	write("internal/engine/compose/cur.go", hdr+"func j() rules.Version { return rules.Current }\n")
 	write("internal/engine/build/lit_test.go", hdr+"func k(a rules.Version) bool { return rules.Has(a, 2) }\n")
+	write("internal/engine/build/dot.go", "package p\n\nimport . \""+rulesImportPath+"\"\n\nfunc l(a Version) bool { return Has(a, 1) }\n")
+	write("internal/engine/build/val.go", hdr+"func m() { f := rules.Has; _ = f(rules.Version(0), 1) }\n")
+	write("internal/engine/build/oldest.go", hdr+"func n(t rules.TB) { rules.SetOldestSupportedForTest(t, 1) }\n")
 	write("internal/engine/other/unrelated.go", "package q\n\ntype T struct{}\n\nfunc (T) Has(a, b int) bool { return a > b }\n\nfunc u(t T) bool { return t.Has(1, 2) }\n")
 	res, err := scanTree(root, map[string]bool{"Alpha": true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Join(res.problems, "\n")
-	for _, want := range []string{"build/lit.go:5", "build/cast.go:5", "build/cur.go:5", "build/lit_test.go:5"} {
+	for _, want := range []string{"build/lit.go:5", "build/cast.go:5", "build/cur.go:5", "build/lit_test.go:5", "build/dot.go:3", "build/val.go:5", "build/oldest.go:5"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("scan missed %s; problems:\n%s", want, got)
 		}
@@ -508,8 +574,8 @@ func TestClassifyAndIsKnown(t *testing.T) {
 	if Classify(0) != SupportTooOld {
 		t.Error("with OldestSupported = 1, version 0 must be too old")
 	}
-	if Classify(1) != SupportOK {
-		t.Error("with OldestSupported = 1, version 1 must be ok")
+	if Classify(1) != SupportTooNew {
+		t.Error("version 1 is above Current 0 and must be too new whatever OldestSupported is")
 	}
 }
 
@@ -521,13 +587,13 @@ func TestEntryBetweenDescribe(t *testing.T) {
 	if !ok || e.Item != "BUG-1224" {
 		t.Fatalf("Entry(1) = %+v, %v", e, ok)
 	}
-	if got := Between(0, Current); len(got) != int(Current) {
-		t.Errorf("Between(0, Current) has %d entries, want %d", len(got), Current)
+	if got := Between(0, RefuseOccupiedCell); len(got) != int(RefuseOccupiedCell) {
+		t.Errorf("Between(0, RefuseOccupiedCell) has %d entries, want %d", len(got), RefuseOccupiedCell)
 	}
 	if got := Between(Current, Current); len(got) != 0 {
 		t.Errorf("Between(Current, Current) has %d entries, want none", len(got))
 	}
-	d := Describe(0, Current)
+	d := Describe(0, RefuseOccupiedCell)
 	for _, want := range []string{"rule 1", "2026-11-18", "BUG-1224", e.Old, e.New} {
 		if !strings.Contains(d, want) {
 			t.Errorf("Describe missing %q: %s", want, d)
@@ -559,6 +625,33 @@ func TestBoundaryIsDocumented(t *testing.T) {
 		s := string(b)
 		if !strings.Contains(s, "daily simulation formula") && !strings.Contains(s, "daily simulation formulas") {
 			t.Errorf("%s no longer states that daily simulation formulas are not versioned", f)
+		}
+	}
+}
+
+// TestCurrentIsHighestWired is the live-registry form of the ruling: the
+// stamp version is the highest WIRED rule (0 while rule 1 is pending), a
+// pending entry's number is exactly Current+1, and a version above Current
+// is too new.
+func TestCurrentIsHighestWired(t *testing.T) {
+	var hw Version
+	for _, r := range registry {
+		if r.Status == StatusWired {
+			hw = r.Number
+		}
+	}
+	if Current != hw {
+		t.Fatalf("Current = %d, highest wired = %d", Current, hw)
+	}
+	for _, r := range registry {
+		if r.Status == StatusPendingWiring {
+			if r.Number != Current+1 {
+				t.Fatalf("first pending entry %d is not Current+1 (%d)", r.Number, Current+1)
+			}
+			if Classify(r.Number) != SupportTooNew || IsKnown(r.Number) {
+				t.Fatalf("pending rule %d must be too new for this build", r.Number)
+			}
+			break
 		}
 	}
 }

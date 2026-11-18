@@ -596,7 +596,7 @@ func TestAttackInc3b_SwallowedJournalAppendAtBoundary(t *testing.T) {
 		t.Fatalf("Wire (reference): %v", err)
 	}
 	for i, cmd := range persistedCmds {
-		if res := eRef.HandleCommand(cmd); !res.Accepted {
+		if res := eRef.HandleCommand(cmd.Command); !res.Accepted {
 			t.Fatalf("reference replay: command %d (%s) rejected: %+v", i, cmd.Kind, res.Error)
 		}
 	}

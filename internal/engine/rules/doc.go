@@ -23,7 +23,7 @@
 //
 //  1. Add one [Rule] to the registry (registry.go) and one named [Version]
 //     constant for it (rules.go). Number is the next integer; [Current]
-//     becomes that number.
+//     stays where it is: it moves only in step 4.
 //  2. At the single place where the command's behaviour changes, branch
 //     with [Has]: if rules.Has(active, rules.TheConstant) { new } else { old }.
 //     Keep the old branch. The second argument is always a named constant,
@@ -33,7 +33,11 @@
 //     [Current]. Do not read [Current] directly outside the composition,
 //     save/restore, replay and command-line code (registry test).
 //  4. Record an old-journal fixture at Number-1 (the registry entry names
-//     its path) and mark the entry [StatusWired].
+//     its path), mark the entry [StatusWired] AND raise [Current] to its
+//     number, all in the same commit as the call site. [Current] is the
+//     highest WIRED rule, never a pending one: it stamps journals and
+//     snapshots, and a stamp must never name a rule the engine does not yet
+//     enforce.
 //
 // An entry is [StatusPendingWiring] from the moment it is registered until
 // a call site uses its constant. The registry tests tolerate an unused

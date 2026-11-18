@@ -101,7 +101,11 @@ func TestPersistJournal_RoundTripDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Wire (fresh restore target): %v", err)
 	}
-	submitAll(t, eFresh, restored)
+	replayedCmds := make([]protocol.Command, len(restored))
+	for i, f := range restored {
+		replayedCmds[i] = f.Command
+	}
+	submitAll(t, eFresh, replayedCmds)
 	restoredDigest := compFresh.StateDigest()
 
 	if liveDigest != restoredDigest {
@@ -111,7 +115,7 @@ func TestPersistJournal_RoundTripDeterministic(t *testing.T) {
 	// Prove-can-fail: mutate ONE restored command (bump the final tick
 	// advance by one) and confirm the digest diverges — otherwise the
 	// equality above would be meaningless.
-	mutated := append([]protocol.Command(nil), restored...)
+	mutated := append([]protocol.Command(nil), replayedCmds...)
 	last := len(mutated) - 1
 	p, ok := mutated[last].Payload.(protocol.AdvanceTicksPayload)
 	if !ok {

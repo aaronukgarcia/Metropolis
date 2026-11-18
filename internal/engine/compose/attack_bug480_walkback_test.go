@@ -104,7 +104,7 @@ func TestAttackBUG480_ThrowawayValidationMatchesRealEngineByteExact(t *testing.T
 	if err != nil {
 		t.Fatalf("RestoreCommands: %v", err)
 	}
-	if err := replayCommands(eRef, cmds); err != nil {
+	if err := replayFrames(eRef, compRef, cmds, 0); err != nil {
 		t.Fatalf("replayCommands (reference): %v", err)
 	}
 

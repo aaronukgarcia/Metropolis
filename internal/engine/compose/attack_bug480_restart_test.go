@@ -139,7 +139,7 @@ func TestAttackBUG480_RestartAfterDirtyLatchDoesNotRebrick(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreCommands: %v", err)
 	}
-	if err := replayCommands(eRef, cmds); err != nil {
+	if err := replayFrames(eRef, compRef, cmds, 0); err != nil {
 		t.Fatalf("reference replay: %v", err)
 	}
 	refClock, err := eRef.Clock()

@@ -459,7 +459,7 @@ func TestSnapshotRestore_ProveCanFail_TruncatedTailDiverges(t *testing.T) {
 	// Deliberately DROP the final tail command (the last AdvanceTicks) --
 	// this is the injected fault this test exists to catch.
 	truncatedTail := fullTail[:len(fullTail)-1]
-	if err := replayCommands(eR, truncatedTail); err != nil {
+	if err := replayFrames(eR, compR, truncatedTail, compR.LoadedRuleVersion()); err != nil {
 		t.Fatalf("replayCommands (truncated): %v", err)
 	}
 
@@ -485,7 +485,7 @@ func TestSplitJournalAtTick_ExactBoundary(t *testing.T) {
 	}
 	buy := protocol.Command{Kind: protocol.KindBuy, CorrelationID: "pre-boundary-buy"}
 	zone := protocol.Command{Kind: protocol.KindZone, CorrelationID: "post-boundary-zone"}
-	cmds := []protocol.Command{adv(100), buy, adv(260), zone}
+	cmds := frames0(adv(100), buy, adv(260), zone)
 	city := persist.CityKey{TenantID: "t", CityID: "split"}
 
 	tail, err := splitJournalAtTick(cmds, 360, city, errs.NewCorrelationID())
@@ -507,7 +507,7 @@ func TestSplitJournalAtTick_StraddlingCommandIsSplit(t *testing.T) {
 	adv := func(n int64) protocol.Command {
 		return protocol.Command{Kind: protocol.KindAdvanceTicks, Payload: protocol.AdvanceTicksPayload{N: n}}
 	}
-	cmds := []protocol.Command{adv(200), adv(200)} // cumulative 200, then 400 -- snapshotTick=300 lands mid-second-command
+	cmds := frames0(adv(200), adv(200)) // cumulative 200, then 400 -- snapshotTick=300 lands mid-second-command
 	city := persist.CityKey{TenantID: "t", CityID: "split-straddle"}
 
 	tail, err := splitJournalAtTick(cmds, 300, city, errs.NewCorrelationID())
@@ -534,7 +534,7 @@ func TestSplitJournalAtTick_ProveCanFail_JournalShorterThanSnapshotErrors(t *tes
 	adv := func(n int64) protocol.Command {
 		return protocol.Command{Kind: protocol.KindAdvanceTicks, Payload: protocol.AdvanceTicksPayload{N: n}}
 	}
-	cmds := []protocol.Command{adv(100)} // only 100 ticks -- snapshotTick=360 is never reached
+	cmds := frames0(adv(100)) // only 100 ticks -- snapshotTick=360 is never reached
 	city := persist.CityKey{TenantID: "t", CityID: "split-short"}
 
 	_, err := splitJournalAtTick(cmds, 360, city, errs.NewCorrelationID())
@@ -667,7 +667,7 @@ func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *t
 	if err != nil {
 		t.Fatalf("RestoreCommands: %v", err)
 	}
-	if err := replayCommands(eGenesis, persistedCmds); err != nil {
+	if err := replayFrames(eGenesis, compGenesis, persistedCmds, 0); err != nil {
 		t.Fatalf("replayCommands (genesis reference): %v", err)
 	}
 	refClock, err := eGenesis.Clock()

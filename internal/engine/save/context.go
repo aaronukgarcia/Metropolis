@@ -44,4 +44,9 @@ type Context struct {
 	// simply carries no game mode — the pre-FEAT-143 shape, unaffected
 	// unless a caller opts into [WithExpectedGameMode] on load.
 	GameMode string
+
+	// RuleVersion is the rule version (FEAT-9995385612) the state being
+	// saved was reached under; written to [Meta.RuleVersion]. 0 (the zero
+	// value) writes nothing, the pre-rule-version shape.
+	RuleVersion int
 }

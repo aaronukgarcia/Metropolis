@@ -1,11 +1,16 @@
 package compose
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/persist"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
@@ -71,6 +76,14 @@ type persistCommandJournaler struct {
 	// construction to context.Background(); a later increment can widen the
 	// constructor to accept a caller ctx without changing this seam's shape.
 	ctx context.Context
+
+	// version reports the live rule version a frame is accepted under
+	// (FEAT-9995385612). nil means version 0: the frame is the plain
+	// protocol.EncodeCommand bytes, exactly as before rule versions existed.
+	// Wire sets it to the composition's live version; it is read once per
+	// frame, on the serialised command path, so a frame is never stamped
+	// with a version it was not accepted under.
+	version func() rules.Version
 
 	// dirty latches true the FIRST time store.AppendJournal fails. Under
 	// BUG-472's later "HALT + SURFACE" ruling (2026-09-01, superseding
@@ -171,7 +184,11 @@ func (p *persistCommandJournaler) ObserveCommand(cmd protocol.Command) error {
 	if err := p.inner.ObserveCommand(cmd); err != nil {
 		return err
 	}
-	data, err := protocol.EncodeCommand(cmd)
+	var v rules.Version
+	if p.version != nil {
+		v = p.version()
+	}
+	data, err := encodeJournalFrame(cmd, v)
 	if err != nil {
 		return err
 	}
@@ -188,33 +205,143 @@ func (p *persistCommandJournaler) ObserveCommand(cmd protocol.Command) error {
 	return nil
 }
 
+// JournalFrame is one durable journal frame decoded: the command and the
+// rule version it was accepted under (FEAT-9995385612). It embeds the
+// command so read-only uses (frame.Kind, frame.Payload) stay natural, but
+// the version is a field of the same value, so a caller cannot take the
+// command without having had the version in hand. Version 0 is a frame
+// with no stamp (every frame written before rule versions existed).
+type JournalFrame struct {
+	protocol.Command
+	Version rules.Version
+}
+
+// journalEnvelope is the on-disk shape of a frame accepted under rule
+// version N >= 1: {"rv":N,"cmd":<the plain command JSON>}. A frame accepted
+// under version 0 is NOT enveloped; it is exactly today's bytes.
+//
+// The envelope exists so that (a) every frame names the rules it was judged
+// by, with no marker entries, no segment table and no wire surface, and (b)
+// a build that predates rule versions meets a frame with no "kind", fails
+// with an unknown-kind decode error and refuses the city, instead of
+// silently ignoring an unknown field and misreplaying (rollback protection).
+// It is written and read only in this file.
+type journalEnvelope struct {
+	RV  json.RawMessage `json:"rv"`
+	Cmd json.RawMessage `json:"cmd"`
+}
+
+// encodeJournalFrame returns the durable bytes for cmd accepted under v:
+// the plain protocol.EncodeCommand bytes at version 0, the envelope at
+// version >= 1. A negative version is refused (never written).
+func encodeJournalFrame(cmd protocol.Command, v rules.Version) ([]byte, error) {
+	if v < 0 {
+		return nil, errs.New(rules.ErrMalformedRuleStamp, errs.NewCorrelationID(), map[string]any{
+			"reason": "refusing to journal a frame under negative rule version " + strconv.Itoa(int(v)),
+		})
+	}
+	plain, err := protocol.EncodeCommand(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if v == 0 {
+		return plain, nil
+	}
+	out := make([]byte, 0, len(plain)+len(`{"rv":,"cmd":}`)+8)
+	out = append(out, `{"rv":`...)
+	out = strconv.AppendInt(out, int64(v), 10)
+	out = append(out, `,"cmd":`...)
+	out = append(out, plain...)
+	out = append(out, '}')
+	return out, nil
+}
+
+// malformedStamp builds the MET-G5613 error for frame i of n.
+func malformedStamp(i, n int, reason string) error {
+	return errs.New(rules.ErrMalformedRuleStamp, errs.NewCorrelationID(), map[string]any{
+		"reason": fmt.Sprintf("journal frame %d of %d: %s", i, n, reason),
+	})
+}
+
+// decodeJournalFrame decodes one durable frame. A frame with neither an
+// "rv" nor a "cmd" key is a plain command at version 0. Any frame that has
+// either key is an envelope and must be exactly {"rv":N,"cmd":{...}} with N
+// a positive base-10 integer: a non-integer, zero, negative or missing rv,
+// a missing cmd, or any other key is MET-G5613, never read as version 0.
+// A version above rules.Current is NOT refused here: classification is the
+// restore's job (it needs the whole journal), this only parses.
+func decodeJournalFrame(frame []byte, i, n int) (JournalFrame, error) {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(frame, &probe); err != nil {
+		return JournalFrame{}, fmt.Errorf("compose: restore command frame %d of %d: %w", i, n, err)
+	}
+	_, hasRV := probe["rv"]
+	_, hasCmd := probe["cmd"]
+	if !hasRV && !hasCmd {
+		cmd, err := protocol.DecodeCommand(frame)
+		if err != nil {
+			return JournalFrame{}, fmt.Errorf("compose: restore command frame %d of %d: %w", i, n, err)
+		}
+		return JournalFrame{Command: cmd}, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(frame))
+	dec.DisallowUnknownFields()
+	var env journalEnvelope
+	if err := dec.Decode(&env); err != nil {
+		return JournalFrame{}, malformedStamp(i, n, "envelope does not decode: "+err.Error())
+	}
+	if len(env.RV) == 0 {
+		return JournalFrame{}, malformedStamp(i, n, "envelope has no rv")
+	}
+	if len(env.Cmd) == 0 || bytes.Equal(bytes.TrimSpace(env.Cmd), []byte("null")) {
+		return JournalFrame{}, malformedStamp(i, n, "envelope has no cmd")
+	}
+	rv, err := strconv.ParseInt(string(bytes.TrimSpace(env.RV)), 10, 32)
+	if err != nil {
+		return JournalFrame{}, malformedStamp(i, n, "rv is not a base-10 integer: "+string(env.RV))
+	}
+	if rv < 1 {
+		return JournalFrame{}, malformedStamp(i, n, "rv is "+strconv.FormatInt(rv, 10)+", must be 1 or more (version 0 is never stamped)")
+	}
+	cmd, err := protocol.DecodeCommand(env.Cmd)
+	if err != nil {
+		return JournalFrame{}, fmt.Errorf("compose: restore command frame %d of %d: %w", i, n, err)
+	}
+	return JournalFrame{Command: cmd, Version: rules.Version(rv)}, nil
+}
+
 // RestoreCommands reads every durably-persisted command frame for city and
-// decodes it back into a protocol.Command sequence, in append order
-// (GR#12: no durable backup without a restore path, proved by the
-// round-trip determinism test in persistjournal_test.go).
+// decodes it back into a JournalFrame sequence (each command with the rule
+// version it was accepted under), in append order (GR#12: no durable backup
+// without a restore path, proved by the round-trip determinism test in
+// persistjournal_test.go).
+//
+// The return type carries the version on purpose (FEAT-9995385612): a
+// caller cannot hold the commands without the versions, so replay cannot
+// forget to apply them.
 //
 // Decode errors surface (a corrupt frame is a real failure, never a silent
 // skip): the Store already guarantees a torn/partial record left by a crash
 // mid-append never reaches here (persist.Store.ReadJournal's contract), so
 // any decode failure at this layer is a genuine corruption worth stopping
-// on, not routine torn-frame noise.
+// on, not routine torn-frame noise. A malformed rule stamp is MET-G5613.
 //
-// The returned commands are replayed into a fresh engine through that
-// engine's normal command path (core.Engine.HandleCommand) — the same path
-// the live commands took — so no bespoke command-submission mechanism is
-// introduced.
-func RestoreCommands(ctx context.Context, store persist.Store, city persist.CityKey) ([]protocol.Command, error) {
+// The returned frames are replayed into a fresh engine through that
+// engine's normal command path (core.Engine.HandleCommand) by replayFrames,
+// which applies each frame's version, so no bespoke command-submission
+// mechanism is introduced.
+func RestoreCommands(ctx context.Context, store persist.Store, city persist.CityKey) ([]JournalFrame, error) {
 	frames, err := store.ReadJournal(ctx, city)
 	if err != nil {
 		return nil, err
 	}
-	cmds := make([]protocol.Command, 0, len(frames))
+	out := make([]JournalFrame, 0, len(frames))
 	for i, frame := range frames {
-		cmd, err := protocol.DecodeCommand(frame)
+		f, err := decodeJournalFrame(frame, i, len(frames))
 		if err != nil {
-			return nil, fmt.Errorf("compose: restore command frame %d of %d: %w", i, len(frames), err)
+			return nil, err
 		}
-		cmds = append(cmds, cmd)
+		out = append(out, f)
 	}
-	return cmds, nil
+	return out, nil
 }

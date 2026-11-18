@@ -1,0 +1,178 @@
+{
+  "formatVersion": "1.0.0",
+  "worldSeed": 20260831,
+  "createdAtTick": 65,
+  "gameMonth": 2,
+  "appVersion": "metropolis-compose",
+  "debugTouched": false,
+  "shardIndex": [
+    {
+      "Name": "world",
+      "Kind": "world",
+      "RecordCount": 2,
+      "ByteSize": 1055,
+      "SHA256": "cdb05bd33a12da61af29e02c8bad465e5f432f7fc9dd2a2934fd447d35723321",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "citizens",
+      "Kind": "citizens",
+      "RecordCount": 114,
+      "ByteSize": 3445,
+      "SHA256": "7aa3b4e9b4bfe0e686a2aa598077f48b6dd35d271778af4cb80a07452d9f96f0",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "finance",
+      "Kind": "finance",
+      "RecordCount": 40,
+      "ByteSize": 1263,
+      "SHA256": "242827d98f2a6782cfdff3e08c5b166d99b6f19c6abe35364fc017f6ba2c1a06",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "build",
+      "Kind": "build",
+      "RecordCount": 4,
+      "ByteSize": 244,
+      "SHA256": "54777319a2261a390bca2696004e51aafaae11305cf564589cf8d70eef125951",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "logistics",
+      "Kind": "logistics",
+      "RecordCount": 2,
+      "ByteSize": 154,
+      "SHA256": "9995c328bc786a8830faf20c751cd5147e20a13584b63963ed79411f9cf34dfb",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "refuse",
+      "Kind": "refuse",
+      "RecordCount": 2,
+      "ByteSize": 227,
+      "SHA256": "f3b0643c9acba6e86bc2057244eb3481fe9588277505d2af5485153592e1ec62",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "traffic",
+      "Kind": "traffic",
+      "RecordCount": 0,
+      "ByteSize": 23,
+      "SHA256": "81da0491c5af5635831f6a3febb5d9bfd66987ba3ecc42e58dc3d80938c25705",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "unlocks",
+      "Kind": "unlocks",
+      "RecordCount": 1,
+      "ByteSize": 126,
+      "SHA256": "e6ce46322e32c3f76720b426fcd0af84d4207e9c76d33faf11f52398f0f98dc9",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "crime",
+      "Kind": "crime",
+      "RecordCount": 2,
+      "ByteSize": 576,
+      "SHA256": "d160639e30a5e49a0d4c131284e65f674936b0549fd73853e2fc60935c820b83",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "market",
+      "Kind": "market",
+      "RecordCount": 1,
+      "ByteSize": 61,
+      "SHA256": "8792777ac085c66a0da79191d6a9e5bdf068ec398d8c579438eef30f0d8a6264",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "consumption",
+      "Kind": "consumption",
+      "RecordCount": 1,
+      "ByteSize": 66,
+      "SHA256": "187d0f7fdd4b4ec5488f10fa19b33a57a881e6ce7cd896bfa8eafa03c83cce01",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "attract",
+      "Kind": "attract",
+      "RecordCount": 1,
+      "ByteSize": 245,
+      "SHA256": "2fed76b2a77cc9b918f361803361517dc63a9e470aa3c1e9895c876da0bdb948",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "services",
+      "Kind": "services",
+      "RecordCount": 25,
+      "ByteSize": 763,
+      "SHA256": "13a6226f853d27626c9475cb5b024a0ceaa90d80c321e1079eeebdc3e2e8da92",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "deathservices",
+      "Kind": "deathservices",
+      "RecordCount": 1,
+      "ByteSize": 162,
+      "SHA256": "eba37dbd7c4913e2010161ca8dbcf9182c97ab4e7ea1f679e80a7416adcfaaf1",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "firms",
+      "Kind": "firms",
+      "RecordCount": 1,
+      "ByteSize": 111,
+      "SHA256": "16db7c2a1aa0d10cbeff147c6907dcdff34ad1088c0e48dd931df46422c73d1b",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "fiscal",
+      "Kind": "fiscal",
+      "RecordCount": 1,
+      "ByteSize": 112,
+      "SHA256": "a4891c2cca517cc4e144c329c048881827041254c92628d4c6658cd018b0ab26",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "compose",
+      "Kind": "compose",
+      "RecordCount": 1,
+      "ByteSize": 265,
+      "SHA256": "8e6131a53579ce50e6b20347d3a071bbe23340a22de8303533b61d74a50e427d",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "policies",
+      "Kind": "policies",
+      "RecordCount": 1,
+      "ByteSize": 162,
+      "SHA256": "2efbf227e2c94302796ef7b5ca2e7c8d0155c56d645c8cd9d83621e3e64bf91c",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "coastal",
+      "Kind": "coastal",
+      "RecordCount": 1,
+      "ByteSize": 487,
+      "SHA256": "9d19a367d8db949ed116ae2b6a1aa11f82f023e1afe543e3cd3d7155efaeedee",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "social",
+      "Kind": "social",
+      "RecordCount": 1,
+      "ByteSize": 337,
+      "SHA256": "204062b2af6475110c2bf603817508b2fd0948d7fea5ebd483c305cc548be947",
+      "Encoding": "ndjson+gzip"
+    },
+    {
+      "Name": "defence",
+      "Kind": "defence",
+      "RecordCount": 1,
+      "ByteSize": 200,
+      "SHA256": "49641c2cf419f465326343de8154613bc9812398ed2daa04b1de582f73ef19b0",
+      "Encoding": "ndjson+gzip"
+    }
+  ]
+}

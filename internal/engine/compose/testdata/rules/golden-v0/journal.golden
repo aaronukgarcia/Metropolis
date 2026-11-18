@@ -1,0 +1,5 @@
+{"protocolVersion":"1.0","correlationId":"rt-adv-1","issuedAtTick":0,"kind":"AdvanceTicks","payload":{"n":5}}
+{"protocolVersion":"1.0","correlationId":"rt-buy","issuedAtTick":0,"kind":"Buy","payload":{"cell":{"x":3,"y":3}}}
+{"protocolVersion":"1.0","correlationId":"rt-zone","issuedAtTick":0,"kind":"Zone","payload":{"cell":{"x":3,"y":3},"zoneType":"dwelling"}}
+{"protocolVersion":"1.0","correlationId":"rt-build","issuedAtTick":0,"kind":"Build","payload":{"cell":{"x":3,"y":3},"buildingType":"dwelling"}}
+{"protocolVersion":"1.0","correlationId":"rt-adv-2","issuedAtTick":0,"kind":"AdvanceTicks","payload":{"n":60}}

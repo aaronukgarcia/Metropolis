@@ -1623,6 +1623,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		e:                          e,
 		cid:                        cid,
 		seed:                       e.WorldSeed(),
+		rv:                         newRuleVersionState(),
 		citizens:                   c,
 		citizenPagingClaim:         citizenPagingClaim,
 		world:                      w,
@@ -1746,7 +1747,11 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		if city == (persist.CityKey{}) {
 			city = defaultPersistCity // PLACEHOLDER (see defaultPersistCity).
 		}
-		journaler = newPersistCommandJournaler(journaler, deps.PersistStore, city)
+		// FEAT-9995385612: the durable journal stamps each frame with the
+		// composition's live rule version (version 0 stays the plain bytes).
+		pj := newPersistCommandJournaler(journaler, deps.PersistStore, city)
+		pj.version = st.rv.get
+		journaler = pj
 
 		// BUG-737 (FEAT-143 wiring, round findings P1-3/P1-4/P3): CHECK
 		// the composition's own locked gameinit mode against whatever is
@@ -1868,6 +1873,13 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		}
 	}
 
+	// FEAT-9995385612: every module registered as rule-versioned (none yet;
+	// engine.build joins in lane 4 with one st.rv.wire line above this)
+	// must hold a getter, or Wire refuses the composition.
+	if err := st.rv.verify(st.cid); err != nil {
+		return nil, err
+	}
+
 	wireSucceeded = true // release-on-failure defer above stands down
 	return &Composition{state: st}, nil
 }
@@ -1968,6 +1980,10 @@ type simState struct {
 	e    *core.Engine
 	cid  string
 	seed uint64
+
+	// rv owns the live rule version (FEAT-9995385612) and the registry of
+	// rule-versioned modules (ruleversion.go).
+	rv *ruleVersionState
 
 	// journaler is the composed engine's engine-owns-journal seam
 	// (Deps.CommandJournaler, injected into e via e.SetCommandJournaler

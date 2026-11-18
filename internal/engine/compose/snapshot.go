@@ -321,6 +321,20 @@ func (c *Composition) restoreFromSnapshotBytes(data []byte) (int64, error) {
 // since a tail can itself contain further AdvanceTicks commands that move
 // the tick past the snapshot's own recorded value).
 func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Composition, store persist.Store, city persist.CityKey) (usedSnapshot bool, tick int64, err error) {
+	rep, err := RestoreLatestSnapshotOrGenesisReport(ctx, e, c, store, city)
+	if err != nil {
+		return false, 0, err
+	}
+	return rep.UsedSnapshot, rep.Tick, nil
+}
+
+// restoreLatest is the body of RestoreLatestSnapshotOrGenesis. It also
+// returns the decoded journal so the caller can report which rule versions
+// were replayed (FEAT-9995385612). The live rule version is rules.Current
+// when it returns without error; every version refusal (newer than this
+// build, retired, out of order, malformed) happens before the engine or any
+// store record is touched.
+func restoreLatest(ctx context.Context, e *core.Engine, c *Composition, store persist.Store, city persist.CityKey) (usedSnapshot bool, tick int64, frames []JournalFrame, err error) {
 	// BUG-488: verify (or, for a pre-fix journal, establish) city's
 	// durable originating world seed BEFORE touching a single journal
 	// record or snapshot — the snapshot walk-back below already gets its
@@ -353,7 +367,7 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 	// candidate never reaches the stamp at all.
 	recorded, err := checkWorldSeed(ctx, store, city, e.WorldSeed(), c.state.cid)
 	if err != nil {
-		return false, 0, err
+		return false, 0, nil, err
 	}
 
 	// BUG-737 (FEAT-143 wiring): the sibling gameinit-mode check runs
@@ -369,18 +383,35 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 
 	ids, err := store.ListSnapshots(ctx, city)
 	if err != nil {
-		return false, 0, err
+		return false, 0, nil, err
 	}
 	cmds, err := RestoreCommands(ctx, store, city)
 	if err != nil {
-		return false, 0, err
+		return false, 0, nil, err
+	}
+	// FEAT-9995385612: refuse a journal from a newer build, or whose rule
+	// versions go backwards, BEFORE anything is applied or stamped. This is
+	// the whole journal (the part before a snapshot included) and it never
+	// walks back to an older snapshot: that would silently drop real
+	// progress. Retirement (OldestSupported) is checked on the frames
+	// actually replayed, so a snapshot taken under a newer version restores
+	// without any old rule.
+	if err := checkFrames(c.state.cid, cmds, 0, false); err != nil {
+		return false, 0, nil, err
+	}
+	// Every rule-versioned module must hold its getter BEFORE a snapshot is
+	// applied to the real engine: replayFrames checks again, but by then the
+	// snapshot state would already be loaded and a refusal would not be clean.
+	if err := c.state.rv.verify(c.state.cid); err != nil {
+		return false, 0, nil, err
 	}
 
 	if len(ids) == 0 {
 		if err := stampWorldSeedIfNeeded(ctx, store, city, e.WorldSeed(), recorded, c.state.cid); err != nil {
-			return false, 0, err
+			return false, 0, nil, err
 		}
-		return restoreGenesis(e, c, cmds)
+		used, tick, err := restoreGenesis(e, c, cmds)
+		return used, tick, cmds, err
 	}
 
 	// Walk back newest -> oldest (ListSnapshots is documented oldest-first,
@@ -399,14 +430,14 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 		if getErr != nil {
 			// A Store-level read failure is not a tail-inconsistency signal
 			// — never walked past (see doc comment above).
-			return false, 0, getErr
+			return false, 0, nil, getErr
 		}
 		_, tail, ok, valErr := tryRestoreCandidate(data, cmds, city, c.state.cid, e.WorldSeed())
 		if valErr != nil {
 			// Corrupt/undecodable snapshot payload — fail closed, no
 			// further walk-back (BUG-480: never widen the fallback to hide
 			// real corruption).
-			return false, 0, valErr
+			return false, 0, nil, valErr
 		}
 		if !ok {
 			// Tail-inconsistency — already logged inside
@@ -420,21 +451,21 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 		// doomed candidate earlier in this loop never reached this line,
 		// so it never poisoned seed.json.
 		if err := stampWorldSeedIfNeeded(ctx, store, city, e.WorldSeed(), recorded, c.state.cid); err != nil {
-			return false, 0, err
+			return false, 0, nil, err
 		}
 		// Apply it for real, exactly once, onto the caller's own e/c
 		// (never touched until this point).
 		if _, err := c.restoreFromSnapshotBytes(data); err != nil {
-			return false, 0, err
+			return false, 0, nil, err
 		}
-		if err := replayCommands(e, tail); err != nil {
-			return false, 0, err
+		if err := replayFrames(e, c, tail, c.LoadedRuleVersion()); err != nil {
+			return false, 0, nil, err
 		}
 		finalTick, err := engineTick(e, c.state.cid)
 		if err != nil {
-			return false, 0, err
+			return false, 0, nil, err
 		}
-		return true, finalTick, nil
+		return true, finalTick, cmds, nil
 	}
 
 	// Every snapshot's tail proved inconsistent with the journal: fall back
@@ -443,9 +474,10 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 	// was skipped), so this is the same backward-compatible
 	// no-header-to-check-against default as the no-snapshot case above.
 	if err := stampWorldSeedIfNeeded(ctx, store, city, e.WorldSeed(), recorded, c.state.cid); err != nil {
-		return false, 0, err
+		return false, 0, nil, err
 	}
-	return restoreGenesis(e, c, cmds)
+	used, tick, err := restoreGenesis(e, c, cmds)
+	return used, tick, cmds, err
 }
 
 // checkWorldSeed is BUG-488's persist-layer seed guard (split from the
@@ -659,8 +691,8 @@ func checkGameMode(ctx context.Context, store persist.Store, city persist.CityKe
 // 0 — the pre-inc3 always-correct fallback, reached both when no snapshot
 // has ever been taken and when every existing snapshot's tail proved
 // inconsistent with the journal (BUG-480's walk-back exhaustion case).
-func restoreGenesis(e *core.Engine, c *Composition, cmds []protocol.Command) (usedSnapshot bool, tick int64, err error) {
-	if err := replayCommands(e, cmds); err != nil {
+func restoreGenesis(e *core.Engine, c *Composition, cmds []JournalFrame) (usedSnapshot bool, tick int64, err error) {
+	if err := replayFrames(e, c, cmds, 0); err != nil {
 		return false, 0, err
 	}
 	finalTick, err := engineTick(e, c.state.cid)
@@ -693,7 +725,7 @@ func restoreGenesis(e *core.Engine, c *Composition, cmds []protocol.Command) (us
 // ErrSnapshotSkipped and safe to walk back past. A non-nil err is a
 // corrupt-frame failure (ErrSnapshotUnpackFailed) — BUG-480 requires this
 // to fail the whole restore closed immediately, never walked past.
-func tryRestoreCandidate(data []byte, cmds []protocol.Command, city persist.CityKey, correlationID string, worldSeed uint64) (snapTick int64, tail []protocol.Command, ok bool, err error) {
+func tryRestoreCandidate(data []byte, cmds []JournalFrame, city persist.CityKey, correlationID string, worldSeed uint64) (snapTick int64, tail []JournalFrame, ok bool, err error) {
 	valE := core.NewEngine(core.WithWorldSeed(worldSeed))
 	valC, wireErr := Wire(valE, nil)
 	if wireErr != nil {
@@ -717,7 +749,7 @@ func tryRestoreCandidate(data []byte, cmds []protocol.Command, city persist.City
 		logSnapshotSkip(city, snapTick, splitErr, correlationID)
 		return 0, nil, false, nil
 	}
-	if replayErr := replayCommands(valE, t); replayErr != nil {
+	if replayErr := replayFrames(valE, valC, t, valC.LoadedRuleVersion()); replayErr != nil {
 		if !isTailInconsistency(replayErr) {
 			return 0, nil, false, replayErr
 		}
@@ -765,35 +797,6 @@ func engineTick(e *core.Engine, correlationID string) (int64, error) {
 	return clock.Tick(), nil
 }
 
-// replayCommands applies cmds to e in order via e.HandleCommand — the SAME
-// command path a live client took — surfacing the first rejection as a
-// fatal restore error rather than silently skipping it (a silently-dropped
-// journal command is restore-side data loss, exactly the class GR#27 and
-// this whole epic exist to kill).
-//
-// Subscribe / Unsubscribe are SESSION state, not simulation state (BUG-1225):
-// a live subscription belongs to one connection (its owner epoch is process-
-// local and never journaled), and a restored city has no connection attached,
-// so replaying a journaled Subscribe would create a subscription no live
-// connection owns and nothing could ever remove. They are skipped here; they
-// touch no hashed state (proved by the restore-digest tests), so every replay
-// reaches the same simulation state as before.
-func replayCommands(e *core.Engine, cmds []protocol.Command) error {
-	for _, cmd := range cmds {
-		if cmd.Kind == protocol.KindSubscribe || cmd.Kind == protocol.KindUnsubscribe {
-			continue
-		}
-		res := e.HandleCommand(cmd)
-		if !res.Accepted {
-			return errs.New(ErrSnapshotTailReplayRejected, string(cmd.CorrelationID), map[string]any{
-				"kind":  string(cmd.Kind),
-				"error": fmt.Sprintf("%v", res.Error),
-			})
-		}
-	}
-	return nil
-}
-
 // splitJournalAtTick returns the suffix of cmds (in the same order) that
 // were journaled AFTER the engine reached snapshotTick — i.e. exactly the
 // commands a snapshot-aware restore still needs to replay on top of a
@@ -817,7 +820,7 @@ func replayCommands(e *core.Engine, cmds []protocol.Command) error {
 // is dropped, and a synthetic AdvanceTicks command carrying only the
 // REMAINDER is replayed in its place, so the tail still advances the clock
 // by exactly the same total amount the original journal would have.
-func splitJournalAtTick(cmds []protocol.Command, snapshotTick int64, city persist.CityKey, correlationID string) ([]protocol.Command, error) {
+func splitJournalAtTick(cmds []JournalFrame, snapshotTick int64, city persist.CityKey, correlationID string) ([]JournalFrame, error) {
 	if snapshotTick <= 0 {
 		return cmds, nil
 	}
@@ -838,14 +841,14 @@ func splitJournalAtTick(cmds []protocol.Command, snapshotTick int64, city persis
 		case running+payload.N < snapshotTick:
 			running += payload.N
 		case running+payload.N == snapshotTick:
-			tail := make([]protocol.Command, len(cmds[i+1:]))
+			tail := make([]JournalFrame, len(cmds[i+1:]))
 			copy(tail, cmds[i+1:])
 			return tail, nil
 		default: // running+payload.N > snapshotTick: this command straddles the boundary.
 			remainder := running + payload.N - snapshotTick
 			remCmd := cmd
 			remCmd.Payload = protocol.AdvanceTicksPayload{N: remainder}
-			tail := make([]protocol.Command, 0, len(cmds)-i)
+			tail := make([]JournalFrame, 0, len(cmds)-i)
 			tail = append(tail, remCmd)
 			tail = append(tail, cmds[i+1:]...)
 			return tail, nil

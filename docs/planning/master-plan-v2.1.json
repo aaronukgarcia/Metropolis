@@ -1865,7 +1865,8 @@
         "engine.fiscal",
         "engine.coastal",
         "engine.social",
-        "engine.defence"
+        "engine.defence",
+        "engine.rules"
       ],
       "calls": [
         "engine.core",
@@ -1913,7 +1914,8 @@
         "engine.fiscal",
         "engine.coastal",
         "engine.social",
-        "engine.defence"
+        "engine.defence",
+        "engine.rules"
       ],
       "sprint": 6
     },

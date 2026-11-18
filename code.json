@@ -3972,7 +3972,12 @@
         "name": "RuleVersions",
         "format": "Go package API: rules.Has(active, introduced Version) bool; rules.Active(getter) Version; rules.Classify(v) Support; rules.Registry()",
         "pattern": "every versioned rule check is rules.Has(active, rules.NamedConstant), never an integer literal; a save recorded at a version above rules.Current is refused, never clamped",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          }
+        ]
       },
       "outbound": {
         "guid": "0aa9b807-0886-48e2-9f6b-d1b0564d984c",
@@ -5343,6 +5348,11 @@
             "key": "engine.defence",
             "moduleGuid": "38f3829b-91df-43da-89b3-8cedd390054c",
             "inboundGuid": "417393b9-920b-4818-95c0-6313411c692a"
+          },
+          {
+            "key": "engine.rules",
+            "moduleGuid": "1846fbfe-0500-440e-ba52-2df435a6acd2",
+            "inboundGuid": "767c453a-2bce-49f9-b993-49d7ddca0e82"
           }
         ]
       },

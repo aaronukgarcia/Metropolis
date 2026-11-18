@@ -102,7 +102,7 @@ func TestBUG1225_ReplaySkipsSubscribeAndUnsubscribe(t *testing.T) {
 			eG, cG := mk(genStore, city)
 			run(eG, cG, nil, city, true)
 
-			count := func(cmds []protocol.Command, k protocol.Kind) int {
+			count := func(cmds []JournalFrame, k protocol.Kind) int {
 				c := 0
 				for _, x := range cmds {
 					if x.Kind == k {

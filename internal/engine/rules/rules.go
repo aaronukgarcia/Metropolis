@@ -1,5 +1,7 @@
 package rules
 
+import "sync/atomic"
+
 // Version is a rule version: how player commands were judged when a save
 // was made. 0 means "before rule versions existed" (today's recorded
 // bytes). Each rule change adds exactly one number.
@@ -17,10 +19,33 @@ const (
 	RefuseOccupiedCell Version = 1
 )
 
-// Current is the live rule version: the number of the last registry entry.
-// Live play always runs at Current; replay of recorded history runs at the
-// version recorded with it.
-const Current Version = RefuseOccupiedCell
+// Current is the live rule version: the number of the highest WIRED registry
+// entry, never a pending one. It is the version that stamps journal frames
+// and snapshots and that live play runs at; replay of recorded history runs
+// at the version recorded with it. A rule registered as pending wiring is
+// not in force, so it cannot raise Current: a frame stamped with a number
+// whose rule the engine does not enforce would later replay WITH the rule
+// once it is wired. Whoever wires a rule flips its entry to wired AND raises
+// Current in the same commit as the call site (the registry test enforces
+// Current == the highest wired entry, and that the first pending entry is
+// exactly Current+1). Today rule 1 is pending, so Current is 0.
+const Current Version = 0
+
+// testCurrent is the test-only override of [Effective] (see
+// SetCurrentForTest in testhelper.go). Zero means no override.
+var testCurrent atomic.Int64
+
+// Effective is the live rule version the engine actually uses: [Current]
+// in production, or the value a test pinned with SetCurrentForTest. Code
+// that needs "the current version" outside a unit test reads Effective (the
+// same files that may read Current); the bounds checks below use it so a
+// test can stand in for a future build that has wired a rule.
+func Effective() Version {
+	if o := testCurrent.Load(); o > 0 {
+		return Version(o)
+	}
+	return Current
+}
 
 // OldestSupported is the oldest version this build can still replay.
 // Raising it is the retirement mechanism: a snapshot or journal frame
@@ -40,7 +65,7 @@ func Has(active, introduced Version) bool {
 // (a unit test of the bare module, or live play with nothing injected).
 func Active(getter func() Version) Version {
 	if getter == nil {
-		return Current
+		return Effective()
 	}
 	return getter()
 }
@@ -49,7 +74,7 @@ func Active(getter func() Version) Version {
 // for (or version 0). A version above [Current] is a save from a newer
 // build and must be refused, never clamped.
 func IsKnown(v Version) bool {
-	return v >= 0 && v <= Current
+	return v >= 0 && v <= Effective()
 }
 
 // Support is the verdict of [Classify].
@@ -74,7 +99,7 @@ func Classify(v Version) Support {
 	switch {
 	case v < 0:
 		return SupportInvalid
-	case v > Current:
+	case v > Effective():
 		return SupportTooNew
 	case v < OldestSupported:
 		return SupportTooOld
