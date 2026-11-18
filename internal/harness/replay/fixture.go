@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -36,6 +38,11 @@ const shardKind = "harness.replay.stream"
 type fixtureHeader struct {
 	Header          serialize.Header `json:"header"`
 	ProtocolVersion string           `json:"protocolVersion"`
+	// RuleVersion is the engine rule version the fixture was captured
+	// under (FEAT-9995385612, C22). Omitted when 0, so every fixture
+	// recorded before rule versions existed has no such field and its
+	// header bytes are unchanged; a missing field reads as version 0.
+	RuleVersion int `json:"ruleVersion,omitempty"`
 }
 
 // FixtureMeta is the caller-supplied identity for a fixture being saved
@@ -48,6 +55,10 @@ type fixtureHeader struct {
 type FixtureMeta struct {
 	WorldSeed  int64
 	AppVersion string
+	// RuleVersion is the rule version the fixture is captured under
+	// (0, the zero value, for a fixture made under the original rules).
+	// Save refuses a version this build does not know.
+	RuleVersion rules.Version
 }
 
 // fixtureShardPath and fixtureHeaderPath resolve name into the two flat
@@ -133,6 +144,10 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) (err error) {
 		return err
 	}
 
+	if err := checkFixtureRuleVersion(name, int(meta.RuleVersion)); err != nil {
+		return err
+	}
+
 	// Resolved first, before any I/O: a rejected (struct-copied) rec
 	// must never reach os.Create — see this function's doc comment.
 	records, err := rec.Records()
@@ -181,7 +196,7 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) (err error) {
 
 	h := serialize.NewHeader(meta.WorldSeed, 0, 0, meta.AppVersion)
 	h.ShardIndex = []serialize.ShardMeta{shardMeta}
-	fh := fixtureHeader{Header: h, ProtocolVersion: protocol.ProtocolVersion}
+	fh := fixtureHeader{Header: h, ProtocolVersion: protocol.ProtocolVersion, RuleVersion: int(meta.RuleVersion)}
 
 	encoded, err := json.MarshalIndent(fh, "", "  ")
 	if err != nil {
@@ -241,6 +256,20 @@ func Load(dir, name string) (Fixture, error) {
 			"cause": "fixture was recorded against a different protocol.ProtocolVersion",
 		})
 	}
+	// An explicit "ruleVersion": null is corrupt, not version 0; only an
+	// ABSENT field reads as 0.
+	var probe struct {
+		RuleVersion json.RawMessage `json:"ruleVersion"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return Fixture{}, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"path": headerPath, "cause": "decoding fixture header"})
+	}
+	if probe.RuleVersion != nil && bytes.Equal(bytes.TrimSpace(probe.RuleVersion), []byte("null")) {
+		return Fixture{}, fixtureCorruptError(errs.NewCorrelationID(), headerPath, "ruleVersion is null; omit the field for rule version 0")
+	}
+	if err := checkFixtureRuleVersion(name, fh.RuleVersion); err != nil {
+		return Fixture{}, err
+	}
 	if len(fh.Header.ShardIndex) != 1 {
 		cause := fmt.Sprintf("fixture header does not describe exactly one shard (got %d)", len(fh.Header.ShardIndex))
 		return Fixture{}, fixtureCorruptError(errs.NewCorrelationID(), headerPath, cause)
@@ -298,6 +327,28 @@ func Load(dir, name string) (Fixture, error) {
 
 	return Fixture{Name: shardPath, Header: fh, Records: records}, nil
 }
+
+// checkFixtureRuleVersion refuses a fixture rule version this build cannot
+// replay: a negative one is a malformed stamp (MET-G5613), one above the
+// live rule version is from a newer build (MET-G5610), and one below the
+// oldest supported version is retired (MET-G5611). Never clamped. A missing
+// header field is version 0 and always passes while 0 is supported.
+func checkFixtureRuleVersion(name string, v int) error {
+	cid := errs.NewCorrelationID()
+	switch rules.Classify(rules.Version(v)) {
+	case rules.SupportInvalid:
+		return errs.New(rules.ErrMalformedRuleStamp, cid, map[string]any{"reason": fmt.Sprintf("fixture %s: rule version %d is negative", name, v)})
+	case rules.SupportTooNew:
+		return errs.New(rules.ErrSavedUnderNewerRules, cid, map[string]any{"savedVersion": v, "currentVersion": int(rules.Effective())})
+	case rules.SupportTooOld:
+		return errs.New(rules.ErrSavedUnderRetiredRules, cid, map[string]any{"savedVersion": v, "oldestSupported": int(rules.OldestSupported)})
+	}
+	return nil
+}
+
+// RuleVersion is the rule version the fixture was captured under (0 when
+// the header has no ruleVersion field).
+func (f Fixture) RuleVersion() rules.Version { return rules.Version(f.Header.RuleVersion) }
 
 // countingReader counts bytes read through it, so Load can verify the
 // shard's on-disk size against ShardMeta.ByteSize without a second pass.

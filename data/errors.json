@@ -1415,6 +1415,18 @@
       "message": "fixture shard at {path} exceeded the decompressed-size bound ({maxDecodedBytes} bytes) while reading",
       "remedy": "SEC-038: a fixture's decompressed size is bounded during gzip decompression itself (not merely checked after decoding), because a maliciously or accidentally huge compressed shard can decompress to orders of magnitude more memory than its on-disk size suggests. Regenerate a legitimate fixture (which should be small -- a short, deliberately-triggered recording session, not a full save) rather than raising the bound; if a legitimate fixture genuinely needs to be this large, the bound itself (harness/replay's maxFixtureDecodedBytes) needs re-deriving against the new population, not bypassing."
     },
+    "MET-H008": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "Fixture {name} was recorded under rule version {fixtureVersion} but the engine is running rule version {liveVersion}, and no way to replay under rule version {fixtureVersion} was supplied. No command was sent.",
+      "remedy": "Call EnginePlayer.PinWith with the target composition's PinRuleVersion before Replay, so the fixture is judged by the rules it was recorded under. Never replay it under the live rules: the result would not be a regression check."
+    },
+    "MET-H009": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "Replay of fixture {name} finished but the target engine could not be returned to the live rule version {liveVersion}: {cause}",
+      "remedy": "The target engine may still be pinned to rule version {fixtureVersion}. Do not reuse it; rebuild the composition, and re-pin it yourself if you had pinned it before Replay."
+    },
     "MET-H100": {
       "severity": "error",
       "module": "ui.harness",

@@ -365,8 +365,14 @@ func TestWire_ReplayThroughRealCompositionReproducesEngineState(t *testing.T) {
 	// same code path a live transport drives, not a hand-rolled loop over
 	// HandleCommand.
 	target := core.NewEngine(core.WithWorldSeed(seed), core.WithPoolSize(1))
-	if _, err := Wire(target, nil); err != nil {
+	targetComp, err := Wire(target, nil)
+	if err != nil {
 		t.Fatalf("Wire(target): %v", err)
+	}
+	// Pin the composition being replayed INTO, so this keeps working when the
+	// live rule version rises above the fixture's (FEAT-9995385612, C22).
+	if err := player.PinWith(targetComp.PinRuleVersion); err != nil {
+		t.Fatalf("PinWith: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -2,9 +2,11 @@ package replay
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
@@ -47,6 +49,15 @@ type EnginePlayer struct {
 	results []protocol.CommandResult // observed via SendResult, arrival order
 	notify  chan struct{}            // buffered 1, coalescing wakeups for Replay's wait loop
 
+	// ruleVersion is the fixture's recorded rule version (FEAT-9995385612,
+	// C22). pin, when set, is called with it before any command is sent, so
+	// the target engine judges the fixture by the rules it was captured
+	// under, never by the live ones. Both immutable after construction and
+	// configuration.
+	ruleVersion rules.Version
+	name        string // fixture name, for error context
+	pin         func(rules.Version) error
+
 	// self mirrors Recorder.self / InProcTransport.self exactly (AC-13b)
 	// — see record.go's Recorder.self doc comment for the full
 	// pre-lock-ordering rationale. mu is a plain sync.Mutex VALUE, so a
@@ -67,16 +78,43 @@ func NewEnginePlayer(f Fixture) (*EnginePlayer, error) {
 		return nil, err
 	}
 	p := &EnginePlayer{
-		commands: commands,
-		recorded: recorded,
-		cmdCh:    make(chan protocol.Command, len(commands)),
-		notify:   make(chan struct{}, 1),
+		commands:    commands,
+		recorded:    recorded,
+		ruleVersion: f.RuleVersion(),
+		name:        f.Name,
+		cmdCh:       make(chan protocol.Command, len(commands)),
+		notify:      make(chan struct{}, 1),
 	}
 	// Stored exactly once, here, before p is returned to any caller —
 	// see Recorder.self's doc comment (record.go) for the identical
 	// rationale.
 	p.self.Store(p)
 	return p, nil
+}
+
+// RuleVersion is the rule version the fixture was captured under and the
+// one Replay pins the target to.
+func (p *EnginePlayer) RuleVersion() rules.Version {
+	if err := p.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	return p.ruleVersion
+}
+
+// PinWith sets the function Replay uses to pin the target engine to the
+// fixture's rule version (for a composition, its PinRuleVersion method; a
+// func rather than the type because compose imports this package). Replay
+// calls it with RuleVersion() before sending the first command and puts
+// the live version back (rules.Effective()) when the replay returns, so a
+// caller that had pinned the target itself must re-pin it after Replay.
+// Without PinWith, Replay refuses a fixture whose rule version differs from
+// the live one (MET-H008). Call before Replay. Returns the copy error for a struct-copied player.
+func (p *EnginePlayer) PinWith(pin func(rules.Version) error) error {
+	if err := p.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return err
+	}
+	p.pin = pin
+	return nil
 }
 
 func (p *EnginePlayer) checkNotCopied(correlationID string, ctx map[string]any) error {
@@ -157,9 +195,37 @@ func (p *EnginePlayer) SendResult(res protocol.CommandResult) bool {
 // never ambiguous — the analogous risk this method guards is "did every
 // dispatched command actually get answered", tracked explicitly via the
 // results count rather than inferred from channel-close timing.
-func (p *EnginePlayer) Replay(ctx context.Context) (*CompareResult, error) {
+func (p *EnginePlayer) Replay(ctx context.Context) (res *CompareResult, retErr error) {
 	if err := p.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
 		return nil, err
+	}
+
+	if p.pin == nil {
+		// No pin supplied: the only honest replay is under the live rules.
+		// Refuse before any command is sent (C22).
+		if live := rules.Effective(); p.ruleVersion != live {
+			return nil, errs.New(codeReplayPinRequired, errs.NewCorrelationID(), map[string]any{
+				"name": p.name, "fixtureVersion": int(p.ruleVersion), "liveVersion": int(live),
+			})
+		}
+	} else {
+		if err := p.pin(p.ruleVersion); err != nil {
+			return nil, err
+		}
+		defer func() {
+			live := rules.Effective()
+			if rerr := p.pin(live); rerr != nil {
+				wrapped := errs.Wrap(codeReplayPinRestoreFailed, errs.NewCorrelationID(), rerr, map[string]any{
+					"name": p.name, "fixtureVersion": int(p.ruleVersion), "liveVersion": int(live), "cause": rerr.Error(),
+				})
+				res = nil
+				if retErr != nil {
+					retErr = errors.Join(retErr, wrapped)
+				} else {
+					retErr = wrapped
+				}
+			}
+		}()
 	}
 
 	// cmdCh is buffered to exactly len(p.commands), so every send below is

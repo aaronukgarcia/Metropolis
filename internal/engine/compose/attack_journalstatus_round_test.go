@@ -320,6 +320,10 @@ func TestAttackReplay_StateDigestEquivalenceNotJustClock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Wire(target): %v", err)
 	}
+	// Pin the composition being replayed INTO (FEAT-9995385612, C22).
+	if err := player.PinWith(targetComp.PinRuleVersion); err != nil {
+		t.Fatalf("PinWith: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	loopDone := make(chan error, 1)

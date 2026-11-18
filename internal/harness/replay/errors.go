@@ -61,4 +61,14 @@ const (
 	// (SEC-038) — distinct from codeFixtureCorrupt, which covers a bad
 	// gzip stream or a digest mismatch on bytes that WERE fully read.
 	codeFixtureDecodedTooLarge = "MET-H007"
+
+	// codeReplayPinRequired: EnginePlayer.Replay was asked to replay a
+	// fixture recorded under a rule version other than the live one, with
+	// no PinWith function supplied (FEAT-9995385612, C22). Refused before
+	// any command is sent.
+	codeReplayPinRequired = "MET-H008"
+
+	// codeReplayPinRestoreFailed: Replay finished but returning the target
+	// to the live rule version failed (FEAT-9995385612, C22).
+	codeReplayPinRestoreFailed = "MET-H009"
 )
