@@ -1,7 +1,6 @@
 package converge
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
@@ -73,6 +72,9 @@ func populationOpFailed(entry JournalEntry, reason string) error {
 // Run implements Domain. Deterministic (GR#21): a fixed world seed, ids
 // minted in journal order, no wall clock, no map ranges.
 func (PopulationDomain) Run(j Journal) (Trajectory, error) {
+	if err := checkJournalShape("population", j); err != nil {
+		return nil, err
+	}
 	cid := errs.NewCorrelationID()
 	api, err := citizens.NewCitizensAPI(PopulationWorldSeed, cid)
 	if err != nil {
@@ -95,8 +97,8 @@ func (PopulationDomain) Run(j Journal) (Trajectory, error) {
 				Count    int64 `json:"count"`
 				AgeYears int64 `json:"ageYears"`
 			}
-			if err := json.Unmarshal(entry.Args, &args); err != nil {
-				return nil, populationOpFailed(entry, fmt.Sprintf("malformed args: %v", err))
+			if err := decodeArgs("population", entry, argKeysPopulationSeed, &args); err != nil {
+				return nil, err
 			}
 			if args.Count < 0 {
 				return nil, populationOpFailed(entry, "count must be non-negative")
@@ -121,11 +123,17 @@ func (PopulationDomain) Run(j Journal) (Trajectory, error) {
 			var args struct {
 				Days int64 `json:"days"`
 			}
-			if err := json.Unmarshal(entry.Args, &args); err != nil {
-				return nil, populationOpFailed(entry, fmt.Sprintf("malformed args: %v", err))
+			if err := decodeArgs("population", entry, argKeysPopulationAdvance, &args); err != nil {
+				return nil, err
 			}
 			if args.Days < 1 {
 				return nil, populationOpFailed(entry, "days must be >= 1")
+			}
+			if err := checkAdvanceDays("population", entry, args.Days); err != nil {
+				return nil, err
+			}
+			if seeded == 0 {
+				return nil, setupMissing("population", entry, "advance before any seed op: nobody to age")
 			}
 			for d := int64(0); d < args.Days; d++ {
 				b, dd, err := api.AdvanceDayTick(cid)
@@ -137,6 +145,12 @@ func (PopulationDomain) Run(j Journal) (Trajectory, error) {
 			}
 
 		case "sample":
+			if err := decodeArgs("population", entry, argKeysPopulationSample, nil); err != nil {
+				return nil, err
+			}
+			if seeded == 0 {
+				return nil, setupMissing("population", entry, "sample before any seed op: the population would read 0")
+			}
 			traj = append(traj, Sample{Tick: entry.Tick, Values: map[string]int64{
 				"population":     int64(api.TotalPopulation(cid)),
 				"births":         births,
@@ -148,6 +162,9 @@ func (PopulationDomain) Run(j Journal) (Trajectory, error) {
 		default:
 			return nil, populationOpFailed(entry, "unrecognised op name")
 		}
+	}
+	if err := requireSamples("population", traj); err != nil {
+		return nil, err
 	}
 	return traj, nil
 }

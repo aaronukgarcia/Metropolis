@@ -1,7 +1,6 @@
 package converge
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 
@@ -140,6 +139,9 @@ func (ServicesDomain) Contract() Contract {
 // keyed lookup or the API's own internally-sorted aggregate — never a raw
 // map range in this file.
 func (ServicesDomain) Run(j Journal) (Trajectory, error) {
+	if err := checkJournalShape("services", j); err != nil {
+		return nil, err
+	}
 	api := services.New("")
 	catalogue, err := loadServicesCatalogue()
 	if err != nil {
@@ -147,6 +149,7 @@ func (ServicesDomain) Run(j Journal) (Trajectory, error) {
 	}
 	registered := map[string][]services.ServiceID{}
 	var population int64
+	populationSet := false
 	var traj Trajectory
 
 	for _, entry := range j.Entries {
@@ -157,8 +160,15 @@ func (ServicesDomain) Run(j Journal) (Trajectory, error) {
 				GoKind      string `json:"goKind"`
 				GoServiceID string `json:"goServiceID"`
 			}
-			if err := json.Unmarshal(entry.Args, &args); err != nil {
-				return nil, journalOpFailed(entry, fmt.Sprintf("malformed args: %v", err))
+			if err := decodeArgs("services", entry, argKeysServicesPlaceService, &args); err != nil {
+				return nil, err
+			}
+			for _, f := range []struct{ name, val string }{
+				{"buildingID", args.BuildingID}, {"goKind", args.GoKind}, {"goServiceID", args.GoServiceID},
+			} {
+				if f.val == "" {
+					return nil, journalOpFailed(entry, f.name+" must not be empty")
+				}
 			}
 			be, ok := buildingByID(catalogue, args.BuildingID)
 			if !ok {
@@ -183,18 +193,28 @@ func (ServicesDomain) Run(j Journal) (Trajectory, error) {
 			var args struct {
 				N int64 `json:"n"`
 			}
-			if err := json.Unmarshal(entry.Args, &args); err != nil {
-				return nil, journalOpFailed(entry, fmt.Sprintf("malformed args: %v", err))
+			if err := decodeArgs("services", entry, argKeysServicesSetPopulation, &args); err != nil {
+				return nil, err
 			}
 			if args.N < 0 {
 				return nil, journalOpFailed(entry, "population must be non-negative")
 			}
 			population = args.N
+			populationSet = true
 			if err := pushGroupDemand(api, registered, population); err != nil {
 				return nil, journalOpFailed(entry, err.Error())
 			}
 
 		case "sample":
+			if err := decodeArgs("services", entry, argKeysServicesSample, nil); err != nil {
+				return nil, err
+			}
+			if len(registered) == 0 {
+				return nil, setupMissing("services", entry, "sample before any place_service op: no capacity registered")
+			}
+			if !populationSet {
+				return nil, setupMissing("services", entry, "sample before any set_population op: demand would read 0")
+			}
 			s, err := snapshotServices(api, registered, entry.Tick)
 			if err != nil {
 				return nil, journalOpFailed(entry, err.Error())
@@ -204,6 +224,9 @@ func (ServicesDomain) Run(j Journal) (Trajectory, error) {
 		default:
 			return nil, journalOpFailed(entry, "unrecognised op name")
 		}
+	}
+	if err := requireSamples("services", traj); err != nil {
+		return nil, err
 	}
 	return traj, nil
 }

@@ -80,3 +80,29 @@ const (
 	// or a distribution window that never filled).
 	codeFieldNeverEvaluated = "MET-H512"
 )
+
+// BUG-1140 (Run side), same range H510-H519.
+const (
+	// codeEmptyJournal: a Domain was asked to Run a journal with no entries.
+	codeEmptyJournal = "MET-H513"
+
+	// codeNoSample: the journal has no sample op, so its trajectory is empty.
+	codeNoSample = "MET-H514"
+
+	// codeSetupMissing: an advance/sample ran before the setup op it needs.
+	codeSetupMissing = "MET-H515"
+
+	// codeUnknownArg: an op's args carried a key the adapter does not define.
+	codeUnknownArg = "MET-H516"
+
+	// codeMissingArg: a required op argument was absent (never defaulted).
+	codeMissingArg = "MET-H517"
+
+	// codeSampleTickOrder: a sample tick was negative or not strictly after
+	// the previous sample's tick.
+	codeSampleTickOrder = "MET-H518"
+
+	// codeAdvanceTooLarge: an advance op asked for more days than
+	// maxAdvanceDays, so the run would loop for minutes.
+	codeAdvanceTooLarge = "MET-H519"
+)

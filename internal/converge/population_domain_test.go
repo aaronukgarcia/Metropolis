@@ -213,7 +213,7 @@ func TestPopulationDomain_DistributionWarmupAndEvaluated(t *testing.T) {
 func TestPopulationDomain_FailsClosed(t *testing.T) {
 	cases := map[string]Journal{
 		"unknown op":          {Entries: []JournalEntry{{Op: "bogus"}}},
-		"malformed seed":      {Entries: []JournalEntry{{Op: "seed", Args: json.RawMessage(`{"count":"x"}`)}}},
+		"malformed seed":      {Entries: []JournalEntry{{Op: "seed", Args: json.RawMessage(`{"count":"x","ageYears":30}`)}}},
 		"negative count":      {Entries: []JournalEntry{{Op: "seed", Args: json.RawMessage(`{"count":-5,"ageYears":30}`)}}},
 		"zero count":          {Entries: []JournalEntry{{Op: "seed", Args: json.RawMessage(`{"count":0,"ageYears":30}`)}}},
 		"age out of range":    {Entries: []JournalEntry{{Op: "seed", Args: json.RawMessage(`{"count":10,"ageYears":200}`)}}},

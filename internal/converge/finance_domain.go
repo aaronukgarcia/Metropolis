@@ -101,16 +101,29 @@ func (FinanceDomain) Contract() Contract {
 // proves the same Journal run twice produces a reflect.DeepEqual
 // Trajectory.
 func (FinanceDomain) Run(j Journal) (Trajectory, error) {
+	if err := checkJournalShape("finance", j); err != nil {
+		return nil, err
+	}
 	f := finance.NewFinanceAPI("")
 	var traj Trajectory
+	posted := false // any ledger-mutating op applied yet
 
 	for _, entry := range j.Entries {
+		if entry.Op == "sample" && !posted {
+			return nil, setupMissing("finance", entry, "sample before any ledger op (post, wages, spend, settle, debt service): every field would read 0")
+		}
 		if err := applyFinanceJournalOp(f, entry); err != nil {
 			return nil, err
+		}
+		if entry.Op != "sample" && entry.Op != "begin_month" {
+			posted = true
 		}
 		if entry.Op == "sample" {
 			traj = append(traj, snapshotFinance(f, entry.Tick))
 		}
+	}
+	if err := requireSamples("finance", traj); err != nil {
+		return nil, err
 	}
 	return traj, nil
 }
@@ -130,23 +143,28 @@ func applyFinanceJournalOp(f *finance.FinanceAPI, entry JournalEntry) error {
 
 	switch entry.Op {
 	case "sample":
-		return nil // handled by the caller after this returns nil
+		return decodeArgs("finance", entry, argKeysFinanceSample, nil) // snapshot is taken by the caller
 
 	case "post":
 		var args struct {
-			Description string `json:"description"`
-			Entries     []struct {
+			Description string            `json:"description"`
+			Entries     []json.RawMessage `json:"entries"`
+		}
+		if err := decodeArgs("finance", entry, argKeysFinancePost, &args); err != nil {
+			return err
+		}
+		tx := finance.Transaction{Description: args.Description}
+		for i, raw := range args.Entries {
+			var e struct {
 				Account  string `json:"account"`
 				Side     string `json:"side"` // "debit" or "credit"
 				Amount   int64  `json:"amount"`
 				Category string `json:"category"`
-			} `json:"entries"`
-		}
-		if err := json.Unmarshal(entry.Args, &args); err != nil {
-			return fail(fmt.Sprintf("malformed args: %v", err))
-		}
-		tx := finance.Transaction{Description: args.Description}
-		for _, e := range args.Entries {
+			}
+			sub := JournalEntry{Tick: entry.Tick, Op: fmt.Sprintf("post.entries[%d]", i), Args: raw}
+			if err := decodeArgs("finance", sub, argKeysFinancePostEntry, &e); err != nil {
+				return err
+			}
 			var side finance.Side
 			switch e.Side {
 			case "debit":
@@ -172,8 +190,8 @@ func applyFinanceJournalOp(f *finance.FinanceAPI, entry JournalEntry) error {
 		var args struct {
 			Month int64 `json:"month"`
 		}
-		if err := json.Unmarshal(entry.Args, &args); err != nil {
-			return fail(fmt.Sprintf("malformed args: %v", err))
+		if err := decodeArgs("finance", entry, argKeysFinanceBeginMonth, &args); err != nil {
+			return err
 		}
 		if err := f.BeginMonth(args.Month); err != nil {
 			return fail(err.Error())
@@ -184,8 +202,8 @@ func applyFinanceJournalOp(f *finance.FinanceAPI, entry JournalEntry) error {
 		var args struct {
 			Total int64 `json:"total"`
 		}
-		if err := json.Unmarshal(entry.Args, &args); err != nil {
-			return fail(fmt.Sprintf("malformed args: %v", err))
+		if err := decodeArgs("finance", entry, argKeysFinancePostWages, &args); err != nil {
+			return err
 		}
 		if _, err := f.PostWages(finance.Money(args.Total)); err != nil {
 			return fail(err.Error())
@@ -197,8 +215,8 @@ func applyFinanceJournalOp(f *finance.FinanceAPI, entry JournalEntry) error {
 			Quantity int64 `json:"quantity"`
 			Price    int64 `json:"price"`
 		}
-		if err := json.Unmarshal(entry.Args, &args); err != nil {
-			return fail(fmt.Sprintf("malformed args: %v", err))
+		if err := decodeArgs("finance", entry, argKeysFinancePostHouseholdSpend, &args); err != nil {
+			return err
 		}
 		if _, err := f.PostHouseholdSpend(args.Quantity, finance.Money(args.Price)); err != nil {
 			return fail(err.Error())
@@ -209,8 +227,8 @@ func applyFinanceJournalOp(f *finance.FinanceAPI, entry JournalEntry) error {
 		var args struct {
 			Opex int64 `json:"opex"`
 		}
-		if err := json.Unmarshal(entry.Args, &args); err != nil {
-			return fail(fmt.Sprintf("malformed args: %v", err))
+		if err := decodeArgs("finance", entry, argKeysFinanceSettleOpex, &args); err != nil {
+			return err
 		}
 		if _, err := f.SettleOpex(finance.Money(args.Opex)); err != nil {
 			return fail(err.Error())
@@ -221,8 +239,8 @@ func applyFinanceJournalOp(f *finance.FinanceAPI, entry JournalEntry) error {
 		var args struct {
 			Cost int64 `json:"cost"`
 		}
-		if err := json.Unmarshal(entry.Args, &args); err != nil {
-			return fail(fmt.Sprintf("malformed args: %v", err))
+		if err := decodeArgs("finance", entry, argKeysFinanceSettleConstruction, &args); err != nil {
+			return err
 		}
 		if _, err := f.SettleConstruction(finance.Money(args.Cost)); err != nil {
 			return fail(err.Error())
@@ -234,8 +252,8 @@ func applyFinanceJournalOp(f *finance.FinanceAPI, entry JournalEntry) error {
 			Interest  int64 `json:"interest"`
 			Principal int64 `json:"principal"`
 		}
-		if err := json.Unmarshal(entry.Args, &args); err != nil {
-			return fail(fmt.Sprintf("malformed args: %v", err))
+		if err := decodeArgs("finance", entry, argKeysFinanceServiceDebt, &args); err != nil {
+			return err
 		}
 		if err := f.ServiceDebt(finance.Money(args.Interest), finance.Money(args.Principal)); err != nil {
 			return fail(err.Error())

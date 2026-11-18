@@ -6405,6 +6405,48 @@
       "module": "harness.converge",
       "message": "Converge comparison for domain {domain} field {field} was never evaluated: zero comparisons made",
       "remedy": "Make the reference and candidate both report the field on shared ticks, and for a distribution field supply at least Window samples; a field that cannot be evaluated must not pass."
+    },
+    "MET-H513": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge domain {domain} was given a journal with no entries",
+      "remedy": "Supply a journal that sets the domain up, advances or changes it, and samples it."
+    },
+    "MET-H514": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge domain {domain} journal contains no sample entry, so the trajectory would be empty",
+      "remedy": "Add at least one sample op to the journal."
+    },
+    "MET-H515": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge domain {domain} op {op} at tick {tick} ran before the setup it needs: {reason}",
+      "remedy": "Put the named setup op (seed, place_service, set_population, a funding post) earlier in the journal than the op that depends on it."
+    },
+    "MET-H516": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge domain {domain} op {op} at tick {tick} has an unknown argument key {key}",
+      "remedy": "Fix the typo or remove the key; allowed keys are defined by the domain adapter for that op."
+    },
+    "MET-H517": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge domain {domain} op {op} at tick {tick} is missing required argument {key}",
+      "remedy": "Supply the argument explicitly; the harness never defaults a required argument to zero."
+    },
+    "MET-H518": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge domain {domain} sample at tick {tick} is negative or not after the previous sample tick {previous}",
+      "remedy": "Order sample ticks strictly increasing and non-negative."
+    },
+    "MET-H519": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge domain {domain} op {op} at tick {tick} asks to advance {days} days, above the bound {bound}",
+      "remedy": "Split the run or lower days; the bound keeps a journal from running unattended for minutes. Raise the named constant only with a reason."
     }
   }
 }
