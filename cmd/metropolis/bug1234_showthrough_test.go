@@ -53,9 +53,42 @@ func bootPausedForBlankTest(t *testing.T, slug string) *skeletonWiring {
 		t.Fatalf("bootCore: %v", err)
 	}
 	t.Cleanup(w.shutdown)
-	pressKey(w, ' ')
-	waitForPaused(t, w, true, 5*time.Second)
-	return w
+	// BUG-1239: the tick driver sends its boot-time Resume asynchronously. A
+	// Space pressed before that Resume is processed reads "paused", sends a
+	// second Resume, and the clock then keeps running (CI run 44406336316:
+	// the F1 status row changed during the "idle" window). Wait for the
+	// clock to be running before pausing it. Nothing tells a test when that
+	// boot Resume has been processed, so settle instead: the clock must read
+	// paused without a break for a full second; whenever it is found running
+	// it is paused again. No fixed number of presses, no fixed wait.
+	stop := time.Now().Add(60 * time.Second)
+	var pausedSince time.Time
+	var lastPress time.Time
+	for {
+		c, err := w.engine.Clock()
+		if err != nil {
+			t.Fatalf("Clock: %v", err)
+		}
+		now := time.Now()
+		if c.Paused() {
+			if pausedSince.IsZero() {
+				pausedSince = now
+			}
+			if now.Sub(pausedSince) >= time.Second {
+				return w
+			}
+		} else {
+			pausedSince = time.Time{}
+			if now.Sub(lastPress) >= 250*time.Millisecond {
+				pressKey(w, ' ')
+				lastPress = now
+			}
+		}
+		if now.After(stop) {
+			t.Fatalf("clock never settled paused (BUG-1239 start-up race)")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // liveLoop runs a real RenderLoop on a simulation screen of the given size.

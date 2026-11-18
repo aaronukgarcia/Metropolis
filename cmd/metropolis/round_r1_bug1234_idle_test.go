@@ -42,7 +42,23 @@ func TestRoundR1_BUG1234_IdleFramesWriteNothingAndStayDrawn(t *testing.T) {
 		k tcell.Key
 	}{{"F1", tcell.KeyF1}, {"F2", tcell.KeyF2}, {"F3", tcell.KeyF3}, {"F4", tcell.KeyF4}, {"F10", tcell.KeyF10}, {"F12", tcell.KeyF12}} {
 		pressSpecial(w, sc.k)
-		time.Sleep(400 * time.Millisecond)
+		// Wait until the frame has stopped changing before the idle window
+		// starts: on a slow runner the status row catches up with the clock
+		// late (CI run 44406336316 counted that catch-up as an idle write).
+		// Settled = no cell write for a full second; no fixed wait.
+		settleBy := time.Now().Add(60 * time.Second)
+		last, lastAt := cs.sets.Load(), time.Now()
+		for {
+			time.Sleep(20 * time.Millisecond)
+			if n := cs.sets.Load(); n != last {
+				last, lastAt = n, time.Now()
+			} else if time.Since(lastAt) >= time.Second {
+				break
+			}
+			if time.Now().After(settleBy) {
+				t.Fatalf("%s: frame never settled (still being written after 60s)", sc.n)
+			}
+		}
 		s0 := cs.sets.Load()
 		var before []string
 		for y := 0; y < rows; y++ {

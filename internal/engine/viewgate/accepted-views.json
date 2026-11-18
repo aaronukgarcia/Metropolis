@@ -1,5 +1,9 @@
 [
   {
+    "view": "f5.why",
+    "reason": "TODO(FEAT-9995385616 lane A2): internal/ui/screens/why declares the view name \"f5.why\" (FEAT-9995385619, the F5 why screen) but compose.viewRegistrationOrder does not publish it yet. The screen does not Subscribe at boot (cmd/metropolis whyViewServed = false) and shows an honest no-data state; lane A2 registers the view, flips that constant and REMOVES this entry in the same commit."
+  },
+  {
     "view": "f3.build",
     "reason": "TODO(FEAT-083): internal/ui/screens/build declares ViewSubscriptionName=\"f3.build\" but compose.viewRegistrationOrder does not publish it (no build_publish.go registration yet), so the F3 build screen's Subscribe is rejected and it renders blank. Known-unwired screen pending its composition-root wiring. Ratcheted for FEAT-231 V1."
   },
