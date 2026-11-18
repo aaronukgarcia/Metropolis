@@ -115,7 +115,7 @@ func TestAttackMOD034_LiveResidentIDsMonotoneAfterLoad(t *testing.T) {
 // sample tracks growth (not pinned at the seed count).
 func TestAttackMOD034_SampleSizeIsExactlyTheCappedLiveCount(t *testing.T) {
 	e := core.NewEngine(core.WithWorldSeed(mod034ReroundSeed), core.WithPoolSize(1))
-	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t)})
+	comp, err := Wire(e, &Deps{Coastal: quietCoastal(t), SeedHomeCapacityPeople: 1 << 40})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)
 	}

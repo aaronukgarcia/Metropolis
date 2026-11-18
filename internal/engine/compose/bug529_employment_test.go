@@ -154,7 +154,8 @@ func TestBUG529_EmployedFractionStaysProportionalUnderOrganicMigration(t *testin
 	const totalMonths = 48
 
 	var violations atomic.Int64
-	e, comp := newTestEngine(t, seed, invariant.WithLogSink(func(*errs.E) { violations.Add(1) }))
+	// BUG-1214: organic migration growth is the thing under test; no housing cap.
+	e, comp := newUncappedTestEngine(t, seed, invariant.WithLogSink(func(*errs.E) { violations.Add(1) }))
 
 	var snaps []bug529Snapshot
 	for m := int64(1); m <= totalMonths; m++ {

@@ -363,7 +363,9 @@ func TestBUG380_SurvivalIsFairAcrossIDBands(t *testing.T) {
 	const months = 200
 	const maxSpreadPoints = 15.0 // applies to the three MIGRANT bands only — see doc comment for why natives are excluded from this assertion
 
-	e, comp := newTestEngine(t, b380Seed)
+	// BUG-1214: this test needs migrants admitted without a housing cap (it is
+	// about emigration fairness, not housing).
+	e, comp := newUncappedTestEngine(t, b380Seed)
 	for m := int64(1); m <= months; m++ {
 		advanceInChunks(t, e, int64(core.DailyTicksPerMonth))
 	}

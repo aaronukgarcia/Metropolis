@@ -1,0 +1,13 @@
+month: control vs build-6-dwellings population
+ 1:   62 vs   62
+ 2:   74 vs   74
+ 3:   86 vs   86
+ 4:  101 vs  101
+ 5:  117 vs  117
+ 6:  122 vs  134
+ 7:  124 vs  150
+ 8:  125 vs  165
+ 9:  130 vs  172
+10:  134 vs  176
+11:  143 vs  185
+12:  148 vs  190

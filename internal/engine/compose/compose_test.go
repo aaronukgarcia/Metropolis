@@ -1513,6 +1513,8 @@ func TestFEAT169_CrossModuleIDCollisionRegression(t *testing.T) {
 	comp, err := Wire(e, &Deps{
 		Citizens:    api,
 		SocialQuiet: true,
+		// BUG-1214: this regression needs real migrant ids, so no housing cap.
+		SeedHomeCapacityPeople: 1 << 40,
 		InvariantOpts: []invariant.HookOption{
 			invariant.WithLogSink(func(*errs.E) { violations.Add(1) }),
 		},

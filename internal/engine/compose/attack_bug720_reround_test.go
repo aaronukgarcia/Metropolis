@@ -46,6 +46,10 @@ func rrWire(t *testing.T, seed uint64, pool int, crematoria []string, cemeteries
 		Citizens:               api,
 		DeathServiceCrematoria: crematoria,
 		DeathServiceCemeteries: cemeteries,
+		// BUG-1214: this fixture is about the hearse budget, not housing; the
+		// natural deaths it needs come from the larger, uncapped population it
+		// always had. A huge seed home stock restores that.
+		SeedHomeCapacityPeople: 1 << 40,
 	})
 	if err != nil {
 		t.Fatalf("Wire: %v", err)

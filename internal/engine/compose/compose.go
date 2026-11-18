@@ -478,6 +478,13 @@ type Deps struct {
 	DeathServiceCemeteries []DeathServiceCemeterySpec
 	DeathServiceCrematoria []string
 
+	// SeedHomeCapacityPeople (BUG-1214) overrides the seed city's starting
+	// home capacity, in people, that housingVacancyFor adds to the capacity of
+	// built dwellings. Zero (every ordinary caller) keeps the default
+	// baselineOneSeedHomeCapacityPeople; a test fixture that is not about
+	// housing sets a large value so migration is not capped by homes.
+	SeedHomeCapacityPeople int64
+
 	// LoadTraffic overrides construction of the FEAT-206 engine.traffic
 	// dependency (defaults to loadDefaultTraffic — traffic.New() +
 	// LoadConfig against the resolved data/ dir, mirroring LoadMarket's
@@ -1598,6 +1605,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	}
 
 	st := &simState{
+		seedHomeCapacityPeople:     deps.SeedHomeCapacityPeople,
 		pol:                        polState,
 		coastalW:                   coastalW,
 		defenceW:                   defenceW,
@@ -1940,6 +1948,9 @@ func idNamespaceRangesDisjoint(fertilityChildIDBase, migrantIDBase uint64) bool 
 // simulation ever reads it) and it cannot drift, because st.treasury is
 // never assigned outside setTreasury.
 type simState struct {
+	// seedHomeCapacityPeople is Deps.SeedHomeCapacityPeople (0 = default).
+	seedHomeCapacityPeople int64
+
 	// pol is the FEAT-2326609832 engine.policies bundle (policies_wire.go).
 	pol *policiesState
 
@@ -3340,7 +3351,7 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 	return st.attract.ApplyMigration(attract.MigrationCommand{
 		Month:              month,
 		ResidentIDs:        st.residentIDs(),
-		HousingVacancy:     baselineOneHousingVacancy,
+		HousingVacancy:     housingVacancyFor(st.buildAPI, st.citizens, st.cid, st.seedHomeCapacityPeople),
 		JunctionThroughput: baselineOneJunctionThroughput,
 	})
 }
