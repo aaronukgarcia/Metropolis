@@ -606,6 +606,11 @@ func (e *Engine) SeedClockForRestore(correlationID string, tick int64) error {
 		return errs.New(ErrEngineSealed, correlationID, map[string]any{"method": "SeedClockForRestore"})
 	}
 	e.clock.tick = tick
+	// BUG-1211: tickCounter is "daily ticks committed", the same quantity as
+	// the clock's elapsed-tick count, so a restore seeds both. Left at 0 it
+	// made /health (and converge's IssuedAtTick) report ticks since this
+	// process started instead of the city's absolute tick after a restart.
+	e.tickCounter.Store(uint64(tick))
 	return nil
 }
 
