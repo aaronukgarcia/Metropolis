@@ -28,6 +28,7 @@
 // "notice present".
 
 import { gameDate, fmtMoney } from './utils.ts';
+import { engineMoneyToPounds } from './engineMoney.ts';
 
 export type NewsSeverity = 'info' | 'success' | 'warning' | 'error';
 
@@ -356,8 +357,7 @@ export function observeNews(
       // discovery and is a pre-existing, pre-rebase-scale display bug —
       // filed as BUG-723-followup rather than fixed here, out of this
       // item's scope.)
-      const MICROPOUNDS_PER_POUND = 1_000;
-      const poundsText = fmtMoney(ps.amountMicropounds / MICROPOUNDS_PER_POUND);
+      const poundsText = fmtMoney(engineMoneyToPounds(ps.amountMicropounds));
       push('payrollShortfall', 'warning', `Payroll shortfall: ${poundsText}${monthsText}. Treasury covering the gap.`);
     } else if (!psActive && tracker.payrollShortfallActive) {
       tracker.payrollShortfallActive = false;

@@ -20,6 +20,7 @@ import { versionRaw } from '../sim/version.ts';
 import { setLiveEngineBuild, resetLiveEngineBuild } from '../sim/liveEngineBuild.ts';
 import { isLiveEngineEnabled, resolveLiveEngineUrl } from '../sim/liveEngineFlag.ts';
 import { financeStatusTracker } from '../sim/financeStatusTracker.ts';
+import { engineMoneyToPounds } from '../sim/engineMoney.ts';
 
 export { LIVE_ENGINE_FLAG_KEY, LIVE_ENGINE_URL_KEY } from '../sim/liveEngineFlag.ts';
 
@@ -144,7 +145,7 @@ export function LiveEngineBadge() {
   const label =
     connState === 'live'
       ? snapshot
-        ? `LIVE ENGINE  tick ${snapshot.tick}${snapshot.netWorthMicropounds != null ? `  £${(snapshot.netWorthMicropounds / 1_000_000).toFixed(0)}` : ''}`
+        ? `LIVE ENGINE  tick ${snapshot.tick}${snapshot.netWorthMicropounds != null ? `  £${engineMoneyToPounds(snapshot.netWorthMicropounds).toFixed(0)}` : ''}`
         : 'LIVE ENGINE  (waiting for data)'
       : connState === 'refused'
         ? `LIVE ENGINE refused: ${refusal?.code ?? ''}`
