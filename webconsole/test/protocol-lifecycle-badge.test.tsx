@@ -54,13 +54,23 @@ class FakeWebSocket {
   }
 }
 
-/** Wraps the global timers and tracks the set of timers armed through the
- * wrapper (cleared or fired ones are removed). */
+/** Wraps the global timers and tracks the set of timers the protocol CLIENT
+ * armed through the wrapper (cleared or fired ones are removed). Other code
+ * arms global timers too: jsdom's localStorage.setItem arms a 0 ms timer for
+ * its storage event, and the client writes its error ring to localStorage
+ * when a socket is lost, so whether that 0 ms timer has fired by the time of
+ * the unmount assertion is a race (it failed about 1 run in 10 locally and
+ * on CI). Every timer the client arms goes through the one timer seam in
+ * src/sim/reconnect.ts, so a timer counts only when the stack that armed it
+ * passes through that file. The precondition in the AC-R12 test proves the
+ * filter still sees the client's timers. */
 function trackTimers() {
   const realSet = globalThis.setTimeout;
   const realClear = globalThis.clearTimeout;
   const outstanding = new Set<unknown>();
+  const armedByClient = () => /[\\/]reconnect\.[tj]s/.test(new Error().stack ?? '');
   (globalThis as any).setTimeout = (fn: (...a: any[]) => void, ms?: number, ...rest: any[]) => {
+    const mine = armedByClient();
     const h: any = realSet(
       (...a: any[]) => {
         outstanding.delete(h);
@@ -69,7 +79,7 @@ function trackTimers() {
       ms,
       ...rest,
     );
-    outstanding.add(h);
+    if (mine) outstanding.add(h);
     return h;
   };
   (globalThis as any).clearTimeout = (h: any) => {
