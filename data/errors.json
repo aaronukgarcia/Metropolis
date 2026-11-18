@@ -170,7 +170,8 @@
       "G5600-G5609": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
       "P050-P059": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
       "P060-P069": "reserved for int.persist (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
-      "H510-H519": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")"
+      "H510-H519": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")",
+      "V936-V939": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -6453,6 +6454,30 @@
       "module": "harness.converge",
       "message": "Converge domain {domain} op {op} at tick {tick} asks to advance {days} days, above the bound {bound}",
       "remedy": "Split the run or lower days; the bound keeps a journal from running unattended for minutes. Raise the named constant only with a reason."
+    },
+    "MET-V936": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "The city did not finish waking: no progress message for {timeoutMs} ms",
+      "remedy": "The browser closes the socket and retries on the reconnect schedule. If it recurs the server is stuck loading the city; check the metroserve logs."
+    },
+    "MET-V937": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "The connection dropped before the engine answered command {correlationId}; whether it applied is unknown",
+      "remedy": "Do not resend blindly: re-read the relevant view to see whether the command took effect. Automatic retry only happens once the server advertises command.dedup."
+    },
+    "MET-V938": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "The city is open in another tab or window (refused {attempts} times)",
+      "remedy": "Close the other tab or window that has this city open, then click to retry."
+    },
+    "MET-V939": {
+      "severity": "error",
+      "module": "ui.webconsole",
+      "message": "Gave up reconnecting to the engine after {attempts} failed attempts",
+      "remedy": "Check that the server is up, then click the badge to retry. The offline mock sim is never swapped in automatically."
     }
   }
 }

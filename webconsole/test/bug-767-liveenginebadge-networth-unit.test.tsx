@@ -18,7 +18,10 @@ class FakeWebSocket {
   addEventListener(type: string, fn: (ev: any) => void) {
     (this.listeners[type] = this.listeners[type] || []).push(fn);
   }
-  send(_data: string) {}
+  sent: string[] = [];
+  send(data: string) {
+    this.sent.push(data);
+  }
   close() {
     this.emit('close', {});
   }
@@ -70,12 +73,15 @@ test('BUG-767: engine net worth of 1,500,000 pounds renders as 1,500,000 pounds,
     // Engine representation of 1,500,000 pounds at 1,000 units per pound.
     const engineNetWorth = 1_500_000 * 1_000;
     assert.equal(MICROPOUNDS_PER_POUND, 1_000, 'precondition: Go det.MicropoundsPerPound is 1,000');
+    // FEAT-9995385597: the first delta of a subscription echoes the Subscribe correlationId (core/subscribe.go pendingCorrID); that echo binds the SubscriptionID.
+    const subCid = socket.sent.map((s: string) => JSON.parse(s)).find((m: any) => m.method === 'command' && m.params?.kind === 'Subscribe').params.correlationId;
     await act(async () => {
       socket.serverSends({
         jsonrpc: '2.0',
         method: 'delta',
         params: {
           subscriptionId: 'sub-finance-1',
+          correlationId: subCid,
           tick: 7,
           seq: 1,
           patch: {

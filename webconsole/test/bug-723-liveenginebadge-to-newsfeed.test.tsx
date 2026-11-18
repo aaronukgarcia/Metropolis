@@ -147,6 +147,15 @@ test('MUT1 CLOSURE: LiveEngineBadge (flag on) feeding NewsFeed a real decoded f2
       socket.serverSends({ jsonrpc: '2.0', id: 1, result: { accepted: true, serverVersion: 'v0.0.0-test' } });
     });
 
+    // FEAT-9995385597: the badge's client now tracks its subscriptions, and the
+    // server's FIRST delta of a subscription echoes the Subscribe's
+    // correlationId (core/subscribe.go pendingCorrID) -- that echo is what binds
+    // the SubscriptionID. Read it from the frame the badge really sent.
+    const subscribeFrame = socket.sent
+      .map((f: string) => JSON.parse(f))
+      .find((m: any) => m.method === 'command' && m.params?.kind === 'Subscribe');
+    assert.ok(subscribeFrame, 'precondition: the badge must have sent a Subscribe');
+
     // A real decoded "f2.finance" delta carrying a starved payrollShortfall
     // section — the exact shape compose's finance_publish.go produces.
     await act(async () => {
@@ -155,6 +164,7 @@ test('MUT1 CLOSURE: LiveEngineBadge (flag on) feeding NewsFeed a real decoded f2
         method: 'delta',
         params: {
           subscriptionId: 'sub-finance-1',
+          correlationId: subscribeFrame.params.correlationId,
           tick: 42,
           seq: 1,
           patch: {

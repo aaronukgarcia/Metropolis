@@ -191,6 +191,10 @@ export interface CommandResult {
   tick: Tick;
   accepted: boolean;
   error?: ErrorRef;
+  /** FEAT-9995385597 AC-R9: a deduplicated retry replies accepted:true with
+   * `{duplicate:true, seq:N}` (the ORIGINAL seq, never the original body).
+   * Absent on every ordinary result. */
+  result?: { duplicate?: boolean; seq?: number } & Record<string, unknown>;
 }
 
 /** Mirrors deltas.go's Delta. `patch` is left as `unknown` at this layer —
@@ -222,7 +226,15 @@ export interface EngineEvent {
 /** Method names wsserver's framing uses — mirrors server.go's constants
  * field-for-field (methodHandshake/methodCommand/methodResult/methodEvent/
  * methodDelta). */
-export type RpcMethod = 'handshake' | 'command' | 'result' | 'event' | 'delta';
+export type RpcMethod =
+  | 'handshake'
+  | 'command'
+  | 'result'
+  | 'event'
+  | 'delta'
+  | 'server.waking'
+  | 'server.draining'
+  | 'server.hibernating';
 
 /** Mirrors wsserver's rpcError. */
 export interface RpcError {
@@ -256,6 +268,10 @@ export interface HandshakeParams {
   clientMinVersion?: WireVersion;
   clientMaxVersion?: WireVersion;
   capabilities?: string[];
+  /** FEAT-9995385597 AC-P5: random 128-bit token minted once per page load,
+   * held in memory only, reused by every reconnect of that page. Optional
+   * (legacy clients omit it). */
+  clientSessionId?: string;
 }
 
 /** Mirrors wsserver's handshakeResult. serverVersion remains the build
@@ -270,6 +286,87 @@ export interface HandshakeResult {
   serverVersion: string;
   negotiatedVersion?: WireVersion;
   capabilities?: string[];
+  /** FEAT-9995385597 AC-W1: true when the reply was written before the city
+   * finished loading; the connection is accepted but not `ready` yet. */
+  waking?: boolean;
+}
+
+// ---------------------------------------------------------------------
+// Server lifecycle notifications (FEAT-9995385597 section A, AC-P1..P3).
+// Mirrors internal/protocol/lifecycle.go field for field. The capability
+// tokens are opt-in per connection (no wire version bump, AC-P1).
+// ---------------------------------------------------------------------
+
+export const CAP_LIFECYCLE_WAKING = 'lifecycle.waking';
+export const CAP_LIFECYCLE_DRAINING = 'lifecycle.draining';
+export const CAP_LIFECYCLE_HIBERNATING = 'lifecycle.hibernating';
+export const CAP_COMMAND_DEDUP = 'command.dedup';
+
+/** Mirrors lifecycle.go's WakePhase: closed, ordered; only queued and ready
+ * are mandatory, failed is the terminal failure phase. */
+export type WakePhase = 'queued' | 'fetching' | 'decoding' | 'indexing' | 'replaying' | 'ready' | 'failed';
+export const WAKE_PHASES: readonly WakePhase[] = [
+  'queued',
+  'fetching',
+  'decoding',
+  'indexing',
+  'replaying',
+  'ready',
+  'failed',
+];
+export type DrainReason = 'deploy' | 'shutdown' | 'limit' | 'budget';
+export const DRAIN_REASONS: readonly DrainReason[] = ['deploy', 'shutdown', 'limit', 'budget'];
+export type HibernateReason = 'idle' | 'operator';
+export const HIBERNATE_REASONS: readonly HibernateReason[] = ['idle', 'operator'];
+
+/** server.waking params. code/ctx only with phase "failed". */
+export interface WakingParams {
+  phase: WakePhase;
+  pct: number;
+  code?: string;
+  ctx?: Record<string, unknown>;
+}
+/** server.draining params; reconnectAfterMs is a floor for the next attempt. */
+export interface DrainingParams {
+  reconnectAfterMs: number;
+  reason: DrainReason;
+}
+/** server.hibernating params. */
+export interface HibernatingParams {
+  reason: HibernateReason;
+}
+
+/** Decodes and validates server.waking params; null when malformed (the
+ * Go-side Validate rules: closed phase set, pct 0..100, ready carries 100). */
+export function decodeWakingParams(raw: unknown): WakingParams | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.phase !== 'string' || !(WAKE_PHASES as readonly string[]).includes(o.phase)) return null;
+  if (typeof o.pct !== 'number' || !Number.isFinite(o.pct) || o.pct < 0 || o.pct > 100) return null;
+  if (o.phase === 'ready' && o.pct !== 100) return null;
+  const out: WakingParams = { phase: o.phase as WakePhase, pct: o.pct };
+  if (typeof o.code === 'string') out.code = o.code;
+  if (o.ctx && typeof o.ctx === 'object') out.ctx = o.ctx as Record<string, unknown>;
+  return out;
+}
+
+/** Decodes and validates server.draining params; null when malformed. */
+export function decodeDrainingParams(raw: unknown): DrainingParams | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.reconnectAfterMs !== 'number' || !Number.isInteger(o.reconnectAfterMs) || o.reconnectAfterMs < 0) {
+    return null;
+  }
+  if (typeof o.reason !== 'string' || !(DRAIN_REASONS as readonly string[]).includes(o.reason)) return null;
+  return { reconnectAfterMs: o.reconnectAfterMs, reason: o.reason as DrainReason };
+}
+
+/** Decodes and validates server.hibernating params; null when malformed. */
+export function decodeHibernatingParams(raw: unknown): HibernatingParams | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.reason !== 'string' || !(HIBERNATE_REASONS as readonly string[]).includes(o.reason)) return null;
+  return { reason: o.reason as HibernateReason };
 }
 
 // ---------------------------------------------------------------------

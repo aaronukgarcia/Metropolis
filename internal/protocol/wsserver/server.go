@@ -175,6 +175,18 @@ type handshakeParams struct {
 	// names here (backward-compat, AC-6).
 	CityID   string `json:"cityId,omitempty"`
 	TenantID string `json:"tenantId,omitempty"`
+
+	// ClientSessionID (FEAT-9995385597 inc1, AC-P5, ASM-1602/1630): a random
+	// 128-bit token the browser mints once per page load and holds in
+	// memory only (never sessionStorage, which a duplicated tab copies). It
+	// is reused by every reconnect of that page, so later increments can key
+	// same-session supersede (AC-G1) and command dedup on it. OPTIONAL: a
+	// legacy client omits it and is accepted exactly as before; an absent id
+	// never matches any other id, including another absent one. This
+	// increment only decodes it (an unknown/absent field never fails the
+	// handshake); the server recording it per connection lands with the
+	// session-gate increment.
+	ClientSessionID string `json:"clientSessionId,omitempty"`
 }
 
 // handshakeResult is methodHandshake's successful response payload.

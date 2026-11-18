@@ -12,8 +12,11 @@
 // indicator; no hot-toggle machinery needed for increment 1).
 import { useEffect, useRef, useState } from 'react';
 import {
+  ERR_CITY_OPEN_ELSEWHERE,
+  ERR_RECONNECT_GIVEUP,
   ProtocolClient,
   type ProtocolClientState,
+  type WakeProgress,
 } from '../sim/protocolClient.ts';
 import { decodeFinanceBalanceSheetPatch, FINANCE_VIEW_NAME, type Delta } from '../sim/wire.ts';
 import { versionRaw } from '../sim/version.ts';
@@ -51,6 +54,10 @@ export function LiveEngineBadge() {
   const [connState, setConnState] = useState<ProtocolClientState>('connecting');
   const [snapshot, setSnapshot] = useState<LiveEngineSnapshot | null>(null);
   const [refusal, setRefusal] = useState<{ code: string; msg: string } | null>(null);
+  // FEAT-9995385597: wake progress, the reconnect attempt number and whether a
+  // connect attempt belongs to a reconnect cycle (label stays "Reconnecting...").
+  const [wakeProgress, setWakeProgress] = useState<WakeProgress | null>(null);
+  const [reconnectInfo, setReconnectInfo] = useState<{ attempt: number; cycle: boolean }>({ attempt: 0, cycle: false });
   const clientRef = useRef<ProtocolClient | null>(null);
   // inc2: last SetSpeed the toggle button asked for (optimistic — the
   // engine's own CommandResult, not this, is the source of truth; a
@@ -66,14 +73,25 @@ export function LiveEngineBadge() {
     const client = new ProtocolClient({
       url: resolveLiveEngineUrl(),
       clientVersion: versionRaw,
-      onStateChange: setConnState,
-      onLive: (serverVersion) => {
+      // FEAT-9995385597: lifecycle protocol + reconnect machine. A lost
+      // connection reconnects with backoff; it NEVER falls back to the
+      // offline mock sim (AC-R8).
+      lifecycle: {},
+      onStateChange: (s) => {
+        setConnState(s);
+        setReconnectInfo({ attempt: client.getReconnectAttempt(), cycle: client.isReconnectCycle() });
+        if (s === 'live') setRefusal(null);
+      },
+      onWakeProgress: setWakeProgress,
+      onLive: (serverVersion, _nv, _caps, info) => {
         // BUG-1097 / Q100145: both builds are exchanged; a difference is a
         // warning (badge + debug files), never a refusal.
         const mismatch = client.isBuildMismatch();
         setLiveEngineBuild({ engineBuild: serverVersion, clientBuild: versionRaw, mismatch });
         setBuildPair({ engine: serverVersion, mismatch });
-        client.subscribe(FINANCE_VIEW_NAME);
+        // A reconnect re-issues the subscriptions inside the client (AC-R5);
+        // subscribing here again would double them.
+        if (!info?.reconnected) client.subscribe(FINANCE_VIEW_NAME);
       },
       onRefused: (code, msg) => setRefusal({ code, msg }),
       onDelta: (delta: Delta) => {
@@ -142,19 +160,50 @@ export function LiveEngineBadge() {
 
   if (!enabled) return null;
 
-  const label =
-    connState === 'live'
-      ? snapshot
-        ? `LIVE ENGINE  tick ${snapshot.tick}${snapshot.netWorthMicropounds != null ? `  £${engineMoneyToPounds(snapshot.netWorthMicropounds).toFixed(0)}` : ''}`
-        : 'LIVE ENGINE  (waiting for data)'
-      : connState === 'refused'
-        ? `LIVE ENGINE refused: ${refusal?.code ?? ''}`
-        : connState === 'error'
-          ? 'LIVE ENGINE unreachable'
-          : `LIVE ENGINE ${connState}`;
+  // AC-B2: states with a user action are clickable. Waking from `asleep` is
+  // CLICK ONLY (AC-H3); an offline give-up and the open-elsewhere stop retry
+  // on click. Nothing else ever connects an asleep client.
+  const openElsewhere = connState === 'refused' && refusal?.code === ERR_CITY_OPEN_ELSEWHERE;
+  const gaveUp = connState === 'error' && refusal?.code === ERR_RECONNECT_GIVEUP;
+  // r4 ruling 2: EVERY refused state is retryable by click (a malformed or
+  // not-accepted reply, MET-P011, after a reconnect is not a dead end).
+  const refusedStop = connState === 'refused';
+  const clickAction: 'wake' | 'retry' | null =
+    connState === 'asleep' ? 'wake' : gaveUp || refusedStop ? 'retry' : null;
+  const onBadgeClick = () => {
+    const client = clientRef.current;
+    if (!client) return;
+    if (clickAction === 'wake') client.wakeFromAsleep();
+    else if (clickAction === 'retry') client.retry();
+  };
+
+  const reconnectingLabel = connState === 'reconnecting' || (reconnectInfo.cycle && (connState === 'connecting' || connState === 'handshaking'));
+  const label = reconnectingLabel
+    ? 'LIVE ENGINE Reconnecting...'
+    : connState === 'waking'
+      ? `LIVE ENGINE Waking city ${wakeProgress?.pct ?? 0}%`
+      : connState === 'asleep'
+        ? 'LIVE ENGINE City asleep - click to wake'
+        : openElsewhere
+          ? 'LIVE ENGINE City is open in another tab'
+          : gaveUp
+            ? 'LIVE ENGINE Offline - click to retry'
+            : connState === 'live'
+              ? snapshot
+                ? `LIVE ENGINE  tick ${snapshot.tick}${snapshot.netWorthMicropounds != null ? `  £${engineMoneyToPounds(snapshot.netWorthMicropounds).toFixed(0)}` : ''}`
+                : 'LIVE ENGINE  (waiting for data)'
+              : connState === 'refused'
+                ? `LIVE ENGINE refused: ${refusal?.code ?? ''} - click to retry`
+                : connState === 'error'
+                  ? 'LIVE ENGINE unreachable'
+                  : `LIVE ENGINE ${connState}`;
 
   const buildWarn = connState === 'live' && buildPair?.mismatch === true;
-  const title = refusal
+  const title = connState === 'waking' && wakeProgress
+    ? `Waking city: ${wakeProgress.phase} ${wakeProgress.pct}%`
+    : reconnectingLabel
+      ? `Reconnecting, attempt ${Math.max(1, reconnectInfo.attempt)}`
+      : refusal && connState !== 'live'
     ? refusal.msg
     : buildWarn
       ? `engine ${buildPair?.engine} / client ${versionRaw}`
@@ -165,6 +214,16 @@ export function LiveEngineBadge() {
       className={buildWarn ? 'live-engine-badge mono live-engine-badge--build-mismatch' : 'live-engine-badge mono'}
       title={title}
       data-conn-state={connState}
+      role={clickAction ? 'button' : undefined}
+      tabIndex={clickAction ? 0 : undefined}
+      onClick={clickAction ? onBadgeClick : undefined}
+      onKeyDown={
+        clickAction
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') onBadgeClick();
+            }
+          : undefined
+      }
       data-build-mismatch={buildWarn ? 'true' : undefined}
       style={buildWarn ? { color: '#b45309', borderBottom: '2px solid #f59e0b' } : undefined}
     >

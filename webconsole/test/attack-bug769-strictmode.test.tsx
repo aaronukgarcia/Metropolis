@@ -130,12 +130,15 @@ test('ATTACK BUG-769 StrictMode: real StrictMode mount records the insolvency en
     // A real decoded "f2.finance" delta carrying a 3-consecutive-month
     // insolvent reading — the exact shape compose's finance_publish.go
     // produces (BUG-769's flat insolvencyMonths/insolvent fields).
+    // FEAT-9995385597: the first delta of a subscription echoes the Subscribe correlationId (core/subscribe.go pendingCorrID); that echo binds the SubscriptionID.
+    const subCid = socket.sent.map((s: string) => JSON.parse(s)).find((m: any) => m.method === 'command' && m.params?.kind === 'Subscribe').params.correlationId;
     await act(async () => {
       socket.serverSends({
         jsonrpc: '2.0',
         method: 'delta',
         params: {
           subscriptionId: 'sub-finance-1',
+          correlationId: subCid,
           tick: 90,
           seq: 1,
           patch: {
