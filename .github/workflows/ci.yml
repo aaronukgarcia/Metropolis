@@ -81,7 +81,12 @@ jobs:
         # proper fix is splitting those suites (tracked separately); this keeps
         # main's Go job honest in the meantime. Job-level timeout-minutes is
         # unset (Actions default 360), so the -timeout is the binding limit.
-        run: go test ./... -race -count=1 -timeout 30m
+        # BUG-1246 (2026-11-18): 30m -> 45m. compose took 1680.6s and 1642.8s
+        # on the two runs before e3bc970 and timed out at 1800s on e3bc970
+        # (the ten-lever formula and save-fix tests tipped it over); the test
+        # running at the alarm had been going 0s, so it is volume, not a hang.
+        # Same stopgap as BUG-859; the split of the compose suite is the fix.
+        run: go test ./... -race -count=1 -timeout 45m
 
       - name: gofmt check
         shell: pwsh
