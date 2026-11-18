@@ -47,7 +47,7 @@ function runGuard(payload, envOverrides = {}) {
       METRO_DB_PORT: String(DB_PORT),
       METRO_DB_USER: DB_USER,
       METRO_DB_PASSWORD: DB_PASSWORD,
-      METRO_DB_NAME: TEST_DB,
+      METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
       CLAUDE_DISABLE_DISPATCH_GUARD: '',
       ...envOverrides,
     },

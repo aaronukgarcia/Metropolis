@@ -65,7 +65,7 @@ function run(args, sessionId, extraEnv = {}) {
       METRO_DB_PORT: String(DB_PORT),
       METRO_DB_USER: DB_USER,
       METRO_DB_PASSWORD: DB_PASSWORD,
-      METRO_DB_NAME: TEST_DB,
+      METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
       CLAUDE_CODE_SESSION_ID: sessionId || '',
       CLAUDE_SESSION_ID: '',
       CLAUDE_IDENTITY: '',
@@ -103,7 +103,7 @@ function runHook(stdinSessionId, extraEnv = {}) {
       env: {
         ...process.env,
         METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT),
-        METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD, METRO_DB_NAME: TEST_DB,
+        METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
         CLAUDE_IDENTITY: '',
         CLAUDE_PING_DIR: throttleDir,
         CLAUDE_CODE_SESSION_ID: stdinSessionId,

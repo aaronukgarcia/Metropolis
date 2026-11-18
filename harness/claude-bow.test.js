@@ -47,6 +47,7 @@ const TEST_DB = process.env.METRO_DB_TEST_NAME || `metro_test_bowlint_${process.
 // front here keeps every db-touching helper below pointed at the scratch DB
 // with no risk of an accidental first call landing on `metro`.
 process.env.METRO_DB_NAME = TEST_DB;
+process.env.METRO_DB_ALLOW_SCRATCH = '1';  // BUG-1119: explicit scratch escape
 
 const bow = require('./claude-bow.js');
 const {
@@ -391,7 +392,7 @@ test('AC-10: `node claude-bow.js lint` always exits 0, even seeded with all thre
 
   const result = spawnSync(process.execPath, ['claude-bow.js', 'lint'], {
     cwd: ROOT,
-    env: { ...process.env, METRO_DB_NAME: TEST_DB },
+    env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1' },
     encoding: 'utf8',
   });
 
@@ -1492,11 +1493,11 @@ test('CLI: `gate` records a row and `gate-status` reports it plus a derived over
     const r = spawnSync(process.execPath, [
       'claude-bow.js', 'gate', '42', '--check', String(i), '--name', GATE_CHECK_NAMES[i - 1],
       '--verdict', 'pass', '--runner', 'cli-test', '--run', runGuid,
-    ], { cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8' });
+    ], { cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8' });
     assert.equal(r.status, 0, `gate check ${i} failed: ${r.stderr}`);
   }
   const status = spawnSync(process.execPath, ['claude-bow.js', 'gate-status', '42'], {
-    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8',
+    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8',
   });
   assert.equal(status.status, 0);
   assert.match(status.stdout, /Overall.*PASS/s);
@@ -1552,11 +1553,11 @@ test('FIX-2: `gate-status` CLI output loudly flags a MANUAL-OVERRIDE run as NOT 
     const r = spawnSync(process.execPath, [
       'claude-bow.js', 'gate', '57', '--check', String(i), '--name', GATE_CHECK_NAMES[i - 1],
       '--verdict', 'pass', '--runner', 'attacker', '--run', runGuid,
-    ], { cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8' });
+    ], { cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8' });
     assert.equal(r.status, 0, `gate check ${i} failed: ${r.stderr}`);
   }
   const status = spawnSync(process.execPath, ['claude-bow.js', 'gate-status', '57'], {
-    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8',
+    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8',
   });
   assert.equal(status.status, 0);
   assert.match(status.stdout, /MANUAL-OVERRIDE/);
@@ -1612,7 +1613,7 @@ test('FIX-3: forcing the 3rd INSERT into bow_gate_verdicts to throw (mid-WRITE, 
 
 function bowCli(args) {
   return spawnSync(process.execPath, ['claude-bow.js', ...args], {
-    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8',
+    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8',
   });
 }
 
@@ -1919,7 +1920,7 @@ test('BUG-061 AC (constraint 1): `redact` never requires a --match/--text argume
   // a bare boolean flag), so nothing resembling a matched-text argument is
   // ever parsed out of argv for this command.
   const r = spawnDirect(process.execPath, ['claude-bow.js', 'redact', '--match', 'FEAT-9106'], {
-    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8',
+    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8',
   });
   // "FEAT-9106" ends up as the positional CODE argument (item likely absent,
   // so requireItem fails) rather than as --match's value — proving --match
@@ -2721,7 +2722,7 @@ function bowCliDdl(args, extraEnv = {}) {
   const outFile = path.join(os.tmpdir(), `metro-ddlspy-${process.pid}-${crypto.randomBytes(8).toString('hex')}.json`);
   const result = spawnSync(process.execPath, ['--require', DDL_SPY, path.join(__dirname, 'claude-bow.js'), ...args], {
     cwd: ROOT,
-    env: { ...process.env, METRO_DB_NAME: TEST_DB, ...extraEnv, METRO_DDL_SPY_OUT: outFile },
+    env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1', ...extraEnv, METRO_DDL_SPY_OUT: outFile },
     encoding: 'utf8',
   });
   let raw;
@@ -2801,7 +2802,7 @@ test('BUG-170: a read-only command (`list`) against a genuinely fresh, table-les
     await boot.query(`CREATE DATABASE \`${freshDb}\``);
 
     const r = spawnSync(process.execPath, ['claude-bow.js', 'list'], {
-      cwd: ROOT, env: { ...process.env, METRO_DB_NAME: freshDb }, encoding: 'utf8',
+      cwd: ROOT, env: { ...process.env, METRO_DB_NAME: freshDb, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8',
     });
 
     assert.equal(r.status, 0,
@@ -2836,7 +2837,7 @@ test('BUG-170: the one-shot fresh-DB bootstrap runs ensureSchema\'s DDL exactly 
 
     // First read against the fresh DB: expected to bootstrap (DDL runs).
     const first = spawnSync(process.execPath, ['claude-bow.js', 'list'], {
-      cwd: ROOT, env: { ...process.env, METRO_DB_NAME: freshDb }, encoding: 'utf8',
+      cwd: ROOT, env: { ...process.env, METRO_DB_NAME: freshDb, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8',
     });
     assert.equal(first.status, 0, `first list (bootstrap) must succeed: ${first.stderr}`);
 
@@ -2844,7 +2845,7 @@ test('BUG-170: the one-shot fresh-DB bootstrap runs ensureSchema\'s DDL exactly 
     // like BUG-115's existing test against TEST_DB — zero DDL statements.
     // Counted inside that subprocess itself (BUG-320), so a sibling test file
     // running concurrently against the same MariaDB cannot perturb it.
-    const second = bowCliDdl(['list'], { METRO_DB_NAME: freshDb });
+    const second = bowCliDdl(['list'], { METRO_DB_NAME: freshDb, METRO_DB_ALLOW_SCRATCH: '1' });
     assert.equal(second.status, 0, `second list must succeed: ${second.stderr}`);
 
     assert.equal(second.ddl.alterTable, 0,
@@ -3564,7 +3565,7 @@ test('FEAT-044 AC-7: supplying both --to and --to-file is rejected non-zero, mat
 test('FEAT-044 (BUG-196-class regression guard): a dangling `--to` (last token, no value following) is REJECTED, not silently ignored/dropped', async () => {
   const guid = await insertItem({ code: 'FEAT-9409', description: 'must not change' });
   const r = spawnSync(process.execPath, ['claude-bow.js', 'amend', 'FEAT-9409', '--field', 'desc', '--reason', 'x', '--to'], {
-    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8',
+    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8',
   });
   assert.notEqual(r.status, 0, 'a dangling --to must be rejected, not silently produce a no-op or a null write');
   assert.match(r.stderr, /--to/);

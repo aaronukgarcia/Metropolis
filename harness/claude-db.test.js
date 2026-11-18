@@ -28,7 +28,11 @@ const ROOT = path.join(__dirname, '..');
 // at call time, not at require time). This is just for clarity in any
 // diagnostic output.
 const prevDbName = process.env.METRO_DB_NAME;
-process.env.METRO_DB_NAME = 'claude-db-test-marker';
+// BUG-1119: connect() refuses any name but `metro`; a scratch name needs the
+// explicit METRO_DB_ALLOW_SCRATCH=1 escape AND a `metro_test` prefix.
+const prevAllowScratch = process.env.METRO_DB_ALLOW_SCRATCH;
+process.env.METRO_DB_NAME = 'metro_test_claudedb_marker';
+process.env.METRO_DB_ALLOW_SCRATCH = '1';
 
 // Require AFTER env setup — the lazy-require pattern in claude-db.js's
 // connect() means mysql2/promise is required at call time, not here,
@@ -347,4 +351,106 @@ test('RED proof: connectCLI() must exit 1 — test FAILS if exit code is 0', () 
   });
   // If connectCLI doesn't exit 1 (e.g. returns normally), this fails.
   assert.notEqual(result.status, 0, 'RED proof: exit status 0 would fail this assertion');
+});
+
+// ============================================================================
+// BUG-1119: wrong-database refusal (before any connection)
+// ============================================================================
+
+async function withDbEnv(name, allow, fn) {
+  const mysql = require('mysql2/promise');
+  const orig = mysql.createConnection;
+  const prevName = process.env.METRO_DB_NAME;
+  const prevAllow = process.env.METRO_DB_ALLOW_SCRATCH;
+  let calls = 0;
+  mysql.createConnection = async () => { calls += 1; return { end: async () => {} }; };
+  if (name === undefined) delete process.env.METRO_DB_NAME; else process.env.METRO_DB_NAME = name;
+  if (allow === undefined) delete process.env.METRO_DB_ALLOW_SCRATCH; else process.env.METRO_DB_ALLOW_SCRATCH = allow;
+  try {
+    return await fn(() => calls);
+  } finally {
+    mysql.createConnection = orig;
+    if (prevName !== undefined) process.env.METRO_DB_NAME = prevName; else delete process.env.METRO_DB_NAME;
+    if (prevAllow !== undefined) process.env.METRO_DB_ALLOW_SCRATCH = prevAllow; else delete process.env.METRO_DB_ALLOW_SCRATCH;
+  }
+}
+
+test('BUG-1119: METRO_DB_NAME unset connects (default metro)', async () => {
+  await withDbEnv(undefined, undefined, async (calls) => {
+    await connect();
+    assert.equal(calls(), 1);
+  });
+});
+
+test('BUG-1119: METRO_DB_NAME=metro connects', async () => {
+  await withDbEnv('metro', undefined, async (calls) => {
+    await connect();
+    assert.equal(calls(), 1);
+  });
+});
+
+test('BUG-1119: METRO_DB_NAME=safe is refused, names the value, and never connects', async () => {
+  await withDbEnv('safe', undefined, async (calls) => {
+    await assert.rejects(() => connect(), (err) => {
+      assert.equal(err.code, 'METRO_WRONG_DB');
+      assert.match(err.message, /'safe'/);
+      assert.match(err.message, /only connects to 'metro'/);
+      assert.match(err.message, /`metro` command/);
+      return true;
+    });
+    assert.equal(calls(), 0, 'createConnection must not be called');
+  });
+});
+
+test('BUG-1119: metro_test_x without the allow flag is refused', async () => {
+  await withDbEnv('metro_test_x', undefined, async (calls) => {
+    await assert.rejects(() => connect(), /metro_test_x/);
+    assert.equal(calls(), 0);
+  });
+  await withDbEnv('metro_test_x', '0', async (calls) => {
+    await assert.rejects(() => connect(), /metro_test_x/);
+    assert.equal(calls(), 0);
+  });
+});
+
+test('BUG-1119: metro_test_x with METRO_DB_ALLOW_SCRATCH=1 connects', async () => {
+  await withDbEnv('metro_test_x', '1', async (calls) => {
+    await connect();
+    assert.equal(calls(), 1);
+  });
+});
+
+test('BUG-1119: the allow flag with a non-test name is refused', async () => {
+  await withDbEnv('safe', '1', async (calls) => {
+    await assert.rejects(() => connect(), /'safe'/);
+    assert.equal(calls(), 0);
+  });
+  await withDbEnv('prefix_metro_test_x', '1', async (calls) => {
+    await assert.rejects(() => connect(), /prefix_metro_test_x/);
+    assert.equal(calls(), 0);
+  });
+});
+
+test('BUG-1119: an explicit database override is the caller choice and is not env-checked', async () => {
+  await withDbEnv('safe', undefined, async (calls) => {
+    await connect({ database: 'metro' });
+    assert.equal(calls(), 1);
+  });
+});
+
+test('BUG-1119: connectCLI prints the refusal and exits 1 without connecting', async () => {
+  await withDbEnv('safe', undefined, async (calls) => {
+    const origExit = process.exit;
+    const origErr = console.error;
+    const lines = [];
+    console.error = (m) => lines.push(String(m));
+    process.exit = (c) => { throw new Error('EXIT:' + c); };
+    try {
+      await assert.rejects(() => connectCLI('claude-bow'), /EXIT:1/);
+    } finally {
+      process.exit = origExit; console.error = origErr;
+    }
+    assert.match(lines.join(' '), /claude-bow: refusing to connect: METRO_DB_NAME is 'safe'/);
+    assert.equal(calls(), 0);
+  });
 });

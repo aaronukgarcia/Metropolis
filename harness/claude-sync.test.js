@@ -100,7 +100,7 @@ function run(args, sessionId) {
       METRO_DB_PORT: String(DB_PORT),
       METRO_DB_USER: DB_USER,
       METRO_DB_PASSWORD: DB_PASSWORD,
-      METRO_DB_NAME: TEST_DB,
+      METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
       CLAUDE_CODE_SESSION_ID: sessionId || '',
       CLAUDE_SESSION_ID: '',
       CLAUDE_IDENTITY: '', // never let the real operator's preferred slot leak into these
@@ -244,7 +244,7 @@ test('AC-1: ensureSchema is idempotent and seeds exactly 4 read-cursor rows', as
   const runInit = () => spawnSync(process.execPath, ['claude-sync.js', 'init'], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, METRO_DB_NAME: AC1_DB, METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD },
+    env: { ...process.env, METRO_DB_NAME: AC1_DB, METRO_DB_ALLOW_SCRATCH: '1', METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD },
   });
 
   const first = runInit();
@@ -560,7 +560,7 @@ function runRealPingHook(sessionId) {
       env: {
         ...process.env,
         METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT),
-        METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD, METRO_DB_NAME: TEST_DB,
+        METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
         CLAUDE_IDENTITY: '',
         CLAUDE_PING_DIR: throttleDir,
         CLAUDE_CODE_SESSION_ID: sessionId,
@@ -1087,7 +1087,7 @@ test('CLAUDE_IDENTITY=Bob is equally rejected with the retirement message (not j
     env: {
       ...process.env,
       METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD,
-      METRO_DB_NAME: TEST_DB,
+      METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
       CLAUDE_CODE_SESSION_ID: 'retire-bob-env-identity',
       CLAUDE_SESSION_ID: '',
       CLAUDE_IDENTITY: 'Bob',
@@ -1104,7 +1104,7 @@ test('BUG-344: checkin --any with CLAUDE_IDENTITY=Bob is rejected by isRetired (
     env: {
       ...process.env,
       METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD,
-      METRO_DB_NAME: TEST_DB,
+      METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
       CLAUDE_CODE_SESSION_ID: 'bug344-any-retired',
       CLAUDE_SESSION_ID: '',
       CLAUDE_IDENTITY: 'Bob',
@@ -1845,7 +1845,7 @@ test('BUG-354 r6 R2 (r5 P1): fresh machine with NO session-keys dir does not sel
       METRO_DB_PORT: String(DB_PORT),
       METRO_DB_USER: DB_USER,
       METRO_DB_PASSWORD: DB_PASSWORD,
-      METRO_DB_NAME: TEST_DB,
+      METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
       CLAUDE_CODE_SESSION_ID: sid,
       CLAUDE_SESSION_ID: '',
       CLAUDE_IDENTITY: '',
@@ -2145,7 +2145,7 @@ function runWithIdentityRaw(args, sessionId, identity) {
     env: {
       ...process.env,
       METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD,
-      METRO_DB_NAME: TEST_DB,
+      METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
       CLAUDE_CODE_SESSION_ID: sessionId,
       CLAUDE_SESSION_ID: '',
       CLAUDE_IDENTITY: identity,
@@ -2186,7 +2186,7 @@ test('BUG-1114 call site (claude-startup requestedIdentity): the SessionStart ho
       env: {
         ...process.env,
         METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD,
-        METRO_DB_NAME: TEST_DB,
+        METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1',
         CLAUDE_CODE_SESSION_ID: sid,
         CLAUDE_SESSION_ID: '',
         CLAUDE_IDENTITY: 'Metro-Bro',

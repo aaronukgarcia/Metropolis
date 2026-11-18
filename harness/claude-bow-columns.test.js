@@ -54,6 +54,7 @@ const TEST_DB = process.env.METRO_DB_TEST_NAME || `metro_test_bowcolumns_${proce
 // claude-bow.test.js uses (connect() reads METRO_DB_NAME from process.env
 // at call time, not at module load).
 process.env.METRO_DB_NAME = TEST_DB;
+process.env.METRO_DB_ALLOW_SCRATCH = '1';  // BUG-1119: explicit scratch escape
 
 const bow = require('./claude-bow.js');
 const { connect, ensureSchema, validateLen, BOW_COLUMN_MAX_LEN } = bow;
@@ -102,7 +103,7 @@ async function insertItem({ code, mkey = null } = {}) {
 
 function bowCli(args) {
   return spawnSync(process.execPath, ['claude-bow.js', ...args], {
-    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8',
+    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB, METRO_DB_ALLOW_SCRATCH: '1' }, encoding: 'utf8',
   });
 }
 
