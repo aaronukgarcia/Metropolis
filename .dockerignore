@@ -1,0 +1,11 @@
+# Build context for the metroserve image (Dockerfile at the repo root).
+# Allowlist: the Go build needs only the module files, cmd/, internal/ and
+# data/. Everything else (temp/, .claude/ worktrees, node_modules/, .git/,
+# webconsole/, docs/) stays on the laptop - the pix route ships the context
+# over SSH, so an unfiltered context would send gigabytes.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!data/

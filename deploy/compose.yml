@@ -1,0 +1,52 @@
+# Metropolis on pix (GGR94, SAFE-552 route; FEAT-9995385600 inc1 on pix).
+# SAFE deploys and registers it (safe.web_service metropolis/metroserve):
+#   docker --context pix compose -p metropolis -f deploy/compose.yml up -d --build
+# Run it from the repo root, never from inside deploy/ (the project's hooks
+# resolve from the root). One metroserve container, LAN only, nothing on the
+# laptop. The build context (the repo root, filtered by ../.dockerignore)
+# ships from the laptop to pix over the docker context.
+#
+# Port 8120 is handed out by SAFE's register; the pix firewall admits x1 only.
+#
+# Memory: pix has 8 GB shared with TeslaMate and sign. The container is capped
+# at 5 GiB and the Go runtime is told to stay under 4.5 GiB so it collects
+# before the kernel kills it. Citizen paging bounds resident citizen memory.
+# CPU is capped at 4 of pix's 8 cores so TeslaMate keeps headroom (SAFE).
+name: metropolis
+
+services:
+  metroserve:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${METRO_VERSION:-dev}
+        COMMIT: ${METRO_COMMIT:-dev}
+        BRANCH: ${METRO_BRANCH:-dev}
+        BUILD_TIME: ${METRO_BUILD_TIME:-dev}
+        HOST: pix
+    image: metropolis-metroserve:latest
+    restart: unless-stopped
+    environment:
+      GOMEMLIMIT: 4500MiB
+    command:
+      - "-addr"
+      - "0.0.0.0:8080"
+      - "-persist-dir"
+      - "/data"
+      - "-city"
+      - "dogfood"
+      - "-tick-interval"
+      - "1s"
+      - "-snapshot-every"
+      - "360"
+      - "-citizen-paging"
+    volumes:
+      - metro-data:/data
+    ports:
+      - "8120:8080"
+    mem_limit: 5g
+    cpus: 4
+
+volumes:
+  metro-data:
