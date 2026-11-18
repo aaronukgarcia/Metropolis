@@ -1,0 +1,52 @@
+===== F2 at 80x24 after finance close 1 =====
+Feb Y1 | cycle 0/30 | money 972996 | pop 62 | rating 1000/1000
+PROFIT & LOSS - TREASURY (Month 1)      BALANCE SHEET
+Treasury income:
+  Opening capital (one-off) £1500000.00 Assets:
+Treasury outflows:                        Treasury                  £972996.00
+  Social support               £1500.00   Reserves                       £0.00
+  Coastal processing         £250000.00
+  Coastal integration        £300000.00 Liabilities:
+  Net treasury change        £948500.00   Outstanding Debt               £0.00
+City economy (not treasury money):
+  Household consumption           £0.00 Net Worth: £972996.00
+  Wages paid (all employers       £0.00
+LOANS & CREDIT                          TAX INSTRUMENTS & ELASTICITY
+unavailable                             unavailable
+
+
+
+
+
+
+
+
+
+TICK 30  MONTH 1  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slowe
+
+===== F2 at 80x24 after finance close 2 =====
+Mar Y1 | cycle 0/30 | money 444322 | pop 74 | rating 1000/1000
+PROFIT & LOSS (Month 2 vs Month 1)      BALANCE SHEET
+Treasury income:
+  ... 5 more income rows      £44296.00 Assets:
+Treasury outflows:                        Treasury                  £444322.50
+  Coastal processing         £250000.00   Reserves                       £0.00
+  Coastal integration        £300000.00
+  ... 3 more outflow rows     £22800.00 Liabilities:
+  Net treasury change       £-528504.00   Outstanding Debt               £0.00
+City economy (not treasury money):
+  Household consumption        £1760.00 Net Worth: £444322.50
+  Wages paid (all employers  £150000.00
+LOANS & CREDIT                          TAX INSTRUMENTS & ELASTICITY
+unavailable                             unavailable
+
+
+
+
+
+
+
+
+
+TICK 60  MONTH 2  SPEED 1x  RUNNING  [Space] pause/resume  []] faster  [[] slowe
+
