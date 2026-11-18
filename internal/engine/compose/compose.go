@@ -779,6 +779,10 @@ func (c *Composition) SetFinalSnapshotBuildHook(fn func()) {
 	c.finalBuildHook = fn
 }
 
+// closeBetweenHook (BUG-1208) is a test-only seam run between sealing the page
+// store and releasing the claim, so a test can pin that order. Nil in production.
+var closeBetweenHook func()
+
 // Close releases resources this Composition holds OUTSIDE the engine
 // itself — today, only BUG-764's citizen-paging exclusive directory claim
 // (round finding F1), a pure no-op when citizen paging was never enabled.
@@ -799,6 +803,13 @@ func (c *Composition) SetFinalSnapshotBuildHook(fn func()) {
 func (c *Composition) Close() error {
 	if c == nil || c.state == nil {
 		return nil
+	}
+	// BUG-1208: close the page store BEFORE the claim is released, so a
+	// snapshot build abandoned at the SIGTERM deadline cannot write a page
+	// file once another process may own the directory.
+	c.state.citizens.ClosePaging()
+	if closeBetweenHook != nil {
+		closeBetweenHook()
 	}
 	c.state.citizenPagingClaim.Release()
 	return nil

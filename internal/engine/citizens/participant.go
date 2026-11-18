@@ -818,7 +818,16 @@ func (p *SaveParticipant) Source() serialize.RecordSource {
 			deathQueueEmitted = true
 			return emit(recCitizensDeathQueue, head.deathQueue)
 		}
-		if w, ok := cold.next(); ok {
+		w, coldOK := cold.next()
+		// BUG-1208: a page fault latched WHILE streaming (a corrupt page, or the
+		// store closed under an abandoned build) means cold.next may have
+		// walked an empty stand-in shard; fail the save instead of emitting it.
+		if p.c.pageFault.Load() != nil {
+			if ferr := p.c.failIfPageFault(errs.NewCorrelationID(), "Source"); ferr != nil {
+				return serialize.Record{}, false, ferr
+			}
+		}
+		if coldOK {
 			return emit(recCitizensCold, w)
 		}
 		if hi < len(head.households) {

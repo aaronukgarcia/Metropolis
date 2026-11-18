@@ -2000,6 +2000,12 @@
       "message": "citizens: page file at shard {shard}'s path is stamped with shard index {stamped}, not {shard} -- refusing to adopt a page file copied/renamed to another shard's path",
       "remedy": "Never copy or rename a .page file to a different shard-numbered path; if a page directory was reorganised by hand, regenerate it from a save instead."
     },
+    "MET-G015": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizens: page store for shard {shard} was closed ({op}) -- its composition released the page directory, so this operation is refused rather than treating the shard as absent or empty",
+      "remedy": "Nothing to repair: an operation (typically an abandoned snapshot build) ran after the composition was closed. Discard its result; never substitute an empty shard."
+    },
     "MET-G100": {
       "severity": "error",
       "module": "engine.projections",

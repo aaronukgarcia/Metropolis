@@ -354,6 +354,25 @@ func (c *CitizensAPI) EnableDiskPaging(dir string, maxResident int, correlationI
 	return nil
 }
 
+// ClosePaging (BUG-1208) closes the disk PageStore, if paging is enabled, so
+// nothing from this registry (an abandoned snapshot build still inside Save)
+// writes to or reads from the page directory afterwards. It does not take
+// c.mu: Save may hold it for a long time and Close must not wait on that;
+// c.pages is set once at wiring (EnableDiskPaging) and read lock-free by
+// every other path. No-op when paging is off.
+func (c *CitizensAPI) ClosePaging() {
+	if c == nil {
+		return
+	}
+	if err := c.checkNotCopied(errs.NewCorrelationID(), "ClosePaging"); err != nil {
+		return
+	}
+	if c.pages == nil || !c.pages.checkNotCopied() {
+		return
+	}
+	c.pages.Seal()
+}
+
 // seedPageBookkeepingLocked (re)builds pageList/pageElem/residentCount/
 // shardPins from the CURRENT contents of cold. Called from
 // EnableDiskPaging (first wiring) and resetForLoad (a load target rebuilds
@@ -682,6 +701,9 @@ func (c *CitizensAPI) loadShardLocked(shard int) *ColdShard {
 		// failIfPageFault), and every already-error-returning public
 		// entrypoint refuses further work once it is set.
 		if c.pageFault.Load() == nil {
+			// Every PageStore.Load error is an *errs.E, including the closed-store
+			// refusal (ErrPageStoreClosed, BUG-1208), so a Load after Close latches
+			// the fault too and is never mistaken for an absent/empty shard.
 			c.pageFault.Store(err.(*errs.E))
 		}
 		ok = false

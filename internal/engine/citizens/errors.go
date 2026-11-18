@@ -161,6 +161,14 @@ const (
 	// citizen ID always resolves to exactly one shard).
 	ErrPageShardIndexMismatch = "MET-G014"
 
+	// ErrPageStoreClosed (BUG-1208): PageStore.Load or Store ran after
+	// Seal, i.e. after the owning composition released its page directory.
+	// A registry error (not a bare errors.New) so loadShardLocked latches
+	// pageFault for it exactly like a corrupt page: an abandoned snapshot
+	// build that touches a paged-out shard FAILS rather than seeing an
+	// empty stand-in shard.
+	ErrPageStoreClosed = "MET-G015"
+
 	// --- feat.deathwave (FEAT-087) — range G5400-G5409, claimed via
 	// tools/plan/add-error.js claim-range (BUG-273's allocator). A
 	// separate range from engine.citizens' own G000-G099 block because the

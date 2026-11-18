@@ -51,6 +51,19 @@ type PageStore struct {
 	// Store call.
 	dirReady bool
 
+	// closed (BUG-1208) is set by Seal under mu. Once set, Store writes
+	// nothing and Load reads nothing: a build abandoned by the SIGTERM path
+	// (cmd/metroserve stopBy) can still be inside CitizensAPI.Save when the
+	// composition's paging claim is released, and its evictions must not
+	// touch a page directory the next process may already own. mu-guarded,
+	// so Seal also waits out any single in-flight write.
+	closed bool
+
+	// beforeStoreHook, test-only (BUG-1208), runs at the top of Store
+	// before mu is taken, so a test can hold an abandoned build inside the
+	// paging phase. Nil in production.
+	beforeStoreHook func()
+
 	// self is the SEC-020 copy guard (atomic.Pointer, mirroring
 	// CitizensAPI.self in this package). mu is a sync.Mutex VALUE while
 	// resident (a map) and order (a slice) are reference types a struct
@@ -58,6 +71,20 @@ type PageStore struct {
 	// same referents (the "two locks, one referent" hazard). Stored exactly
 	// once, in NewPageStore, before the value is returned to any caller.
 	self atomic.Pointer[PageStore]
+}
+
+// Seal (BUG-1208) permanently stops this store touching its page
+// directory: every later Store writes nothing and every later Load reads
+// nothing, each returning an error. It takes mu, so it returns only after
+// any write already in flight has finished, which makes "Seal returned"
+// a barrier: no page file is written by this store after it. Idempotent.
+func (p *PageStore) Seal() {
+	if !p.checkNotCopied() {
+		return
+	}
+	p.mu.Lock()
+	p.closed = true
+	p.mu.Unlock()
 }
 
 // errPageStoreCopied is returned by Store when called on a struct copy of
@@ -250,6 +277,9 @@ func (p *PageStore) Load(shard int, correlationID string) (*ColdShard, bool, err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, false, errs.New(ErrPageStoreClosed, correlationID, map[string]any{"shard": shard, "op": "Load"})
+	}
 	if s, ok := p.resident[shard]; ok {
 		p.touchLocked(shard)
 		return s, true, nil
@@ -289,6 +319,9 @@ func (p *PageStore) Store(shard int, s *ColdShard) error {
 	if !p.checkNotCopied() {
 		return errPageStoreCopied
 	}
+	if p.beforeStoreHook != nil {
+		p.beforeStoreHook()
+	}
 	w := s.toWire()
 	w.WorldSeed = p.worldSeed
 	w.ShardIndex = shard
@@ -299,6 +332,9 @@ func (p *PageStore) Store(shard int, s *ColdShard) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return errs.New(ErrPageStoreClosed, errs.NewCorrelationID(), map[string]any{"shard": shard, "op": "Store"})
+	}
 	if !p.dirReady {
 		if err := os.MkdirAll(p.dir, 0o755); err != nil {
 			return err

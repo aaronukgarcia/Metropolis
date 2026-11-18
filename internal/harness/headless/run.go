@@ -498,6 +498,12 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	// of any genuinely unattended caller (the discipline lives in THIS
 	// function; nothing stops a future refactor from breaking it, and a
 	// discarded return would then silently hide that regression).
+	// BUG-1208: shutdown() closes the composition, which seals the citizen page
+	// store, so a read of a paged-out shard after it would see an empty
+	// stand-in and report a short population. The tick loop is idle here (every
+	// driveTicks result was awaited), so read the paged state first.
+	population := comp.Population()
+	populationHash := comp.PopulationHash()
 	if loopErr := shutdown(); loopErr != nil {
 		return Result{}, errs.Wrap(ErrEngineRunFailed, correlationID, loopErr, map[string]any{"cause": loopErr.Error()})
 	}
@@ -512,11 +518,11 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		TicksAdvanced:    ticksAdvanced,
 		ScenarioCommands: scenarioCommands,
 		PhaseHookCount:   e.HookCount(),
-		Population:       comp.Population(),
+		Population:       population,
 		TickWallTime:     tickWallTime,
 		Births:           comp.VitalBirths(),
 		Deaths:           comp.VitalDeaths(),
-		PopulationHash:   comp.PopulationHash(),
+		PopulationHash:   populationHash,
 		ReportWriteErr:   rw.err,
 	}, nil
 }
