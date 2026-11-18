@@ -1844,6 +1844,11 @@ func TestResolveRepoRoot_NoGoModIsRegistryError(t *testing.T) {
 		}
 	})
 
+	// BUG-1136: TEMP is inside the repo on this machine, so fence the walk at
+	// the fixture directory or it finds the real go.mod above.
+	repoRootCeiling = tmp
+	t.Cleanup(func() { repoRootCeiling = "" })
+
 	_, err = resolveRepoRoot()
 	e := assertRegistryError(t, err, "MET-F702")
 	if _, ok := e.Ctx["dir"]; !ok {

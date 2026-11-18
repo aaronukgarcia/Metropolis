@@ -1777,6 +1777,14 @@ func floodMessage(fr FloodRisk) string {
 // resolveRepoRoot walks upward from the current working directory until
 // it finds a go.mod, mirroring resolveRegistryPath's precedent in
 // internal/foundation/errs/registry.go (never a hardcoded path).
+//
+// repoRootCeiling is a TEST-ONLY walk ceiling (BUG-1136): when non-empty the
+// walk gives up after checking that directory instead of continuing upward.
+// The launcher points TEMP inside the repo, so a "no go.mod above me" fixture
+// under t.TempDir() would otherwise find the real repo's go.mod. Always empty
+// in production.
+var repoRootCeiling string
+
 func resolveRepoRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -1787,7 +1795,7 @@ func resolveRepoRoot() (string, error) {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || (repoRootCeiling != "" && dir == repoRootCeiling) {
 			return "", errs.New("MET-F702", errs.NewCorrelationID(), map[string]any{"dir": dir})
 		}
 		dir = parent
