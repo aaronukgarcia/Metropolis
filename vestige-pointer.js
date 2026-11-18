@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// forge:script.safe.vestige-pointer.js@3
+// forge:script.safe.vestige-pointer.js@4
 /**
  * vestige-pointer.js — the recall bridge (SAFE-064, Aaron 2026-10-06).
  *
@@ -138,7 +138,9 @@ async function cmdFind(query, opt) {
   const c = await conn();
   // SAFE-081: the asked-for scope outranks the shared 'user' scope. The old ORDER BY score alone let the
   // 889 user-scope rows bury a project's own memories (ghostflux find returned immich hits first).
-  const scope = typeof opt.scope === 'string' ? opt.scope : 'safe';
+  // SAFE-452 item 3: default to THIS project's own slug (FORGE_PROJECT, set by every forge launcher), not a
+  // hardcoded 'safe' - a bare `find` run in any other project was silently ranking SAFE's own memories first.
+  const scope = typeof opt.scope === 'string' ? opt.scope : (process.env.FORGE_PROJECT || 'safe');
   const where = ['MATCH(content,tags,gist) AGAINST (? IN NATURAL LANGUAGE MODE)']; const params = [query];
   if (!opt.all) { where.push('(scope = ? OR scope = ?)'); params.push(scope, 'user'); }
   let [rows] = await c.query(

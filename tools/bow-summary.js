@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// forge:script.safe.bow-summary.js@2
+// forge:script.safe.bow-summary.js@3
 // bow-summary.js - short read-only view of a light-schema BOW table (schema/admin.sql `bow`), for /bye, /update and /health-check.
 // Aaron's own items first (his queue leads every session), then the open P0/P1 queue, then counts.
 // Usage: node tools/bow-summary.js [--db safe] [--limit 8]
@@ -21,7 +21,12 @@ const mysql = (() => {
 })();
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > -1 ? process.argv[i + 1] : d; };
-const db = arg('--db', process.env.METRO_DB_NAME || 'safe');
+// SAFE-452 item 2: every project's launcher sets METRO_DB_NAME to ITS OWN database (I9) - this script must
+// read that, never assume 'safe'. Falling back to 'safe' when it is unset would show another project's BOW
+// as if it were its own, which is exactly the SAFE-453 cross-project-DB mistake in script form. Fail loudly
+// instead: only --db can supply a name when the env var is genuinely absent.
+const db = arg('--db', process.env.METRO_DB_NAME);
+if (!db) { console.error('bow-summary: no database name - METRO_DB_NAME is unset and --db was not given. Refusing to guess (I9); pass --db <name> or run inside a launcher that sets METRO_DB_NAME.'); process.exit(1); }
 const limit = Number(arg('--limit', 8));
 
 (async () => {

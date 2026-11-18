@@ -41,58 +41,58 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-version-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-version-guard.js\"",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "node harness/claude-pre-commit-check.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-pre-commit-check.js\"",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node harness/claude-plan-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-plan-guard.js\"",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "node harness/claude-secret-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-secret-guard.js\"",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "node harness/claude-bow-ref-check.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-bow-ref-check.js\"",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "node harness/claude-pre-push-check.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-pre-push-check.js\"",
             "timeout": 6
           },
           {
             "type": "command",
-            "command": "node harness/claude-codename-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-codename-guard.js\""
           },
           {
             "type": "command",
-            "command": "node harness/claude-author-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-author-guard.js\""
           },
           {
             "type": "command",
-            "command": "node harness/claude-destructive-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-destructive-guard.js\""
           },
           {
             "type": "command",
-            "command": "node harness/claude-worktree-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-worktree-guard.js\""
           },
           {
             "type": "command",
-            "command": "node harness/claude-checkin-pipe-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-checkin-pipe-guard.js\"",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node harness/claude-test-scope-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-test-scope-guard.js\"",
             "timeout": 3
           }
         ]
@@ -102,58 +102,58 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-version-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-version-guard.js\"",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "node harness/claude-pre-commit-check.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-pre-commit-check.js\"",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node harness/claude-plan-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-plan-guard.js\"",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "node harness/claude-secret-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-secret-guard.js\"",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "node harness/claude-bow-ref-check.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-bow-ref-check.js\"",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "node harness/claude-pre-push-check.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-pre-push-check.js\"",
             "timeout": 6
           },
           {
             "type": "command",
-            "command": "node harness/claude-codename-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-codename-guard.js\""
           },
           {
             "type": "command",
-            "command": "node harness/claude-author-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-author-guard.js\""
           },
           {
             "type": "command",
-            "command": "node harness/claude-destructive-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-destructive-guard.js\""
           },
           {
             "type": "command",
-            "command": "node harness/claude-worktree-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-worktree-guard.js\""
           },
           {
             "type": "command",
-            "command": "node harness/claude-checkin-pipe-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-checkin-pipe-guard.js\"",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node harness/claude-test-scope-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-test-scope-guard.js\"",
             "timeout": 3
           }
         ]
@@ -163,7 +163,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-dispatch-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-dispatch-guard.js\""
           }
         ]
       },
@@ -172,7 +172,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-file-claim-guard.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-file-claim-guard.js\"",
             "timeout": 10
           }
         ]
@@ -183,7 +183,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-memory-prefetch.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-memory-prefetch.js\"",
             "timeout": 2
           }
         ]
@@ -203,7 +203,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-startup.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-startup.js\""
           }
         ]
       },
@@ -223,6 +223,11 @@
           {
             "type": "command",
             "command": "echo \"CRITICAL CONTEXT TO PRESERVE: [1] You are bill/ben/bev (Bob retired 2026-08-18) - prefix ALL responses; verify with node claude-sync.js checkin --name <yours>. [2] Run node claude-sync.js checkin after compaction. [3] Golden Rules 1-25: error trapping, GR#2 Metropolis profile (version = git describe/ldflags + milestone tags, NO version files), SSOT, identity prefix, contract-first/stub-forever, red determinism gate stops the line, GR#23 independence amendment (attacker never the author), GR#25 graph-driven specification. [4] Dev-team: Bev=lead (merges/BOW), Bill=RM/BA/allocator+oversight, Ben=coder; evidence protocol per parallel-coder-brief.md 5a; recover mid-cycle state from docs/planning/checkpoint.md + BOW. [5] Read CLAUDE.md for full rules.\""
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/session-ledger.js\" auto",
+            "timeout": 10
           }
         ]
       }
@@ -232,7 +237,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-ping-check.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-ping-check.js\""
           }
         ]
       },
@@ -241,17 +246,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-bow-autoref.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-bow-autoref.js\"",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "node harness/claude-reflection.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-reflection.js\"",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node harness/claude-push-ci-check.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-push-ci-check.js\"",
             "timeout": 3
           }
         ]
@@ -261,17 +266,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-bow-autoref.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-bow-autoref.js\"",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "node harness/claude-reflection.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-reflection.js\"",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "node harness/claude-push-ci-check.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-push-ci-check.js\"",
             "timeout": 3
           }
         ]
@@ -281,7 +286,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-agent-stop.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-agent-stop.js\"",
             "timeout": 5
           }
         ]
@@ -301,7 +306,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node harness/claude-agent-stop.js",
+            "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-agent-stop.js\"",
             "timeout": 5
           }
         ]
@@ -321,7 +326,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "node harness/claude-statusline.js"
+    "command": "node \"$CLAUDE_PROJECT_DIR/harness/claude-statusline.js\""
   },
   "enabledMcpjsonServers": [
     "safe-nats"
