@@ -1450,6 +1450,26 @@
       }
     },
     {
+      "key": "engine.rules",
+      "type": "module",
+      "seq": 275,
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "engine",
+      "title": "Rule versions: which rules a save's player commands were judged by",
+      "desc": "Leaf package holding the rule-version registry (FEAT-9995385612): the Version type, Current, OldestSupported, Has, Active and the registry of rule changes with their old and new behaviour and old-journal fixtures. A rule version is recorded ONLY for changes to what a player's command does (accepted or refused, and what it costs); daily simulation formulas are never versioned (Aaron 2026-11-18). Imports nothing from the engine.",
+      "specRef": "docs/planning/acceptance/feat-9995385612-rule-versions.md",
+      "path": "internal/engine/rules/",
+      "deps": [],
+      "calls": [],
+      "sprint": 7,
+      "inbound": {
+        "name": "RuleVersions",
+        "format": "Go package API: rules.Has(active, introduced Version) bool; rules.Active(getter) Version; rules.Classify(v) Support; rules.Registry()",
+        "pattern": "every versioned rule check is rules.Has(active, rules.NamedConstant), never an integer literal; a save recorded at a version above rules.Current is refused, never clamped"
+      }
+    },
+    {
       "key": "engine.market",
       "type": "module",
       "seq": 280,

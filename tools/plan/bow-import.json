@@ -708,6 +708,22 @@
       ]
     },
     {
+      "mkey": "engine.rules",
+      "type": "module",
+      "title": "Rule versions: which rules a save's player commands were judged by",
+      "desc": "Leaf package holding the rule-version registry (FEAT-9995385612): the Version type, Current, OldestSupported, Has, Active and the registry of rule changes with their old and new behaviour and old-journal fixtures. A rule version is recorded ONLY for changes to what a player's command does (accepted or refused, and what it costs); daily simulation formulas are never versioned (Aaron 2026-11-18). Imports nothing from the engine. [spec: docs/planning/acceptance/feat-9995385612-rule-versions.md] [path: internal/engine/rules/]",
+      "seq": 275,
+      "sprint": 7,
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "docs/planning/acceptance/feat-9995385612-rule-versions.md",
+      "guid": "1846fbfe-0500-440e-ba52-2df435a6acd2",
+      "guidIn": "767c453a-2bce-49f9-b993-49d7ddca0e82",
+      "guidOut": "0aa9b807-0886-48e2-9f6b-d1b0564d984c",
+      "deps": []
+    },
+    {
       "mkey": "engine.market",
       "type": "module",
       "title": "Needs & commodities behind the Market interface",

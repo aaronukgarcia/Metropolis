@@ -171,7 +171,8 @@
       "P050-P059": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
       "P060-P069": "reserved for int.persist (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
       "H510-H519": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")",
-      "V936-V939": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V936-V939": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "G5610-G5619": "reserved for engine.rules (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -6478,6 +6479,42 @@
       "module": "ui.webconsole",
       "message": "Gave up reconnecting to the engine after {attempts} failed attempts",
       "remedy": "Check that the server is up, then click the badge to retry. The offline mock sim is never swapped in automatically."
+    },
+    "MET-G5610": {
+      "severity": "error",
+      "module": "engine.rules",
+      "message": "This save was made under rule version {savedVersion}, newer than this build understands (rule version {currentVersion}). Nothing was loaded.",
+      "remedy": "Run a newer build of Metropolis that knows rule version {savedVersion}. Do not clamp or edit the save: its commands were judged by rules this build does not have."
+    },
+    "MET-G5611": {
+      "severity": "error",
+      "module": "engine.rules",
+      "message": "This save was made under rule version {savedVersion}, older than the oldest this build still replays (rule version {oldestSupported}). Nothing was loaded.",
+      "remedy": "Restore it with an older build that still supports rule version {savedVersion}, or from a snapshot taken under rule version {oldestSupported} or later."
+    },
+    "MET-G5612": {
+      "severity": "error",
+      "module": "engine.rules",
+      "message": "The journal's rule versions go backwards: a frame at rule version {version} follows one at rule version {previousVersion}. The restore was refused and nothing was loaded.",
+      "remedy": "The journal is damaged or was joined from two different cities. Do not walk back to an older snapshot, that would drop real progress; restore the journal from a backup."
+    },
+    "MET-G5613": {
+      "severity": "error",
+      "module": "engine.rules",
+      "message": "A rule version stamp is malformed: {reason}. The restore was refused and nothing was loaded.",
+      "remedy": "The journal frame or snapshot header is damaged; restore it from a backup. A stamp of 0 is never written, version 0 is stored without a stamp."
+    },
+    "MET-G5614": {
+      "severity": "warn",
+      "module": "engine.rules",
+      "message": "City restored under older rules: replayed rule version {fromVersion} through {toVersion}, now running rule version {currentVersion}. {changes}",
+      "remedy": "Not a fault. Recorded history was replayed under the rules it was made under; new commands follow the current rules. The warning does not repeat once the last journal frame is at the current rule version."
+    },
+    "MET-G5615": {
+      "severity": "error",
+      "module": "engine.rules",
+      "message": "Rule version {version} is not in the rule registry (known versions 1 to {currentVersion}).",
+      "remedy": "Use only a named rule constant from the rules package, never a literal number."
     }
   }
 }

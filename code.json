@@ -636,7 +636,7 @@
       "note": "FEAT-2326609792 inc0: dispatched fire/ambulance/police incidents per 1,000 residents per simulated day."
     }
   ],
-  "moduleCount": 172,
+  "moduleCount": 173,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -3952,6 +3952,31 @@
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
           }
         ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "1846fbfe-0500-440e-ba52-2df435a6acd2",
+      "key": "engine.rules",
+      "bowType": "module",
+      "seq": 275,
+      "sprint": 7,
+      "title": "Rule versions: which rules a save's player commands were judged by",
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "docs/planning/acceptance/feat-9995385612-rule-versions.md",
+      "path": "internal/engine/rules/",
+      "inbound": {
+        "guid": "767c453a-2bce-49f9-b993-49d7ddca0e82",
+        "name": "RuleVersions",
+        "format": "Go package API: rules.Has(active, introduced Version) bool; rules.Active(getter) Version; rules.Classify(v) Support; rules.Registry()",
+        "pattern": "every versioned rule check is rules.Has(active, rules.NamedConstant), never an integer literal; a save recorded at a version above rules.Current is refused, never clamped",
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "0aa9b807-0886-48e2-9f6b-d1b0564d984c",
+        "calls": []
       },
       "securityScan": null
     },
