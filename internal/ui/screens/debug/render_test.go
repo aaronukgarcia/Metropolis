@@ -321,3 +321,33 @@ func TestRender_PureFunction_RepeatedCallsIdentical(t *testing.T) {
 		}
 	}
 }
+
+// BUG-1220: when the tail does not fit the pane, the NEWEST entry must stay
+// visible (the oldest scroll off), never the other way round.
+func TestRender_ErrorTail_NewestSurvivesAShortPane(t *testing.T) {
+	entries := make([]errs.Entry, 50)
+	for i := range entries {
+		entries[i] = errs.Entry{Ts: "t", Level: "error", Code: "MET-U100", Msg: "old"}
+	}
+	entries[49].Msg = "NEWEST-MARKER"
+	s := debug.NewScreen(nil, "corr-1",
+		debug.WithDebugFlag(func() bool { return true }),
+		debug.WithErrorTailSource(func() []errs.Entry { return entries }),
+	)
+	buf := core.NewBuffer(160, 40)
+	debug.Render(buf, core.Rect{X: 0, Y: 0, W: 160, H: 40}, debugOnSnapshot(s), widgets.DefaultPalette)
+	var sb strings.Builder
+	for y := 0; y < 40; y++ {
+		for x := 0; x < 160; x++ {
+			r := buf.Get(x, y).Rune
+			if r == 0 {
+				r = ' '
+			}
+			sb.WriteRune(r)
+		}
+		sb.WriteByte('\n')
+	}
+	if !strings.Contains(sb.String(), "NEWEST-MARKER") {
+		t.Fatalf("the newest tail entry scrolled off a 40-row pane:\n%s", sb.String())
+	}
+}

@@ -30,6 +30,13 @@ import (
 // rather than by luck. Widening this is the alert wiring's own job.
 const chromeTopBarRows = 1
 
+// chromeHousingRows is the BUG-1220 housing-and-migration row directly below
+// the top bar; chromeReservedRows is what the screens are inset by.
+const (
+	chromeHousingRows  = 1
+	chromeReservedRows = chromeTopBarRows + chromeHousingRows
+)
+
 // chromeTopBarDraw returns a core.DrawFunc that renders the global
 // chrome's top bar across row 0, on top of whatever the active screen
 // drew there.
@@ -90,6 +97,12 @@ func chromeTopBarDraw(c *chromescreen.Chrome) core.DrawFunc {
 			back.Set(x, 0, ' ', tcell.StyleDefault)
 		}
 		c.Render(back, core.Rect{X: 0, Y: 0, W: w, H: rows})
+		if h > chromeTopBarRows {
+			for x := 0; x < w; x++ {
+				back.Set(x, chromeTopBarRows, ' ', tcell.StyleDefault)
+			}
+			c.RenderHousing(back, core.Rect{X: 0, Y: chromeTopBarRows, W: w, H: chromeHousingRows})
+		}
 	}
 }
 
@@ -127,11 +140,17 @@ func screenContentRect(back *core.Buffer) core.Rect {
 	if h < 0 {
 		h = 0
 	}
-	y := chromeTopBarRows
+	y := chromeReservedRows
 	if y > h {
 		y = h
 	}
-	return core.Rect{X: 0, Y: y, W: w, H: h - y}
+	bottom := 0
+	if hintRoom(h) {
+		// BUG-1220 Part B: the hint row and the status bar are the bottom
+		// two rows; screens end above them so neither covers content.
+		bottom = 1 + chromeHintRows
+	}
+	return core.Rect{X: 0, Y: y, W: w, H: h - y - bottom}
 }
 
 // chromeDeltaSink adapts *chromescreen.Chrome onto the two callbacks

@@ -167,7 +167,15 @@ func renderErrorTailPane(c *cursor, snap Snapshot, palette widgets.Palette) {
 		c.line("(no entries)", tcell.StyleDefault)
 		return
 	}
-	for i, e := range snap.ErrorTail {
+	// A tail is about the NEWEST entries: when the pane does not fit the rows
+	// left, drop the oldest so the latest error is never the one scrolled off
+	// the bottom (BUG-1220 shrank the F12 rect and exposed this).
+	first := 0
+	if room := c.rect.H - c.y; room >= 1 && len(snap.ErrorTail) > room {
+		first = len(snap.ErrorTail) - room
+	}
+	for i := first; i < len(snap.ErrorTail); i++ {
+		e := snap.ErrorTail[i]
 		style := tcell.StyleDefault
 		switch e.Level {
 		case "error", "fatal":

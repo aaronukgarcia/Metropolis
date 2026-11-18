@@ -54,6 +54,19 @@ func housingVacancyUnits(seedPeople, builtPeople, population int64) int64 {
 // fixed order and only summed). A nil build or citizens module reads the
 // zero-signal case (seed stock only, population 0).
 func housingVacancyFor(b *build.BuildAPI, c *citizens.CitizensAPI, cid string, seedOverride int64) int64 {
+	var pop int64
+	if c != nil {
+		pop = int64(c.TotalPopulation(cid))
+	}
+	return housingVacancyUnits(housingStockFor(b, seedOverride), 0, pop)
+}
+
+// housingStockFor is the one place the home stock is summed: the seed city's
+// starting homes plus the resident capacity of every standing structure build
+// reports, in people. housingVacancyFor and the BUG-1220 housing publish both
+// read it, so the player-facing "places" figure and the migration rule can
+// never be two notions of homes. A nil build reads the seed stock only.
+func housingStockFor(b *build.BuildAPI, seedOverride int64) int64 {
 	var built int64
 	if b != nil {
 		for _, s := range b.StandingCapacities() {
@@ -62,13 +75,9 @@ func housingVacancyFor(b *build.BuildAPI, c *citizens.CitizensAPI, cid string, s
 			}
 		}
 	}
-	var pop int64
-	if c != nil {
-		pop = int64(c.TotalPopulation(cid))
-	}
 	seed := baselineOneSeedHomeCapacityPeople
 	if seedOverride > 0 {
 		seed = seedOverride
 	}
-	return housingVacancyUnits(seed, built, pop)
+	return num.SatAdd(seed, built)
 }

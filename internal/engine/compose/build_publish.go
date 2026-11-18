@@ -2,9 +2,45 @@ package compose
 
 import (
 	"encoding/json"
+	"strconv"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
+
+// BUG-1220 Part C: the F3 catalogue's cost and cap columns come from the real
+// zone catalogue (data/buildings.json via engine.build), not blanks.
+//
+// Cost is the materials bill priced at the ledger's own per-tonne rate (the
+// price accrueAndSettleConstruction charges), formatted as pounds like the
+// finance screen ("£%.2f"); labour is worker-days, not money, and the queue
+// pane already shows it, so the column stays one pound figure. Cap is what one completed structure of the zone holds:
+// resident capacity (people) and job capacity.
+func catalogueCostText(z build.ZoneInfo) string {
+	bill, _ := num.SafeMul(z.Materials, constructionMaterialLedgerPriceMicropoundsPerTonne)
+	return catalogueFormatPounds(bill)
+}
+
+func catalogueCapacityText(z build.ZoneInfo) string {
+	return strconv.FormatInt(z.ResidentCapacity, 10) + " homes, " + strconv.FormatInt(z.JobCapacity, 10) + " jobs"
+}
+
+// catalogueFormatPounds renders micropounds as "£N.NN" with integer maths
+// only (same output as the finance screen's "£%.2f").
+func catalogueFormatPounds(micropounds int64) string {
+	sign := ""
+	mag := uint64(micropounds)
+	if micropounds < 0 {
+		sign = "-"
+		mag = uint64(-(micropounds + 1)) + 1
+	}
+	perPound := uint64(finance.MicropoundsPerPound)
+	pounds := mag / perPound
+	hundredths := (mag % perPound) * 100 / perPound
+	return sign + "£" + strconv.FormatUint(pounds, 10) + "." + string([]byte{byte('0' + hundredths/10), byte('0' + hundredths%10)})
+}
 
 // ui.screen.build (F3): the "f3.build" view publisher, an adapter over
 // engine.build's BuildAPI (ZoneCatalogue + Queue). Same one-file-per-
@@ -97,6 +133,7 @@ func (st *simState) buildF3Patch() (json.RawMessage, error) {
 		})
 		catalogue = append(catalogue, buildWireCatalogueEntry{
 			ID: string(z.Zone), Name: z.Name, Section: "zone", UnlockState: "unlocked",
+			CostRaw: catalogueCostText(z), CapacityRaw: catalogueCapacityText(z),
 		})
 	}
 

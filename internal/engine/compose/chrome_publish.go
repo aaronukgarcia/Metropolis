@@ -119,6 +119,9 @@ type chromeFigures struct {
 	Money      int64  `json:"money"`
 	Population int64  `json:"population"`
 	Rating     string `json:"rating"`
+
+	// Housing is BUG-1220's housing-and-migration block (housing_pub.go).
+	Housing chromeHousing `json:"housing"`
 }
 
 // chromeTopBarWirePatch is compose's own copy of ui.screen.chrome/
@@ -216,6 +219,7 @@ func (st *simState) buildChromeTopBarPatch() (json.RawMessage, error) {
 			Money:      st.publishedTreasury() / int64(finance.MicropoundsPerPound),
 			Population: int64(st.citizens.TotalPopulation(st.cid)),
 			Rating:     chromeRatingString(st.finance.CreditRatingNow()),
+			Housing:    buildChromeHousing(&st.housingPub, st.citizens, st.cid),
 		},
 	}
 

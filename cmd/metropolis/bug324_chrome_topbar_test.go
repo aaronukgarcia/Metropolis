@@ -270,17 +270,18 @@ func TestBUG324_TopBarOverlaysTheActiveScreen(t *testing.T) {
 	// The active screen + the bottom status line, but NO chrome.
 	withoutChrome := core.NewBuffer(100, 24)
 	w.screens.ActiveDraw()(withoutChrome, &core.ViewModels{})
+	hintBarDraw(w)(withoutChrome, &core.ViewModels{})
 	statusBarDraw(w.statusBar)(withoutChrome, &core.ViewModels{})
 
 	composed := renderAt(w, 100, 24)
 
-	if row(withoutChrome, 0) == row(composed, 0) {
+	if row(withoutChrome, chromeTopBarRows-1) == row(composed, chromeTopBarRows-1) {
 		t.Errorf("row 0 is identical with and without the chrome overlay — the bar is not being drawn on top\n  got: %q", row(composed, 0))
 	}
-	// Rows 1..23 must be byte-identical: chrome is given exactly one row
-	// (chromeTopBarRows), so it must not paint the screen's body and it
-	// must not disturb the status line either.
-	for y := 1; y < 24; y++ {
+	// Every row at or below chromeReservedRows (the top bar plus BUG-1220's
+	// housing row) must be byte-identical: chrome must not paint the
+	// screen's body and must not disturb the hint row or status line.
+	for y := chromeReservedRows; y < 24; y++ {
 		if row(withoutChrome, y) != row(composed, y) {
 			t.Fatalf("chrome overlay modified row %d, which does not belong to it\n  without chrome: %q\n  composed:       %q", y, row(withoutChrome, y), row(composed, y))
 		}
@@ -315,19 +316,22 @@ func TestBUG324_ScreensAreInsetSoNoHeadingIsLost(t *testing.T) {
 		screenOnly := core.NewBuffer(100, 24)
 		w.screens.ActiveDraw()(screenOnly, &core.ViewModels{})
 
-		if got := strings.TrimSpace(row(screenOnly, 0)); got != "" {
-			t.Errorf("screen %q still draws on row 0 (%q) — that row belongs to the global chrome, so this content would be painted over", id, got)
+		for y := 0; y < chromeReservedRows; y++ {
+			if got := strings.TrimSpace(row(screenOnly, y)); got != "" {
+				t.Errorf("screen %q still draws on row %d (%q) — that row belongs to the global chrome, so this content would be painted over", id, y, got)
+			}
 		}
 
-		firstRow := strings.TrimRight(row(screenOnly, 1), " ")
+		first := chromeReservedRows
+		firstRow := strings.TrimRight(row(screenOnly, first), " ")
 		if strings.TrimSpace(firstRow) == "" {
-			t.Errorf("screen %q draws nothing on row 1 — the inset moved its content down but the first content row is empty, so the screen has no visible heading at all", id)
+			t.Errorf("screen %q draws nothing on its first content row — the inset moved its content down but the first content row is empty, so the screen has no visible heading at all", id)
 			continue
 		}
 
 		composed := renderAt(w, 100, 24)
-		if got := strings.TrimRight(row(composed, 1), " "); got != firstRow {
-			t.Errorf("screen %q lost its first content row in the composed frame\n  screen-only row 1: %q\n  composed row 1:    %q", id, firstRow, got)
+		if got := strings.TrimRight(row(composed, first), " "); got != firstRow {
+			t.Errorf("screen %q lost its first content row in the composed frame\n  screen-only row %d: %q\n  composed row %d:    %q", id, first, firstRow, first, got)
 		}
 	}
 }

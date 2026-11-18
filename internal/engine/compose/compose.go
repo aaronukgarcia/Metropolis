@@ -2234,6 +2234,10 @@ type simState struct {
 	// history written at each finance close and reset on Load.
 	plPub plPubHolder
 
+	// BUG-1220: housing/migration publish mirror (housing_pub.go), written at
+	// each monthly migration step and reset on Load.
+	housingPub housingPubHolder
+
 	// cumulative gross money flow (AC-9)
 	moneyFlows int64
 
@@ -3363,12 +3367,16 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 	if aff, err := st.attract.HousingAffordability(); err == nil {
 		st.housingAffordability = aff
 	}
-	return st.attract.ApplyMigration(attract.MigrationCommand{
+	res, err := st.attract.ApplyMigration(attract.MigrationCommand{
 		Month:              month,
 		ResidentIDs:        st.residentIDs(),
 		HousingVacancy:     housingVacancyFor(st.buildAPI, st.citizens, st.cid, st.seedHomeCapacityPeople),
 		JunctionThroughput: baselineOneJunctionThroughput,
 	})
+	if err == nil {
+		recordHousingMonth(&st.housingPub, st.buildAPI, st.seedHomeCapacityPeople, res) // BUG-1220
+	}
+	return res, err
 }
 
 // deathServicesEffect carries the month deathServicesHook.RunShard reads

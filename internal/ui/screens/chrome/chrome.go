@@ -61,6 +61,10 @@ type Figures struct {
 	Money      int64  `json:"money"`      // city treasury in WHOLE POUNDS (the engine's own unit is micropounds; the publisher converts)
 	Population int64  `json:"population"` // current citizen count
 	Rating     string `json:"rating"`     // credit rating on engine.finance's own 0..1000 scale, e.g. "1000/1000" — there is no letter-grade scale in the engine
+
+	// Housing is the BUG-1220 housing-and-migration block; optional on the
+	// wire (a patch without it leaves Known false).
+	Housing HousingFigures `json:"housing"`
 }
 
 // Chrome is the persistent chrome: the top bar (figures) and the bottom

@@ -176,9 +176,11 @@ func printBootError(stderr io.Writer, err error) {
 func composeDraw(w *skeletonWiring) core.DrawFunc {
 	chromeDraw := chromeTopBarDraw(w.chromeUI)
 	statusDraw := statusBarDraw(w.statusBar)
+	hintDraw := hintBarDraw(w)
 	return func(back *core.Buffer, vm *core.ViewModels) {
 		w.screens.ActiveDraw()(back, vm)
 		chromeDraw(back, vm)
+		hintDraw(back, vm)
 		statusDraw(back, vm)
 	}
 }

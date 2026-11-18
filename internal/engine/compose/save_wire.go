@@ -375,6 +375,7 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	// timeline; drop it so nothing from before the load leaks in. The first
 	// close after the load rebuilds the statement from the restored ledger.
 	c.state.plPub.Store(nil)
+	c.state.housingPub.Store(nil) // BUG-1220: same reason
 	// FEAT-build-services-bridge-2026-09-02 root fix + round remedy (b):
 	// engine.services IS now a save.Participant (Participants(), above) — its
 	// own instance table, funding/upgrade/demand/allocated state,

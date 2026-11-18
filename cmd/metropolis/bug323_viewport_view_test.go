@@ -47,6 +47,18 @@ func bug323BootAndRenderMap(t *testing.T, width, height int) string {
 	return bufferText(back)
 }
 
+// bug323ContentRect is the rect the map screen draws into at width x height.
+func bug323ContentRect(width, height int) core.Rect {
+	return screenContentRect(core.NewBuffer(width, height))
+}
+
+// bug323ContentText returns only the rows of text inside the content rect.
+func bug323ContentText(text string, width, height int) string {
+	rect := bug323ContentRect(width, height)
+	rows := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	return strings.Join(rows[rect.Y:rect.Y+rect.H], "\n")
+}
+
 // countGlyphs tallies every rune in text except the row separators.
 func countGlyphs(text string) map[rune]int {
 	counts := make(map[rune]int)
@@ -75,9 +87,13 @@ func TestBUG323_DefaultScreenAtBoot_RendersRealTerrainNotBlank(t *testing.T) {
 	// had ever LOOKED at this screen.
 	t.Logf("F1 at %dx%d through a real bootCore:\n%s", width, height, text)
 
-	counts := countGlyphs(text)
+	// BUG-1220: the screen draws only inside screenContentRect (chrome owns
+	// the rows above, the hint row and status bar the rows below), so the
+	// coverage fraction is measured over THAT rect, not the whole buffer.
+	content := bug323ContentText(text, width, height)
+	counts := countGlyphs(content)
 	blanks := counts[' ']
-	total := width * height
+	total := width * bug323ContentRect(width, height).H
 
 	if blanks == total || blanks == total-1 {
 		t.Fatalf("F1 rendered blank at %dx%d: %d of %d cells are spaces — this is exactly the BUG-323 finding (an unregistered \"f1.viewport\" view leaves every cell Known=false, which renders as blankGlyph)", width, height, blanks, total)
@@ -195,8 +211,11 @@ func TestBUG323_MinimapStrip_IsAlsoPopulated(t *testing.T) {
 	if len(rows) != height {
 		t.Fatalf("rendered %d rows, want %d", len(rows), height)
 	}
-	minimap := rows[height-1]
+	// BUG-1220: the minimap is the LAST row of the screen's own content rect
+	// (the hint row and status bar sit below it), not of the buffer.
+	rect := bug323ContentRect(width, height)
+	minimap := rows[rect.Y+rect.H-1]
 	if strings.TrimSpace(minimap) == "" {
-		t.Fatalf("the minimap strip (last row) rendered blank while the viewport above it did not:\n%s", text)
+		t.Fatalf("the minimap strip (last content row) rendered blank while the viewport above it did not:\n%s", text)
 	}
 }

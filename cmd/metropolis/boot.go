@@ -1113,7 +1113,13 @@ func registerMapBuildKeys(w *skeletonWiring, transport protocol.Transport) error
 	}
 	for _, b := range moveBindings {
 		dx, dy := b.dx, b.dy
-		if err := w.mapGrammar.RegisterGlobal(b.key, keys.Action{Name: b.name, Run: func(keys.ActionArgs) { w.mapScreen.MoveCursor(dx, dy) }}); err != nil {
+		if err := w.mapGrammar.RegisterGlobal(b.key, keys.Action{Name: b.name, Run: func(keys.ActionArgs) {
+			// BUG-1220 Part C: the next cursor key clears a stale refusal
+			// ("already owned" used to sit on F1 for the whole session); 'c'
+			// and the next accepted y/b still clear it too.
+			w.mapScreen.DismissBuildNotice()
+			w.mapScreen.MoveCursor(dx, dy)
+		}}); err != nil {
 			return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
 				"component": "ui.keys.RegisterGlobal", "key": b.key.Token(),
 			})

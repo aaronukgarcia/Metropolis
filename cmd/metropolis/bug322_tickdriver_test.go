@@ -776,9 +776,14 @@ func TestBUG322_StatusBarHelpMatchesBindings(t *testing.T) {
 			t.Fatalf("status line advertises %q but the chrome grammar did not dispatch it (status=%v)", string(r), res.Status)
 		}
 	}
-	for _, want := range []string{"[Space]", "]", "[", "F1/F2/F4", "[q] quit"} {
+	for _, want := range []string{"[Space]", "]", "[", "F10 menu", "F12 debug", "[q] quit"} {
 		if !strings.Contains(statusBarKeyHelp, want) {
 			t.Fatalf("statusBarKeyHelp %q does not mention %q", statusBarKeyHelp, want)
+		}
+	}
+	for _, want := range []string{"F1 map", "F2 money", "F3 build", "F4 services"} {
+		if !strings.Contains(statusBarScreens, want) {
+			t.Fatalf("statusBarScreens %q does not mention %q", statusBarScreens, want)
 		}
 	}
 }
