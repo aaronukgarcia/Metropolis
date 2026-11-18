@@ -1,0 +1,24 @@
+Jan Y1 | cycle 0/30 | money 1500000 | pop 64 | rating 1000/1000
+homes: no month closed yet
+WHY PEOPLE COME OR GO
+no month closed yet
+Housing          [..........]   -- no data yet
+Jobs             [..........]   -- no data yet
+Services         [..........]   -- no data yet
+Health care      [..........]   -- no data yet
+Policy           [..........]   -- no data yet
+Shops            [..........]   -- no data yet
+Parks            [..........]   -- no data yet
+Transport links  [..........]   -- no data yet
+Congestion       [..........]   -- no data yet
+Tourism          [..........]   -- no data yet
+Safety           [..........]   -- no data yet          extra modifier
+Environment      [..........]   -- no data yet          extra modifier
+homelessness: not built yet
+
+
+
+
+
+F5 WHY  view only, no action keys | why people move here or leave, last month
+F1 map F2 money F3 build F4 services F5 why | TICK 0  MONTH 0  SPEED 1x RUNNING

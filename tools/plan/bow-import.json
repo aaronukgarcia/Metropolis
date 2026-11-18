@@ -1461,6 +1461,22 @@
       ]
     },
     {
+      "mkey": "ui.screen.why",
+      "type": "feature",
+      "title": "F5 WHY screen: why people come and why they leave",
+      "desc": "View-only panel of the ten-lever migration formula (housing, jobs, services, health care, policy, shops, parks, transport links, congestion, tourism), the safety and environment modifiers, the momentum/pride line, the wellbeing effect, what limits arrivals and a reserved homelessness row, rendered from the f5.why view (FEAT-9995385616 lane A3). Honest no-data state until the engine publishes the view. [spec: docs/planning/acceptance/reason-panel-criteria.md] [path: internal/ui/screens/why/]",
+      "seq": 596,
+      "sprint": 9,
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "ui",
+      "specRef": "docs/planning/acceptance/reason-panel-criteria.md",
+      "guid": "ffa472b7-819c-49b9-b1c6-32aea49acc73",
+      "guidIn": "b2c4edba-3791-4371-9e76-db8a1e86aafd",
+      "guidOut": "7638b1ff-17ce-4022-ac95-02760f8f536b",
+      "deps": []
+    },
+    {
       "mkey": "engine.refuse",
       "type": "module",
       "title": "Refuse rounds & the waste-health loop",

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "known": true,
+  "month": 13,
+  "aWorld": 40.0,
+  "score": 47.9,
+  "net": 7.9,
+  "levers": [
+    {"id": "housing", "built": true, "value": 71.0, "points": 3.1, "parts": [{"k": "rent share", "v": 29}]},
+    {"id": "jobs", "built": false, "value": 0, "points": 0},
+    {"id": "services", "built": true, "value": 62.0, "points": 2.2, "parts": [{"k": "coverage", "v": 62}]},
+    {"id": "healthcare", "built": false, "value": 0, "points": 0},
+    {"id": "policy", "built": false, "value": 0, "points": 0},
+    {"id": "shops", "built": false, "value": 0, "points": 0},
+    {"id": "parks", "built": true, "value": 55.0, "points": 1.5, "parts": [{"k": "entertainment venues", "v": 1}]},
+    {"id": "transport", "built": false, "value": 0, "points": 0},
+    {"id": "congestion", "built": false, "value": 0, "points": 0},
+    {"id": "tourism", "built": false, "value": 0, "points": 0}
+  ],
+  "modifiers": [
+    {"id": "safety", "built": true, "value": 52.0, "points": 1.2, "parts": [{"k": "safe", "v": 52}]},
+    {"id": "environment", "built": true, "value": 46.0, "points": 0.6, "parts": [{"k": "clean", "v": 46}]}
+  ],
+  "reputation": 2.0,
+  "reputationPoints": 0.3,
+  "reputationTrend": "rising",
+  "wellbeingFactor": 0.98,
+  "wellbeingPoints": -1.0,
+  "wanted": 8,
+  "room": 62,
+  "limitedBy": "homes",
+  "movedIn": 8,
+  "left": 0,
+  "homes": {"known": true, "places": 120, "lived": 89, "free": 31, "movedIn": 8, "left": 0, "full": false},
+  "homeless": {"built": false}
+}

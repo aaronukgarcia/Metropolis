@@ -781,7 +781,7 @@ func TestBUG322_StatusBarHelpMatchesBindings(t *testing.T) {
 			t.Fatalf("statusBarKeyHelp %q does not mention %q", statusBarKeyHelp, want)
 		}
 	}
-	for _, want := range []string{"F1 map", "F2 money", "F3 build", "F4 services"} {
+	for _, want := range []string{"F1 map", "F2 money", "F3 build", "F4 services", "F5 why"} {
 		if !strings.Contains(statusBarScreens, want) {
 			t.Fatalf("statusBarScreens %q does not mention %q", statusBarScreens, want)
 		}

@@ -114,20 +114,20 @@ func (s *statusBar) Line() string {
 	return statusBarScreens + " | TICK " + strconv.FormatInt(v.Tick, 10) +
 		"  MONTH " + strconv.FormatInt(v.Month, 10) +
 		"  SPEED " + strconv.Itoa(v.Speed) + "x" +
-		"  " + state +
-		"  " + statusBarKeyHelp
+		" " + state +
+		" " + statusBarKeyHelp
 }
 
 // statusBarKeyHelp names the clock keys registerClockKeys binds. Written
 // once, here, so the on-screen prompt can never drift from what is actually
 // bound (GR#3) — bootCore's registration and this string are asserted
 // against each other in the tests.
-const statusBarKeyHelp = "[Space] pause []] faster [[] slower F10 menu F12 debug [q] quit"
+const statusBarKeyHelp = "[Space] pause []] fast [[] slow F10 menu F12 debug [q] quit"
 
 // statusBarScreens leads the status row (BUG-1220 r2) so the screen list,
 // F3 build above all, is visible at 80 columns and still at 60, on every
 // screen from the first frame; the clock help after it truncates first.
-const statusBarScreens = "F1 map F2 money F3 build F4 services"
+const statusBarScreens = "F1 map F2 money F3 build F4 services F5 why"
 
 // statusBarDraw returns a core.DrawFunc that renders the status line on the
 // LAST row of the buffer, on top of whatever the active screen drew.

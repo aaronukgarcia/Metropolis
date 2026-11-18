@@ -1,0 +1,18 @@
+WHY PEOPLE COME OR GO   month 13
+Housing          [#######---]   71 pulling        +3.1  rent share 29
+Jobs             [..........]   -- not built yet   0.0
+Services         [######----]   62 pulling        +2.2  coverage 62
+Health care      [..........]   -- not built yet   0.0
+Policy           [..........]   -- not built yet   0.0
+Shops            [..........]   -- not built yet   0.0
+Parks            [######----]   55 pulling        +1.5  entertainment venues 1
+Transport links  [..........]   -- not built yet   0.0
+Congestion       [..........]   -- not built yet   0.0
+Tourism          [..........]   -- not built yet   0.0
+Safety           [#####-----]   52 pulling        +1.2  safe 52
+Environment      [#####-----]   46 pulling        +0.6  clean 46
+Momentum / pride                +2 rising         +0.3  pride, big inertia
+Wellbeing                          pushing        -1.0  city mood x0.98
+TOTAL            47.9 vs 40.0      net gain       +7.9  people, before the cap
+Wanted 8, room for 62 (limit: free homes), moved in 8
+homelessness: not built yet

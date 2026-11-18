@@ -30,13 +30,13 @@ func TestBUG1220_R2_ScreenListVisibleAtNarrowWidths(t *testing.T) {
 	screens := []struct {
 		key  tcell.Key
 		name string
-	}{{tcell.KeyF1, "F1"}, {tcell.KeyF2, "F2"}, {tcell.KeyF3, "F3"}, {tcell.KeyF4, "F4"}}
+	}{{tcell.KeyF1, "F1"}, {tcell.KeyF2, "F2"}, {tcell.KeyF3, "F3"}, {tcell.KeyF4, "F4"}, {tcell.KeyF5, "F5"}}
 	for _, dims := range [][2]int{{80, 24}, {60, 24}} {
 		for _, s := range screens {
 			rcKey(r.w, s.key, 0)
 			rows := sizedFrame(r.w, dims[0], dims[1])
 			st := rows[dims[1]-1]
-			for _, want := range []string{"F1 map", "F2 money", "F3 build", "F4 services"} {
+			for _, want := range []string{"F1 map", "F2 money", "F3 build", "F4 services", "F5 why"} {
 				if !strings.Contains(st, want) {
 					t.Fatalf("%dx%d on %s: status row %q lacks %q", dims[0], dims[1], s.name, st, want)
 				}

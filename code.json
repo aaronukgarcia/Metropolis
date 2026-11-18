@@ -636,7 +636,7 @@
       "note": "FEAT-2326609792 inc0: dispatched fire/ambulance/police incidents per 1,000 residents per simulated day."
     }
   ],
-  "moduleCount": 173,
+  "moduleCount": 174,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -800,6 +800,10 @@
           {
             "key": "ui.screen.trade",
             "outboundGuid": "0b151078-0738-4064-b61f-85aff7cbc933"
+          },
+          {
+            "key": "ui.screen.why",
+            "outboundGuid": "7638b1ff-17ce-4022-ac95-02760f8f536b"
           },
           {
             "key": "ui.webconsole",
@@ -1450,6 +1454,10 @@
           {
             "key": "ui.screen.trade",
             "outboundGuid": "0b151078-0738-4064-b61f-85aff7cbc933"
+          },
+          {
+            "key": "ui.screen.why",
+            "outboundGuid": "7638b1ff-17ce-4022-ac95-02760f8f536b"
           }
         ]
       },
@@ -2382,6 +2390,10 @@
             "outboundGuid": "0b151078-0738-4064-b61f-85aff7cbc933"
           },
           {
+            "key": "ui.screen.why",
+            "outboundGuid": "7638b1ff-17ce-4022-ac95-02760f8f536b"
+          },
+          {
             "key": "ui.widgets",
             "outboundGuid": "3cef8a56-e40f-4fc6-a564-75c49539c769"
           }
@@ -3087,6 +3099,11 @@
             "key": "ui.screen.services",
             "moduleGuid": "beb58fc8-35c7-4df4-8eb9-dcdffe0de7f3",
             "inboundGuid": "8dacbb29-593a-4015-9821-44f67ea2db67"
+          },
+          {
+            "key": "ui.screen.why",
+            "moduleGuid": "ffa472b7-819c-49b9-b1c6-32aea49acc73",
+            "inboundGuid": "b2c4edba-3791-4371-9e76-db8a1e86aafd"
           },
           {
             "key": "ui.widgets",
@@ -7154,6 +7171,52 @@
             "key": "ui.dash",
             "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
             "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "ffa472b7-819c-49b9-b1c6-32aea49acc73",
+      "key": "ui.screen.why",
+      "bowType": "feature",
+      "seq": 596,
+      "sprint": 9,
+      "title": "F5 WHY screen: why people come and why they leave",
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "ui",
+      "specRef": "docs/planning/acceptance/reason-panel-criteria.md",
+      "path": "internal/ui/screens/why/",
+      "inbound": {
+        "guid": "b2c4edba-3791-4371-9e76-db8a1e86aafd",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": [
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          }
+        ]
+      },
+      "outbound": {
+        "guid": "7638b1ff-17ce-4022-ac95-02760f8f536b",
+        "calls": [
+          {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
           }
         ]
       },

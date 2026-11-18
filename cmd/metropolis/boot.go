@@ -22,6 +22,7 @@ import (
 	financescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/finance"
 	mapscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/map"
 	servicesscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/services"
+	whyscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/why"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
@@ -737,6 +738,23 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 			"component": "ui.screen.build.Subscribe",
 		})
 	}
+	// ui.screen.why (F5): "f5.why" is not served by the engine yet (the
+	// engine lane adds it), so the Subscribe is not sent at all while
+	// whyViewServed is false: an unknown view logs an error-level MET-E004 on
+	// every launch. The screen keeps its honest "no month closed yet" state.
+	// A refused Subscribe is still NOT a boot failure once it is sent.
+	if _, err := primeWhyScreen(whyViewServed, transport, w.router, primed, w.extra.whyCorrID, whyscreen.ViewSubscriptionName,
+		func() error { return w.extra.why.Subscribe(transport.SendCommand) },
+		w.extra.why.BindSubscription,
+		w.extra.why.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.why.Subscribe",
+		})
+	}
 	// BUG-323: F1 ("f1.viewport") is primed and bound the SAME way, now
 	// that compose.Wire registers a real view behind it
 	// (viewRegistrationOrder / internal/engine/compose/viewport_publish.go).
@@ -1332,8 +1350,46 @@ func primeScreenSubscription(
 	bind func(protocol.SubscriptionID),
 	applyDelta func(protocol.Delta),
 ) error {
+	_, err := primeSubscription(transport, rt, primed, correlationID, viewName, false, subscribe, bind, applyDelta)
+	return err
+}
+
+// primeOptionalScreenSubscription is primeScreenSubscription for a view the
+// engine may not serve yet (F5 "f5.why" until the engine lane publishes it).
+// If the engine REFUSES the Subscribe (the view is not registered) it is not
+// a boot failure: it returns served=false and nil, the screen binds nothing
+// and keeps drawing its honest "no month closed yet" state. Every other
+// failure (timeout, closed channel, foreign result) is still a boot error.
+// Once the engine registers the view, the same call binds and applies the
+// first delta exactly like the other screens.
+func primeOptionalScreenSubscription(
+	transport *protocol.InProcTransport,
+	rt *router.Router,
+	primed map[protocol.SubscriptionID]func(protocol.Delta),
+	correlationID string,
+	viewName string,
+	subscribe func() error,
+	bind func(protocol.SubscriptionID),
+	applyDelta func(protocol.Delta),
+) (served bool, err error) {
+	return primeSubscription(transport, rt, primed, correlationID, viewName, true, subscribe, bind, applyDelta)
+}
+
+// primeSubscription is the shared handshake. optional makes a refused
+// Subscribe return (false, nil) instead of a boot error.
+func primeSubscription(
+	transport *protocol.InProcTransport,
+	rt *router.Router,
+	primed map[protocol.SubscriptionID]func(protocol.Delta),
+	correlationID string,
+	viewName string,
+	optional bool,
+	subscribe func() error,
+	bind func(protocol.SubscriptionID),
+	applyDelta func(protocol.Delta),
+) (bool, error) {
 	if err := subscribe(); err != nil {
-		return err
+		return false, err
 	}
 	want := protocol.CorrelationID(correlationID)
 	deadline := time.After(feat208PrimeTimeout)
@@ -1342,7 +1398,7 @@ func primeScreenSubscription(
 		select {
 		case r, ok := <-transport.Results():
 			if !ok {
-				return errs.New(codeBootFailure, correlationID, map[string]any{
+				return false, errs.New(codeBootFailure, correlationID, map[string]any{
 					"component": "primeScreenSubscription", "view": viewName, "cause": "transport.Results() closed while priming",
 				})
 			}
@@ -1369,21 +1425,24 @@ func primeScreenSubscription(
 				// loud instead, naming the foreign CorrelationID, so this
 				// constraint violation surfaces as a boot failure rather
 				// than a silently eaten result.
-				return errs.New(codeBootFailure, correlationID, map[string]any{
+				return false, errs.New(codeBootFailure, correlationID, map[string]any{
 					"component": "primeScreenSubscription", "view": viewName,
 					"cause":                "observed a CommandResult for a foreign CorrelationID during the priming window — bootCore must be the transport's only reader while priming runs; a third concurrent command at boot is a programming error, not a droppable event",
 					"foreignCorrelationID": string(r.CorrelationID),
 				})
 			}
 			if !r.Accepted {
-				return errs.New(codeBootFailure, correlationID, map[string]any{
+				if optional {
+					return false, nil
+				}
+				return false, errs.New(codeBootFailure, correlationID, map[string]any{
 					"component": "primeScreenSubscription", "view": viewName, "cause": "Subscribe rejected",
 				})
 			}
 			gotResult = true
 		case d, ok := <-transport.Deltas():
 			if !ok {
-				return errs.New(codeBootFailure, correlationID, map[string]any{
+				return false, errs.New(codeBootFailure, correlationID, map[string]any{
 					"component": "primeScreenSubscription", "view": viewName, "cause": "transport.Deltas() closed while priming",
 				})
 			}
@@ -1403,12 +1462,12 @@ func primeScreenSubscription(
 			applyDelta(d)
 			gotDelta = true
 		case <-deadline:
-			return errs.New(codeBootFailure, correlationID, map[string]any{
+			return false, errs.New(codeBootFailure, correlationID, map[string]any{
 				"component": "primeScreenSubscription", "view": viewName, "cause": "timed out waiting for Subscribe's own Result/Delta",
 			})
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // deltaReceiverFunc adapts a bare func(protocol.Delta) into
@@ -1630,4 +1689,32 @@ func servicesDrawFunc(ss *servicesscreen.Screen) core.DrawFunc {
 		wl, haveWL := ss.WaitingLists()
 		servicesscreen.RenderWaitingLists(back, core.Rect{X: r.X + col, Y: r.Y + row, W: r.W - col, H: r.H - row}, wl, haveWL, style)
 	}
+}
+
+// whyViewServed says whether an engine lane publishes the "f5.why" view yet.
+// It is false because no publisher is registered: sending the Subscribe would
+// log an error-level MET-E004 ("Subscribe requested unknown view f5.why") on
+// every launch. Lane A2 (the publisher) flips this to true in the SAME commit
+// that registers f5.why (FEAT-9995385616). The screen's Subscribe, Bind and
+// ApplyDelta stay wired; only the prime is held back.
+const whyViewServed = false
+
+// primeWhyScreen primes the F5 screen's subscription when served is true and
+// does nothing otherwise. served is a parameter so the call stays a plain
+// function; callers pass whyViewServed.
+func primeWhyScreen(
+	served bool,
+	transport *protocol.InProcTransport,
+	rt *router.Router,
+	primed map[protocol.SubscriptionID]func(protocol.Delta),
+	correlationID string,
+	viewName string,
+	subscribe func() error,
+	bind func(protocol.SubscriptionID),
+	applyDelta func(protocol.Delta),
+) (bool, error) {
+	if !served {
+		return false, nil
+	}
+	return primeOptionalScreenSubscription(transport, rt, primed, correlationID, viewName, subscribe, bind, applyDelta)
 }

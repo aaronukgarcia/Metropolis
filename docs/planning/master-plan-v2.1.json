@@ -1171,6 +1171,7 @@
         "ui.screen.map",
         "ui.screen.menu",
         "ui.screen.services",
+        "ui.screen.why",
         "ui.widgets"
       ],
       "sprint": 1
@@ -2615,6 +2616,25 @@
         "foundation.errors",
         "engine.census",
         "ui.dash"
+      ],
+      "sprint": 9
+    },
+    {
+      "key": "ui.screen.why",
+      "type": "feature",
+      "seq": 596,
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "ui",
+      "title": "F5 WHY screen: why people come and why they leave",
+      "desc": "View-only panel of the ten-lever migration formula (housing, jobs, services, health care, policy, shops, parks, transport links, congestion, tourism), the safety and environment modifiers, the momentum/pride line, the wellbeing effect, what limits arrivals and a reserved homelessness row, rendered from the f5.why view (FEAT-9995385616 lane A3). Honest no-data state until the engine publishes the view.",
+      "specRef": "docs/planning/acceptance/reason-panel-criteria.md",
+      "path": "internal/ui/screens/why/",
+      "deps": [],
+      "calls": [
+        "ui.core",
+        "int.protocol",
+        "foundation.errors"
       ],
       "sprint": 9
     },

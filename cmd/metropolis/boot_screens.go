@@ -13,6 +13,7 @@ import (
 	buildscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/build"
 	debugscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/debug"
 	menuscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/menu"
+	whyscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/why"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
@@ -28,6 +29,7 @@ const (
 	screenIDBuild core.ScreenID = "build"
 	screenIDMenu  core.ScreenID = "menu"
 	screenIDDebug core.ScreenID = "debug"
+	screenIDWhy   core.ScreenID = "why"
 )
 
 // saveDirEnv names the environment variable that overrides the directory
@@ -46,6 +48,11 @@ type extraScreens struct {
 
 	subID atomic.Value // protocol.SubscriptionID learned by the f3.build prime
 
+	// why is the F5 WHY screen (FEAT-9995385616 lane A3): view only. The
+	// engine does not serve "f5.why" yet, so the prime is optional.
+	whyCorrID string
+	why       *whyscreen.Screen
+
 	menu  *menuscreen.Screen
 	debug *debugscreen.Screen
 }
@@ -54,6 +61,8 @@ type extraScreens struct {
 func newExtraScreens(w *skeletonWiring) *extraScreens {
 	x := &extraScreens{buildCorrID: errs.NewCorrelationID()}
 	x.build = buildscreen.New(x.buildCorrID)
+	x.whyCorrID = errs.NewCorrelationID()
+	x.why = whyscreen.New(x.whyCorrID)
 	root := os.Getenv(saveDirEnv)
 	if root == "" {
 		root = "saves"
@@ -122,6 +131,7 @@ func registerExtraScreens(w *skeletonWiring, transport protocol.Transport) error
 
 	entries := []core.ScreenEntry{
 		{ID: screenIDBuild, Draw: buildDrawFunc(x, func() bool { return w.router.SubscriptionStale(x.buildSubID()) }), Grammar: x.buildGrm},
+		{ID: screenIDWhy, Draw: whyDrawFunc(x.why)},
 		{ID: screenIDMenu, Draw: menuDrawFunc(x.menu)},
 		{ID: screenIDDebug, Draw: debugDrawFunc(x.debug)},
 	}
@@ -147,6 +157,7 @@ func registerExtraScreens(w *skeletonWiring, transport protocol.Transport) error
 	}{
 		{"F3", screenIDBuild, "Switch to Build (F3)", nil},
 		// Refresh on activation (a keypress, never in Draw: BUG-602).
+		{"F5", screenIDWhy, "Switch to Why (F5)", nil},
 		{"F10", screenIDMenu, "Switch to Menu (F10)", func() { _ = x.menu.Refresh() }},
 		{"F12", screenIDDebug, "Switch to Debug (F12)", nil},
 	}
@@ -201,6 +212,19 @@ func buildDrawFunc(x *extraScreens, staleFn func() bool) core.DrawFunc {
 			}
 			back.Set(r.X+i, last, ch, style)
 		}
+	}
+}
+
+// whyDrawFunc draws the F5 WHY screen into the chrome-inset content rect.
+// View only: the screen owns its own state (kept live by ApplyDelta via
+// router.BindSubscription), never vm.
+func whyDrawFunc(ws *whyscreen.Screen) core.DrawFunc {
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		r := screenContentRect(back)
+		if r.H <= 0 {
+			return
+		}
+		ws.Render(back, r)
 	}
 }
 

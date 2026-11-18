@@ -21,6 +21,7 @@ const (
 	screenHintFinance  = "F2 FINANCE  view only, no action keys | F1: y buy cell | F3: b queue build"
 	screenHintBuild    = "F3 BUILD  n/p choose | b queue at the F1 map cursor (move it on F1)"
 	screenHintServices = "F4 SERVICES  view only, no action keys yet (no service is live in baseline one)"
+	screenHintWhy      = "F5 WHY  view only, no action keys | why people move here or leave, last month"
 	screenHintMenu     = "F10 MENU  saves list, view only"
 	screenHintDebug    = "F12 DEBUG  view only"
 )
@@ -37,6 +38,8 @@ func screenHint(id core.ScreenID) string {
 		return screenHintBuild
 	case screenIDServices:
 		return screenHintServices
+	case screenIDWhy:
+		return screenHintWhy
 	case screenIDMenu:
 		return screenHintMenu
 	case screenIDDebug:

@@ -38,6 +38,7 @@ func TestBUG1220_Hints_StatusAndPerScreen(t *testing.T) {
 		{tcell.KeyF2, screenHintFinance, screenIDFinance},
 		{tcell.KeyF3, screenHintBuild, screenIDBuild},
 		{tcell.KeyF4, screenHintServices, screenIDServices},
+		{tcell.KeyF5, screenHintWhy, screenIDWhy},
 		{tcell.KeyF10, screenHintMenu, screenIDMenu},
 		{tcell.KeyF12, screenHintDebug, screenIDDebug},
 	}

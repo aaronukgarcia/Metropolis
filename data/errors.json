@@ -172,7 +172,8 @@
       "P060-P069": "reserved for int.persist (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
       "H510-H519": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")",
       "V936-V939": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "G5610-G5619": "reserved for engine.rules (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")"
+      "G5610-G5619": "reserved for engine.rules (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "V980-V989": "reserved for ui.screen.why (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -6515,6 +6516,24 @@
       "module": "engine.rules",
       "message": "Rule version {version} is not in the rule registry (known versions 1 to {currentVersion}).",
       "remedy": "Use only a named rule constant from the rules package, never a literal number."
+    },
+    "MET-V980": {
+      "severity": "error",
+      "module": "ui.screen.why",
+      "message": "f5.why patch refused: {cause}",
+      "remedy": "check the engine's f5.why publisher against the contract in internal/ui/screens/why/types.go"
+    },
+    "MET-V981": {
+      "severity": "warn",
+      "module": "ui.screen.why",
+      "message": "delta received for unknown/stale subscription {subscriptionId}",
+      "remedy": "verify the subscription was bound via BindSubscription before deltas are applied"
+    },
+    "MET-V982": {
+      "severity": "fatal",
+      "module": "ui.screen.why",
+      "message": "why.Screen method called on a struct-copied receiver",
+      "remedy": "always operate on the *Screen returned by why.New, never a value copy"
     }
   }
 }
