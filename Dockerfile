@@ -9,12 +9,13 @@
 # # Version stamping (GR#2: app version = git describe via ldflags, NEVER
 # a hand-maintained file)
 #
-# The four VERSION/COMMIT/BRANCH/BUILD_TIME build-args mirror build.ps1's
+# The five VERSION/COMMIT/BRANCH/BUILD_TIME/HOST build-args mirror build.ps1's
 # own ldflags incantation exactly (internal/foundation/buildinfo's doc
-# comment names the five -X flags; HOST is set to "azure-container-apps"
-# here rather than a build-args value, since "the machine that built this"
-# is meaningless once the image is pushed to a registry and later run on
-# a DIFFERENT Azure node than the one that built it -- see the ARG below).
+# comment names the five -X flags). HOST names where the image is deployed,
+# not the machine that built it, and the builder passes it: the Azure
+# workflow passes "azure-container-apps", deploy/compose.yml passes "pix".
+# A bare `docker build .` gets buildinfo's own honest default ("dev"), so an
+# image never claims a host it was not built for (BUG-1210).
 # The CI workflow (.github/workflows/azure-deploy.yml) computes VERSION/
 # COMMIT/BRANCH/BUILD_TIME on the RUNNER via `git describe`/`git rev-parse`
 # BEFORE invoking `docker build`, exactly as build.ps1 does for the local
@@ -56,6 +57,7 @@ ARG VERSION=dev
 ARG COMMIT=dev
 ARG BRANCH=dev
 ARG BUILD_TIME=dev
+ARG HOST=dev
 
 # CGO_DISABLED + GOOS=linux: a fully static Linux binary, buildable on any
 # host CI runner (incl. windows-latest, where this project's own CI
@@ -66,7 +68,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
               -X github.com/aaronukgarcia/Metropolis/internal/foundation/buildinfo.Commit=${COMMIT} \
               -X github.com/aaronukgarcia/Metropolis/internal/foundation/buildinfo.Branch=${BRANCH} \
               -X github.com/aaronukgarcia/Metropolis/internal/foundation/buildinfo.BuildTime=${BUILD_TIME} \
-              -X github.com/aaronukgarcia/Metropolis/internal/foundation/buildinfo.Host=azure-container-apps" \
+              -X github.com/aaronukgarcia/Metropolis/internal/foundation/buildinfo.Host=${HOST}" \
     -o /out/metroserve \
     ./cmd/metroserve
 

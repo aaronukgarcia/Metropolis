@@ -131,6 +131,7 @@ jobs:
             --build-arg COMMIT="${{ steps.buildinfo.outputs.commit }}" \
             --build-arg BRANCH="${{ steps.buildinfo.outputs.branch }}" \
             --build-arg BUILD_TIME="${{ steps.buildinfo.outputs.build_time }}" \
+            --build-arg HOST=azure-container-apps \
             -t "$IMAGE" \
             -f Dockerfile .
           docker push "$IMAGE"
