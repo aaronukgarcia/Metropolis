@@ -351,55 +351,37 @@ func wireCitizenPaging(c *citizens.CitizensAPI, opts CitizenPagingOptions, city 
 		})
 	}
 
-	// F2: an unstamped directory that already holds real .page files is
-	// unidentifiable and possibly foreign -- refuse rather than silently
-	// adopt it. A genuinely fresh directory (no .page files yet) is exempt
-	// -- that is the ordinary first-use case every existing test relies on.
 	stampPath := filepath.Join(opts.PageDir, pageIdentityFileName)
-	if _, statErr := os.Stat(stampPath); os.IsNotExist(statErr) {
-		n, err := countPageFiles(opts.PageDir)
-		if err != nil {
-			return nil, errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{
-				"reason": "page-file scan failed", "pageDir": opts.PageDir, "cause": err.Error(),
-			})
-		}
-		if n > 0 {
-			return nil, errs.New(ErrCitizenPagingUnstampedForeignPages, correlationID, map[string]any{
-				"dir": opts.PageDir, "pageFileCount": n,
-			})
-		}
-	}
-
 	want := pageIdentity{TenantID: city.TenantID, CityID: city.CityID, WorldSeed: worldSeed}
-	existing, ok, err := readPageIdentity(stampPath)
-	if err != nil {
-		return nil, errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{
-			"reason": "identity sidecar read failed", "pageDir": opts.PageDir, "cause": err.Error(),
-		})
-	}
-	if ok {
-		if existing != want {
-			return nil, errs.New(ErrCitizenPagingIdentityMismatch, correlationID, map[string]any{
-				"dir":            opts.PageDir,
-				"recordedTenant": existing.TenantID,
-				"recordedCity":   existing.CityID,
-				"recordedSeed":   existing.WorldSeed,
-				"tenant":         want.TenantID,
-				"city":           want.CityID,
-				"seed":           want.WorldSeed,
-			})
-		}
-	} else if err := writePageIdentity(stampPath, want); err != nil {
-		return nil, errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{
-			"reason": "identity sidecar write failed", "pageDir": opts.PageDir, "cause": err.Error(),
-		})
+
+	// BUG-1178 r4 (outcome): a directory with a POSITIVE identity problem
+	// (unstamped foreign pages MET-G820, damaged identity MET-G817, identity
+	// mismatch MET-G818) is refused with its own code on EVERY open, plain or
+	// reclaim, whether or not another process holds the claim, and without
+	// touching any claim. So the READ-ONLY pre-flight runs first on every open.
+	// A reclaim takeover would DESTROY the live holder's claim, so for a
+	// reclaim an I/O error reading identity also refuses (MET-G817, fail
+	// closed); for a plain open an I/O error may only be a sibling's rename on
+	// Windows, so it is deferred to the authoritative check under the claim.
+	if err := checkPageIdentity(opts.PageDir, stampPath, want, correlationID, false, opts.Reclaim); err != nil {
+		return nil, err
 	}
 
-	// F1: take the EXCLUSIVE claim. Identity passing only proves "this
-	// directory belongs to my lineage" -- it says nothing about whether
-	// ANOTHER live composition of that exact same lineage already holds it.
+	// F1 (BUG-1178 r2: FIRST): take the EXCLUSIVE claim. Identity is read,
+	// checked and stamped only while this opener holds it, so a loser of a
+	// concurrent open always sees the claim refusal, never an identity error
+	// caused by the winner's stamp, and no process-wide mutex is needed.
 	claim, err := claimPageDir(opts.PageDir, city, opts.Reclaim, correlationID)
 	if err != nil {
+		return nil, err
+	}
+
+	// Under the claim: sweep crash-leftover identity temp files, then F2 +
+	// identity read/stamp. Any refusal RELEASES the claim so a refused opener
+	// leaves nothing claimed.
+	removeIdentityTemps(opts.PageDir)
+	if err := checkPageIdentity(opts.PageDir, stampPath, want, correlationID, true, true); err != nil {
+		claim.Release()
 		return nil, err
 	}
 
@@ -409,6 +391,82 @@ func wireCitizenPaging(c *citizens.CitizensAPI, opts CitizenPagingOptions, city 
 	}
 	return claim, nil
 }
+
+// checkPageIdentity runs the F2 unstamped-foreign-pages check and the
+// identity read/compare, and (stamp=true, a fresh directory) stamps the
+// identity. stamp=false is the read-only reclaim pre-flight: it refuses on
+// a positive problem only and never writes. strictIO=false (plain-open
+// pre-flight) defers a plain read I/O error to the under-claim check.
+func checkPageIdentity(dir, stampPath string, want pageIdentity, correlationID string, stamp, strictIO bool) error {
+	// F2: an unstamped directory that already holds real .page files is
+	// unidentifiable and possibly foreign -- refuse rather than silently
+	// adopt it. A genuinely fresh directory (no .page files yet) is exempt.
+	if _, statErr := os.Stat(stampPath); os.IsNotExist(statErr) {
+		n, err := countPageFiles(dir)
+		if err != nil {
+			return errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{
+				"reason": "page-file scan failed", "pageDir": dir, "cause": err.Error(),
+			})
+		}
+		if n > 0 {
+			return errs.New(ErrCitizenPagingUnstampedForeignPages, correlationID, map[string]any{
+				"dir": dir, "pageFileCount": n,
+			})
+		}
+	}
+	existing, ok, err := readPageIdentity(stampPath)
+	if err != nil {
+		var de *identityDecodeError
+		if !strictIO && !errors.As(err, &de) {
+			return nil // plain pre-flight: unconfirmed I/O error is judged under the claim
+		}
+		return errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{
+			"reason": "identity sidecar read failed", "pageDir": dir, "cause": err.Error(),
+		})
+	}
+	if ok {
+		if existing != want {
+			return errs.New(ErrCitizenPagingIdentityMismatch, correlationID, map[string]any{
+				"dir":            dir,
+				"recordedTenant": existing.TenantID,
+				"recordedCity":   existing.CityID,
+				"recordedSeed":   existing.WorldSeed,
+				"tenant":         want.TenantID,
+				"city":           want.CityID,
+				"seed":           want.WorldSeed,
+			})
+		}
+		return nil
+	}
+	if !stamp {
+		return nil
+	}
+	if err := writePageIdentity(stampPath, want); err != nil {
+		return errs.Wrap(ErrCitizenPagingConfigInvalid, correlationID, err, map[string]any{
+			"reason": "identity sidecar write failed", "pageDir": dir, "cause": err.Error(),
+		})
+	}
+	return nil
+}
+
+// removeIdentityTemps deletes crash-leftover identity.json.tmp-* files. It
+// must only be called while holding the directory claim (BUG-1178).
+func removeIdentityTemps(dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, pageIdentityFileName+".tmp-*"))
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+}
+
+// identityDecodeError marks a damaged (undecodable) identity.json as opposed
+// to an I/O failure reading it.
+type identityDecodeError struct{ err error }
+
+func (e *identityDecodeError) Error() string { return e.err.Error() }
+func (e *identityDecodeError) Unwrap() error { return e.err }
 
 // claimPageDir takes the exclusive, O_EXCL-created claim on dir. Portable
 // across every GOOS this project builds on/deploys to (O_EXCL is POSIX and
@@ -996,20 +1054,65 @@ func readPageIdentity(path string) (pageIdentity, bool, error) {
 	}
 	var id pageIdentity
 	if err := json.Unmarshal(data, &id); err != nil {
-		return pageIdentity{}, false, fmt.Errorf("decode %s: %w", path, err)
+		return pageIdentity{}, false, &identityDecodeError{err: fmt.Errorf("decode %s: %w", path, err)}
 	}
 	return id, true, nil
 }
 
-// writePageIdentity durably stamps path with id. Not atomic-rename (unlike
-// persist.DiskStore's own snapshot writes) — this is a one-time, once-per-
-// directory bookkeeping file written under Wire's own single-threaded
-// construction path, never concurrently, so a torn write here is no worse
-// than the directory itself failing to be created.
+// pageIdentityBeforeRename is a test seam (BUG-1178): called after the temp
+// file is fully written and synced, immediately before the rename. A non-nil
+// return simulates a crash at that point. Always nil in production.
+var pageIdentityBeforeRename func() error
+
+// writePageIdentity durably stamps path with id via write-to-temp-then-rename
+// in the same directory (BUG-1178), the same discipline as persist's
+// atomicWrite: a crash leaves either the old file or the fully written new
+// one, never a truncated identity.json. A truncated stamp is refused by
+// readPageIdentity (fail closed) and would wedge the directory until an
+// operator intervened; atomicity removes that failure mode.
 func writePageIdentity(path string, id pageIdentity) error {
 	data, err := json.Marshal(id)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
-	return os.WriteFile(path, data, 0o644)
+	dir, name := filepath.Split(path)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, name+".tmp-")
+	if err != nil {
+		return fmt.Errorf("create temp for %s: %w", path, err)
+	}
+	tmpPath := tmp.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp for %s: %w", path, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("fsync temp for %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp for %s: %w", path, err)
+	}
+	if hook := pageIdentityBeforeRename; hook != nil {
+		if err := hook(); err != nil {
+			return fmt.Errorf("before rename %s: %w", path, err)
+		}
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename into place %s: %w", path, err)
+	}
+	renamed = true
+	if dh, derr := os.Open(dir); derr == nil {
+		_ = dh.Sync()
+		_ = dh.Close()
+	}
+	return nil
 }
