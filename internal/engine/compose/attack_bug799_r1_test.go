@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -24,11 +25,21 @@ func r1Race(t *testing.T, dir string, reclaimers, plain int) []*pageDirClaim {
 	var mu sync.Mutex
 	var held []*pageDirClaim
 	start := make(chan struct{})
+	// reclaimersLeft counts takeovers still running. The remove->create gap a
+	// plain opener is hunting exists only while a takeover runs, so spinning
+	// after the last one finishes can only meet a held claim (BUG-1215: on
+	// Windows every such wasted attempt is several filesystem calls, and
+	// 6 spinners x 400 attempts x 40 iterations took 7-22 minutes).
+	var reclaimersLeft atomic.Int32
+	reclaimersLeft.Store(int32(reclaimers))
 	launch := func(reclaim bool) {
 		wg.Add(1)
 		ready.Add(1)
 		go func() {
 			defer wg.Done()
+			if reclaim {
+				defer reclaimersLeft.Add(-1)
+			}
 			ready.Done()
 			<-start
 			// Plain openers SPIN (up to 400 attempts) so one can actually
@@ -42,6 +53,11 @@ func r1Race(t *testing.T, dir string, reclaimers, plain int) []*pageDirClaim {
 			var err error
 			for a := 0; a < attempts; a++ {
 				if c, err = claimPageDir(dir, rr764City, reclaim, "r1"); err == nil {
+					break
+				}
+				// Always make the first attempt; after that stop once no
+				// takeover is left to race (see reclaimersLeft).
+				if !reclaim && reclaimersLeft.Load() == 0 {
 					break
 				}
 			}
