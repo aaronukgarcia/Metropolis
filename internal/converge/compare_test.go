@@ -1,6 +1,7 @@
 package converge
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -154,16 +155,112 @@ func TestCompare_Distribution_OutsideBandFails(t *testing.T) {
 	}
 }
 
-// TestCompare_Distribution_WarmupNeverMisreported proves a tick before
-// the window has filled is never evaluated (and therefore never
-// misreported as a divergence) even when the raw values differ wildly.
+// TestCompare_Distribution_WarmupNeverMisreported proves ticks before the
+// window has filled are skipped (never misreported as a divergence even when
+// the raw values differ wildly) while the filled ticks are evaluated.
 func TestCompare_Distribution_WarmupNeverMisreported(t *testing.T) {
-	ref := Trajectory{{Tick: 1, Values: map[string]int64{"population": 1000}}}
-	cand := Trajectory{{Tick: 1, Values: map[string]int64{"population": 999_999}}}
-	contract := Contract{"population": {Tier: TierDistribution, Window: 5, BandPct: 0.01}}
+	ref := Trajectory{
+		{Tick: 1, Values: map[string]int64{"population": 1000}},
+		{Tick: 2, Values: map[string]int64{"population": 1000}},
+		{Tick: 3, Values: map[string]int64{"population": 1000}},
+	}
+	cand := Trajectory{
+		{Tick: 1, Values: map[string]int64{"population": 999_999}},
+		{Tick: 2, Values: map[string]int64{"population": 1000}},
+		{Tick: 3, Values: map[string]int64{"population": 1000}},
+	}
+	contract := Contract{"population": {Tier: TierDistribution, Window: 2, BandPct: 0.01}}
 	rep := Compare("demographics", ref, cand, contract)
-	if !rep.Pass {
-		t.Fatalf("expected a not-yet-full window to be skipped, got diffs: %v", rep.Diffs)
+	if rep.Evaluated != 2 || rep.FieldEvaluated["population"] != 2 {
+		t.Fatalf("expected the two filled windows evaluated, got %d (%v)", rep.Evaluated, rep.FieldEvaluated)
+	}
+	// tick 2's window still contains the wild tick-1 value, so it diverges;
+	// tick 3's window is clean. Warm-up tick 1 itself is never reported.
+	for _, d := range rep.Diffs {
+		if d.Tick == 1 {
+			t.Fatalf("warm-up tick misreported: %v", d)
+		}
+	}
+}
+
+func reasonCites(rep *Report, code, field string) bool {
+	for _, d := range rep.Diffs {
+		if strings.Contains(d.Reason, code) && (field == "" || d.Field == field) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCompare_ReviewerProbe_UnfilledDistributionPlusExactFails is the BUG-1140
+// r1 round's probe: a never-filled distribution field beside an evaluated
+// exact field must FAIL for the distribution field.
+func TestCompare_ReviewerProbe_UnfilledDistributionPlusExactFails(t *testing.T) {
+	ref := Trajectory{{Tick: 1, Values: map[string]int64{"population": 1000, "tick": 1}}}
+	cand := Trajectory{{Tick: 1, Values: map[string]int64{"population": 999_999, "tick": 1}}}
+	contract := Contract{
+		"population": {Tier: TierDistribution, Window: 5, BandPct: 0.01},
+		"tick":       {Tier: TierExact},
+	}
+	rep := Compare("demographics", ref, cand, contract)
+	if rep.Pass {
+		t.Fatalf("unfilled distribution window passed: %+v", rep)
+	}
+	if !reasonCites(rep, codeFieldNeverEvaluated, "population") {
+		t.Fatalf("expected %s naming population, got %v", codeFieldNeverEvaluated, rep.Diffs)
+	}
+	if rep.FieldEvaluated["tick"] != 1 || rep.FieldEvaluated["population"] != 0 {
+		t.Fatalf("unexpected per-field counts: %v", rep.FieldEvaluated)
+	}
+}
+
+func TestCompare_DeclaredFieldNeverReportedFails(t *testing.T) {
+	tr := Trajectory{{Tick: 1, Values: map[string]int64{"a": 1}}}
+	rep := Compare("d", tr, tr, Contract{"a": {Tier: TierExact}, "b": {Tier: TierExact}})
+	if rep.Pass || !reasonCites(rep, codeFieldMissingFromReference, "b") || !reasonCites(rep, codeFieldNeverEvaluated, "b") {
+		t.Fatalf("declared-but-never-reported field must fail with H511+H512 naming b: %v", rep.Diffs)
+	}
+}
+
+func TestCompare_SparseReferenceFails(t *testing.T) {
+	ref := Trajectory{
+		{Tick: 1, Values: map[string]int64{"a": 1, "b": 1}},
+		{Tick: 2, Values: map[string]int64{"a": 2}},
+	}
+	rep := Compare("d", ref, ref, Contract{"a": {Tier: TierExact}, "b": {Tier: TierExact}})
+	if rep.Pass || !reasonCites(rep, codeFieldMissingFromReference, "b") {
+		t.Fatalf("sparse reference must fail naming b: %v", rep.Diffs)
+	}
+	for _, d := range rep.Diffs {
+		if d.Field == "b" && strings.Contains(d.Reason, codeFieldMissingFromReference) && d.Tick != 2 {
+			t.Fatalf("sparse diff should name tick 2, got %v", d)
+		}
+	}
+}
+
+func TestCompare_DuplicateTicksFail(t *testing.T) {
+	dup := Trajectory{
+		{Tick: 1, Values: map[string]int64{"a": 1}},
+		{Tick: 1, Values: map[string]int64{"a": 1}},
+	}
+	one := Trajectory{{Tick: 1, Values: map[string]int64{"a": 1}}}
+	c := Contract{"a": {Tier: TierExact}}
+	if rep := Compare("d", dup, one, c); rep.Pass || !reasonCites(rep, codeDuplicateTick, "") {
+		t.Fatalf("duplicate reference tick must fail: %v", rep.Diffs)
+	}
+	if rep := Compare("d", one, dup, c); rep.Pass || !reasonCites(rep, codeDuplicateTick, "") {
+		t.Fatalf("duplicate candidate tick must fail: %v", rep.Diffs)
+	}
+}
+
+func TestCompare_ExtraCandidateTicksAndFieldsHarmless(t *testing.T) {
+	ref := Trajectory{{Tick: 1, Values: map[string]int64{"a": 1}}}
+	cand := Trajectory{
+		{Tick: 1, Values: map[string]int64{"a": 1, "extra": 9}},
+		{Tick: 2, Values: map[string]int64{"a": 7}},
+	}
+	if rep := Compare("d", ref, cand, Contract{"a": {Tier: TierExact}}); !rep.Pass {
+		t.Fatalf("extras must stay harmless: %v", rep.Diffs)
 	}
 }
 
@@ -208,5 +305,65 @@ func TestCompare_Deterministic(t *testing.T) {
 				t.Fatalf("iteration %d: diff[%d] changed: %+v vs %+v", i, j, got.Diffs[j], first.Diffs[j])
 			}
 		}
+	}
+}
+
+// TestCompare_ZeroEvaluated_NeverPasses is BUG-1140: every route to zero
+// evaluated comparisons is its own registry-coded failure, never a pass.
+func TestCompare_ZeroEvaluated_NeverPasses(t *testing.T) {
+	exact := Contract{"treasury": {Tier: TierExact}}
+	one := Trajectory{{Tick: 1, Values: map[string]int64{"treasury": 5}}}
+	cases := []struct {
+		name      string
+		ref, cand Trajectory
+		contract  Contract
+		code      string
+	}{
+		{"nil reference", nil, one, exact, codeEmptyReference},
+		{"empty reference and candidate", Trajectory{}, Trajectory{}, exact, codeEmptyReference},
+		{"reference samples without values", Trajectory{{Tick: 1}}, one, exact, codeNoFieldsReported},
+		{"empty candidate", one, nil, exact, codeZeroEvaluated},
+		{"no tick overlap", one, Trajectory{{Tick: 2, Values: map[string]int64{"treasury": 5}}}, exact, codeZeroEvaluated},
+		{"candidate lacks the field", one, Trajectory{{Tick: 1, Values: map[string]int64{"other": 1}}}, exact, codeZeroEvaluated},
+		{"distribution window never fills", one, one, Contract{"treasury": {Tier: TierDistribution, Window: 5, BandPct: 0.01}}, codeZeroEvaluated},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rep := Compare("d", c.ref, c.cand, c.contract)
+			if rep.Pass {
+				t.Fatalf("zero-evaluation comparison passed: %+v", rep)
+			}
+			if rep.Evaluated != 0 {
+				t.Fatalf("expected Evaluated=0, got %d", rep.Evaluated)
+			}
+			found := false
+			for _, d := range rep.Diffs {
+				if strings.Contains(d.Reason, c.code) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("expected a diff citing %s, got %v", c.code, rep.Diffs)
+			}
+		})
+	}
+}
+
+// TestCompare_NormalComparison_ReportsEvaluatedCount proves a real
+// comparison still passes and carries its evaluated count.
+func TestCompare_NormalComparison_ReportsEvaluatedCount(t *testing.T) {
+	tr := Trajectory{
+		{Tick: 1, Values: map[string]int64{"treasury": 5}},
+		{Tick: 2, Values: map[string]int64{"treasury": 6}},
+	}
+	rep := Compare("d", tr, tr, Contract{"treasury": {Tier: TierExact}})
+	if !rep.Pass || rep.Evaluated != 2 {
+		t.Fatalf("expected pass with Evaluated=2, got pass=%t evaluated=%d diffs=%v", rep.Pass, rep.Evaluated, rep.Diffs)
+	}
+	if rep.FieldEvaluated["treasury"] != 2 || !strings.Contains(rep.Text(), "fieldEvaluated: treasury=2") {
+		t.Fatalf("per-field counts missing: %v %q", rep.FieldEvaluated, rep.Text())
+	}
+	if !strings.Contains(rep.Text(), "evaluated=2") {
+		t.Fatalf("Text() omits the evaluated count: %q", rep.Text())
 	}
 }

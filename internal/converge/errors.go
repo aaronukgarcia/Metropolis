@@ -51,4 +51,32 @@ const (
 	// candidate build string (BUG-1097 AC-8) -- a validation error, never a
 	// silently unstamped report.
 	codeBuildStampMissing = "MET-H506"
+
+	// codeEmptyReference: Compare was given a reference trajectory with no
+	// samples (BUG-1140) -- zero ticks evaluated is a failure, never a pass.
+	codeEmptyReference = "MET-H507"
+
+	// codeNoFieldsReported: the reference had samples but none reported a
+	// field (BUG-1140), so there was nothing to constrain or compare.
+	codeNoFieldsReported = "MET-H508"
+
+	// codeZeroEvaluated: reference had ticks and fields but no comparison
+	// was made (BUG-1140): no tick overlap, an empty candidate, or a
+	// distribution window longer than the series.
+	codeZeroEvaluated = "MET-H509"
+
+	// BUG-1140 r2 (range H510-H519, claimed for harness.converge).
+
+	// codeDuplicateTick: a trajectory carried two samples for one tick, so
+	// Compare would otherwise have silently kept only the last.
+	codeDuplicateTick = "MET-H510"
+
+	// codeFieldMissingFromReference: a field the contract declares (or
+	// another reference sample reports) is absent from a reference sample.
+	codeFieldMissingFromReference = "MET-H511"
+
+	// codeFieldNeverEvaluated: a declared or reference-reported field had
+	// zero comparisons made (no shared ticks, candidate never reports it,
+	// or a distribution window that never filled).
+	codeFieldNeverEvaluated = "MET-H512"
 )

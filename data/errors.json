@@ -169,7 +169,8 @@
       "V970-V979": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
       "G5600-G5609": "reserved for feat.compositionroot (auto-claimed via tools/plan/add-error.js claim-range on 2026-10-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
       "P050-P059": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
-      "P060-P069": "reserved for int.persist (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")"
+      "P060-P069": "reserved for int.persist (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-17 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
+      "H510-H519": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5485,6 +5486,24 @@
       "message": "Converge comparison for domain {domain} needs both build stamps: reference build {referenceBuild}, candidate build {candidateBuild}",
       "remedy": "Pass the non-empty reference (Go engine) and candidate (browser) build strings to CompareStamped; an unstamped comparison cannot be traced to the builds it judged."
     },
+    "MET-H507": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge comparison for domain {domain} had an empty reference trajectory: zero samples, zero ticks evaluated",
+      "remedy": "The reference run produced no samples; fix the run that builds the reference trajectory. A comparison that evaluated nothing is a failure, never a pass."
+    },
+    "MET-H508": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge comparison for domain {domain} had a reference trajectory with {samples} samples but no reported fields: zero fields evaluated",
+      "remedy": "Make the reference adapter report at least one named value per sample; an unconstrained comparison is a failure, never a pass."
+    },
+    "MET-H509": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge comparison for domain {domain} evaluated zero ticks of {refTicks} reference ticks (candidate had {candTicks}): nothing was compared",
+      "remedy": "Check the candidate trajectory shares tick numbers with the reference and has samples, and that a distribution window is not longer than the series; a gate that cannot evaluate must not pass."
+    },
     "MET-P035": {
       "severity": "error",
       "module": "int.protocol",
@@ -6368,6 +6387,24 @@
       "module": "int.persist",
       "message": "persist: journal for city {city} is corrupt mid-file: the bad frame at offset {goodBytes} is followed by valid frames (file {fileBytes} bytes); the journal was left untouched and the city refused to load",
       "remedy": "This is NOT a torn tail (a crash can only damage the last frame), so truncating would destroy committed commands. Copy the city directory aside, then inspect journal.dat: restore it from backup, or an operator may cut it at goodBytes only after accepting the loss of every later command. The city stays unloadable until then (fail closed)."
+    },
+    "MET-H510": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge comparison for domain {domain} found duplicate tick {tick} in the {side} trajectory: a tick must appear once",
+      "remedy": "Fix the adapter or fixture that emitted two samples for one tick; compare never picks one silently."
+    },
+    "MET-H511": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge comparison for domain {domain} field {field} is declared or reported but the reference sample at tick {tick} does not carry it",
+      "remedy": "Make the reference report every contract field at every tick, or drop the field from the contract."
+    },
+    "MET-H512": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "Converge comparison for domain {domain} field {field} was never evaluated: zero comparisons made",
+      "remedy": "Make the reference and candidate both report the field on shared ticks, and for a distribution field supply at least Window samples; a field that cannot be evaluated must not pass."
     }
   }
 }
