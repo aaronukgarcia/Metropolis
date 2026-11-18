@@ -10,6 +10,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
@@ -323,6 +324,11 @@ type BuildAPI struct {
 	logistics *logistics.LogisticsAPI
 	services  *services.ServicesAPI
 
+	// ruleVersion is the injected live rule-version getter
+	// (FEAT-9995385612); nil means rules.Effective() (a bare module).
+	// Guarded by mu.
+	ruleVersion func() rules.Version
+
 	// servicesSweepDirty (BUG-586) gates registerCompletedServicesLocked:
 	// Tick used to run the sweep on EVERY call, rebuilding a
 	// b.structures-derived standing-membership set each time — measured at
@@ -527,6 +533,39 @@ func (b *BuildAPI) SetServices(s *services.ServicesAPI) error {
 	return nil
 }
 
+// SetRuleVersionSource injects the composition's live rule-version getter
+// (FEAT-9995385612). It makes BuildAPI a rule-versioned module: replay of a
+// journal recorded before a rule existed runs with the getter answering that
+// older version, so the old behaviour is reproduced exactly.
+func (b *BuildAPI) SetRuleVersionSource(f func() rules.Version) {
+	if err := b.checkNotCopied("SetRuleVersionSource"); err != nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ruleVersion = f
+}
+
+// HasRuleVersionSource reports whether a getter has been injected; the
+// composition refuses to wire or replay a versioned module without one.
+func (b *BuildAPI) HasRuleVersionSource() bool {
+	if err := b.checkNotCopied("HasRuleVersionSource"); err != nil {
+		return false
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.ruleVersion != nil
+}
+
+// activeRules is the rule version commands are judged by now. Caller holds
+// b.mu (read or write).
+func (b *BuildAPI) activeRules() rules.Version {
+	if err := b.checkNotCopied("activeRules"); err != nil {
+		return rules.Active(nil)
+	}
+	return rules.Active(b.ruleVersion)
+}
+
 // SetDistrict sets the district the build queue draws construction
 // materials from. A non-empty string is required.
 func (b *BuildAPI) SetDistrict(d string) error {
@@ -687,6 +726,19 @@ func (b *BuildAPI) SubmitBuildCommand(cmd BuildCommand) (BuildOrderID, error) {
 	if err := b.checkNotCopied("SubmitBuildCommand"); err != nil {
 		return 0, err
 	}
+	// BUG-1224 (rule version 1, rules.RefuseOccupiedCell): one cell holds one
+	// order or one structure. structures is keyed by cell, so a second order
+	// would be paid for and add nothing. Refused before nextOrder is minted,
+	// so a refusal leaves no trace. Journals recorded before version 1 hold
+	// accepted duplicates and replay them under the old branch (accepted and
+	// charged, exactly as recorded). Demolition deletes the structure, which
+	// frees the cell; a completed order whose structure was demolished stays
+	// in the queue but is complete, so it does not hold the cell.
+	if rules.Has(b.activeRules(), rules.RefuseOccupiedCell) && cellInUse(b.structures, b.queue, cellKey{tile: cmd.Tile, local: cmd.Local}) {
+		return 0, errs.New(ErrCellInUse, b.correlationID, map[string]any{
+			"tile": cmd.Tile, "local": cmd.Local,
+		})
+	}
 	b.nextOrder++
 	order := &buildOrder{
 		id:                 b.nextOrder,
@@ -701,6 +753,22 @@ func (b *BuildAPI) SubmitBuildCommand(cmd BuildCommand) (BuildOrderID, error) {
 	}
 	b.queue = append(b.queue, order)
 	return order.id, nil
+}
+
+// cellInUse reports whether the cell holds a standing structure or a
+// queued order that has not completed (BUG-1224). The structure check is a
+// keyed lookup; the queue is walked in its slice (insertion) order, never a
+// map range, and the answer is order-independent anyway. Caller holds b.mu.
+func cellInUse(structures map[cellKey]BuildOrderID, queue []*buildOrder, key cellKey) bool {
+	if _, standing := structures[key]; standing {
+		return true
+	}
+	for _, o := range queue {
+		if !o.complete && o.tile == key.tile && o.local == key.local {
+			return true
+		}
+	}
+	return false
 }
 
 // SubmitDemolishCommand demolishes the structure on an owned cell (AC-7):

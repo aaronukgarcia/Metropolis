@@ -55,11 +55,31 @@ type fixtureHeader struct {
 type FixtureMeta struct {
 	WorldSeed  int64
 	AppVersion string
-	// RuleVersion is the rule version the fixture is captured under
-	// (0, the zero value, for a fixture made under the original rules).
-	// Save refuses a version this build does not know.
-	RuleVersion rules.Version
+	// RuleVersion is the rule version the fixture is captured under. It is
+	// a RuleStamp, not a bare number: its zero value is "unset" and Save
+	// refuses it (MET-H010), so a version is never inferred from a zero
+	// value. Take it from Recorder.Meta or Fixture.Meta, or state it with
+	// RecordedAt.
+	RuleVersion RuleStamp
 }
+
+// RuleStamp is a rule version that has been deliberately stated. The zero
+// value is unset and invalid; the only ways to get a set one are RecordedAt,
+// Recorder.Meta and Fixture.Meta. Version 0 is a perfectly good stated
+// version (RecordedAt(0)), distinguishable from "never said".
+type RuleStamp struct {
+	v   rules.Version
+	set bool
+}
+
+// RecordedAt states that a fixture was captured under rule version v.
+func RecordedAt(v rules.Version) RuleStamp { return RuleStamp{v: v, set: true} }
+
+// IsSet reports whether the version was stated.
+func (s RuleStamp) IsSet() bool { return s.set }
+
+// Version is the stated rule version; meaningful only when IsSet.
+func (s RuleStamp) Version() rules.Version { return s.v }
 
 // fixtureShardPath and fixtureHeaderPath resolve name into the two flat
 // file paths a fixture lives at under dir (doc.go's "On-disk layout").
@@ -144,14 +164,19 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) (err error) {
 		return err
 	}
 
-	if err := checkFixtureRuleVersion(name, int(meta.RuleVersion)); err != nil {
-		return err
-	}
-
 	// Resolved first, before any I/O: a rejected (struct-copied) rec
 	// must never reach os.Create — see this function's doc comment.
 	records, err := rec.Records()
 	if err != nil {
+		return err
+	}
+
+	// A rule version is never inferred: an unstated one is refused.
+	if !meta.RuleVersion.IsSet() {
+		return errs.New(codeFixtureRuleVersionUnset, errs.NewCorrelationID(), map[string]any{"name": name})
+	}
+	stamped := meta.RuleVersion.Version()
+	if err := checkFixtureRuleVersion(name, int(stamped)); err != nil {
 		return err
 	}
 
@@ -196,7 +221,7 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) (err error) {
 
 	h := serialize.NewHeader(meta.WorldSeed, 0, 0, meta.AppVersion)
 	h.ShardIndex = []serialize.ShardMeta{shardMeta}
-	fh := fixtureHeader{Header: h, ProtocolVersion: protocol.ProtocolVersion, RuleVersion: int(meta.RuleVersion)}
+	fh := fixtureHeader{Header: h, ProtocolVersion: protocol.ProtocolVersion, RuleVersion: int(stamped)}
 
 	encoded, err := json.MarshalIndent(fh, "", "  ")
 	if err != nil {
@@ -349,6 +374,18 @@ func checkFixtureRuleVersion(name string, v int) error {
 // RuleVersion is the rule version the fixture was captured under (0 when
 // the header has no ruleVersion field).
 func (f Fixture) RuleVersion() rules.Version { return rules.Version(f.Header.RuleVersion) }
+
+// Meta is the FixtureMeta that round-trips this fixture exactly: its world
+// seed, app version and rule version as the header states them. Saving a
+// loaded fixture's records with this meta keeps its rule version, whatever
+// the live version is.
+func (f Fixture) Meta() FixtureMeta {
+	return FixtureMeta{
+		WorldSeed:   f.Header.Header.WorldSeed,
+		AppVersion:  f.Header.Header.AppVersion,
+		RuleVersion: RecordedAt(f.RuleVersion()),
+	}
+}
 
 // countingReader counts bytes read through it, so Load can verify the
 // shard's on-disk size against ShardMeta.ByteSize without a second pass.

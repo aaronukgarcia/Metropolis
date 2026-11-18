@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
@@ -67,6 +68,12 @@ func TestSampleFixtureLoadsAndReplays(t *testing.T) {
 	ep, err := NewEnginePlayer(fx)
 	if err != nil {
 		t.Fatalf("NewEnginePlayer: %v", err)
+	}
+	// The committed sample was recorded at rule version 0; the fake target
+	// has no rule-versioned state, so the pin is a no-op (an unpinned replay
+	// of an older fixture is refused, MET-H008).
+	if err := ep.PinWith(func(rules.Version) error { return nil }); err != nil {
+		t.Fatalf("PinWith: %v", err)
 	}
 	recorded, err := fx.Results()
 	if err != nil {

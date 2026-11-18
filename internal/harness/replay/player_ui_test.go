@@ -11,7 +11,7 @@ import (
 func TestUIPlayerServesCannedStream(t *testing.T) {
 	dir := t.TempDir()
 	r := sampleRecorder(t)
-	if err := Save(dir, "ui", r, FixtureMeta{}); err != nil {
+	if err := Save(dir, "ui", r, r.Meta(0, "")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	fx, err := Load(dir, "ui")
@@ -45,7 +45,8 @@ func TestUIPlayerServesCannedStream(t *testing.T) {
 // compile check, no runtime assertions needed beyond compiling).
 func TestUIPlayerImplementsTransportShape(t *testing.T) {
 	dir := t.TempDir()
-	if err := Save(dir, "shape", sampleRecorder(t), FixtureMeta{}); err != nil {
+	sr := sampleRecorder(t)
+	if err := Save(dir, "shape", sr, sr.Meta(0, "")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	fx, err := Load(dir, "shape")

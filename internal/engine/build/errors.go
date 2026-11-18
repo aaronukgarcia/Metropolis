@@ -67,4 +67,12 @@ const (
 	// ErrInvalidDistrict: SetDistrict was given an invalid district parameter
 	// (empty string). District identifiers are required and must be non-empty.
 	ErrInvalidDistrict = "MET-G509"
+
+	// ErrCellInUse: SubmitBuildCommand against a cell that already holds a
+	// queued (not yet complete) build order or a standing structure
+	// (BUG-1224, rule version 1). build.structures is keyed by cell, so a
+	// second order would be paid for yet add nothing; it is refused at
+	// submit, no order is created and nothing is ever drawn or charged for
+	// it. Not raised while replaying history recorded before version 1.
+	ErrCellInUse = "MET-G510"
 )

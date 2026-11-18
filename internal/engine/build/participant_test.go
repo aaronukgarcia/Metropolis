@@ -52,6 +52,7 @@ func TestBuildAPIFieldsAllClassified(t *testing.T) {
 		"self":             "SEC-020 copy-guard pointer, re-armed by Load",
 		"catalogueEntries": "immutable config, loaded from data/buildings.json entries (FEAT-build-services-bridge-2026-09-02)",
 		"services":         "injected dependency, re-wired by the composition root on load (FEAT-build-services-bridge-2026-09-02)",
+		"ruleVersion":      "injected rule-version getter (FEAT-9995385612), set once at Wire by the composition root and held across loads; never serialized",
 		"serviceByOrder": "derived runtime index (order id -> registered ServiceID), rebuildable from queue+catalogueEntries+engine.services state; " +
 			"NOT part of the save schema per FEAT-build-services-bridge-2026-09-02's own scope notes (composition-root save wiring for engine.services " +
 			"is separate follow-up work) -- resetForLoad clears it to empty so a load never carries a stale order->service reference forward",

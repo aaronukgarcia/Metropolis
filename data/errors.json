@@ -1427,6 +1427,12 @@
       "message": "Replay of fixture {name} finished but the target engine could not be returned to the live rule version {liveVersion}: {cause}",
       "remedy": "The target engine may still be pinned to rule version {fixtureVersion}. Do not reuse it; rebuild the composition, and re-pin it yourself if you had pinned it before Replay."
     },
+    "MET-H010": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "Fixture {name} was saved with no rule version stated. A fixture's rule version is never inferred from a zero value.",
+      "remedy": "Build the FixtureMeta from the Recorder (Recorder.Meta) or from a loaded Fixture (Fixture.Meta), or state the version with RecordedAt."
+    },
     "MET-H100": {
       "severity": "error",
       "module": "ui.harness",
@@ -2392,6 +2398,12 @@
       "module": "engine.build",
       "message": "SetDistrict validation failed: {cause}",
       "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-G510": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "cell (tile {tile}, local {local}) is already in use: it holds a queued build order or a standing structure",
+      "remedy": "This cell already holds a queued order or a standing structure. Choose a different cell; to reuse this one, wait for a queued order to finish and demolish what stands there."
     },
     "MET-G600": {
       "severity": "error",

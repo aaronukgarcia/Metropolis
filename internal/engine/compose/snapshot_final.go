@@ -202,10 +202,13 @@ func journalTailState(ctx context.Context, store persist.Store, city persist.Cit
 		return true, 0, nil
 	}
 	for i, rec := range recs {
-		cmd, derr := protocol.DecodeCommand(rec)
+		// BUG-1224 r2: a live frame is a rule-version envelope since rule 1;
+		// only the envelope-aware decoder reads both shapes.
+		frame, derr := decodeJournalFrame(rec, i, len(recs))
 		if derr != nil {
 			return false, 0, derr
 		}
+		cmd := frame.Command
 		if cmd.Kind != protocol.KindAdvanceTicks {
 			if i == len(recs)-1 {
 				trailing = true

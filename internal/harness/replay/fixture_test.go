@@ -36,7 +36,7 @@ func sampleRecorder(t *testing.T) *Recorder {
 func TestSaveLoadFixtureRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	r := sampleRecorder(t)
-	meta := FixtureMeta{WorldSeed: 42, AppVersion: "test-build"}
+	meta := r.Meta(42, "test-build")
 	if err := Save(dir, "roundtrip", r, meta); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestFixtureNameTraversalRejectedOnSave(t *testing.T) {
 	r := sampleRecorder(t)
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := Save(dir, name, r, FixtureMeta{})
+			err := Save(dir, name, r, r.Meta(0, ""))
 			if err == nil {
 				t.Fatalf("Save(name=%q): expected rejection, got nil", name)
 			}
@@ -171,7 +171,7 @@ func TestFixtureNameTraversalRejectedOnLoad(t *testing.T) {
 func TestLoadRejectsCorruptTruncatedFixture(t *testing.T) {
 	dir := t.TempDir()
 	r := sampleRecorder(t)
-	if err := Save(dir, "truncated", r, FixtureMeta{}); err != nil {
+	if err := Save(dir, "truncated", r, r.Meta(0, "")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -200,14 +200,14 @@ func TestLoadRejectsCorruptTruncatedFixture(t *testing.T) {
 func TestLoadRejectsCorruptTamperedShard(t *testing.T) {
 	dir := t.TempDir()
 	r1 := sampleRecorder(t)
-	if err := Save(dir, "victim", r1, FixtureMeta{}); err != nil {
+	if err := Save(dir, "victim", r1, r1.Meta(0, "")); err != nil {
 		t.Fatalf("Save victim: %v", err)
 	}
 	r2 := sampleRecorder(t)
 	if err := r2.ObserveCommand(cmdFixture("extra")); err != nil {
 		t.Fatalf("ObserveCommand: %v", err)
 	}
-	if err := Save(dir, "donor", r2, FixtureMeta{}); err != nil {
+	if err := Save(dir, "donor", r2, r2.Meta(0, "")); err != nil {
 		t.Fatalf("Save donor: %v", err)
 	}
 
@@ -234,7 +234,7 @@ func TestLoadRejectsCorruptTamperedShard(t *testing.T) {
 func TestLoadRejectsFormatVersionMismatch(t *testing.T) {
 	dir := t.TempDir()
 	r := sampleRecorder(t)
-	if err := Save(dir, "verfix", r, FixtureMeta{}); err != nil {
+	if err := Save(dir, "verfix", r, r.Meta(0, "")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	headerPath := filepath.Join(dir, "verfix.header.json")
@@ -261,7 +261,7 @@ func TestLoadRejectsFormatVersionMismatch(t *testing.T) {
 func TestLoadRejectsProtocolVersionMismatch(t *testing.T) {
 	dir := t.TempDir()
 	r := sampleRecorder(t)
-	if err := Save(dir, "protover", r, FixtureMeta{}); err != nil {
+	if err := Save(dir, "protover", r, r.Meta(0, "")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	headerPath := filepath.Join(dir, "protover.header.json")

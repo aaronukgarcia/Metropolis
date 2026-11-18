@@ -14,6 +14,11 @@
 // wall-clock dependency anywhere on this path — GR#21), so re-running
 // this script without any code change reproduces byte-identical output.
 //
+// NOTE: the fixture is stamped with the rule version live when it is
+// recorded. Regenerating the committed sample fixture therefore relabels it
+// to the CURRENT rule version and changes its bytes (a version-0 header has
+// no ruleVersion field; a later one does). Do that only on purpose.
+//
 // # GR#7 exemption (SEC-040, module key harness.replay)
 //
 // This file constructs its errors via bare fmt.Errorf, not
@@ -180,7 +185,9 @@ func run() error {
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))))
 	fixturesDir := filepath.Join(repoRoot, "fixtures")
 
-	meta := replay.FixtureMeta{WorldSeed: int64(stub.FixtureSeed), AppVersion: "gen/main.go (H-STUB, chaos disabled)"}
+	// The recorder's own meta: the fixture is stamped with the rule version
+	// the recorder was created under (BUG-1224 port).
+	meta := rec.Meta(int64(stub.FixtureSeed), "gen/main.go (H-STUB, chaos disabled)")
 	if err := replay.Save(fixturesDir, fixtureName, rec, meta); err != nil {
 		return fmt.Errorf("Save: %w", err)
 	}

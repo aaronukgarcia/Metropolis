@@ -71,4 +71,9 @@ const (
 	// codeReplayPinRestoreFailed: Replay finished but returning the target
 	// to the live rule version failed (FEAT-9995385612, C22).
 	codeReplayPinRestoreFailed = "MET-H009"
+
+	// codeFixtureRuleVersionUnset: Save was given a FixtureMeta whose rule
+	// version was never stated. A version is never inferred from a zero
+	// value (BUG-1224 port).
+	codeFixtureRuleVersionUnset = "MET-H010"
 )

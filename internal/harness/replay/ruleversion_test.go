@@ -26,7 +26,7 @@ func isCode(err error, code string) bool {
 
 func saveVersioned(t *testing.T, dir, name string, v rules.Version) {
 	t.Helper()
-	if err := Save(dir, name, sampleRecorder(t), FixtureMeta{WorldSeed: 7, AppVersion: "rv", RuleVersion: v}); err != nil {
+	if err := Save(dir, name, sampleRecorder(t), FixtureMeta{WorldSeed: 7, AppVersion: "rv", RuleVersion: RecordedAt(v)}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 }
@@ -87,7 +87,7 @@ func TestFixtureFutureRuleVersionRefused(t *testing.T) {
 	if _, err := Load(dir, "future"); !isCode(err, rules.ErrSavedUnderNewerRules) {
 		t.Fatalf("Load future fixture: want %s, got %v", rules.ErrSavedUnderNewerRules, err)
 	}
-	if err := Save(t.TempDir(), "x", sampleRecorder(t), FixtureMeta{RuleVersion: 5}); !isCode(err, rules.ErrSavedUnderNewerRules) {
+	if err := Save(t.TempDir(), "x", sampleRecorder(t), FixtureMeta{RuleVersion: RecordedAt(5)}); !isCode(err, rules.ErrSavedUnderNewerRules) {
 		t.Fatalf("Save future: want %s, got %v", rules.ErrSavedUnderNewerRules, err)
 	}
 }
@@ -147,7 +147,7 @@ func replayWithVersionedTarget(t *testing.T, p *EnginePlayer, live *rules.Versio
 // version 1, and the live version is put back afterwards.
 func TestEnginePlayerReplaysAtFixtureVersionNotCurrent(t *testing.T) {
 	rules.SetCurrentForTest(t, 1)
-	p, err := NewEnginePlayer(fixtureWithCommands(t, 2))
+	p, err := NewEnginePlayer(fixtureWithCommandsAtVersion(t, 2, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestEnginePlayerReplaysVersionOneFixtureAtOne(t *testing.T) {
 		}
 	}
 	dir := t.TempDir()
-	if err := Save(dir, "v1dup", r, FixtureMeta{RuleVersion: 1}); err != nil {
+	if err := Save(dir, "v1dup", r, r.Meta(0, "")); err != nil {
 		t.Fatal(err)
 	}
 	fx, err := Load(dir, "v1dup")
@@ -200,7 +200,7 @@ func TestEnginePlayerUnpinnedMismatchRefusesBeforeSending(t *testing.T) {
 		fixture rules.Version
 	}{
 		{"older fixture", 1, 0},
-		{"newer fixture", 0, 1},
+		{"newer fixture", 1, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rules.SetCurrentForTest(t, tc.live)
@@ -235,7 +235,7 @@ func TestEnginePlayerUnpinnedEqualVersionStillReplays(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	if err := Save(dir, "eq", r, FixtureMeta{RuleVersion: 1}); err != nil {
+	if err := Save(dir, "eq", r, r.Meta(0, "")); err != nil {
 		t.Fatal(err)
 	}
 	fx, err := Load(dir, "eq")
@@ -348,7 +348,7 @@ func TestCommittedFixtureResavesUnchanged(t *testing.T) {
 	if fx.RuleVersion() != 0 {
 		t.Fatalf("committed fixture RuleVersion = %d, want 0", fx.RuleVersion())
 	}
-	meta := FixtureMeta{WorldSeed: fx.Header.Header.WorldSeed, AppVersion: fx.Header.Header.AppVersion, RuleVersion: fx.RuleVersion()}
+	meta := fx.Meta()
 	resave := func() (string, Fixture) {
 		rec := NewRecorder()
 		rec.records = fx.Records

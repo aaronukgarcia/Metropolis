@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -46,6 +47,11 @@ type Recorder struct {
 	mu      sync.Mutex
 	records []serialize.Record
 
+	// ruleVersion is rules.Effective() as of NewRecorder: the rules the
+	// recorded commands were judged under. Set once, never changed, so a
+	// save made after the live version moved still stamps this one.
+	ruleVersion rules.Version
+
 	// self holds the address NewRecorder gave this Recorder at
 	// construction. Mirrors InProcTransport.self (internal/protocol/
 	// transport.go) exactly: mu is a plain sync.Mutex VALUE, so a
@@ -62,12 +68,24 @@ type Recorder struct {
 
 // NewRecorder returns an empty Recorder ready to capture.
 func NewRecorder() *Recorder {
-	r := &Recorder{}
+	r := &Recorder{ruleVersion: rules.Effective()}
 	// Stored exactly once, here, before r is returned to any caller — no
 	// goroutine can have a reference to r to race this Store against
 	// (mirrors NewInProcTransport/NewEngine — see self's doc comment).
 	r.self.Store(r)
 	return r
+}
+
+// Meta is the FixtureMeta for saving this Recorder: the given seed and app
+// version, stamped with the rule version the Recorder was created under (not
+// the live version at save time). On a struct-copied Recorder it returns a
+// meta with no rule version stated, which Save refuses; Save reports the
+// copy itself first.
+func (r *Recorder) Meta(worldSeed int64, appVersion string) FixtureMeta {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return FixtureMeta{WorldSeed: worldSeed, AppVersion: appVersion}
+	}
+	return FixtureMeta{WorldSeed: worldSeed, AppVersion: appVersion, RuleVersion: RecordedAt(r.ruleVersion)}
 }
 
 // checkNotCopied reports whether the receiver is a struct copy of some

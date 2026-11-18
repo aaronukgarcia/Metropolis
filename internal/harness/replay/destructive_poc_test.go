@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
 	"io"
 	"os"
 	"testing"
@@ -238,7 +239,7 @@ func TestSEC037_SaveRejectsCopiedRecorderAndLeavesNoPartialArtifact(t *testing.T
 	recCopy := copyRecorderBytes(rec)
 
 	dir := t.TempDir()
-	err := Save(dir, "poc-fixture", recCopy, FixtureMeta{WorldSeed: 1, AppVersion: "test"})
+	err := Save(dir, "poc-fixture", recCopy, FixtureMeta{WorldSeed: 1, AppVersion: "test", RuleVersion: RecordedAt(rules.Effective())})
 	if err == nil {
 		t.Fatal("Save(copied *Recorder) returned nil error — SEC-037 regression")
 	}
@@ -264,7 +265,7 @@ func TestSEC037_SaveRejectsCopiedRecorderAndLeavesNoPartialArtifact(t *testing.T
 	// Confirm the ORIGINAL rec (uncopied) still saves correctly, to prove
 	// this is specific to the copy, not a general Save defect.
 	dir2 := t.TempDir()
-	if err := Save(dir2, "poc-fixture-orig", rec, FixtureMeta{WorldSeed: 1, AppVersion: "test"}); err != nil {
+	if err := Save(dir2, "poc-fixture-orig", rec, FixtureMeta{WorldSeed: 1, AppVersion: "test", RuleVersion: RecordedAt(rules.Effective())}); err != nil {
 		t.Fatalf("Save(original): %v", err)
 	}
 	fx2, err := Load(dir2, "poc-fixture-orig")
@@ -290,7 +291,7 @@ func TestSave_GenuinelyEmptyRecorderStillSucceeds(t *testing.T) {
 	rec := NewRecorder() // never Observe*'d
 	dir := t.TempDir()
 
-	if err := Save(dir, "empty-fixture", rec, FixtureMeta{WorldSeed: 1, AppVersion: "test"}); err != nil {
+	if err := Save(dir, "empty-fixture", rec, FixtureMeta{WorldSeed: 1, AppVersion: "test", RuleVersion: RecordedAt(rules.Effective())}); err != nil {
 		t.Fatalf("Save on a genuinely empty, uncopied Recorder returned an error: %v (want nil — an empty capture is a legitimate session, not a rejected copy)", err)
 	}
 

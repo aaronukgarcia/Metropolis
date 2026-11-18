@@ -34,7 +34,7 @@ func buildFixture(t *testing.T, n int) replay.Fixture {
 			t.Fatalf("ObserveDelta: %v", err)
 		}
 	}
-	if err := replay.Save(dir, "uitest-fixture", rec, replay.FixtureMeta{WorldSeed: 1, AppVersion: "uitest-test"}); err != nil {
+	if err := replay.Save(dir, "uitest-fixture", rec, rec.Meta(1, "uitest-test")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	fx, err := replay.Load(dir, "uitest-fixture")

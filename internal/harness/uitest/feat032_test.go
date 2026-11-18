@@ -116,7 +116,7 @@ func buildFolkestone64BootFixture(t *testing.T) (replay.Fixture, protocol.Subscr
 	}
 
 	dir := t.TempDir()
-	meta := replay.FixtureMeta{WorldSeed: int64(stub.FixtureSeed), AppVersion: "feat032-test"}
+	meta := rec.Meta(int64(stub.FixtureSeed), "feat032-test")
 	if err := replay.Save(dir, "folkestone64-boot", rec, meta); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

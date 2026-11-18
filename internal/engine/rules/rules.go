@@ -28,8 +28,8 @@ const (
 // once it is wired. Whoever wires a rule flips its entry to wired AND raises
 // Current in the same commit as the call site (the registry test enforces
 // Current == the highest wired entry, and that the first pending entry is
-// exactly Current+1). Today rule 1 is pending, so Current is 0.
-const Current Version = 0
+// exactly Current+1). Rule 1 (BUG-1224, build module) is wired, so Current is 1.
+const Current Version = 1
 
 // testCurrent is the test-only override of [Effective] (see
 // SetCurrentForTest in testhelper.go). Zero means no override.

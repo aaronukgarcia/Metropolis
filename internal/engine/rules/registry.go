@@ -52,15 +52,16 @@ type Rule struct {
 // it costs); a daily simulation formula never gets an entry.
 var registry = []Rule{
 	{
-		Number:      RefuseOccupiedCell,
-		Const:       "RefuseOccupiedCell",
-		Date:        "2026-11-18",
-		Item:        "BUG-1224",
-		Old:         "a second build order on a cell that already holds a queued or standing structure is accepted and charged",
-		New:         "a second build order on an occupied cell is refused with the cell-in-use error and not charged",
-		Fixture:     "internal/engine/compose/testdata/rules/v1",
-		Status:      StatusPendingWiring,
-		PendingItem: "FEAT-9995385612",
+		Number: RefuseOccupiedCell,
+		Const:  "RefuseOccupiedCell",
+		Date:   "2026-11-18",
+		Item:   "BUG-1224",
+		Old:    "a second build order on a cell that already holds a queued or standing structure is accepted and charged",
+		New:    "a second build order on an occupied cell is refused with the cell-in-use error and not charged",
+		// C25: Old and New are asserted against behaviour by TestBug1224_* in
+		// internal/engine/build/bug1224_cell_in_use_test.go.
+		Fixture: "internal/engine/compose/testdata/rules/v1",
+		Status:  StatusWired,
 	},
 }
 

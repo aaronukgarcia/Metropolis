@@ -34,7 +34,7 @@ func lane3Fixture(t *testing.T, v rules.Version) replay.Fixture {
 		}
 	}
 	dir := t.TempDir()
-	if err := replay.Save(dir, "fx", rec, replay.FixtureMeta{WorldSeed: 42, AppVersion: "r1", RuleVersion: v}); err != nil {
+	if err := replay.Save(dir, "fx", rec, replay.FixtureMeta{WorldSeed: 42, AppVersion: "r1", RuleVersion: replay.RecordedAt(v)}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	fx, err := replay.Load(dir, "fx")

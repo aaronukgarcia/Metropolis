@@ -1881,9 +1881,12 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		}
 	}
 
-	// FEAT-9995385612: every module registered as rule-versioned (none yet;
-	// engine.build joins in lane 4 with one st.rv.wire line above this)
-	// must hold a getter, or Wire refuses the composition.
+	// FEAT-9995385612: engine.build is rule-versioned (BUG-1224, rule 1);
+	// every module registered as rule-versioned must hold a getter, or Wire
+	// refuses the composition.
+	if err := st.rv.wire(st.cid, "engine.build", buildAPI); err != nil {
+		return nil, err
+	}
 	if err := st.rv.verify(st.cid); err != nil {
 		return nil, err
 	}

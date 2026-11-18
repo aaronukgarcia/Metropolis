@@ -144,9 +144,15 @@ func TestWireTUI_AC_D2_DebugShowsBuildIdentityAndErrorTail(t *testing.T) {
 	ds := debugscreen.NewScreen(nil, errs.NewCorrelationID(), debugscreen.WithDebugFlag(func() bool { return true }))
 	draw := debugDrawFunc(ds)
 	_ = errs.New("MET-U200", errs.NewCorrelationID(), map[string]any{"cause": "wire-tui-d2-marker"})
-	buf := core.NewBuffer(twW, twH)
+	// BUG-1224: the tail draws oldest first and the 40-row test screen clips
+	// the newest entries once the process-wide ring holds about a dozen
+	// distinct codes (every registry error the other tests in this package
+	// emit, now including MET-G510); draw into a tall buffer so the marker is
+	// not clipped by an unrelated test's error.
+	const tallH = 120
+	buf := core.NewBuffer(twW, tallH)
 	draw(buf, nil)
-	if !bufferContainsString(buf, twW, twH, "MET-U200") {
+	if !bufferContainsString(buf, twW, tallH, "MET-U200") {
 		t.Error("AC-D2: emitted error not in the F12 error tail")
 	}
 	if !bufferContainsString(buf, twW, twH, "go1") {

@@ -162,6 +162,15 @@ func TestAttackBug493_RapidFire_NoRaceNoWedge(t *testing.T) {
 	w.mapScreen.MoveCursor(31, 31)
 
 	for i := 0; i < 50; i++ {
+		// BUG-1224: a second build on a cell already holding an order is
+		// now refused (MET-G510), so each iteration builds on a distinct
+		// cell (walk left along the row, then up a row) to keep this a
+		// hammering test of accepted builds, not of the new refusal.
+		if i > 0 && i%32 == 0 {
+			w.mapScreen.MoveCursor(31, -1)
+		} else if i > 0 {
+			w.mapScreen.MoveCursor(-1, 0)
+		}
 		routeKeyInput(w, keyMsg(tcell.KeyRune, 'b'))
 		routeKeyInput(w, keyMsg(tcell.KeyRune, 'y'))
 		routeKeyInput(w, keyMsg(tcell.KeyRune, 'c'))

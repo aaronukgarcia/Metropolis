@@ -156,6 +156,11 @@ func TestRuleVersion_V0_ByteIdenticalToGoldens(t *testing.T) {
 		ctx := context.Background()
 		store := persist.NewMemStore()
 		e, c := newPersistComposition(t, store)
+		// Lane 4: rule 1 is wired, so a fresh city runs version 1. The goldens
+		// are the version-0 bytes, so the session is recorded pinned to 0.
+		if err := c.PinRuleVersion(0); err != nil {
+			t.Fatal(err)
+		}
 		submitAll(t, e, rtCommands())
 		if _, ok, err := c.MaybeSnapshotEvery(ctx, store, defaultPersistCity, 65); err != nil || !ok {
 			t.Fatalf("snapshot ok=%v err=%v", ok, err)
@@ -221,13 +226,13 @@ func TestRuleVersion_V0_ByteIdenticalToGoldens(t *testing.T) {
 			}
 		}
 	})
-	t.Run("current_is_zero_today", func(t *testing.T) {
-		if rules.Current != 0 || rules.Effective() != 0 {
-			t.Fatalf("Current/Effective = %d/%d, want 0/0 while every registered rule is pending wiring", rules.Current, rules.Effective())
+	t.Run("live_is_current_when_unpinned", func(t *testing.T) {
+		if rules.Current != 1 || rules.Effective() != 1 {
+			t.Fatalf("Current/Effective = %d/%d, want 1/1 (rule 1, BUG-1224, is wired)", rules.Current, rules.Effective())
 		}
 		c := newRuleCity(t, nil, -1).c
-		if c.RuleVersion() != 0 {
-			t.Fatalf("live version %d, want 0", c.RuleVersion())
+		if c.RuleVersion() != rules.Current {
+			t.Fatalf("live version %d, want %d", c.RuleVersion(), rules.Current)
 		}
 	})
 }
@@ -838,13 +843,13 @@ func TestRuleVersion_CheckRuleFixture(t *testing.T) {
 // the build does not know (C10).
 func TestRuleVersion_PinRefusesUnknownVersion(t *testing.T) {
 	rc := newRuleCity(t, nil, -1)
-	if err := rc.c.PinRuleVersion(1); !isCode(err, rules.ErrSavedUnderNewerRules) {
-		t.Fatalf("pin 1 under Current 0: %v", err)
+	if err := rc.c.PinRuleVersion(rules.Current + 1); !isCode(err, rules.ErrSavedUnderNewerRules) {
+		t.Fatalf("pin Current+1 under Current %d: %v", rules.Current, err)
 	}
 	if err := rc.c.PinRuleVersion(-1); !isCode(err, rules.ErrMalformedRuleStamp) {
 		t.Fatalf("pin -1: %v", err)
 	}
-	if rc.c.RuleVersion() != 0 {
+	if rc.c.RuleVersion() != rules.Current {
 		t.Fatalf("live version moved to %d", rc.c.RuleVersion())
 	}
 }

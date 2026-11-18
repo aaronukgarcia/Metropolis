@@ -574,8 +574,8 @@ func TestClassifyAndIsKnown(t *testing.T) {
 	if Classify(0) != SupportTooOld {
 		t.Error("with OldestSupported = 1, version 0 must be too old")
 	}
-	if Classify(1) != SupportTooNew {
-		t.Error("version 1 is above Current 0 and must be too new whatever OldestSupported is")
+	if Classify(Current+1) != SupportTooNew {
+		t.Error("a version above Current must be too new whatever OldestSupported is")
 	}
 }
 

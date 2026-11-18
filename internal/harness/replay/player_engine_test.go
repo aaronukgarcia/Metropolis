@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
@@ -35,7 +36,22 @@ func runLoop(ctx context.Context, source commandSource, handle func(protocol.Com
 	}
 }
 
+// fixtureWithCommands records n commands and saves them with the
+// Recorder's own meta, so the fixture carries the version the commands were
+// recorded under (BUG-1224 port).
 func fixtureWithCommands(t *testing.T, n int) Fixture {
+	t.Helper()
+	return fixtureWithCommandsMeta(t, n, func(r *Recorder) FixtureMeta { return r.Meta(0, "") })
+}
+
+// fixtureWithCommandsAtVersion is fixtureWithCommands with the rule version
+// stated, for a test that needs a fixture older than the live rules.
+func fixtureWithCommandsAtVersion(t *testing.T, n int, v rules.Version) Fixture {
+	t.Helper()
+	return fixtureWithCommandsMeta(t, n, func(*Recorder) FixtureMeta { return FixtureMeta{RuleVersion: RecordedAt(v)} })
+}
+
+func fixtureWithCommandsMeta(t *testing.T, n int, metaOf func(*Recorder) FixtureMeta) Fixture {
 	t.Helper()
 	r := NewRecorder()
 	for i := 0; i < n; i++ {
@@ -49,7 +65,7 @@ func fixtureWithCommands(t *testing.T, n int) Fixture {
 		}
 	}
 	dir := t.TempDir()
-	if err := Save(dir, "engineplayer", r, FixtureMeta{}); err != nil {
+	if err := Save(dir, "engineplayer", r, metaOf(r)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	fx, err := Load(dir, "engineplayer")

@@ -1719,7 +1719,8 @@
         "engine.staffing",
         "engine.firms",
         "engine.services",
-        "int.serializer"
+        "int.serializer",
+        "engine.rules"
       ],
       "sprint": 6,
       "collaborations": {

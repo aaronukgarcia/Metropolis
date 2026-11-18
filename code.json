@@ -3996,6 +3996,10 @@
         "pattern": "every versioned rule check is rules.Has(active, rules.NamedConstant), never an integer literal; a save recorded at a version above rules.Current is refused, never clamped",
         "consumers": [
           {
+            "key": "engine.build",
+            "outboundGuid": "7e791c72-d564-4504-b921-33adb1d486c9"
+          },
+          {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
@@ -4848,6 +4852,11 @@
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          },
+          {
+            "key": "engine.rules",
+            "moduleGuid": "1846fbfe-0500-440e-ba52-2df435a6acd2",
+            "inboundGuid": "767c453a-2bce-49f9-b993-49d7ddca0e82"
           }
         ]
       },
