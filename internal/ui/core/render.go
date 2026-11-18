@@ -232,6 +232,13 @@ func (r *RenderLoop) renderOnce() {
 	}
 
 	vm := r.views.Front()
+	// BUG-1234: the back buffer persists between frames (Flush only diffs it
+	// against the front), so without a blank here whatever the previous frame
+	// drew, the map or another screen, shows through every cell the active
+	// screen does not write. Blank it once per frame, centrally, before any
+	// draw runs; the diff against the front keeps the flush cost to changed
+	// cells only.
+	r.back.Fill(blankCell.Rune, blankCell.Style)
 	if r.belowMin {
 		stubDraw(r.back, vm)
 	} else {

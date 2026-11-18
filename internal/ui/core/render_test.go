@@ -24,6 +24,30 @@ func newSimScreen(t *testing.T, w, h int) tcell.SimulationScreen {
 	return sim
 }
 
+// BUG-1234: the back buffer persists between frames, so a frame must start
+// blank; a cell drawn last frame and not drawn this frame must not show.
+func TestRenderLoop_BlanksBackBufferEachFrame_BUG1234(t *testing.T) {
+	sim := newSimScreen(t, 120, 30)
+	views := NewViewStore()
+	frame := 0
+	draw := func(back *Buffer, vm *ViewModels) {
+		if frame == 0 {
+			back.Set(5, 5, '%', tcell.StyleDefault)
+		}
+		back.Set(0, 0, 'H', tcell.StyleDefault)
+	}
+	r := NewRenderLoop(sim, views, draw)
+	r.renderOnce()
+	if ch, _, _ := sim.Get(5, 5); ch != "%" {
+		t.Fatalf("precondition: first frame cell (5,5) = %q, want %%", ch)
+	}
+	frame = 1
+	r.renderOnce()
+	if ch, _, _ := sim.Get(5, 5); ch != " " {
+		t.Fatalf("cell (5,5) = %q after a frame that did not draw it, want blank", ch)
+	}
+}
+
 func TestRenderLoop_DrawsAndFlushesViaSimulationScreen(t *testing.T) {
 	sim := newSimScreen(t, 120, 30)
 	views := NewViewStore()

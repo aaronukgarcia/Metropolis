@@ -2,6 +2,9 @@ package build
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -95,6 +98,98 @@ func laneLength(remaining int64) int {
 	return int(remaining)
 }
 
+// rowWidth is the number of terminal columns a row occupies (one per rune;
+// the glyphs used here are all single-width).
+func rowWidth(s string) int { return len([]rune(s)) }
+
+// rowFmt renders one row from a (possibly shortened) name.
+type rowFmt func(name string) string
+
+// pickTier returns the lowest format tier at which EVERY row fits in w
+// columns (BUG-1234 part 3), so a column never mixes verbose and compact
+// rows. mk(i) lists row i's formats from fullest wording to most compact. If
+// no tier fits every row, the most compact tier is returned.
+func pickTier(w int, names []string, mk func(i int) []rowFmt) int {
+	if len(names) == 0 {
+		return 0
+	}
+	tiers := len(mk(0))
+	for t := 0; t < tiers; t++ {
+		ok := true
+		for i, n := range names {
+			if rowWidth(mk(i)[t](n)) > w {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return t
+		}
+	}
+	return tiers - 1
+}
+
+// fitRow renders a row at the chosen tier. When even that is too wide (only
+// possible at the most compact tier), the NAME alone is shortened with an
+// ellipsis (down to one rune), so the figures and the status badge at the end
+// of the row are never the part that gets cut. Only if that still does not
+// fit is the row clipped by drawText.
+func fitRow(w int, name string, tier int, cands []rowFmt) string {
+	f := cands[tier]
+	if row := f(name); rowWidth(row) <= w {
+		return row
+	}
+	rs := []rune(name)
+	for n := len(rs) - 1; n >= 2; n-- {
+		if row := f(string(rs[:n-1]) + "…"); rowWidth(row) <= w {
+			return row
+		}
+	}
+	if len(rs) > 2 {
+		return f(string(rs[:1]) + "…")
+	}
+	return f(name)
+}
+
+var capacityRe = regexp.MustCompile(`^(\d+) homes, (\d+) jobs$`)
+
+// compactCapacity shortens "8 homes, 0 jobs" to "8 homes" and "0 homes, 15
+// jobs" to "15 jobs" (a zero side adds nothing); any other text is returned
+// verbatim.
+func compactCapacity(raw string) string {
+	m := capacityRe.FindStringSubmatch(raw)
+	if m == nil {
+		return raw
+	}
+	switch {
+	case m[2] == "0":
+		return m[1] + " homes"
+	case m[1] == "0":
+		return m[2] + " jobs"
+	}
+	return raw
+}
+
+// compactCost turns "£15000.00" into "£15,000" (whole pounds, thousands
+// separators) when withCommas, or "£15000" when not. Anything that is not a
+// plain pounds figure is returned verbatim.
+func compactCost(raw string, withCommas bool) string {
+	body, ok := strings.CutPrefix(raw, "£")
+	if !ok {
+		return raw
+	}
+	body = strings.TrimSuffix(body, ".00")
+	if _, err := strconv.ParseInt(body, 10, 64); err != nil {
+		return raw
+	}
+	if withCommas {
+		for i := len(body) - 3; i > 0; i -= 3 {
+			body = body[:i] + "," + body[i:]
+		}
+	}
+	return "£" + body
+}
+
 // RenderHeader draws the F3 title line plus the staleness marker. When
 // !haveData it draws "no data" rather than a fabricated figure.
 func RenderHeader(buf *core.Buffer, rect core.Rect, haveData, stale bool, style tcell.Style) {
@@ -154,18 +249,80 @@ func RenderZones(buf *core.Buffer, rect core.Rect, zones []ZoneInfo, have bool, 
 		return
 	}
 	y := rect.Y + 1
-	for _, z := range zones {
+	names := make([]string, len(zones))
+	for i, z := range zones {
+		names[i] = z.Name
+		if names[i] == "" {
+			names[i] = z.Zone
+		}
+	}
+	tier := pickTier(rect.W, names, func(i int) []rowFmt { return zoneFmts(zones[i]) })
+	for i, z := range zones {
 		if y >= rect.Y+rect.H {
 			return
 		}
-		name := z.Name
-		if name == "" {
-			name = z.Zone
-		}
-		row := fmt.Sprintf("  %s  materials %dt  labour %dd  lead %dd",
-			name, z.Materials, z.Labour, z.BaseLeadTimeDays)
-		drawText(buf, rect, rect.X, y, row, style)
+		drawText(buf, rect, rect.X, y, fitRow(rect.W, names[i], tier, zoneFmts(z)), style)
 		y++
+	}
+}
+
+// zoneFmts lists a zone row's formats, fullest first. The compact tiers keep
+// all three figures and only abbreviate the words (BUG-1234 part 3).
+func zoneFmts(z ZoneInfo) []rowFmt {
+	return []rowFmt{
+		func(n string) string {
+			return fmt.Sprintf("  %s  materials %dt  labour %dd  lead %dd", n, z.Materials, z.Labour, z.BaseLeadTimeDays)
+		},
+		func(n string) string {
+			return fmt.Sprintf("%s mat %dt lab %dd lead %dd", n, z.Materials, z.Labour, z.BaseLeadTimeDays)
+		},
+		func(n string) string {
+			return fmt.Sprintf("%s mat%dt lab%dd lead%dd", n, z.Materials, z.Labour, z.BaseLeadTimeDays)
+		},
+	}
+}
+
+// orderFmts lists a queue row's formats, fullest first. Only the last two
+// tiers drop a figure (labour remaining), and only at narrow widths.
+func orderFmts(o BuildOrder) []rowFmt {
+	return []rowFmt{
+		func(z string) string {
+			return fmt.Sprintf("  #%d %s  materials %d/%dt  labour %dd  lead %dd  [%s]",
+				o.ID, z, o.MaterialsDrawn, o.MaterialsBillTotal,
+				o.LabourRemaining, o.LeadTimeRemaining, o.Status)
+		},
+		func(z string) string {
+			return fmt.Sprintf("#%d %s %d/%dt lab %dd %dd left [%s]",
+				o.ID, z, o.MaterialsDrawn, o.MaterialsBillTotal,
+				o.LabourRemaining, o.LeadTimeRemaining, o.Status)
+		},
+		func(z string) string {
+			return fmt.Sprintf("#%d %s %d/%dt %dd left [%s]",
+				o.ID, z, o.MaterialsDrawn, o.MaterialsBillTotal,
+				o.LeadTimeRemaining, o.Status)
+		},
+		func(z string) string {
+			return fmt.Sprintf("#%d %s %d/%dt %dd [%s]",
+				o.ID, z, o.MaterialsDrawn, o.MaterialsBillTotal,
+				o.LeadTimeRemaining, o.Status)
+		},
+	}
+}
+
+// catalogueFmts lists a catalogue row's formats, fullest first. The compact
+// tiers drop the section word, the pence, and a zero homes/jobs half.
+func catalogueFmts(e CatalogueEntry) []rowFmt {
+	badge := e.Unlock.String()
+	return []rowFmt{
+		func(n string) string {
+			return fmt.Sprintf("  %s (%s) cost %s cap %s [%s]", n, e.Section, e.CostRaw, e.CapacityRaw, badge)
+		},
+		func(n string) string {
+			return fmt.Sprintf("%s %s %s [%s]", n, compactCost(e.CostRaw, true), compactCapacity(e.CapacityRaw), badge)
+		},
+		func(n string) string {
+			return fmt.Sprintf("%s %s %s [%s]", n, compactCost(e.CostRaw, false), compactCapacity(e.CapacityRaw), badge)
+		},
 	}
 }
 
@@ -194,24 +351,60 @@ func RenderQueue(buf *core.Buffer, rect core.Rect, orders []BuildOrder, have boo
 		}
 		return
 	}
-	y := rect.Y + 1
+	// BUG-1234 part 2: orders still in progress come first, in the order the
+	// engine published them; finished orders collapse into one "N completed"
+	// line instead of a row each. Rows are budgeted so that the completed
+	// line and, when active orders overflow, the "+N more" line always fit.
+	var active []BuildOrder
+	completed := 0
 	for _, o := range orders {
-		if y >= rect.Y+rect.H {
-			return
+		if o.Status == StatusComplete {
+			completed++
+			continue
 		}
-		label := fmt.Sprintf("  #%d %s  materials %d/%dt  labour %dd  lead %dd  [%s]",
-			o.ID, o.Zone, o.MaterialsDrawn, o.MaterialsBillTotal,
-			o.LabourRemaining, o.LeadTimeRemaining, o.Status)
+		active = append(active, o)
+	}
+	rows := rect.H - 1
+	reserved := 0
+	if completed > 0 {
+		reserved = 1
+	}
+	shown := len(active)
+	more := 0
+	if shown > rows-reserved {
+		// One row for "+N more" as well, unless the pane is so short that
+		// only the more line fits.
+		shown = rows - reserved - 1
+		if shown < 0 {
+			shown = 0
+		}
+		more = len(active) - shown
+	}
+	y := rect.Y + 1
+	zoneNames := make([]string, shown)
+	for i := range zoneNames {
+		zoneNames[i] = active[i].Zone
+	}
+	tier := pickTier(rect.W, zoneNames, func(i int) []rowFmt { return orderFmts(active[i]) })
+	for _, o := range active[:shown] {
+		label := fitRow(rect.W, o.Zone, tier, orderFmts(o))
 		drawText(buf, rect, rect.X, y, label, style)
 		// Hand the rest of the row to QueueLane (which draws its own
 		// seconds label + glyph run) — the construction queue backing up
 		// toward completion, cargo-coded as construction freight.
-		labelCols := len(label) + 1
+		labelCols := rowWidth(label) + 1
 		if labelCols < rect.W {
 			laneRect := core.Rect{X: rect.X + labelCols, Y: y, W: rect.W - labelCols, H: 1}
 			widgets.QueueLane(buf, laneRect, laneLength(o.LeadTimeRemaining), widgets.CargoFreight, 0, style)
 		}
 		y++
+	}
+	if more > 0 && y < rect.Y+rect.H {
+		drawText(buf, rect, rect.X, y, fmt.Sprintf("  +%d more", more), style)
+		y++
+	}
+	if completed > 0 && y < rect.Y+rect.H {
+		drawText(buf, rect, rect.X, y, fmt.Sprintf("  %d completed", completed), style)
 	}
 }
 
@@ -238,13 +431,16 @@ func RenderCatalogue(buf *core.Buffer, rect core.Rect, entries []CatalogueEntry,
 		return
 	}
 	y := rect.Y + 1
-	for _, e := range entries {
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+	tier := pickTier(rect.W, names, func(i int) []rowFmt { return catalogueFmts(entries[i]) })
+	for i, e := range entries {
 		if y >= rect.Y+rect.H {
 			return
 		}
-		row := fmt.Sprintf("  %s (%s)  cost %s  cap %s  [%s]",
-			e.Name, e.Section, e.CostRaw, e.CapacityRaw, e.Unlock.String())
-		drawText(buf, rect, rect.X, y, row, style)
+		drawText(buf, rect, rect.X, y, fitRow(rect.W, names[i], tier, catalogueFmts(e)), style)
 		y++
 	}
 }
