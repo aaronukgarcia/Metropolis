@@ -24,14 +24,20 @@ const maxPatchWireBytes = 1 << 20 // 1 MiB
 type wirePLItem struct {
 	Label            string `json:"label"`
 	ValueMicropounds int64  `json:"valueMicropounds"`
+	// PrevValueMicropounds is the same line for the month before (BUG-1213);
+	// nil when no earlier month has closed.
+	PrevValueMicropounds *int64 `json:"prevValueMicropounds,omitempty"`
 }
 
 // wirePLView is the period P&L statement: revenue lines, expense lines and
 // the period label they were accumulated over.
 type wirePLView struct {
-	Period   string       `json:"period"`
-	Revenues []wirePLItem `json:"revenues"`
-	Expenses []wirePLItem `json:"expenses"`
+	Period      string       `json:"period"`
+	Revenues    []wirePLItem `json:"revenues"`
+	Expenses    []wirePLItem `json:"expenses"`
+	Other       *wirePLItem  `json:"other,omitempty"`
+	Net         *wirePLItem  `json:"net,omitempty"`
+	CityEconomy []wirePLItem `json:"cityEconomy,omitempty"`
 }
 
 // wireBalanceItem is one labelled balance-sheet line in micropounds.

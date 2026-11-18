@@ -193,6 +193,18 @@ func (s *Screen) ApplyDelta(delta protocol.Delta) {
 		for i, e := range p.PL.Expenses {
 			s.pl.Expenses[i] = PLItem(e)
 		}
+		if p.PL.Other != nil {
+			o := PLItem(*p.PL.Other)
+			s.pl.Other = &o
+		}
+		if p.PL.Net != nil {
+			n := PLItem(*p.PL.Net)
+			s.pl.Net = &n
+		}
+		s.pl.CityEconomy = make([]PLItem, len(p.PL.CityEconomy))
+		for i, c := range p.PL.CityEconomy {
+			s.pl.CityEconomy[i] = PLItem(c)
+		}
 		s.havePL = true
 	} else {
 		s.havePL = false
@@ -366,6 +378,15 @@ func (s *Screen) PL() (PLView, bool) {
 	}
 	copy(res.Revenues, s.pl.Revenues)
 	copy(res.Expenses, s.pl.Expenses)
+	if s.pl.Other != nil {
+		o := *s.pl.Other
+		res.Other = &o
+	}
+	if s.pl.Net != nil {
+		n := *s.pl.Net
+		res.Net = &n
+	}
+	res.CityEconomy = append([]PLItem(nil), s.pl.CityEconomy...)
 	return res, true
 }
 

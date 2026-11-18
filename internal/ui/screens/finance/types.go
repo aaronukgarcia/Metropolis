@@ -4,6 +4,8 @@ package finance
 type PLItem struct {
 	Label            string `json:"label"`
 	ValueMicropounds int64  `json:"valueMicropounds"`
+	// PrevValueMicropounds is the month before (BUG-1213); nil when none.
+	PrevValueMicropounds *int64 `json:"prevValueMicropounds,omitempty"`
 }
 
 // PLView is the full profit and loss view.
@@ -11,6 +13,14 @@ type PLView struct {
 	Period   string   `json:"period"`
 	Revenues []PLItem `json:"revenues"`
 	Expenses []PLItem `json:"expenses"`
+	// Other is the signed row for treasury movements the statement does not
+	// itemise (nil when there are none); Net is the treasury change for the
+	// period (BUG-1213). CityEconomy is a separate block of city-wide figures
+	// (household consumption, wages) that are NOT treasury money and sit
+	// outside the net.
+	Other       *PLItem  `json:"other,omitempty"`
+	Net         *PLItem  `json:"net,omitempty"`
+	CityEconomy []PLItem `json:"cityEconomy,omitempty"`
 }
 
 // BalanceItem represents an asset or liability line item in the balance sheet (FIN-2).

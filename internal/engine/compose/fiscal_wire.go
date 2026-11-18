@@ -125,6 +125,7 @@ func (st *simState) unemployedResidentCount() int64 {
 // unemployed headcount (a balanced treasury -> households transfer; money
 // neutral). Failures are logged loudly (GR#1/GR#17) and never block the tick.
 func (st *simState) applyFiscalMonth() {
+	defer plCloseMonth(st) // BUG-1213: close the month into the P&L snapshot
 	if st.fiscal == nil || st.finance == nil {
 		return
 	}

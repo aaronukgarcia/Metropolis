@@ -371,6 +371,10 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	// compose participant and these two mirrors recomputed, the full
 	// StateDigest round-trips exactly.
 	c.state.syncMoneyFromLedger()
+	// BUG-1213: a P&L snapshot published before the load belongs to another
+	// timeline; drop it so nothing from before the load leaks in. The first
+	// close after the load rebuilds the statement from the restored ledger.
+	c.state.plPub.Store(nil)
 	// FEAT-build-services-bridge-2026-09-02 root fix + round remedy (b):
 	// engine.services IS now a save.Participant (Participants(), above) — its
 	// own instance table, funding/upgrade/demand/allocated state,

@@ -165,6 +165,9 @@ type financeBalanceSheetWirePatch struct {
 	// unwired); balanceSheet above is unchanged.
 	Sankey        *financeSankeyView        `json:"sankey,omitempty"`
 	PublicPayroll *financePublicPayrollView `json:"publicPayroll,omitempty"`
+
+	// PL is the BUG-1213 ledger-derived monthly P&L (finance_pl.go).
+	PL *financePLView `json:"pl,omitempty"`
 }
 
 // financePayrollShortfallView mirrors internal/ui/screens/finance/wire.go's
@@ -348,6 +351,7 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 		SchemaVersion:     financeWireSchemaVersion,
 		Sankey:            sankey,
 		PublicPayroll:     publicPayroll,
+		PL:                buildFinancePL(st),
 		UnlimitedMoney:    unlimitedMoney,
 		PayrollShortfall:  payrollShortfall,
 		CreditRating:      creditRating,

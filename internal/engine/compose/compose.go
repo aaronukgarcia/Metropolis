@@ -2219,6 +2219,10 @@ type simState struct {
 	// change a simulated outcome, only a displayed one.
 	treasuryPub atomic.Int64
 
+	// BUG-1213: P&L publish mirror (finance_pl.go): an immutable snapshot
+	// history written at each finance close and reset on Load.
+	plPub plPubHolder
+
 	// cumulative gross money flow (AC-9)
 	moneyFlows int64
 

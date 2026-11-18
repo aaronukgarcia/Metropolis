@@ -40,40 +40,67 @@ func formatPounds(micropounds int64) string {
 	return fmt.Sprintf("£%.2f", pounds)
 }
 
+// plRowText formats one P&L row: label, this month and, when a month before
+// exists, that month's figure (BUG-1213).
+func plRowText(item PLItem) string {
+	row := fmt.Sprintf("  %-41s %11s", item.Label, formatPounds(item.ValueMicropounds))
+	if item.PrevValueMicropounds != nil {
+		row += fmt.Sprintf(" %11s", formatPounds(*item.PrevValueMicropounds))
+	}
+	return row
+}
+
 func RenderPL(buf *core.Buffer, rect core.Rect, pl PLView, have bool, style tcell.Style) {
 	if buf == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
-	drawText(buf, rect, rect.X, rect.Y, "PROFIT & LOSS ("+pl.Period+")", style.Bold(true))
+	drawText(buf, rect, rect.X, rect.Y, "PROFIT & LOSS - TREASURY ("+pl.Period+")", style.Bold(true))
 	if !have {
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
 		return
 	}
 
 	y := rect.Y + 2
-	drawText(buf, rect, rect.X, y, "Revenues:", style.Underline(true))
+	drawText(buf, rect, rect.X, y, "Treasury income:", style.Underline(true))
 	y++
 	for _, item := range pl.Revenues {
 		if y >= rect.Y+rect.H {
 			break
 		}
-		rowStr := fmt.Sprintf("  %-20s %15s", item.Label, formatPounds(item.ValueMicropounds))
+		rowStr := plRowText(item)
 		drawText(buf, rect, rect.X, y, rowStr, style)
 		y++
 	}
 
 	y++
 	if y < rect.Y+rect.H {
-		drawText(buf, rect, rect.X, y, "Expenses:", style.Underline(true))
+		drawText(buf, rect, rect.X, y, "Treasury outflows:", style.Underline(true))
 		y++
 	}
-	for _, item := range pl.Expenses {
+	rows := append([]PLItem(nil), pl.Expenses...)
+	if pl.Other != nil {
+		rows = append(rows, *pl.Other)
+	}
+	if pl.Net != nil {
+		rows = append(rows, *pl.Net)
+	}
+	for i, item := range rows {
 		if y >= rect.Y+rect.H {
 			break
 		}
-		rowStr := fmt.Sprintf("  %-20s %15s", item.Label, formatPounds(item.ValueMicropounds))
-		drawText(buf, rect, rect.X, y, rowStr, style)
+		drawText(buf, rect, rect.X, y, plRowText(item), style)
 		y++
+		if i == len(rows)-1 && len(pl.CityEconomy) > 0 && y+1 < rect.Y+rect.H {
+			drawText(buf, rect, rect.X, y, "City economy (not treasury money):", style.Underline(true))
+			y++
+			for _, c := range pl.CityEconomy {
+				if y >= rect.Y+rect.H {
+					break
+				}
+				drawText(buf, rect, rect.X, y, plRowText(c), style)
+				y++
+			}
+		}
 	}
 }
 
