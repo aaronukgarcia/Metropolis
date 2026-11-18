@@ -3262,6 +3262,22 @@
       "guidIn": "087edd5a-d6c4-427f-bc70-ce944f0d7280",
       "guidOut": "64cda04e-7c14-4e11-a62c-93e8818efe7e",
       "deps": []
+    },
+    {
+      "mkey": "ui.flyout",
+      "type": "feature",
+      "title": "Fly-out menu engine: menu bar, nested drop-down lists, keys and mouse hit logic",
+      "desc": "Self-contained menu engine for the terminal game (FEAT-9995385618 lane L1): a validated menu table, a pure state machine (open, move, enter, back, letter, remembered last pick), layout with scrolling and flip-left at the right edge, drawing that blanks each box before its text, and a pure mouse hit test. No menu content lives here; the game wiring (bar on row 0, F10, input priority, mouse enabling) is lane L2. [spec: docs/planning/acceptance/feat-9995385618-flyout-menu.md] [path: internal/ui/flyout/]",
+      "seq": 1004,
+      "sprint": 9,
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "ui",
+      "specRef": "docs/planning/acceptance/feat-9995385618-flyout-menu.md",
+      "guid": "3e5d45cb-82d8-4628-9824-393a1b4e2cdb",
+      "guidIn": "a52742e6-84b7-486a-9b83-9a6ba8518fdc",
+      "guidOut": "9454a261-2bd2-4eb0-997e-8141c73f2b61",
+      "deps": []
     }
   ]
 }

@@ -173,7 +173,8 @@
       "H510-H519": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")",
       "V936-V939": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 4-wide block found after scanning existing codes and reservations on layer \"V\")",
       "G5610-G5619": "reserved for engine.rules (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
-      "V980-V989": "reserved for ui.screen.why (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V980-V989": "reserved for ui.screen.why (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V990-V999": "reserved for ui.flyout (auto-claimed via tools/plan/add-error.js claim-range on 2026-11-18 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -6564,6 +6565,18 @@
       "module": "ui.screen.why",
       "message": "why.Screen method called on a struct-copied receiver",
       "remedy": "always operate on the *Screen returned by why.New, never a value copy"
+    },
+    "MET-V990": {
+      "severity": "error",
+      "module": "ui.flyout",
+      "message": "fly-out menu table refused: {cause}",
+      "remedy": "fix the menu table so it passes flyout.NewTable validation (unique letters per list, labels, depth)"
+    },
+    "MET-V991": {
+      "severity": "error",
+      "module": "ui.flyout",
+      "message": "fly-out menu used before it was built from a valid table",
+      "remedy": "build the menu with flyout.New(table) and use the returned value"
     }
   }
 }
