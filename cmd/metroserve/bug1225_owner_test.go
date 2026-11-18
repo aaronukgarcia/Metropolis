@@ -160,7 +160,9 @@ func TestBug1225_ServerUnloadAndStoppedEngine(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		bug1225Subscribe(t, conn, int64(10+i), "u"+strconv.Itoa(i))
 	}
-	bug1225WaitSubs(t, rc, 50, "all applied")
+	// At least one applied is enough for the claim (shutdown with live
+	// subscriptions does not deadlock); a full command queue may refuse some.
+	bug1225WaitSubsAtLeast(t, rc, 1, "subscriptions applied")
 	done := make(chan error, 1)
 	go func() { done <- host.Shutdown(persist.CityKey{TenantID: persistTenantID, CityID: city}) }()
 	select {
@@ -235,7 +237,14 @@ func TestBug1225_LegacyPathDetach(t *testing.T) {
 		for i := 0; i < 100; i++ {
 			bug1225Subscribe(t, conn, int64(10+i), "l"+strconv.Itoa(i))
 		}
-		bug1225WaitSubs(t, rc, 101, "legacy live")
+		// On a slow machine the engine's bounded command queue can be full
+		// while the tick loop is also sending (CI saw "command queue is full"
+		// and 77 of 100 applied), and a refused Subscribe is correct
+		// backpressure, not a leak. The claim under test is that whatever
+		// the connection DID create goes when it drops and the in-process
+		// subscriber stays, so wait for at least one of this connection's
+		// subscriptions rather than for all hundred.
+		bug1225WaitSubsAtLeast(t, rc, 2, "legacy live")
 		_ = conn.Close()
 		c2, code := bug1225DialRetry(t, url, "legacy")
 		if code != "" {
@@ -244,6 +253,23 @@ func TestBug1225_LegacyPathDetach(t *testing.T) {
 		bug1225Holds(t, rc, 1, 150*time.Millisecond, "legacy: only the in-process subscriber after the drop")
 		_ = c2.Close()
 		bug1225DialRetryClosed(t, url)
+	}
+}
+
+// bug1225WaitSubsAtLeast waits until the engine holds at least min
+// subscriptions.
+func bug1225WaitSubsAtLeast(t *testing.T, rc *runningCity, min int, why string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got := rc.engine.SubscriptionCount()
+		if got >= min {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: engine holds %d subscriptions, want at least %d", why, got, min)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
