@@ -6,6 +6,83 @@ this file, the BOW comments on each item, `git log -10`, `gh run list
 --branch main --limit 3` and `git worktree list`, and carries on. It never
 redoes committed work and never trusts recall over those four sources.
 
+## STATE AT 23:40 on 2026-11-18 (newest; supersedes everything below)
+
+origin/main = e3bc970. **CI IS RED on main (BUG-1242)**: viewgate rejects f5.why; the BUG-1234 idle test fails on the slow runner. The fix is STAGED in the main checkout (3 files) and in review in .claude/worktrees/round-cifix; land it first, on an ACCEPT recorded on BUG-1242, then confirm green with `gh run list` (never a chained exit code).
+
+| Lane | State | Where | Next |
+|---|---|---|---|
+| CI fix BUG-1242 | Sonnet round running | staged in main; copy in .claude/worktrees/round-cifix | commit [BUG-1242], push, see green |
+| Lane 4 BUG-1224 as rule 1 | Opus r2 ACCEPT on the old base; port r3 REJECT (re-save relabels a version-0 replay fixture); r4 fix running | .claude/worktrees/port-lane4 (on e3bc970; changes partly STAGED: use `git diff HEAD`) | narrow round on the delta, allow entries for testdata/rules/v1, land |
+| Lane 5 FEAT-9995385620 | three REJECTs; r4 = dry-run restore, fix running | .claude/worktrees/agent-adec187556609086f (base 762c857) | Opus r4 round; hosting work, spare lane only |
+| Menu L1 FEAT-9995385622 | r1 REJECT (letters), r2 REJECT (sub-list hides an ancestor); r3 = one left-to-right cascade, fix running | .claude/worktrees/agent-afdb71fe010d0edec (base de23f76) | Sonnet r3 round; then L2 (Opus review), L3-L5 |
+| Help/save/load/debug FEAT-9995385621 | all three parts built; second finisher making the suite green, moving its error range off V990-V999 | .claude/worktrees/agent-ab13ecb6178696f6c (base de23f76) | Opus round (save/load = data), land; then the welcome screen |
+| Money format FEAT-9995385625 | Sonnet build running | isolation worktree (base e3bc970) | Sonnet round, land |
+| Playability FEAT-9995385623 | plan + 8 personas + template + register written (uncommitted docs) | docs/playtest/, acceptance/feat-9995385623-playability-module.md | driver lane PT-A, welcome lane PT-E (after help), runner PT-C; NO session before a cost forecast and Aaron's Authorise |
+| A2 publish f5.why | NOT dispatched | - | dispatch once CI is green: it answers "why is nobody moving in" on screen; it removes the f5.why accepted-views entry and flips whyViewServed |
+| Roads FEAT-9995385608 | NOT dispatched (Aaron asked how to lay roads) | - | after lane 4 lands (same build code) |
+| Diagnosis worktrees | done; read-only scratch | .claude/worktrees/diag-migration, diag-migration-old | remove (deletion gate) |
+
+Migration finding (BUG-1243, P0, Aaron to rule): arrivals stop at about 1,400 people because safety and environment only fall; old and new formula alike. Also BUG-1244 (rating is the credit rating), BUG-1245 (parks costs 2.75 points from day one).
+
+## STATE AT 22:30 on 2026-11-18 (superseded by 23:40 above)
+
+origin/main = de23f76 (F5 screen f922c52 + BUG-1234 de23f76; CI run 44406336316 in progress, all jobs green but build-test-vet).
+LOCAL, NOT PUSHED: fba12a5 rule versions lane 3; e3bc970 ten-lever formula A1 + BUG-1231. Push both when that CI run is green.
+Aaron's rulings tonight (verbatim on the items): fly-out menu FEAT-9995385618 (bar on top row, keys and mouse, replaces F3 for building, all four contents; F10 opens; clock runs; closes after placing; confirms); minimum terminal 120x30, 80x24 retired (BUG-1236); menu first then wire save/load/tax/borrow (BUG-1237); help + save + load + save debug information FEAT-9995385621; standing OK this session for secret-guard allow entries for TEST FILES AND FIXTURES ONLY, one exact path each, named in the commit.
+
+| Lane | State | Where | Next |
+|---|---|---|---|
+| Lane 4 BUG-1224 as rule 1 | r1 REJECT (final snapshot could not read rv:1 frames) fixed; Opus r2 round running | .claude/worktrees/agent-a5a79cef252f1901c (base 762c857) | on ACCEPT port (3-way: compose.go, ruleversion_test.go, errors.json, master-plan), allow entry for testdata/rules/v1, land; then FEAT-9995385608 roads and placement C1 |
+| Lane 5 FEAT-9995385620 | r1 and r2 REJECT; r3 structural fix running (one shared decision function for restore and pre-check) | .claude/worktrees/agent-adec187556609086f (base 762c857) | Opus r3 round |
+| Menu L1 engine FEAT-9995385618 | Sonnet build running (new package internal/ui/flyout) | isolation worktree | Sonnet round; then L2 (Opus review), L3-L5 per the criteria doc section 6 |
+| Help/save/load/debug FEAT-9995385621 | Sonnet build running (may stop at the design if a safe save needs an engine command) | isolation worktree | finisher or Opus round (save/load = data) |
+| A2 publisher (per-lever compose files, publish f5.why, flip whyViewServed in cmd/metropolis/boot.go) | NOT dispatched: needs e3bc970 on origin | - | dispatch after the push |
+| Uncommitted in main | docs/planning/acceptance/feat-9995385618-flyout-menu.md (commit with a docs commit), kit files (need a review verdict) | main | - |
+
+New items tonight: BUG-1234..1241, FEAT-9995385618..621. SAFE asked on the bus at 19:35 (secret guard false positive; host the browser console on pix): no reply yet.
+LESSON: a port agent that runs `git apply --3way` leaves its changes STAGED; take its change set with `git diff HEAD`, not `git diff` (the first A1 port into main missed everything but one file and broke the build for a few minutes).
+
+## RESUMED 2026-11-18 19:25 - state at 20:00 (superseded by the 22:30 state above)
+
+main = origin/main = 762c857 (rule versions lane 2 LANDED; CI run to be seen). Aaron is at the keyboard, playing the terminal game.
+
+| Lane | State | Where | Next action |
+|---|---|---|---|
+| Rule versions lane 2 | LANDED 762c857 (lead gates 14/14; Aaron approved the one allow-list entry) | main | see CI green |
+| Rule versions lane 3 (replay harness C21, C22) | Sonnet build running | isolation worktree (agent report names it) | Sonnet round, then land |
+| Rule versions lane 4 (BUG-1224 as rule 1) | Sonnet build running (tests first; a finisher is likely) | isolation worktree | finisher if needed, then OPUS round, land, then placement C1 gets its rule number |
+| Rule versions lane 5 (metroserve operator line, journalscan) | NOT dispatched (load: hold until a compose lane finishes) | - | dispatch |
+| BUG-1231 r2 | finisher DONE, all gates rc=0; Opus round r2 running (records its own verdict) | .claude/worktrees/agent-a2f4e3f8ee1ba231e | on ACCEPT land WITH formula A1 (same estate; data/errors.json needs a text merge: main holds G5610-G5619); then A2 |
+| F5 why screen A3 | r1 REJECT (missing plan edge; huge values print garbage; MET-E004 on every boot); r2 fix running | .claude/worktrees/agent-a73d11fa88e9fc982 | narrow Sonnet r2 round, verdict stated in the report |
+| BUG-1234 (P0, Aaron's frame): screens do not blank their background, F3 queue lists completed orders, rows cut off | Sonnet build running; told to fix centrally and avoid boot.go/boot_screens.go/statusbar.go (F5 lane holds them) | isolation worktree | Sonnet round, land; port may need a hand merge with F5 |
+| FEAT-9995385618 fly-out menu (P0, Aaron's rulings on the item) | BA criteria being written | docs/planning/acceptance/feat-9995385618-flyout-menu.md | read, interview Aaron on its questions, dispatch lanes; supersedes placement C3 |
+| Placement C1 | r1 ACCEPT, held for a rule number | .claude/worktrees/agent-a385f81166b77c3f3 | after lane 4 |
+
+Asked SAFE on the bus (19:35): secret guard false positive on SHA256 fields in goldens; host the browser console on pix (Aaron's request). No reply yet.
+Kit files still uncommitted in the main checkout (.claude/settings.json, .claude/commands/lifecycle.md, tools/bow-summary.js, vestige-pointer.js, tools/lib-catalog.js): need a review verdict.
+
+## STOPPED FOR A LAPTOP RESTART - 2026-11-18 about 19:15 (Aaron's instruction)
+
+All agents and background runs stopped by the lead. main = origin/main = 3951276, CI green, pix running 3951276.
+Nothing half-committed. Uncommitted in the main checkout: the forge kit files only (.claude/settings.json,
+.claude/commands/lifecycle.md, tools/bow-summary.js, vestige-pointer.js, tools/lib-catalog.js) - need a review verdict.
+The authoritative plan is docs/planning/delivery-path-2026-11-18.md; rulings are on the BOW items. STAGE 1 STATE:
+
+| Lane | State | Where | Next action |
+|---|---|---|---|
+| Rule versions lane 1 (package) | LANDED 3951276 | main | - |
+| Rule versions lane 2 (record + restore) | Opus r1 ACCEPT recorded; leftover gates NOT finished (only gofmt ran) | estate .claude/worktrees/agent-aba8d30c0c0eaf048; round worktree round-rules2-r1 (holds the reviewer's round_r1_attack_test.go - ADOPT it at port) | run temp/lead-gates/rules2.sh, then port + commit [FEAT-9995385612]; then lanes 3 (replay harness header), 4 (BUG-1224 as rule 1: wire, flip to wired, raise Current, v1 fixture), 5 (metroserve operator line + journalscan) |
+| Placement C1 (data + resolver) | r1 ACCEPT; NOT landing until it can be a versioned rule (after rules lane 2 + a rule number for the placement gate) | .claude/worktrees/agent-a385f81166b77c3f3 | then C2 (committed cost) and C3 (F3 screen) |
+| Formula A1 (ten levers, attract) | Opus r1 ACCEPT; lands WITH BUG-1231 (same files) | .claude/worktrees/agent-a2f4e3f8ee1ba231e | wait for BUG-1231 |
+| BUG-1231 save fix | r1 REJECT (record not validated); r2 code + test file written, NEVER compiled or run | same worktree | fresh finisher: brief is in the conversation ("BUG-1231 r2 finisher") - envelope evidence first, then tests, red-proofs, gates; then a narrow Opus round |
+| F5 why screen A3 | built + wired, all gates green but edge-lint (1 finding, believed pre-existing - unverified); review interrupted, NO verdict | .claude/worktrees/agent-a73d11fa88e9fc982 | fresh Sonnet round (do not record on the item while the formula lane's verdict is the recorded one - state the verdict in the report) |
+| A2 (per-lever compose files, publish f5.why, housing = free homes AND affordability) | not started | - | after A1 + BUG-1231 land; contract = internal/ui/screens/why/types.go Patch |
+| BUG-1224 refusal | built, held for rules lane 4 | .claude/worktrees/agent-ad5c8b543590393b6 | lane 4 |
+
+Aaron's rulings today are in his words on FEAT-083, FEAT-9995385606..616, BUG-782, BUG-1217, BUG-1224, BUG-1228, BUG-1231.
+Standing: overnight runs every night, game lanes only - NOT started tonight (restart); start on Aaron's return.
+
 ## RUN ENDED 08:45 on 2026-11-18
 
 The overnight timer (cron 11999eb3) is deleted; no lanes are running. Summary for Aaron:
