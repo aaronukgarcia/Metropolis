@@ -46,62 +46,40 @@ still stands and they run in the lanes that are left.
 
 ## Landed tonight
 
-BUG-1209 663dc0e, docs 15eeaab, BUG-1194 fdd06c0, BUG-1190 99cc157,
-BUG-1192 d99d4a4, BUG-1191 387d19b.
+Pushed and CI-green through ef61b1d: BUG-1209, 1194, 1190, 1192, 1191, 1200, 1212, 1211, 1136, 767 + docs.
+Pushed, CI running since 01:25 (ca395e4): BUG-1210 748c427, deploy files 6784c41, BUG-1215 9001e9b, BUG-1214 leg 4 ca395e4.
+COMMITTED LOCALLY, NOT PUSHED: BUG-1213 leg 3 (r2 ACCEPT) - push when the ca395e4 run is green.
+Closed as already fixed: BUG-854 (8b173d0). pix redeployed by SAFE at ef61b1d; tick continues.
 
-## CI IS RED (23:30) - land nothing until BUG-1212 is fixed and green
+## Baseline One (FEAT-083)
 
-Run 44192415055 (15eeaab) failed: wsserver TestCommandFailures send_failure got
-a TCP abort instead of the 1001 close. Cause: BUG-1209's watcher hard-closes
-right after writing the close frame. BUG-1212 (P0) fix lane running: graceful
-close (read deadline, let the handshake finish). Four webconsole commits were
-pushed on top before the red was seen; they do not touch Go.
-When BUG-1212 reports: Sonnet round, land, watch CI to green, THEN resume landing.
-
-## Baseline One (FEAT-083) evidence run result
-
-Leg 2 MET on screen (build completes at tick 60, 15,000.00 leaves the treasury).
-Leg 3 PARTIAL: spend posts each month but F2 PROFIT & LOSS says unavailable -> BUG-1213.
-Leg 4 GAP: population identical with and without builds or policies -> BUG-1214.
-Evidence files + two evidence tests sit in .claude/worktrees/agent-aaec4b9f1792dc788
-(docs/planning/evidence/feat-083/, cmd/metropolis and compose feat083_evidence_test.go):
-port and commit them under [FEAT-083] once CI is green.
+Leg 2 MET on screen. Leg 4 pushed (CI pending). Leg 3 committed locally. NOT marked met:
+after CI, re-run the evidence capture on main (legs 2-4), commit the frames, comment FEAT-083; Aaron signs off.
 
 ## In flight (update as they report)
 
 | Item | Stage | Where |
 |---|---|---|
-| BUG-1212 CI red (P0) | fix lane running | isolated worktree |
-| BUG-1213 Baseline One leg 3 (P&L on F2) | build running | .claude/worktrees/agent-a4a2b532e45f4e7b2; brief temp/briefs/bug1213-leg3.md |
-| BUG-1214 Baseline One leg 4 (housing vacancy feeds attract) | build running | .claude/worktrees/agent-a76b3407e3912a9c3; brief temp/briefs/bug1214-leg4.md |
-| BUG-1211 health tick (= BUG-1096) | round r1 ACCEPT (no caller computes a rate from the counter); land after CI is green, then close BUG-1096 too and ask SAFE to redeploy pix | estate .claude/worktrees/agent-ac624e2d316ee6350 |
-| BUG-1200 confirm Esc | r2 ACCEPT; COMMITTED LOCALLY, not pushed (push with the BUG-1212 fix once CI can go green) | .claude/worktrees/agent-a5cc590b4a9369adb |
-| BUG-1136 test infra (astgate ceiling) | ACCEPT; land gate.go + gate_test.go only, after CI is green | estate .claude/worktrees/agent-a65bb1f0a0538394d |
-| BUG-1193 resolver cwd-first | round r1 REJECT (a metroserve paging test times out with the change); needs an r2 lane: diagnose (resolver on a hot path? cache it), rerun metroserve -race x3; queued behind Baseline One for load | estate .claude/worktrees/agent-a65bb1f0a0538394d |
-| FEAT-9995385596 meter | r2 rework BUILT; HELD for an Opus round r2 until load drops (compose suite timing out at 30 m under load); the round must run full compose + metroserve -race | .claude/worktrees/agent-afac334e274decd2f |
-| FEAT-9995385598 workers part 1 | finisher running | .claude/worktrees/agent-a59928c4840009f1f |
-| deploy/compose.yml + .dockerignore | uncommitted; needs a round (mkey FEAT-9995385600) | main checkout |
+| CI on ca395e4 | running; leg 4 changes default population - watch the perf/population probes | |
+| BUG-1208 sealed page store | Opus round r1 running (long test runs) | estate .claude/worktrees/agent-a8bc01e3c389428e3 |
+| BUG-1140 converge zero-evaluation | r1 REJECT, r2 built (per-field counts, H510-H512), round r2 running | estate .claude/worktrees/agent-a7e4f9fa8eab25d4d |
+| BUG-1143 save/load employment | investigate + fix running | isolated worktree |
+| BUG-1178 page identity atomic write | build running (step 0: is it already fixed?) | isolated worktree |
+| BUG-1217 three counts of homes | options paper being written for Aaron (docs/planning/bug-1217-one-count-of-homes.md); do NOT build | main checkout, docs only |
+| FEAT-9995385596 meter | r2 built; HELD for an Opus round r2 | .claude/worktrees/agent-afac334e274decd2f |
+| FEAT-9995385598 workers part 1 | state UNKNOWN; needs a fresh finisher that reads the worktree first | .claude/worktrees/agent-a59928c4840009f1f |
+| BUG-1193 resolver cwd-first | r1 REJECT, probably a false alarm; recheck then land | estate .claude/worktrees/agent-a65bb1f0a0538394d |
 
-## Queue, in order (start as lanes free up)
+## Queue, in order (THREE heavy Go lanes at most; compose in slices with -skip BUG799; every lane checks first that its bug still exists)
 
-1. BUG-1212: round, land, CI green. Nothing else lands first.
-1b. BUG-1208 (now P1): TestBug1197_AbandonedSigtermReleasesPagingClaim flakes under -race ('citizen id N already exists (cold)') - the abandoned build still pages after the claim is released. Dispatch a fix lane as the next Go lane (see the BOW comment).
-2. Baseline One: round + land BUG-1213 and BUG-1214 as they report (BUG-1214
-   will move golden pins and converge bounds - Opus round, it is money/migration);
-   then re-run the evidence capture and record legs 3 and 4 on FEAT-083.
-3. Close the verified-done P1 items: docs/planning/backlog-comb/p1-done-verification.md
-   lists 23 CLOSE with closing notes. Close the plain bugs/UX ones; leave
-   FEAT-230, FEAT-1972079852 and FEAT-2326609823 for Aaron (policy). 6 are WIRE
-   (built, never called): MOD-072/073/078/080/085, FEAT-094 - keep open.
-4. Rounds/landings for BUG-1211, test infra, BUG-1200 r2, meter r2 (Opus), workers part 1.
-5. Game bugs from the comb: BUG-782, BUG-767, BUG-854, BUG-1143, BUG-1140,
-   BUG-1178, BUG-1141; then FEAT-2326609746 (zone tax wiring).
-6. Offload builds in remaining lanes: reconnect FEAT-9995385597, inc2a
-   FEAT-9995385594 after the meter lands, hibernation after that.
-7. Replace docs/planning/assessment.docx with assessment-v2.docx once Word no
-   longer holds the file; commit with p3plus-1.md, p1-done-verification.md and
-   this checkpoint.
-8. BUG-1210, BUG-1208, BUG-1202, BUG-1203, BUG-1207, BUG-1199.
+1. CI green on ca395e4 -> push leg 3 -> watch CI -> evidence capture on main -> ask SAFE for a redeploy.
+2. Land BUG-1208 and BUG-1140 on ACCEPT (BUG-1208 needs compose.go + accepted-findings.json 3-way merges).
+3. Game: BUG-782 (migration + council tax ignore employment - the next migration link, jobs), BUG-1141 (ledger observer), FEAT-2326609746 (zone tax wiring), BUG-1218 (F2 follow-ups), BUG-1216 (deterministic hook for the BUG-799 race tests).
+4. Close the remaining verified-done P1 items from docs/planning/backlog-comb/p1-done-verification.md.
+5. Meter Opus round r2; workers fresh finisher; BUG-1193 recheck.
+6. Offload builds in remaining lanes: reconnect FEAT-9995385597, inc2a FEAT-9995385594 after the meter lands, hibernation after that.
+7. Replace docs/planning/assessment.docx with assessment-v2.docx when Word releases it.
+8. BUG-1202, BUG-1203, BUG-1207, BUG-1199.
 
 ## Parked for Aaron (morning)
 
@@ -110,3 +88,10 @@ port and commit them under [FEAT-083] once CI is green.
 - Hibernation ASM-H6 (store retries run inside the stop, city not playable
   for up to ~70 s) and ASM-H7 (pause counts through the no-command clock).
 - GGR95 delete reports went to SAFE's fallback log (bus refused the text).
+- Meter: a ~5-minute store failure now hibernates every city on a metered host (per the lead's fail-closed ruling) - confirm.
+- BUG-1214 changes the default game: a city where the player builds nothing levels off at 148 (was 244) because homes run out; seed home capacity 120 is a balance placeholder (ASM-1644).
+- Default city loses about 550k a month to an outflow shown as 'Coastal/other' (balance flag); BUG-1213 r2 is tracing what it really is.
+- BUG-1200 edge: Esc closes a confirm sitting UNDER a blocking popup (z-order), not the visible popup. Not filed.
+- pix EXPOSURE: metroserve has no login; whether other LAN devices can reach port 8120 is NOT proven blocked (SAFE-572, P1: depends on the Hyper-V firewall default action; SAFE is testing). Only the dogfood city is on it. Nothing sensitive goes on pix until SAFE-572 is proven or the Cloudflare front door (FEAT-9995385599) lands.
+- Windows Defender may be what makes file-heavy tests collapse on this machine (BUG-1215, unproven); an exclusion for the project temp folder is Aaron's call.
+- forge upgrade --apply would make every hook path absolute (prevents the cwd hook failure) and update 8 kit assets: needs Aaron's yes.
