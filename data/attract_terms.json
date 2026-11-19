@@ -29,13 +29,23 @@
       {"id": "parks", "weight": 0.02}
     ]
   },
+  "built": {
+    "comment": "Which migration inputs count (BUG-1243). SHIPPED VALUES ARE TODAY'S BEHAVIOUR (both modifiers built), pending Aaron's choice between options A, B and C on BUG-1243; each option is a one-line edit here. built.modifiers.safety / .environment: true = the reading counts as weight x (reading - world.aWorld) points (today); false = the modifier is not built and adds exactly 0 points, the F5 panel reads 'not built yet' (option A, Aaron's ruling of 2026-11-18 before the early-game cost was measured: about 2 arrivals a month instead of 12). The reading is computed and stored either way. A flag missing from this block means built, so an older data file behaves as it always did. Unknown keys anywhere in this file are refused, so a misspelt switch cannot silently do nothing. The parks lever is NOT flagged here: its input is real (zoning entertainment opens a leisure venue), see leisure.floorAtBaseline and BUG-1245.",
+    "modifiers": {"safety": true, "environment": true},
+    "whenUnbuilt": {"comment": "What a modifier flagged false (not built) contributes. neutral: exactly 0 points (option A). floorAtBaseline: option C, the modifier counts max(reading, world.aWorld), so it adds points when its reading is above the baseline and exactly 0 when below, never negative; the F5 panel shows it as built with the floored value. Only matters while the modifier's built flag is false. Option C = set both built flags false AND both of these to floorAtBaseline.", "safety": "neutral", "environment": "neutral"}
+  },
+  "world": {
+    "comment": "The outside-world baseline A_world that every lever and modifier is measured against. 40 is today's value; valid range 0 to 100; a lower value gives a new city more arrivals (option B = built flags false plus a lower value, 20 or 0). A_world is re-read from this file on every load and is NOT stored in a save: a save made under one value and loaded under another continues under the new value, deterministically.",
+    "aWorld": 40
+  },
   "environment": {
     "pollutionHalfSaturationKg": 50000,
     "comment": "Directional placeholder (GR#15): total uncollected+disposal-backlog waste (kg, summed general+recycling+food) at which engine.attract's Environment term reads 50/100. Mirrors data/crime.json's safety.halfSaturationActiveCrime curve shape (see internal/engine/crime/api.go's SafetyTerm). Balance pass pending (Aaron's balance-number regime, 2026-08-13)."
   },
   "leisure": {
     "bridgeVenueCapacityUnits": 500,
-    "comment": "Directional placeholder (GR#15): weekly patronage capacity (person-hours, engine.leisure's Venue.Capacity unit) assigned by the compose->leisure venue-registration bridge to every completed engine.build ZoneEntertainment order. engine.build's zone catalogue carries one generic 'entertainment' type today, with no venue-category sub-signal, so the bridge always opens one CategoryCommunity venue at this one capacity figure — a coarse composite, not a real per-building capacity read. Balance pass pending."
+    "floorAtBaseline": false,
+    "comment": "Directional placeholder (GR#15): weekly patronage capacity (person-hours, engine.leisure's Venue.Capacity unit) assigned by the compose->leisure venue-registration bridge to every completed engine.build ZoneEntertainment order. engine.build's zone catalogue carries one generic 'entertainment' type today, with no venue-category sub-signal, so the bridge always opens one CategoryCommunity venue at this one capacity figure — a coarse composite, not a real per-building capacity read. Balance pass pending. floorAtBaseline (BUG-1245, off = today): when true the parks lever never reads below world.aWorld, so it adds 0 points before the first venue and a venue can only raise it."
   },
   "jobAvailability": {
     "vacancyRateHalfSaturationPerMille": 100,

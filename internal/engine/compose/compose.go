@@ -3373,9 +3373,18 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 		MonthlyRentMicroPounds: st.monthlyRentForHouseholds(householdIDs),
 	}
 	in.Levers[attract.LeverHousing] = attract.LeverTerm{Built: true} // value computed inside attract
+	aWorld := st.attract.AWorld()
+	if st.attractTerms.Leisure.FloorAtBaseline {
+		leisureFit = math.Max(leisureFit, aWorld) // BUG-1245 option: parks never reads below the baseline
+	}
 	in.Levers[attract.LeverParks] = attract.LeverTerm{Value: leisureFit, Built: true}
-	in.Modifiers[attract.ModifierSafety] = attract.LeverTerm{Value: safety, Built: true}
-	in.Modifiers[attract.ModifierEnvironment] = attract.LeverTerm{Value: environment, Built: true}
+	// BUG-1243: both readings are still computed and stored above, but they
+	// count toward migration only when data/attract_terms.json's built block
+	// says the system behind them exists (Aaron, 2026-11-18: hold both at neutral).
+	// Option C (data, default off): an unbuilt modifier may instead be floored
+	// at the baseline, see modifierTerm.
+	in.Modifiers[attract.ModifierSafety] = modifierTerm(safety, st.attractTerms.Built.safetyBuilt(), st.attractTerms.Built.safetyFloored(), aWorld)
+	in.Modifiers[attract.ModifierEnvironment] = modifierTerm(environment, st.attractTerms.Built.environmentBuilt(), st.attractTerms.Built.environmentFloored(), aWorld)
 	if err := st.attract.SetTermInputs(in); err != nil {
 		return attract.MigrationResult{}, err
 	}
@@ -4489,9 +4498,15 @@ func baselineOneAttractConfig(b []byte, correlationID string) (attract.Config, e
 	if err != nil {
 		return attract.Config{}, err
 	}
+	// BUG-1243 option B: an optional data override of the outside-world
+	// baseline (world.aWorld); a file without it keeps baselineOneAWorld.
+	terms, err := parseAttractTermsData(b, correlationID)
+	if err != nil {
+		return attract.Config{}, err
+	}
 	return attract.Config{
 		Weights:       w,
-		World:         attract.NewStaticWorldPool(baselineOneAWorld),
+		World:         attract.NewStaticWorldPool(terms.World.worldBaseline()),
 		MigrationRate: baselineOneMigrationRate,
 		Reputation:    attract.ReputationConfig{RiseRate: baselineOneRepRise, FallRate: baselineOneRepFall, Max: baselineOneRepMax},
 	}, nil
