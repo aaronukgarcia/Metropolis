@@ -6,7 +6,29 @@ this file, the BOW comments on each item, `git log -10`, `gh run list
 --branch main --limit 3` and `git worktree list`, and carries on. It never
 redoes committed work and never trusts recall over those four sources.
 
-## STATE AT 23:40 on 2026-11-18 (newest; supersedes everything below)
+## STATE AT 02:50 on 2026-11-19 (newest; supersedes everything below)
+
+origin/main = caaff08. **CI IS RED on caaff08** (run 44427281456): two cmd/metropolis frame tests fail under the race detector on the slow runner (BUG-1239 class: the idle-frame test, with data races in its own harness, and the money boot test reading a frame before the views caught up). Nothing lands until the fix is in and CI is green. Read CI from `gh run list`, never from a chained exit code.
+
+LANDED since 23:40 (all on origin): docs eac24a4; CI fix 143197d; CI limit 45m 2bf8fe9; kit files 181830a; BUG-1224 as rule 1 785bc70; menu engine 6d109c1 (CI green there); money format caaff08 (CI red, see above).
+DONE on the BOW: BUG-1234, BUG-1231, FEAT-9995385619, BUG-1242.
+Aaron's rulings since 23:40 (verbatim on the items): registry versions for the drifted kit files; question.md ignored locally (.git/info/exclude); BUG-1243 "Hold both at neutral" (then measured: see below); browser simulation frozen (FEAT-9995385626).
+
+| Lane | State | Where | Next |
+|---|---|---|---|
+| BUG-1239 start-up race in frame tests (CI red) | Sonnet fix running: a real start-up signal from the tick driver, safe frame reads, tests wait for views to agree | .claude/worktrees/b1239 (base caaff08) | Sonnet round, land FIRST, see CI green |
+| Lane 5 FEAT-9995385620 | r4 ACCEPT, ported, port delta r5 ACCEPT: LAND-READY | .claude/worktrees/port-lane5 (base 6d109c1; partly STAGED: use `git diff HEAD`) | port into main, land.sh, commit [FEAT-9995385620]; then run tools/journalscan on a copy of the pix dogfood journal, then ask SAFE to redeploy |
+| BUG-1243 migration switches | r2 ACCEPT: ships TODAY's behaviour, switches in data: LAND-READY | .claude/worktrees/agent-ac4aaa8e98093a984 (base 2bf8fe9) | port, land.sh, commit [BUG-1243]; item stays OPEN until Aaron picks A, B or C (lead recommends C; table on the item) |
+| Help/save/load/debug FEAT-9995385621 | Opus r1 REJECT (y could load the wrong slot); r2 fixes built; second finisher running the gates | .claude/worktrees/agent-ab13ecb6178696f6c (base de23f76) | Opus r2 round; port (conflicts expected with money and BUG-1239 in cmd/metropolis tests, statusbar, tickdriver) |
+| Roads lane 1a FEAT-9995385628 (+ BUG-1250 long path fix) | engine half built; third agent finishing: v2 fixture, version-number tests made relative to named rules, gates | .claude/worktrees/rd1a (base 6d109c1) | Opus round (changes what a command accepts), land; then lane 1b (the key) after help lands |
+| Menu L2 wiring, welcome screen, playtest driver | NOT dispatched: all change cmd/metropolis key and screen wiring | - | after help/save lands |
+| A2 publish f5.why | NOT dispatched | - | after BUG-1243 lands (same applyMigration code) |
+| Roads criteria doc | written, UNCOMMITTED in main | docs/planning/acceptance/feat-9995385608-roads-terminal.md | commit with the next docs commit |
+
+GOTCHAS FOUND TONIGHT: isolation worktrees (`agent-<17 hex>`) fail on Windows until BUG-1250 lands (path too long): cut worktrees by hand with SHORT names and dispatch without isolation. Agents resumed after a rate-limit stop are killed by their budget guard (it counts the wait): start fresh agents. The lead's landing gate script is temp/lead-gates/land.sh <label> (19 gates, real packages only). Rule bumps break tests that hard-code version numbers (roads lane is making them relative to named rules).
+NEW ITEMS: BUG-1243..1251, FEAT-9995385626..628.
+
+## STATE AT 23:40 on 2026-11-18 (superseded by 02:50 above)
 
 origin/main = e3bc970. **CI IS RED on main (BUG-1242)**: viewgate rejects f5.why; the BUG-1234 idle test fails on the slow runner. The fix is STAGED in the main checkout (3 files) and in review in .claude/worktrees/round-cifix; land it first, on an ACCEPT recorded on BUG-1242, then confirm green with `gh run list` (never a chained exit code).
 
