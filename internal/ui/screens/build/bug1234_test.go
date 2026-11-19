@@ -81,13 +81,13 @@ func TestBUG1234_RowsFitFortyColumns(t *testing.T) {
 	rows = renderedText(buf, core.Rect{X: 0, Y: 0, W: w, H: 6})
 	for i := range entries {
 		row := rows[1+i]
-		if !strings.HasSuffix(row, "[unlocked]") || !strings.Contains(row, entries[i].Name) {
+		if !strings.HasSuffix(row, "[unlocked]") || !rowShowsNameOrCutName(row, entries[i].Name) {
 			t.Errorf("catalogue row cut at %d columns: %q", w, row)
 		}
 	}
-	// One tier for the whole column: "Heavy Industry £60,000 80 jobs
-	// [unlocked]" is 41 wide, so at 40 every row drops the commas together.
-	if rows[1] != "Dwelling £15000 8 homes [unlocked]" || rows[2] != "Heavy Industry £60000 80 jobs [unlocked]" {
+	// One tier for the whole column, commas always kept: "Heavy Industry £60,000 80 jobs
+	// [unlocked]" is 41 wide, so at 40 the NAME is shortened, never the figure.
+	if rows[1] != "Dwelling £15,000 8 homes [unlocked]" || rows[2] != "Heavy Indust… £60,000 80 jobs [unlocked]" {
 		t.Errorf("catalogue compact format changed: %q", rows[1:3])
 	}
 	buf = renderBuf(44, 6, func(b *core.Buffer, r core.Rect) { RenderCatalogue(b, r, entries, true, style) })
@@ -117,5 +117,34 @@ func TestBUG1234_LongNameShortenedBadgeKept(t *testing.T) {
 	row := renderedText(buf, core.Rect{X: 0, Y: 0, W: 40, H: 3})[1]
 	if !strings.HasSuffix(row, "[materials-pending]") || !strings.Contains(row, "…") {
 		t.Errorf("long name row = %q", row)
+	}
+}
+
+// rowShowsNameOrCutName is true when the row starts with the whole name, or
+// with the name cut at some length followed by an ellipsis whose prefix matches
+// the name exactly, and then a space.
+func rowShowsNameOrCutName(row, name string) bool {
+	if strings.HasPrefix(row, name+" ") {
+		return true
+	}
+	r := []rune(name)
+	for k := 1; k < len(r); k++ {
+		if strings.HasPrefix(row, string(r[:k])+"…"+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRowShowsNameOrCutName_IsStrict(t *testing.T) {
+	for _, row := range []string{"Heavy Industry £1", "Heavy Indust… £1", "H… £1"} {
+		if !rowShowsNameOrCutName(row, "Heavy Industry") {
+			t.Errorf("rejected a valid row %q", row)
+		}
+	}
+	for _, row := range []string{"Heavy Xndust… £1", "Heavy Indust £1", "Heavy Industr £1", "Hxavy Industry £1", "Heavy Indust…£1", "Dwelling £1"} {
+		if rowShowsNameOrCutName(row, "Heavy Industry") {
+			t.Errorf("accepted a wrong row %q", row)
+		}
 	}
 }

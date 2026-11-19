@@ -11,6 +11,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	chromescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/chrome"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
 // BUG-324's composition-root proof set.
@@ -205,8 +206,8 @@ func TestBUG324_TopRowCarriesRealFigures(t *testing.T) {
 		"money ",   // the labelled money
 		"pop ",     // the labelled population
 		fig.Rating, // e.g. "1000/1000" — empty on a blank bar
-		"pop " + strconv.FormatInt(fig.Population, 10), // the REAL live citizen count
-		"money " + strconv.FormatInt(fig.Money, 10),    // the REAL live treasury, whole pounds
+		"pop " + strconv.FormatInt(fig.Population, 10),  // the REAL live citizen count
+		"money " + widgets.FormatWholePounds(fig.Money), // the REAL live treasury, whole pounds with commas
 	} {
 		if want == "" {
 			t.Errorf("expected a non-empty figure to assert on, got empty (figures: %+v)", fig)

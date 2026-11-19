@@ -53,8 +53,10 @@ func plAdvance(t *testing.T, w *skeletonWiring, n int64) {
 }
 
 var (
-	plConsumptionRe = regexp.MustCompile(`Household consumption\s+£\s*(-?[0-9.]+)(?:\s+£\s*(-?[0-9.]+))?`)
-	plNetRe         = regexp.MustCompile(`Net treasury change\s+£\s*(-?[0-9.]+)(?:\s+£\s*(-?[0-9.]+))?`)
+	// Whole-pound figures with thousands commas and the minus before the pound
+	// sign: "-£530,161" (FEAT-9995385625).
+	plConsumptionRe = regexp.MustCompile(`Household consumption\s+(-?£[0-9,]+)(?:\s+(-?£[0-9,]+))?`)
+	plNetRe         = regexp.MustCompile(`Net treasury change\s+(-?£[0-9,]+)(?:\s+(-?£[0-9,]+))?`)
 )
 
 func plF2(w *skeletonWiring) string {

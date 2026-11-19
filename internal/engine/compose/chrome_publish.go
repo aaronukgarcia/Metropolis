@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
@@ -213,10 +214,10 @@ func (st *simState) buildChromeTopBarPatch() (json.RawMessage, error) {
 			Date:       chromeDateString(clock.Month()),
 			ClockCycle: int(clock.DayInMonth()),
 			Speed:      chromeSpeedFigure(clock.Paused(), int(clock.Speed())),
-			// Integer division, not a rounding helper: a status bar
-			// reads whole pounds, and truncation toward zero is the
-			// documented behaviour of the field (see the ledger).
-			Money:      st.publishedTreasury() / int64(finance.MicropoundsPerPound),
+			// One rounding rule for whole pounds (half away from zero, det.WholePoundsRounded): a status bar
+			// reads whole pounds and must match the F2 balance sheet, which the UI rounds the
+			// same way (FEAT-9995385625 r2).
+			Money:      det.WholePoundsRounded(st.publishedTreasury()),
 			Population: int64(st.citizens.TotalPopulation(st.cid)),
 			Rating:     chromeRatingString(st.finance.CreditRatingNow()),
 			Housing:    buildChromeHousing(&st.housingPub, st.citizens, st.cid),

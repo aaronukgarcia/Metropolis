@@ -135,3 +135,30 @@ func checkedMul64(a, b int64) (int64, bool) {
 	}
 	return p, true
 }
+
+// WholePoundsRounded converts money units to whole pounds, rounding half away
+// from zero (1,499 units -> 1, 1,500 -> 2, -1,500 -> -2). It is THE rounding
+// rule for whole pounds in the whole program (FEAT-9995385625 r2: the status
+// line and the F2 balance sheet must show the same figure); the terminal's
+// formatter applies the same rule and a test in cmd/metropolis pins them
+// equal. Integer arithmetic only. The magnitude is held in uint64 so
+// math.MinInt64 (no int64 absolute value) cannot wrap; the result always fits
+// int64 because the scale is 1,000.
+func WholePoundsRounded(units int64) int64 {
+	neg := units < 0
+	var mag uint64
+	if neg {
+		mag = uint64(-(units + 1)) + 1
+	} else {
+		mag = uint64(units)
+	}
+	per := uint64(MicropoundsPerPound)
+	pounds := mag / per
+	if mag%per >= per/2 {
+		pounds++
+	}
+	if neg {
+		return -int64(pounds)
+	}
+	return int64(pounds)
+}

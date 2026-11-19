@@ -80,7 +80,7 @@ func TestFiguresRenderAndUpdate(t *testing.T) {
 
 	top := rowString(buf, 0, 80)
 	for _, want := range []string{
-		"Aug 2026", "cycle 14/30", "money 123456", "pop 50000", "rating AA",
+		"Aug 2026", "cycle 14/30", "money £123,456", "pop 50000", "rating AA",
 	} {
 		if !strings.Contains(top, want) {
 			t.Errorf("top bar %q does not contain %q", top, want)
@@ -99,7 +99,7 @@ func TestFiguresRenderAndUpdate(t *testing.T) {
 	c.Render(buf, core.Rect{X: 0, Y: 0, W: 80, H: 6})
 	top = rowString(buf, 0, 80)
 	for _, want := range []string{
-		"Sep 2026", "cycle 5/30", "money 999", "pop 60000", "rating BB",
+		"Sep 2026", "cycle 5/30", "money £999", "pop 60000", "rating BB",
 	} {
 		if !strings.Contains(top, want) {
 			t.Errorf("updated top bar %q does not contain %q", top, want)

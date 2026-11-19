@@ -87,7 +87,7 @@ func TestBUG1220_Hints_AdvertisedKeysAreBound(t *testing.T) {
 	}
 }
 
-var catRowRe = regexp.MustCompile(`cost £\d+\.\d\d\s+cap \d+ homes, \d+ jobs`)
+var catRowRe = regexp.MustCompile(`cost £\d{1,3}(?:,\d{3})*\s+cap \d+ homes, \d+ jobs`)
 
 // Part C: the F3 catalogue's cost and cap columns show real values.
 func TestBUG1220_F3Catalogue_CostAndCapShowValues(t *testing.T) {

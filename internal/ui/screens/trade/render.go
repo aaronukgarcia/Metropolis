@@ -12,17 +12,6 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
-// micropoundsPerPound is the money scale (1 GBP = 1,000 units since the
-// BUG-452 rebase, 2026-09-01 — was 1,000,000 pre-rebase; M0-ENG §1.2 /
-// engine.finance.money.go). It is a unit conversion constant, not a
-// balance value — used only to DISPLAY int64 money-unit figures as pounds
-// (the stored value stays int64; GR#16). GR#20 bars this UI package from
-// importing internal/engine/finance directly, so this stays a
-// hand-duplicated literal — rebased alongside its engine-side siblings
-// (see internal/foundation/det/money.go's MicropoundsPerPound doc comment)
-// rather than left silently stale.
-const micropoundsPerPound int64 = 1_000
-
 // drawText writes s left-to-right starting at (x, y), clipped to rect's
 // right edge — the small shared primitive every label row uses, mirroring
 // ui.screen.proj's drawText clipping discipline.
@@ -40,42 +29,6 @@ func drawText(buf *core.Buffer, rect core.Rect, x, y int, s string, style tcell.
 // formatTonnes renders a t/day figure as "<n>t/day".
 func formatTonnes(tonnesPerDay int64) string {
 	return fmt.Sprintf("%dt/day", tonnesPerDay)
-}
-
-// formatPounds renders an int64 micro-pound figure as pounds to two decimal
-// places (integer arithmetic only — no float in the display path, so the
-// formatting is deterministic across runs). Negative values get a leading
-// minus. The magnitude is computed in uint64 so that negating
-// math.MinInt64 never wraps to a negative value (GR#16): |MinInt64| = 2^63
-// has no int64 representation, and the old in-place `-micropounds` left
-// both sign and magnitude negative, rendering a double-minus string (SEC-142).
-func formatPounds(micropounds int64) string {
-	sign := ""
-	var mag uint64
-	if micropounds < 0 {
-		sign = "-"
-		// -(v+1)+1 yields |v| without ever negating MinInt64 itself — the
-		// same two's-complement magnitude trick as foundation/num.absU64.
-		mag = uint64(-(micropounds + 1)) + 1
-	} else {
-		mag = uint64(micropounds)
-	}
-	// unitsPerPenny/half-unit rounding are DERIVED from micropoundsPerPound
-	// (100 pence per pound), not hand-duplicated literals — BUG-452
-	// (2026-09-01) found the pre-existing hardcoded "10000"/"5000" pair
-	// silently wrong after the base-unit rebase (they assumed the
-	// pre-rebase 1,000,000 scale) and this file's own
-	// TestFormatPounds_Deterministic caught it, so the formula is
-	// generalized here to survive any future rescale.
-	unitsPerPenny := uint64(micropoundsPerPound) / 100
-	pounds := mag / uint64(micropoundsPerPound)
-	frac := mag % uint64(micropoundsPerPound)
-	hundredths := (frac + unitsPerPenny/2) / unitsPerPenny
-	if hundredths >= 100 {
-		pounds++
-		hundredths -= 100
-	}
-	return fmt.Sprintf("%s£%d.%02d", sign, pounds, hundredths)
 }
 
 // formatRisk renders a [0,1] risk indicator as a whole-number percentage.
@@ -146,8 +99,8 @@ func RenderContracts(buf *core.Buffer, rect core.Rect, contracts []ImportContrac
 		}
 		row := fmt.Sprintf("%s  %s  %dmo (%d left)  %s/unit  penalty %s%s",
 			c.ID, c.Commodity, c.TermMonths, c.MonthsRemaining,
-			formatPounds(c.PricePerUnitMicropounds),
-			formatPounds(c.CancellationPenaltyMicropounds), status)
+			widgets.FormatPounds(c.PricePerUnitMicropounds),
+			widgets.FormatPounds(c.CancellationPenaltyMicropounds), status)
 		drawText(buf, rect, rect.X, y, row, style)
 		y++
 	}
@@ -298,14 +251,14 @@ func RenderBalance(buf *core.Buffer, rect core.Rect, balance BalanceOfTradeView,
 			if y >= rect.Y+rect.H {
 				return
 			}
-			drawText(buf, rect, rect.X, y, fmt.Sprintf("    %s  %s  %s/day", f.Key, formatTonnes(f.TonnesPerDay), formatPounds(f.ValuePerDayMicropounds)), style)
+			drawText(buf, rect, rect.X, y, fmt.Sprintf("    %s  %s  %s/day", f.Key, formatTonnes(f.TonnesPerDay), widgets.FormatPounds(f.ValuePerDayMicropounds)), style)
 			y++
 		}
 		for _, f := range ledger.ByArtery {
 			if y >= rect.Y+rect.H {
 				return
 			}
-			drawText(buf, rect, rect.X, y, fmt.Sprintf("    via %s  %s  %s/day", f.Key, formatTonnes(f.TonnesPerDay), formatPounds(f.ValuePerDayMicropounds)), style)
+			drawText(buf, rect, rect.X, y, fmt.Sprintf("    via %s  %s  %s/day", f.Key, formatTonnes(f.TonnesPerDay), widgets.FormatPounds(f.ValuePerDayMicropounds)), style)
 			y++
 		}
 	}

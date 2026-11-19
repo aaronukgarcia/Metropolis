@@ -3,8 +3,6 @@ package build
 import (
 	"fmt"
 	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -13,20 +11,6 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
-
-// micropoundsPerPound is the money scale (1 GBP = 1,000 units since the
-// BUG-452 rebase, 2026-09-01 — was 1,000,000 pre-rebase; M0-ENG §1.2 /
-// engine.finance.money.go). It is a unit conversion constant, not a
-// balance value — used only to DISPLAY int64 money-unit figures as pounds
-// (the stored value stays int64; GR#16). This mirrors ui.screen.trade's
-// local formatPounds (there is no shared money formatter in
-// ui.widgets/ui.core yet — flagged in the delivery report as a GR#3
-// extraction candidate, out of this package's file ownership). GR#20 bars
-// this UI package from importing internal/engine/finance directly, so
-// this stays a hand-duplicated literal — rebased alongside its three
-// engine-side siblings (see internal/foundation/det/money.go's
-// MicropoundsPerPound doc comment) rather than left silently stale.
-const micropoundsPerPound int64 = 1_000
 
 // laneLengthCap bounds the queue-lane glyph run so the lane never exceeds a
 // reasonable visual width before widgets.QueueLane's own rect clamp. It is
@@ -46,41 +30,6 @@ func drawText(buf *core.Buffer, rect core.Rect, x, y int, s string, style tcell.
 		buf.Set(x, y, r, style)
 		x++
 	}
-}
-
-// formatPounds renders an int64 micro-pound figure as pounds to two decimal
-// places (integer arithmetic only — no float in the display path, so the
-// formatting is deterministic across runs). Negative values get a leading
-// minus. The magnitude is computed in uint64 so that negating
-// math.MinInt64 never wraps to a negative value (GR#16): |MinInt64| = 2^63
-// has no int64 representation, and the in-place `-micropounds` would leave
-// both sign and magnitude negative, rendering a double-minus string
-// (SEC-142, mirrored from ui.screen.trade).
-func formatPounds(micropounds int64) string {
-	sign := ""
-	var mag uint64
-	if micropounds < 0 {
-		sign = "-"
-		mag = uint64(-(micropounds + 1)) + 1
-	} else {
-		mag = uint64(micropounds)
-	}
-	// unitsPerPenny/half-unit rounding are DERIVED from micropoundsPerPound
-	// (100 pence per pound), not hand-duplicated literals — BUG-452
-	// (2026-09-01) found the pre-existing hardcoded "10000"/"5000" pair
-	// silently wrong after the base-unit rebase (they assumed the
-	// pre-rebase 1,000,000 scale) and this file's own
-	// TestFormatPounds_Deterministic caught it (£1.25 rendered as £1.00),
-	// so the formula is generalized here to survive any future rescale.
-	unitsPerPenny := uint64(micropoundsPerPound) / 100
-	pounds := mag / uint64(micropoundsPerPound)
-	frac := mag % uint64(micropoundsPerPound)
-	hundredths := (frac + unitsPerPenny/2) / unitsPerPenny
-	if hundredths >= 100 {
-		pounds++
-		hundredths -= 100
-	}
-	return fmt.Sprintf("%s£%d.%02d", sign, pounds, hundredths)
 }
 
 // laneLength clamps an int64 lead-time-remaining figure into the
@@ -170,26 +119,6 @@ func compactCapacity(raw string) string {
 	return raw
 }
 
-// compactCost turns "£15000.00" into "£15,000" (whole pounds, thousands
-// separators) when withCommas, or "£15000" when not. Anything that is not a
-// plain pounds figure is returned verbatim.
-func compactCost(raw string, withCommas bool) string {
-	body, ok := strings.CutPrefix(raw, "£")
-	if !ok {
-		return raw
-	}
-	body = strings.TrimSuffix(body, ".00")
-	if _, err := strconv.ParseInt(body, 10, 64); err != nil {
-		return raw
-	}
-	if withCommas {
-		for i := len(body) - 3; i > 0; i -= 3 {
-			body = body[:i] + "," + body[i:]
-		}
-	}
-	return "£" + body
-}
-
 // RenderHeader draws the F3 title line plus the staleness marker. When
 // !haveData it draws "no data" rather than a fabricated figure.
 func RenderHeader(buf *core.Buffer, rect core.Rect, haveData, stale bool, style tcell.Style) {
@@ -224,7 +153,7 @@ func RenderLandPrice(buf *core.Buffer, rect core.Rect, price LandPriceView, have
 	}
 	if rect.H > 1 {
 		drawText(buf, rect, rect.X, rect.Y+1,
-			fmt.Sprintf("cell (%d,%d)  %s", price.Cell.X, price.Cell.Y, formatPounds(price.PriceMicropounds)), style)
+			fmt.Sprintf("cell (%d,%d)  %s", price.Cell.X, price.Cell.Y, widgets.FormatPounds(price.PriceMicropounds)), style)
 	}
 }
 
@@ -309,19 +238,26 @@ func orderFmts(o BuildOrder) []rowFmt {
 	}
 }
 
+// costText shows a catalogue cost in the shared money style ("£15,000": whole
+// pounds, thousands commas). The catalogue's CostRaw is TEXT from the engine
+// ("£15000.00"); widgets.FormatMoneyText is the one strict parser, and text it
+// does not understand (for example "20k") is shown unchanged.
+func costText(raw string) string {
+	out, _ := widgets.FormatMoneyText(raw)
+	return out
+}
+
 // catalogueFmts lists a catalogue row's formats, fullest first. The compact
-// tiers drop the section word, the pence, and a zero homes/jobs half.
+// tier drops the section word and a zero homes/jobs half; the cost keeps its
+// commas in every tier (Aaron, FEAT-9995385625).
 func catalogueFmts(e CatalogueEntry) []rowFmt {
 	badge := e.Unlock.String()
 	return []rowFmt{
 		func(n string) string {
-			return fmt.Sprintf("  %s (%s) cost %s cap %s [%s]", n, e.Section, e.CostRaw, e.CapacityRaw, badge)
+			return fmt.Sprintf("  %s (%s) cost %s cap %s [%s]", n, e.Section, costText(e.CostRaw), e.CapacityRaw, badge)
 		},
 		func(n string) string {
-			return fmt.Sprintf("%s %s %s [%s]", n, compactCost(e.CostRaw, true), compactCapacity(e.CapacityRaw), badge)
-		},
-		func(n string) string {
-			return fmt.Sprintf("%s %s %s [%s]", n, compactCost(e.CostRaw, false), compactCapacity(e.CapacityRaw), badge)
+			return fmt.Sprintf("%s %s %s [%s]", n, costText(e.CostRaw), compactCapacity(e.CapacityRaw), badge)
 		},
 	}
 }
@@ -461,7 +397,7 @@ func RenderDemolition(buf *core.Buffer, rect core.Rect, dem DemolitionView, have
 	}
 	if rect.H > 1 {
 		drawText(buf, rect, rect.X, rect.Y+1,
-			fmt.Sprintf("cell (%d,%d)  compensation %s", dem.Cell.X, dem.Cell.Y, formatPounds(dem.CompensationMicropounds)), style)
+			fmt.Sprintf("cell (%d,%d)  compensation %s", dem.Cell.X, dem.Cell.Y, widgets.FormatPounds(dem.CompensationMicropounds)), style)
 	}
 }
 

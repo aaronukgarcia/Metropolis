@@ -259,3 +259,22 @@ func TestMulRat_BoundaryNoOverflow(t *testing.T) {
 		})
 	}
 }
+
+// FEAT-9995385625 r2: the one whole-pound rounding rule (half away from zero).
+func TestWholePoundsRounded_Table(t *testing.T) {
+	cases := []struct {
+		in   int64
+		want int64
+	}{
+		{0, 0}, {1, 0}, {499, 0}, {500, 1}, {999, 1}, {1000, 1}, {1499, 1}, {1500, 2},
+		{-1, 0}, {-499, 0}, {-500, -1}, {-999, -1}, {-1000, -1}, {-1499, -1}, {-1500, -2},
+		{438_609_999, 438_610}, {438_609_499, 438_609},
+		{math.MaxInt64, 9_223_372_036_854_776}, {math.MaxInt64 - 1, 9_223_372_036_854_776},
+		{math.MinInt64, -9_223_372_036_854_776}, {math.MinInt64 + 1, -9_223_372_036_854_776},
+	}
+	for _, c := range cases {
+		if got := WholePoundsRounded(c.in); got != c.want {
+			t.Errorf("WholePoundsRounded(%d) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}

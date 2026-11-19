@@ -7,10 +7,10 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
-	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	uichrome "github.com/aaronukgarcia/Metropolis/internal/ui/screens/chrome"
@@ -302,7 +302,10 @@ func TestBUG324_TreasuryMirrorTracksEveryWriter_ThroughTheRealComposition(t *tes
 	if err := json.Unmarshal(raw, &patch); err != nil {
 		t.Fatalf("unmarshal published patch: %v", err)
 	}
-	if want := st.treasury / int64(finance.MicropoundsPerPound); patch.Figures.Money != want {
+	// FEAT-9995385625: whole pounds are rounded half away from zero, by the
+	// one helper every screen agrees with, never truncated (truncation put
+	// two treasury figures a pound apart on one screen).
+	if want := det.WholePoundsRounded(st.treasury); patch.Figures.Money != want {
 		t.Fatalf("published Money = %d, want %d (st.treasury %d micropounds in whole pounds) — the bar is showing a figure the simulation does not have", patch.Figures.Money, want, st.treasury)
 	}
 }

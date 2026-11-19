@@ -40,7 +40,7 @@ func TestRenderContracts_ShowsTermPenaltyAndPrice(t *testing.T) {
 	// base-unit change (1e-6 GBP/unit -> 1e-3 GBP/unit) so they still
 	// exercise the same real £ figures the row assertions below expect.
 	contracts := []ImportContract{
-		{ID: "c-1", Commodity: "grain", TermMonths: 12, MonthsRemaining: 8, CancellationPenaltyMicropounds: 1500, PricePerUnitMicropounds: 45_000, Status: StatusActive},
+		{ID: "c-1", Commodity: "grain", TermMonths: 12, MonthsRemaining: 8, CancellationPenaltyMicropounds: 1_500_000, PricePerUnitMicropounds: 45_000, Status: StatusActive},
 		{ID: "c-2", Commodity: "fuel", TermMonths: 6, MonthsRemaining: 2, CancellationPenaltyMicropounds: 0, PricePerUnitMicropounds: 90_000, Status: StatusCancelled},
 	}
 	buf := renderBuf(90, 4, func(b *core.Buffer, r core.Rect) {
@@ -50,11 +50,14 @@ func TestRenderContracts_ShowsTermPenaltyAndPrice(t *testing.T) {
 	if !rowContains(rows, "c-1") || !rowContains(rows, "grain") || !rowContains(rows, "12mo") {
 		t.Errorf("contract row missing term/commodity: %v", rows)
 	}
-	if !rowContains(rows, "£45.00") {
-		t.Errorf("contract row missing £/unit price: %v", rows)
+	if !rowContains(rows, "  £45/unit  penalty £1,500") {
+		t.Errorf("contract row missing the whole £45/unit price text: %v", rows)
 	}
-	if !rowContains(rows, "£1.50") {
-		t.Errorf("contract row missing penalty £1.50 (1500 micropounds): %v", rows)
+	if !rowContains(rows, "  £90/unit  penalty £0 [cancelled]") {
+		t.Errorf("cancelled contract row missing its whole price text: %v", rows)
+	}
+	if !rowContains(rows, "£1,500") {
+		t.Errorf("contract row missing penalty £1,500: %v", rows)
 	}
 	if !rowContains(rows, "[cancelled]") {
 		t.Errorf("cancelled contract row missing [cancelled] marker: %v", rows)
@@ -144,7 +147,7 @@ func TestRenderBalance_ShowsCommodityAndArtery(t *testing.T) {
 	// the assertions below expect (e.g. £1.80/day).
 	balance := BalanceOfTradeView{
 		Imports: TradeLedgerView{
-			ByCommodity: []TradeFlow{{Key: "grain", TonnesPerDay: 40, ValuePerDayMicropounds: 1800}},
+			ByCommodity: []TradeFlow{{Key: "grain", TonnesPerDay: 40, ValuePerDayMicropounds: 1_800_000}},
 			ByArtery:    []TradeFlow{{Key: "sea", TonnesPerDay: 60, ValuePerDayMicropounds: 2700}},
 		},
 		Exports: TradeLedgerView{
@@ -156,7 +159,7 @@ func TestRenderBalance_ShowsCommodityAndArtery(t *testing.T) {
 		RenderBalance(b, r, balance, true, style)
 	})
 	rows := renderedText(buf, core.Rect{X: 0, Y: 0, W: 90, H: 8})
-	for _, want := range []string{"imports", "exports", "grain", "via sea", "40t/day", "£1.80/day", "machinery", "via rail"} {
+	for _, want := range []string{"imports", "exports", "grain", "via sea", "40t/day", "£1,800/day", "machinery", "via rail"} {
 		if !rowContains(rows, want) {
 			t.Errorf("balance panel missing %q: %v", want, rows)
 		}
@@ -227,17 +230,17 @@ func TestFormatPounds_Deterministic(t *testing.T) {
 		micropounds int64
 		want        string
 	}{
-		{1_500, "£1.50"},
-		{45_000, "£45.00"},
-		{0, "£0.00"},
-		{1_000_000, "£1000.00"},
-		{-1_500, "-£1.50"},
-		{math.MaxInt64, "£9223372036854775.81"},
-		{math.MinInt64, "-£9223372036854775.81"},
+		{1_500, "£2"},
+		{45_000, "£45"},
+		{0, "£0"},
+		{1_000_000, "£1,000"},
+		{-1_500, "-£2"},
+		{math.MaxInt64, "£9,223,372,036,854,776"},
+		{math.MinInt64, "-£9,223,372,036,854,776"},
 	}
 	for _, c := range cases {
-		if got := formatPounds(c.micropounds); got != c.want {
-			t.Errorf("formatPounds(%d) = %q, want %q", c.micropounds, got, c.want)
+		if got := widgets.FormatPounds(c.micropounds); got != c.want {
+			t.Errorf("widgets.FormatPounds(%d) = %q, want %q", c.micropounds, got, c.want)
 		}
 	}
 }
@@ -277,5 +280,24 @@ func TestRenderHeader_StaleMarker(t *testing.T) {
 	})
 	if rows := renderedText(buf, core.Rect{X: 0, Y: 0, W: 40, H: 1}); !rowContains(rows, "stale") {
 		t.Errorf("stale header missing '(stale)' marker: %v", rows)
+	}
+}
+
+// FEAT-9995385625 r2 (known problem, pinned, not designed away): under the
+// whole-pounds rule a price per unit below 50p rounds to "£0/unit", which reads
+// as free. The trade screen is not registered in the live game yet; the rule
+// for per-unit prices is a follow-up bug (a price under £1 needs pence or an
+// "under £1" form before the screen goes live). This test pins TODAY's text so
+// the change, when made, is deliberate.
+func TestRenderContracts_PriceUnderFiftyPenceShowsAsZeroPounds(t *testing.T) {
+	style := widgets.DefaultPalette.Style(widgets.TokenMoney)
+	contracts := []ImportContract{
+		{ID: "c-9", Commodity: "salt", TermMonths: 3, MonthsRemaining: 3, PricePerUnitMicropounds: 400, Status: StatusActive},
+		{ID: "c-8", Commodity: "salt", TermMonths: 3, MonthsRemaining: 3, PricePerUnitMicropounds: 500, Status: StatusActive},
+	}
+	buf := renderBuf(90, 4, func(b *core.Buffer, r core.Rect) { RenderContracts(b, r, contracts, true, style) })
+	rows := renderedText(buf, core.Rect{X: 0, Y: 0, W: 90, H: 4})
+	if !rowContains(rows, "  £0/unit  penalty £0") || !rowContains(rows, "  £1/unit  penalty £0") {
+		t.Errorf("per-unit price text changed: %v", rows)
 	}
 }

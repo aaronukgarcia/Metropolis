@@ -82,25 +82,30 @@ func plRender(pl PLView, w, h int) []string {
 	return rows
 }
 
-var plAmountRe = regexp.MustCompile(`£(-?[0-9]+\.[0-9]{2})`)
+// plAmountRe matches one whole-pound figure with thousands commas: "-£529,869"
+// (FEAT-9995385625: no pence on screen).
+var plAmountRe = regexp.MustCompile(`(-?)£([0-9][0-9,]*)`)
 
+// plFirstAmount reads the first figure on a line back as whole pounds.
 func plFirstAmount(t *testing.T, line string) int64 {
 	t.Helper()
 	m := plAmountRe.FindStringSubmatch(line)
 	if m == nil {
 		t.Fatalf("no amount on line %q", line)
 	}
-	f, err := strconv.ParseFloat(m[1], 64)
+	v, err := strconv.ParseInt(strings.ReplaceAll(m[2], ",", ""), 10, 64)
 	if err != nil {
-		t.Fatalf("parse %q: %v", m[1], err)
+		t.Fatalf("parse %q: %v", m[2], err)
 	}
-	if f < 0 {
-		return int64(f*100 - 0.5)
+	if m[1] == "-" {
+		v = -v
 	}
-	return int64(f*100 + 0.5)
+	return v
 }
 
-var plSignedRe = regexp.MustCompile(`([+-])£([0-9]+\.[0-9]{2})`)
+// A residue carries an explicit sign, except a figure that rounds to zero, which
+// is a bare "£0" (FEAT-9995385625 r2).
+var plSignedRe = regexp.MustCompile(`([+-]?)£([0-9][0-9,]*)`)
 
 // plParsed is a rendered P&L read back into numbers (pence).
 type plParsed struct {
@@ -137,11 +142,10 @@ func plParse(t *testing.T, rows []string) plParsed {
 			p.haveWages = true
 		case strings.HasPrefix(trim, "Other t"):
 			m := plSignedRe.FindStringSubmatch(ln)
-			if m == nil {
+			if m == nil || (m[1] == "" && m[2] != "0") {
 				t.Fatalf("residue row has no explicit sign: %q", ln)
 			}
-			f, _ := strconv.ParseFloat(m[2], 64)
-			v := int64(f*100 + 0.5)
+			v, _ := strconv.ParseInt(strings.ReplaceAll(m[2], ",", ""), 10, 64)
 			if m[1] == "-" {
 				v = -v
 			}
@@ -236,7 +240,7 @@ func TestBUG1222_PLRoomyPaneShowsEverythingWithoutFolding(t *testing.T) {
 		t.Fatalf("roomy pane folded rows:\n%s", frame)
 	}
 	// Wide pane keeps the previous-month column.
-	if !strings.Contains(frame, "£1500000.00") {
+	if !strings.Contains(frame, "£1,500,000") {
 		t.Fatalf("wide pane dropped the previous-month column:\n%s", frame)
 	}
 	sum, net, _ := plSumVisible(t, rows)
@@ -248,7 +252,7 @@ func TestBUG1222_PLRoomyPaneShowsEverythingWithoutFolding(t *testing.T) {
 func TestBUG1222_PLNarrowPaneDropsPreviousMonthColumn(t *testing.T) {
 	rows := plRender(plRealMonth(), 40, 30)
 	frame := strings.Join(rows, "\n")
-	if strings.Contains(frame, "£1500000.00") {
+	if strings.Contains(frame, "£1,500,000") {
 		t.Fatalf("40-column pane still shows a previous-month column:\n%s", frame)
 	}
 	for _, ln := range rows {
@@ -310,7 +314,7 @@ func plStatement(income, outflows []int64, residue *int64) PLView {
 }
 
 func TestBUG1222_FoldWordingSignAndPlacement(t *testing.T) {
-	neg := int64(-80)
+	neg := plPounds(-80)
 	// 5 income rows (100..500) and 5 outflow rows (10..50), residue -0.075.
 	pl := plStatement([]int64{100, 200, 300, 400, 500}, []int64{10, 20, 30, 40, 50}, &neg)
 	// h=9: 8 lines = Net, consumption, then the reconciling set of 5 (two
@@ -340,21 +344,21 @@ func TestBUG1222_FoldWordingSignAndPlacement(t *testing.T) {
 	if inHdr >= incFold || incFold >= outHdr || outHdr >= outFold || outFold >= resid || resid+1 != net {
 		t.Fatalf("fold under the wrong heading or residue not directly above Net (in %d/%d out %d/%d resid %d net %d):\n%s", inHdr, incFold, outHdr, outFold, resid, net, frame)
 	}
-	if !strings.Contains(rows[incFold], "£1500.00") || strings.Contains(rows[incFold], "-") {
-		t.Fatalf("income fold must be a positive 1500.00 total: %q", rows[incFold])
+	if !strings.Contains(rows[incFold], "£1,500") || strings.Contains(rows[incFold], "-") {
+		t.Fatalf("income fold must be a positive 1,500 total: %q", rows[incFold])
 	}
-	if !strings.Contains(rows[outFold], "£150.00") || strings.Contains(rows[outFold], "-") {
-		t.Fatalf("outflow fold must be a positive 150.00 total: %q", rows[outFold])
+	if !strings.Contains(rows[outFold], "£150") || strings.Contains(rows[outFold], "-") {
+		t.Fatalf("outflow fold must be a positive 150 total: %q", rows[outFold])
 	}
-	if !strings.Contains(rows[resid], "-£0.08") {
+	if !strings.Contains(rows[resid], "-£80") {
 		t.Fatalf("negative residue needs an explicit minus: %q", rows[resid])
 	}
-	pos := int64(40)
+	pos := plPounds(40)
 	pl = plStatement([]int64{100, 200, 300}, []int64{10, 20, 30}, &pos)
 	rows = plRender(pl, 40, 8)
 	frame = strings.Join(rows, "\n")
 	for _, ln := range rows {
-		if strings.Contains(ln, "Other treasury movements") && !strings.Contains(ln, "+£0.04") {
+		if strings.Contains(ln, "Other treasury movements") && !strings.Contains(ln, "+£40") {
 			t.Fatalf("positive residue needs an explicit plus: %q\n%s", ln, frame)
 		}
 	}
@@ -398,13 +402,13 @@ func TestBUG1222_PropertyRenderedStatementReconciles(t *testing.T) {
 		"real month":     plRealMonth(),
 		"all income":     plStatement([]int64{50, 40, 30, 20, 10, 5}, nil, nil),
 		"all outflow":    plStatement(nil, []int64{50, 40, 30, 20, 10, 5}, nil),
-		"negative resid": plStatement([]int64{50, 40, 30, 20}, []int64{25, 15, 5, 3, 2}, i64(-12340)),
-		"positive resid": plStatement([]int64{50, 40, 30, 20}, []int64{25, 15, 5, 3, 2}, i64(770)),
+		"negative resid": plStatement([]int64{50, 40, 30, 20}, []int64{25, 15, 5, 3, 2}, i64(plPounds(-12340))),
+		"positive resid": plStatement([]int64{50, 40, 30, 20}, []int64{25, 15, 5, 3, 2}, i64(plPounds(770))),
 		"one huge row":   plStatement([]int64{1, 1, 1, 9000000}, []int64{2, 2, 2, 2}, nil),
 		"equal amounts":  plStatement([]int64{7, 7, 7, 7, 7}, []int64{7, 7, 7, 7, 7}, i64(0)),
 		"zero rows":      plStatement(nil, nil, nil),
-		"zero rows+res":  plStatement(nil, nil, i64(-500)),
-		"one each":       plStatement([]int64{5}, []int64{3}, i64(1)),
+		"zero rows+res":  plStatement(nil, nil, i64(plPounds(-500))),
+		"one each":       plStatement([]int64{5}, []int64{3}, i64(plPounds(1))),
 	}
 	for name, pl := range cases {
 		rowCount := len(pl.Revenues) + len(pl.Expenses)
@@ -432,7 +436,7 @@ func TestBUG1222_PropertyRenderedStatementReconciles(t *testing.T) {
 					t.Fatalf("%s %dx%d: wages shown while the reconciling set is not:\n%s", name, w, h, frame)
 				}
 				// The wide-enough panes carry the full wording.
-				if plLayoutFor(w-1, pl.Net != nil && pl.Net.PrevValueMicropounds != nil).labelW >= 25 {
+				if plLayoutFor(w-1, pl.Net != nil && pl.Net.PrevValueMicropounds != nil, plAmountWidth(pl)).labelW >= 25 {
 					if p.incomeFold != "" && !strings.Contains(p.incomeFold, "more income rows") {
 						t.Fatalf("%s %dx%d: income fold wording: %q", name, w, h, p.incomeFold)
 					}

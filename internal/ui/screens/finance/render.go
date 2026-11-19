@@ -2,6 +2,7 @@ package finance
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 
@@ -34,16 +35,56 @@ func drawText(buf *core.Buffer, rect core.Rect, x, y int, text string, style tce
 	}
 }
 
-// micropoundsPerPound mirrors ui.screen.build/ui.screen.trade's own local
-// copy (GR#20 bars this UI package from importing internal/engine/finance
-// directly) — rebased 1,000,000 -> 1,000 alongside its engine-side
-// siblings (BUG-452, 2026-09-01; see
-// internal/foundation/det/money.go's MicropoundsPerPound doc comment).
-const micropoundsPerPound = 1000.0
+// plAmountMinW is the narrowest a P&L money column is drawn; the real width is
+// the widest figure in the statement (plAmountWidth), so a small city does not
+// waste label room and a nine-digit treasury ("-£123,485,323", 13 cells) is
+// never cut (FEAT-9995385625).
+const plAmountMinW = 6
 
-func formatPounds(micropounds int64) string {
-	pounds := float64(micropounds) / micropoundsPerPound
-	return fmt.Sprintf("£%.2f", pounds)
+// plAmountWidth is the width of the widest money figure the statement can
+// draw: every item and previous-month value, the residue with its explicit
+// sign, and the folded income and outflow totals (sums, saturating).
+func plAmountWidth(pl PLView) int {
+	w := plAmountMinW
+	note := func(s string) {
+		if n := len([]rune(s)); n > w {
+			w = n
+		}
+	}
+	item := func(it PLItem) {
+		note(widgets.FormatPounds(it.ValueMicropounds))
+		if it.PrevValueMicropounds != nil {
+			note(widgets.FormatPounds(*it.PrevValueMicropounds))
+		}
+	}
+	sum := func(items []PLItem) {
+		var total int64
+		for _, it := range items {
+			item(it)
+			v := plAbs(it.ValueMicropounds)
+			if v < 0 || total > math.MaxInt64-v { // MinInt64 or overflow: saturate
+				total = math.MaxInt64
+			} else {
+				total += v
+			}
+		}
+		note(widgets.FormatPounds(total))
+	}
+	sum(pl.Revenues)
+	sum(pl.Expenses)
+	for _, it := range pl.CityEconomy {
+		item(it)
+	}
+	if pl.Net != nil {
+		item(*pl.Net)
+	}
+	if pl.Other != nil {
+		note(widgets.FormatSignedPounds(pl.Other.ValueMicropounds))
+		if pl.Other.PrevValueMicropounds != nil {
+			note(widgets.FormatSignedPounds(*pl.Other.PrevValueMicropounds))
+		}
+	}
+	return w
 }
 
 // plLabelWidthWide is the label column of a P&L row in a pane wide enough for
@@ -54,17 +95,18 @@ const plLabelWidthWide = 41
 // plRowLayout is the column plan for one P&L pane width.
 type plRowLayout struct {
 	labelW   int
+	amtW     int
 	showPrev bool
 }
 
 // plLayoutFor picks the label width and whether the previous-month column
 // fits; the previous-month column goes first when the pane is narrow (BUG-1222).
-func plLayoutFor(width int, hasPrev bool) plRowLayout {
-	// "  " + label + " " + 11-wide amount [+ " " + 11-wide previous amount]
-	l := plRowLayout{labelW: width - 3 - 11}
-	if hasPrev && l.labelW-12 >= 20 {
+func plLayoutFor(width int, hasPrev bool, amtW int) plRowLayout {
+	// "  " + label + " " + amtW-wide amount [+ " " + amtW-wide previous amount]
+	l := plRowLayout{labelW: width - 3 - amtW, amtW: amtW}
+	if hasPrev && l.labelW-(amtW+1) >= 20 {
 		l.showPrev = true
-		l.labelW -= 12
+		l.labelW -= amtW + 1
 	}
 	if l.labelW > plLabelWidthWide {
 		l.labelW = plLabelWidthWide
@@ -86,9 +128,9 @@ func plClip(label string, w int) string {
 // plRowText formats one P&L row: label, this month and, when the pane has room
 // and a month before exists, that month's figure (BUG-1213).
 func plRowText(item PLItem, lay plRowLayout) string {
-	row := fmt.Sprintf("  %-*s %11s", lay.labelW, plClip(item.Label, lay.labelW), formatPounds(item.ValueMicropounds))
+	row := fmt.Sprintf("  %-*s %*s", lay.labelW, plClip(item.Label, lay.labelW), lay.amtW, widgets.FormatPounds(item.ValueMicropounds))
 	if lay.showPrev && item.PrevValueMicropounds != nil {
-		row += fmt.Sprintf(" %11s", formatPounds(*item.PrevValueMicropounds))
+		row += fmt.Sprintf(" %*s", lay.amtW, widgets.FormatPounds(*item.PrevValueMicropounds))
 	}
 	return row
 }
@@ -135,24 +177,15 @@ func plFoldedLine(n int, income bool, total int64, lay plRowLayout) string {
 	if len([]rune(label)) > lay.labelW {
 		label = fmt.Sprintf("... %d", n)
 	}
-	return fmt.Sprintf("  %-*s %11s", lay.labelW, plClip(label, lay.labelW), formatPounds(total))
-}
-
-// plSignedPounds formats an amount with an explicit + or - so the direction of
-// the residue is never a guess.
-func plSignedPounds(v int64) string {
-	if v < 0 {
-		return "-" + formatPounds(-v)
-	}
-	return "+" + formatPounds(v)
+	return fmt.Sprintf("  %-*s %*s", lay.labelW, plClip(label, lay.labelW), lay.amtW, widgets.FormatPounds(total))
 }
 
 // plResidueText formats the signed "Other treasury movements" row that sits
 // directly above Net.
 func plResidueText(item PLItem, lay plRowLayout) string {
-	row := fmt.Sprintf("  %-*s %11s", lay.labelW, plClip(item.Label, lay.labelW), plSignedPounds(item.ValueMicropounds))
+	row := fmt.Sprintf("  %-*s %*s", lay.labelW, plClip(item.Label, lay.labelW), lay.amtW, widgets.FormatSignedPounds(item.ValueMicropounds))
 	if lay.showPrev && item.PrevValueMicropounds != nil {
-		row += fmt.Sprintf(" %11s", plSignedPounds(*item.PrevValueMicropounds))
+		row += fmt.Sprintf(" %*s", lay.amtW, widgets.FormatSignedPounds(*item.PrevValueMicropounds))
 	}
 	return row
 }
@@ -189,7 +222,7 @@ func RenderPL(buf *core.Buffer, rect core.Rect, pl PLView, have bool, style tcel
 		return
 	}
 
-	lay := plLayoutFor(rect.W-1, pl.Net != nil && pl.Net.PrevValueMicropounds != nil)
+	lay := plLayoutFor(rect.W-1, pl.Net != nil && pl.Net.PrevValueMicropounds != nil, plAmountWidth(pl))
 
 	var body []plBodyRow
 	nIncome, nOut := 0, 0
@@ -443,7 +476,7 @@ func RenderBalanceSheet(buf *core.Buffer, rect core.Rect, bs BalanceSheetView, h
 		if y >= rect.Y+rect.H {
 			break
 		}
-		rowStr := fmt.Sprintf("  %-20s %15s", item.Label, formatPounds(item.ValueMicropounds))
+		rowStr := fmt.Sprintf("  %-20s %15s", item.Label, widgets.FormatPounds(item.ValueMicropounds))
 		drawText(buf, rect, rect.X, y, rowStr, style)
 		y++
 	}
@@ -457,14 +490,14 @@ func RenderBalanceSheet(buf *core.Buffer, rect core.Rect, bs BalanceSheetView, h
 		if y >= rect.Y+rect.H {
 			break
 		}
-		rowStr := fmt.Sprintf("  %-20s %15s", item.Label, formatPounds(item.ValueMicropounds))
+		rowStr := fmt.Sprintf("  %-20s %15s", item.Label, widgets.FormatPounds(item.ValueMicropounds))
 		drawText(buf, rect, rect.X, y, rowStr, style)
 		y++
 	}
 
 	y++
 	if y < rect.Y+rect.H {
-		rowStr := fmt.Sprintf("Net Worth: %s", formatPounds(bs.NetWorth))
+		rowStr := fmt.Sprintf("Net Worth: %s", widgets.FormatPounds(bs.NetWorth))
 		drawText(buf, rect, rect.X, y, rowStr, style.Bold(true))
 	}
 }
@@ -504,7 +537,7 @@ func RenderPayrollShortfall(buf *core.Buffer, rect core.Rect, p PayrollShortfall
 	if buf == nil || rect.W <= 0 || rect.H <= 0 || !have || p.AmountMicropounds <= 0 {
 		return
 	}
-	line := fmt.Sprintf("PAYROLL SHORTFALL: %s (month %d, %d consecutive month(s))", formatPounds(p.AmountMicropounds), p.Month, p.Months)
+	line := fmt.Sprintf("PAYROLL SHORTFALL: %s (month %d, %d consecutive month(s))", widgets.FormatPounds(p.AmountMicropounds), p.Month, p.Months)
 	drawText(buf, rect, rect.X, rect.Y, line, style.Bold(true))
 }
 
@@ -572,7 +605,7 @@ func RenderLoans(buf *core.Buffer, rect core.Rect, loans []LoanState, rating int
 			break
 		}
 		rowStr := fmt.Sprintf("Loan %s: %s @ %.1f%% (%d mo remaining) - Next: %s",
-			l.ID, formatPounds(l.PrincipalMicropounds), l.RatePercent, l.TermMonths, formatPounds(l.NextPaymentMicropounds))
+			l.ID, widgets.FormatPounds(l.PrincipalMicropounds), l.RatePercent, l.TermMonths, widgets.FormatPounds(l.NextPaymentMicropounds))
 		drawText(buf, rect, rect.X, y, rowStr, style)
 		y++
 	}
@@ -610,8 +643,8 @@ func RenderPublicPayroll(buf *core.Buffer, rect core.Rect, p PublicPayrollView, 
 		return
 	}
 
-	drawText(buf, rect, rect.X, rect.Y+2, fmt.Sprintf("Gross Wage Cost: %s", formatPounds(p.WageCostMicropounds)), style)
-	drawText(buf, rect, rect.X, rect.Y+3, fmt.Sprintf("Income Tax Clawback: %s", formatPounds(p.TaxClawbackMicropounds)), style)
+	drawText(buf, rect, rect.X, rect.Y+2, fmt.Sprintf("Gross Wage Cost: %s", widgets.FormatPounds(p.WageCostMicropounds)), style)
+	drawText(buf, rect, rect.X, rect.Y+3, fmt.Sprintf("Income Tax Clawback: %s", widgets.FormatPounds(p.TaxClawbackMicropounds)), style)
 }
 
 // RenderSankey is a method on *Screen (not a free function like the other

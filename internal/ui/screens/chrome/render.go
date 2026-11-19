@@ -33,8 +33,8 @@ import (
 // changed is only what this one line prints. Zeroing the field instead
 // would have made the view lie to satisfy a layout decision.
 func (f Figures) topBarString() string {
-	return fmt.Sprintf("%s | cycle %d/30 | money %d | pop %d | rating %s",
-		f.Date, f.ClockCycle, f.Money, f.Population, f.Rating)
+	return fmt.Sprintf("%s | cycle %d/30 | money %s | pop %d | rating %s",
+		f.Date, f.ClockCycle, widgets.FormatWholePounds(f.Money), f.Population, f.Rating)
 }
 
 // alertLine renders one alert's displayed text. The tier colour is applied
