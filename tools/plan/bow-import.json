@@ -724,6 +724,29 @@
       "deps": []
     },
     {
+      "mkey": "tool.journalscan",
+      "type": "module",
+      "title": "journalscan: read-only report on a persist directory's rule versions",
+      "desc": "Read-only command (FEAT-9995385612 lane 5) that opens a persist directory and reports, per city, each snapshot's recorded rule version, the journal frame count per rule version, the first and last tick, and every snapshot or frame the restore would refuse (MET-G5610 to MET-G5613). Never writes to, locks or modifies the directory it scans; safe against a live server. Used for the read-only checks before deploying a rule change to the home-server city. [spec: docs/planning/acceptance/feat-9995385612-rule-versions.md] [path: tools/journalscan/]",
+      "seq": 276,
+      "sprint": 7,
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "process",
+      "specRef": "docs/planning/acceptance/feat-9995385612-rule-versions.md",
+      "guid": "f20b4cd4-fff7-482d-b40c-6931434ef622",
+      "guidIn": "7e384e68-ba67-406e-bf41-46805f5c7269",
+      "guidOut": "f3967073-9aa2-441a-aa2c-121d2cd8ebdd",
+      "deps": [
+        "engine.rules",
+        "feat.compositionroot",
+        "feat.saveux",
+        "foundation.errors",
+        "int.persist",
+        "int.protocol"
+      ]
+    },
+    {
       "mkey": "engine.market",
       "type": "module",
       "title": "Needs & commodities behind the Market interface",

@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -384,26 +385,139 @@ func CheckRuleFixture(dir string, want rules.Version) error {
 // snapshotRuleVersion reads a snapshot payload's Meta rule version without
 // restoring it.
 func snapshotRuleVersion(data []byte) (int, error) {
+	info, err := ReadSnapshotRuleInfo(data)
+	return info.Version, err
+}
+
+// SnapshotRuleInfo is what a restore needs to know about one snapshot to
+// judge its rule version: the version recorded in its composition bundle's
+// Meta and the tick that bundle was taken at (the point the journal tail
+// starts from).
+type SnapshotRuleInfo struct {
+	Version int
+	Tick    int64
+}
+
+// ReadSnapshotRuleInfo reads a snapshot payload's rule version and tick from
+// the composition bundle (the one whose DisplayName is compositionSaveName,
+// the same bundle restoreFromSnapshotBytes loads) without restoring it. It
+// unpacks into the OS temp folder and removes it again; it never touches a
+// persist directory.
+func ReadSnapshotRuleInfo(data []byte) (SnapshotRuleInfo, error) {
 	dir, err := os.MkdirTemp("", "metropolis-snapver-*")
 	if err != nil {
-		return 0, err
+		return SnapshotRuleInfo{}, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	if err := unzipDir(data, dir); err != nil {
-		return 0, err
+		return SnapshotRuleInfo{}, err
 	}
 	summaries, _, err := save.List(dir)
 	if err != nil {
-		return 0, err
+		return SnapshotRuleInfo{}, err
 	}
 	for _, s := range summaries {
 		if s.DisplayName == compositionSaveName {
 			meta, err := save.ReadMeta(s.Path)
 			if err != nil {
-				return 0, err
+				return SnapshotRuleInfo{}, err
 			}
-			return meta.RuleVersion, nil
+			return SnapshotRuleInfo{Version: meta.RuleVersion, Tick: s.CreatedAtTick}, nil
 		}
 	}
-	return 0, fmt.Errorf("no composition bundle in snapshot")
+	return SnapshotRuleInfo{}, fmt.Errorf("no composition bundle in snapshot")
+}
+
+// checkJournalGate is step (a) of the rule-version decision: the whole
+// decoded journal (the part before a snapshot included) is checked for
+// "newer than this build", "negative" and "going backwards"; a retired frame
+// is not a refusal here because frames before a snapshot are never replayed.
+// restoreLatest and DecideRuleVersions both call exactly this function, so
+// the gate cannot drift between the restore and the pre-check.
+func checkJournalGate(cid string, frames []JournalFrame) error {
+	return checkFrames(cid, frames, 0, false)
+}
+
+// SnapshotInfoReader returns the rule info of snapshot i (0 is the oldest, as
+// ListSnapshots orders them). It is called lazily, newest first, and never
+// past the first usable snapshot.
+type SnapshotInfoReader func(i int) (SnapshotRuleInfo, error)
+
+// DecideRuleVersions is a STATIC rule-version check: it reads the journal and
+// the snapshot headers and follows restoreLatest's order without running an
+// engine. It writes nothing and installs nothing. It exists for
+// tools/journalscan, which cannot run an engine. THE SERVER DOES NOT USE IT:
+// the server's own pre-check is a dry-run restore ([PrecheckRuleVersions]).
+//
+// The order it follows:
+//
+//	(a) the whole-journal gate (checkJournalGate), before any snapshot is read;
+//	(b) with no snapshot: the genesis check of the whole journal (restoreGenesis
+//	    runs replayFrames over it with retirement checked);
+//	(c) snapshots newest to oldest, one read each, stopping at the first
+//	    usable one: the snapshot's own version is classified (what LoadAt
+//	    does first); a snapshot whose journal tail cannot be split (tail
+//	    short) is walked past exactly as the restore walks past it; the first
+//	    usable snapshot has its tail checked from the snapshot's version
+//	    (replayFrames), and the walk ends there;
+//	(d) every snapshot walked past: the genesis check of the whole journal.
+//
+// A snapshot that cannot be read (read returns an error) is handled as the
+// restore handles it at that very point of the walk: the restore returns the
+// store or unpack error and does NOT walk back (BUG-480). That is not a
+// rule-version question, so the function returns nil there.
+//
+// THE ONE CASE IT CANNOT SEE: a snapshot whose journal tail is REJECTED on
+// replay (ErrSnapshotTailReplayRejected, for example after a lost journal
+// append) makes the restore walk back to an older snapshot, whose version may
+// then be refused (retired). Only running the engine shows that rejection, so
+// this check stops at that snapshot's tail check and reports clean where the
+// restore refuses. tools/journalscan/agree_test.go asserts that disagreement.
+func DecideRuleVersions(cid string, frames []JournalFrame, n int, read SnapshotInfoReader) error {
+	if err := checkJournalGate(cid, frames); err != nil {
+		return err
+	}
+	for i := n - 1; i >= 0; i-- {
+		s, err := read(i)
+		if err != nil {
+			return nil // not a rule-version question; the restore reports it itself
+		}
+		if err := checkSnapshotVersion(cid, s.Version); err != nil {
+			return err
+		}
+		tail, err := splitJournalAtTick(frames, s.Tick, persist.CityKey{}, cid)
+		if err != nil {
+			if isTailInconsistency(err) {
+				continue
+			}
+			return nil // not a rule-version question; the restore reports it itself
+		}
+		return checkFrames(cid, tail, rules.Version(s.Version), true)
+	}
+	return checkFrames(cid, frames, 0, true)
+}
+
+// CheckRuleVersionHistory is DecideRuleVersions over snapshots already held in
+// memory (tools/journalscan). frames is the whole decoded journal and
+// snapshots is oldest first (the order ListSnapshots returns). It returns the
+// registered error the restore would return (MET-G5610 newer than this build,
+// MET-G5611 retired, MET-G5612 going backwards, MET-G5613 malformed), or nil.
+func CheckRuleVersionHistory(cid string, frames []JournalFrame, snapshots []SnapshotRuleInfo) error {
+	return DecideRuleVersions(cid, frames, len(snapshots), func(i int) (SnapshotRuleInfo, error) {
+		return snapshots[i], nil
+	})
+}
+
+// IsRuleVersionRefusal reports whether err is one of the four registered
+// rule-version refusals (MET-G5610 to MET-G5613).
+func IsRuleVersionRefusal(err error) bool {
+	var e *errs.E
+	if !errors.As(err, &e) {
+		return false
+	}
+	switch e.Code {
+	case rules.ErrSavedUnderNewerRules, rules.ErrSavedUnderRetiredRules, rules.ErrRuleVersionWentBackwards, rules.ErrMalformedRuleStamp:
+		return true
+	}
+	return false
 }

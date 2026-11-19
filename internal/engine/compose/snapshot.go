@@ -396,7 +396,7 @@ func restoreLatest(ctx context.Context, e *core.Engine, c *Composition, store pe
 	// progress. Retirement (OldestSupported) is checked on the frames
 	// actually replayed, so a snapshot taken under a newer version restores
 	// without any old rule.
-	if err := checkFrames(c.state.cid, cmds, 0, false); err != nil {
+	if err := checkJournalGate(c.state.cid, cmds); err != nil {
 		return false, 0, nil, err
 	}
 	// Every rule-versioned module must hold its getter BEFORE a snapshot is

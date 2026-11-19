@@ -647,10 +647,20 @@ claim:
 	// BUG-1197: cut any torn journal tail before the rehydrate reads it and
 	// before any append can land after it.
 	var city *runningCity
+	// FEAT-9995385620 round r1 (B2): a city whose restore will be refused for
+	// its rule version is not modified at all, so the read-only pre-check
+	// (the restore's own functions, torn tail tolerated as the reader does)
+	// runs BEFORE the repair below truncates anything.
 	var err error
+	if h.store != nil {
+		err = compose.PrecheckRuleVersions(ctx, h.store, cityKey, seedForCity(cityKey), h.gameMode)
+	}
+	if err != nil {
+		err = fmt.Errorf("rehydrate city %s (corrupt journal or snapshot?): %w", cityKey.CityID, err)
+	}
 	if rep, ok := h.store.(interface {
 		RepairJournal(context.Context, persist.CityKey) (persist.JournalRepair, error)
-	}); ok {
+	}); ok && err == nil {
 		_, err = rep.RepairJournal(ctx, cityKey)
 	}
 	var corrupt *persist.JournalCorruptError

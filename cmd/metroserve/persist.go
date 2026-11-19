@@ -237,6 +237,17 @@ func wireAndRehydratePaging(ctx context.Context, e *core.Engine, store persist.S
 	// completes below, before any loop/pump goroutine is started by the
 	// caller (setUpPersistence/buildCity) — the same ordering the pre-inc3b
 	// code observed, unchanged by this increment.
+	// FEAT-9995385620 round r1 (B1): a city whose restore will be refused for
+	// its rule version is not touched at all. Wire opens citizen paging (a
+	// claim file, an identity file and the page files under the paging
+	// directory), none of which Close removes, so the refusal is decided
+	// BEFORE Wire, from a read-only pre-check built from the same functions
+	// the restore uses. Anything the pre-check cannot judge is left to the
+	// restore itself.
+	if err := compose.PrecheckRuleVersions(ctx, store, city, e.WorldSeed(), mode); err != nil {
+		return nil, fmt.Errorf("rehydrate city %s (corrupt journal or snapshot?): %w", city.CityID, err)
+	}
+
 	guard := &rehydrateGuardStore{Store: store}
 	guard.replaying.Store(true)
 	comp, err := compose.Wire(e, &compose.Deps{PersistStore: guard, PersistCity: city, GameMode: mode, CitizenPaging: paging})
@@ -251,6 +262,7 @@ func wireAndRehydratePaging(ctx context.Context, e *core.Engine, store persist.S
 	// not load-bearing for correctness, only for the message.
 	exists, err := store.Exists(ctx, city)
 	if err != nil {
+		_ = comp.Close() // release the paging claim; nothing live was started
 		return nil, fmt.Errorf("persist existence check for city %q: %w", city.CityID, err)
 	}
 
@@ -261,10 +273,22 @@ func wireAndRehydratePaging(ctx context.Context, e *core.Engine, store persist.S
 	// re-append throughout. A decode/restore error (corrupt journal or
 	// snapshot) or a rejected replayed command surfaces from
 	// RestoreLatestSnapshotOrGenesis and is fatal here.
-	usedSnapshot, tick, err := compose.RestoreLatestSnapshotOrGenesis(ctx, e, comp, store, city)
+	//
+	// FEAT-9995385612 lane 5 (C18): the Report variant is the SAME restore and
+	// additionally tells this host when recorded history was replayed under
+	// older rules. A rule-version refusal (MET-G5610 to MET-G5613) is returned
+	// as an error with its registered code wrapped (%w) and BEFORE the guard
+	// is released and before any "rehydrated" line is printed, so the caller
+	// discards the city and no store write has happened.
+	rep, err := compose.RestoreLatestSnapshotOrGenesisReport(ctx, e, comp, store, city)
 	if err != nil {
+		// Release the paging claim (Composition.Close removes claim.pid and
+		// seals the page store; it writes nothing) so the next wake of this
+		// city reports the real reason, not MET-G819.
+		_ = comp.Close()
 		return nil, fmt.Errorf("rehydrate city %s (corrupt journal or snapshot?): %w", city.CityID, err)
 	}
+	usedSnapshot, tick := rep.UsedSnapshot, rep.Tick
 	guard.replaying.Store(false)
 
 	switch {
@@ -274,6 +298,12 @@ func wireAndRehydratePaging(ctx context.Context, e *core.Engine, store persist.S
 		_, _ = fmt.Fprintf(stdout, "metroserve: rehydrated city %s from latest snapshot + journal tail (tick %d)\n", city.CityID, tick)
 	default:
 		_, _ = fmt.Fprintf(stdout, "metroserve: rehydrated city %s via full genesis replay (tick %d)\n", city.CityID, tick)
+	}
+	// The one operator line for a city restored under older rules; its text
+	// comes from the rule registry (rep.OperatorLine), never typed here. The
+	// registered WARN event MET-G5614 was already raised by the restore.
+	if rep.OlderRules {
+		_, _ = fmt.Fprintf(stdout, "metroserve: city %s: %s\n", city.CityID, rep.OperatorLine)
 	}
 	return comp, nil
 }

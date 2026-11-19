@@ -1472,6 +1472,40 @@
       }
     },
     {
+      "key": "tool.journalscan",
+      "type": "module",
+      "seq": 276,
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "process",
+      "title": "journalscan: read-only report on a persist directory's rule versions",
+      "desc": "Read-only command (FEAT-9995385612 lane 5) that opens a persist directory and reports, per city, each snapshot's recorded rule version, the journal frame count per rule version, the first and last tick, and every snapshot or frame the restore would refuse (MET-G5610 to MET-G5613). Never writes to, locks or modifies the directory it scans; safe against a live server. Used for the read-only checks before deploying a rule change to the home-server city.",
+      "specRef": "docs/planning/acceptance/feat-9995385612-rule-versions.md",
+      "path": "tools/journalscan/",
+      "deps": [
+        "engine.rules",
+        "feat.compositionroot",
+        "feat.saveux",
+        "foundation.errors",
+        "int.persist",
+        "int.protocol"
+      ],
+      "calls": [
+        "engine.rules",
+        "feat.compositionroot",
+        "feat.saveux",
+        "foundation.errors",
+        "int.persist",
+        "int.protocol"
+      ],
+      "sprint": 7,
+      "inbound": {
+        "name": "JournalScan",
+        "format": "CLI: journalscan [-tenant T] [-city ID] <persist-dir>; exit 0 clean, 2 findings, 1 cannot run",
+        "pattern": "read-only; per-city report byte-stable; each finding carries its registered MET code"
+      }
+    },
+    {
       "key": "engine.market",
       "type": "module",
       "seq": 280,

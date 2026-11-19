@@ -636,7 +636,7 @@
       "note": "FEAT-2326609792 inc0: dispatched fire/ambulance/police incidents per 1,000 residents per simulated day."
     }
   ],
-  "moduleCount": 175,
+  "moduleCount": 176,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -728,6 +728,10 @@
           {
             "key": "harness.stub",
             "outboundGuid": "21192f19-d7f4-4d40-8c7a-327e3d205138"
+          },
+          {
+            "key": "tool.journalscan",
+            "outboundGuid": "f3967073-9aa2-441a-aa2c-121d2cd8ebdd"
           },
           {
             "key": "ui.alerts",
@@ -1378,6 +1382,10 @@
           {
             "key": "tool.astgate",
             "outboundGuid": "e46ebfdd-bb93-47b4-a2a8-d393da496b88"
+          },
+          {
+            "key": "tool.journalscan",
+            "outboundGuid": "f3967073-9aa2-441a-aa2c-121d2cd8ebdd"
           },
           {
             "key": "ui.alerts",
@@ -4018,12 +4026,72 @@
           {
             "key": "harness.replay",
             "outboundGuid": "f0bdf83e-4e69-451e-a33c-6a96a8cdd31a"
+          },
+          {
+            "key": "tool.journalscan",
+            "outboundGuid": "f3967073-9aa2-441a-aa2c-121d2cd8ebdd"
           }
         ]
       },
       "outbound": {
         "guid": "0aa9b807-0886-48e2-9f6b-d1b0564d984c",
         "calls": []
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "f20b4cd4-fff7-482d-b40c-6931434ef622",
+      "key": "tool.journalscan",
+      "bowType": "module",
+      "seq": 276,
+      "sprint": 7,
+      "title": "journalscan: read-only report on a persist directory's rule versions",
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "process",
+      "specRef": "docs/planning/acceptance/feat-9995385612-rule-versions.md",
+      "path": "tools/journalscan/",
+      "inbound": {
+        "guid": "7e384e68-ba67-406e-bf41-46805f5c7269",
+        "name": "JournalScan",
+        "format": "CLI: journalscan [-tenant T] [-city ID] <persist-dir>; exit 0 clean, 2 findings, 1 cannot run",
+        "pattern": "read-only; per-city report byte-stable; each finding carries its registered MET code",
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "f3967073-9aa2-441a-aa2c-121d2cd8ebdd",
+        "calls": [
+          {
+            "key": "engine.rules",
+            "moduleGuid": "1846fbfe-0500-440e-ba52-2df435a6acd2",
+            "inboundGuid": "767c453a-2bce-49f9-b993-49d7ddca0e82"
+          },
+          {
+            "key": "feat.compositionroot",
+            "moduleGuid": "fae40226-71d0-4836-be99-854c7b41eb4a",
+            "inboundGuid": "542d181a-9253-4392-9cdb-be59f10d8913"
+          },
+          {
+            "key": "feat.saveux",
+            "moduleGuid": "d50904e1-5eda-42b6-bdc7-e075d4648e20",
+            "inboundGuid": "20c48d83-347b-434c-902f-b61aeef16711"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "int.persist",
+            "moduleGuid": "82897e55-1135-46e1-9b71-7d18c99a6b7a",
+            "inboundGuid": "087edd5a-d6c4-427f-bc70-ce944f0d7280"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          }
+        ]
       },
       "securityScan": null
     },
@@ -5160,6 +5228,10 @@
           {
             "key": "harness.synth",
             "outboundGuid": "c711ba2e-0e5b-4a5e-9685-183ca7643ed4"
+          },
+          {
+            "key": "tool.journalscan",
+            "outboundGuid": "f3967073-9aa2-441a-aa2c-121d2cd8ebdd"
           }
         ]
       },
@@ -6143,6 +6215,10 @@
           {
             "key": "foundation.integration",
             "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
+          },
+          {
+            "key": "tool.journalscan",
+            "outboundGuid": "f3967073-9aa2-441a-aa2c-121d2cd8ebdd"
           }
         ]
       },
@@ -11930,6 +12006,10 @@
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
+            "key": "tool.journalscan",
+            "outboundGuid": "f3967073-9aa2-441a-aa2c-121d2cd8ebdd"
           }
         ]
       },
