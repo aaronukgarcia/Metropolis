@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -155,9 +156,19 @@ func TestCityHost_EvictThenGetOrCreate_PagingSurvivesWithoutRefusal(t *testing.T
 	// than an outer variable assigned after newCityHost returns -- no
 	// forward reference, no window where the closure could run before the
 	// host it calls back into exists.
+	// The rebuilt city idles too (idle is 20 ms), so on a slow machine the
+	// evictor can evict it a SECOND time before this test returns and fire
+	// this hook again; a second close(raceDone) panicked the whole package
+	// (BUG-1252). Only the first eviction is the one under test.
 	raceDone := make(chan struct{})
+	var firstEviction sync.Once
 	withOnEvictStopping := func(h *CityHost) {
 		h.onEvictStopping = func() {
+			fired := false
+			firstEviction.Do(func() { fired = true })
+			if !fired {
+				return
+			}
 			go func() {
 				defer close(raceDone)
 				if _, err := h.GetOrCreate(ctx, cityKey); err != nil {
