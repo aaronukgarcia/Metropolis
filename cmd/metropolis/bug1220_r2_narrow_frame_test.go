@@ -33,7 +33,7 @@ func TestBUG1220_R2_ScreenListVisibleAtNarrowWidths(t *testing.T) {
 	}{{tcell.KeyF1, "F1"}, {tcell.KeyF2, "F2"}, {tcell.KeyF3, "F3"}, {tcell.KeyF4, "F4"}, {tcell.KeyF5, "F5"}}
 	for _, dims := range [][2]int{{80, 24}, {60, 24}} {
 		for _, s := range screens {
-			rcKey(r.w, s.key, 0)
+			rcKey(t, r.w, s.key, 0)
 			rows := sizedFrame(r.w, dims[0], dims[1])
 			st := rows[dims[1]-1]
 			for _, want := range []string{"F1 map", "F2 money", "F3 build", "F4 services", "F5 why"} {
@@ -49,7 +49,7 @@ func TestBUG1220_R2_ScreenListVisibleAtNarrowWidths(t *testing.T) {
 
 func TestBUG1220_R2_F4HintIsTrue(t *testing.T) {
 	r := rcNew(t)
-	rcKey(r.w, tcell.KeyF4, 0)
+	rcKey(t, r.w, tcell.KeyF4, 0)
 	rows := sizedFrame(r.w, 80, 24)
 	hint := rows[22]
 	if !strings.Contains(hint, "F4 SERVICES") || !strings.Contains(hint, "view only") {
@@ -65,11 +65,11 @@ func TestBUG1220_R2_F4HintIsTrue(t *testing.T) {
 // Evidence: the 80x24 first frame, and an 80x24 frame with the HOMES FULL cue.
 func TestBUG1220_R2_Evidence80x24(t *testing.T) {
 	r := rcNew(t)
-	rcKey(r.w, tcell.KeyF1, 0)
+	rcKey(t, r.w, tcell.KeyF1, 0)
 	first := strings.Join(sizedFrame(r.w, 80, 24), "\n") + "\n"
 	rcSave(t, "r2_f1_first_frame_80x24.txt", first)
 	for m := 1; m <= 8; m++ {
-		plAdvance(t, r.w, 30)
+		advanceAndSettle(t, r.w, 30)
 		rows := sizedFrame(r.w, 80, 24)
 		if strings.Contains(strings.Join(rows, "\n"), "HOMES FULL") {
 			rcSave(t, "r2_homes_full_80x24.txt", strings.Join(rows, "\n")+"\n")

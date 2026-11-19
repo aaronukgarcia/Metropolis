@@ -61,8 +61,8 @@ func TestMoneyFrameFaults_DetectsTheOldStyle(t *testing.T) {
 // real figures (nine-digit-capable, negative net) are on screen.
 func TestFEAT9995385625_TopLineAndF2ReadAsWholePounds(t *testing.T) {
 	r := rcNew(t)
-	plAdvance(t, r.w, 60)
-	f2 := r.snap("F2 money screen", tcell.KeyF2)
+	advanceAndSettle(t, r.w, 60)
+	f2 := r.snap(t, "F2 money screen", tcell.KeyF2)
 	top := strings.Split(f2, "\n")[0]
 	if !regexp.MustCompile(`money £[0-9]{1,3}(,[0-9]{3})*( |$)`).MatchString(top) {
 		t.Fatalf("top line has no comma'd pound figure: %q", top)
@@ -83,7 +83,7 @@ func TestFEAT9995385625_TopLineAndF2ReadAsWholePounds(t *testing.T) {
 // has closed so the catalogue costs are on screen.
 func TestFEAT9995385625_EveryScreenReadsAsWholePounds(t *testing.T) {
 	r := rcNew(t)
-	plAdvance(t, r.w, 60)
+	advanceAndSettle(t, r.w, 60)
 	screens := []struct {
 		name string
 		key  tcell.Key
@@ -93,7 +93,7 @@ func TestFEAT9995385625_EveryScreenReadsAsWholePounds(t *testing.T) {
 	}
 	moneyScreens := 0
 	for _, s := range screens {
-		f := r.snap("sweep "+s.name, s.key)
+		f := r.snap(t, "sweep "+s.name, s.key)
 		if faults := moneyFrameFaults(f); len(faults) != 0 {
 			t.Errorf("%s breaks the money style on %d line(s): %q", s.name, len(faults), faults)
 		}

@@ -15,7 +15,7 @@ import (
 
 func TestFEAT9995385616_WhyScreen_F5RealBootFrame(t *testing.T) {
 	r := rcNew(t)
-	f := r.snap("F5 no data", tcell.KeyF5)
+	f := r.snap(t, "F5 no data", tcell.KeyF5)
 	rcSave(t, "f5_why_real_boot_no_data.txt", f)
 
 	if got := r.w.screens.ActiveID(); got != screenIDWhy {
@@ -37,7 +37,7 @@ func TestFEAT9995385616_WhyScreen_F5RealBootFrame(t *testing.T) {
 	}
 
 	// Pressing F1 returns to the map.
-	rcKey(r.w, tcell.KeyF1, 0)
+	rcKey(t, r.w, tcell.KeyF1, 0)
 	if got := r.w.screens.ActiveID(); got != screenIDMap {
 		t.Fatalf("F1 after F5: active %q, want %q", got, screenIDMap)
 	}
@@ -49,7 +49,7 @@ func TestFEAT9995385616_WhyScreen_StatusRowShowsF5AtNarrowWidths(t *testing.T) {
 	names := []string{"F1", "F2", "F3", "F4", "F5"}
 	for _, dims := range [][2]int{{80, 24}, {60, 24}} {
 		for i, k := range keys {
-			rcKey(r.w, k, 0)
+			rcKey(t, r.w, k, 0)
 			rows := sizedFrame(r.w, dims[0], dims[1])
 			st := rows[dims[1]-1]
 			if !strings.Contains(st, "F5 why") {
@@ -58,7 +58,7 @@ func TestFEAT9995385616_WhyScreen_StatusRowShowsF5AtNarrowWidths(t *testing.T) {
 		}
 	}
 	// F5 at 80x24: the panel is on screen, not clipped to nothing.
-	rcKey(r.w, tcell.KeyF5, 0)
+	rcKey(t, r.w, tcell.KeyF5, 0)
 	rows := sizedFrame(r.w, 80, 24)
 	rcSave(t, "f5_why_real_boot_no_data_80x24.txt", strings.Join(rows, "\n")+"\n")
 	joined := strings.Join(rows, "\n")

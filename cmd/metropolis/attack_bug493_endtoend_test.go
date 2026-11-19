@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
 // BUG-493 end-to-end wiring proof: BUG-490's rejected round found that the
@@ -80,7 +82,10 @@ func TestAttackBug493_RejectedBuy_ReachesScreen_EndToEnd(t *testing.T) {
 	// First 'y' buys the tile (accepted). Second 'y' must be rejected:
 	// the tile is already owned.
 	pressMapKey(t, w, 'y')
-	time.Sleep(150 * time.Millisecond)
+	// The engine has handled the first buy once a later command's result
+	// arrives (commands and results are in order), so the second is the
+	// already-owned refusal.
+	commandBarrier(t, w, string(protocol.NewCorrelationID()))
 	pressMapKey(t, w, 'y')
 
 	notice := waitForBuildNotice(t, w)
@@ -175,7 +180,9 @@ func TestAttackBug493_RapidFire_NoRaceNoWedge(t *testing.T) {
 		routeKeyInput(w, keyMsg(tcell.KeyRune, 'y'))
 		routeKeyInput(w, keyMsg(tcell.KeyRune, 'c'))
 	}
-	time.Sleep(500 * time.Millisecond)
+	// Every result for the 150 commands above has reached the screen once the
+	// barrier's own result has (in order through the one router).
+	commandBarrier(t, w, string(protocol.NewCorrelationID()))
 
 	if n := w.mapScreen.BuildNotice(); n != "" {
 		assertNoRawToken(t, n, "rapid-fire final notice")

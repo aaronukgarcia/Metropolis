@@ -40,6 +40,7 @@ func bootForScreenTest(t *testing.T) *skeletonWiring {
 		t.Fatalf("bootCore: %v", err)
 	}
 	t.Cleanup(w.shutdown)
+	waitDriverReady(t, w)
 	if w.screens == nil {
 		t.Fatal("bootCore did not construct w.screens (FEAT-211 increment 1's ScreenRegistry did not take)")
 	}

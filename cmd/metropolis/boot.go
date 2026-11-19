@@ -322,6 +322,12 @@ type skeletonWiring struct {
 	// one-line bottom overlay rather than inside ui.screens/chrome.
 	statusBar *statusBar
 
+	// driverReady is closed once the tick driver's boot Resume has been
+	// applied by the engine (BUG-1239); viewTicks records the tick each bound
+	// view last applied. Both exist so tests wait on real signals.
+	driverReady <-chan struct{}
+	viewTicks   *viewTicks
+
 	// chromeUI is BUG-324's GLOBAL chrome (internal/ui/screens/chrome):
 	// the persistent TOP bar carrying date/cycle/money/population/
 	// credit-rating. It is deliberately NOT a ScreenRegistry entry — per
@@ -578,6 +584,7 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 		viewStore:     core.NewViewStore(),
 		mapScreen:     mapscreen.NewMapScreen(mapCorrID, widgets.DefaultPalette),
 		statusBar:     newStatusBar(),
+		viewTicks:     newViewTicks(),
 		ctx:           ctx,
 		cancel:        cancel,
 		engineDone:    make(chan struct{}),
@@ -700,7 +707,7 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 	if err := primeScreenSubscription(transport, w.router, primed, servicesCorrID, servicesscreen.ViewSubscriptionName,
 		func() error { return w.servicesScreen.Subscribe(transport.SendCommand) },
 		w.servicesScreen.BindSubscription,
-		w.servicesScreen.ApplyDelta,
+		w.viewTicks.wrap("f4.services", w.servicesScreen.ApplyDelta),
 	); err != nil {
 		w.cancel()
 		w.wg.Wait()
@@ -712,7 +719,7 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 	if err := primeScreenSubscription(transport, w.router, primed, financeCorrID, financescreen.ViewSubscriptionName,
 		func() error { return w.financeScreen.Subscribe(transport.SendCommand) },
 		w.financeScreen.BindSubscription,
-		w.financeScreen.ApplyDelta,
+		w.viewTicks.wrap("f2.finance", w.financeScreen.ApplyDelta),
 	); err != nil {
 		w.cancel()
 		w.wg.Wait()
@@ -729,7 +736,7 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 			w.extra.subID.Store(id)
 			w.extra.build.BindSubscription(id)
 		},
-		w.extra.build.ApplyDelta,
+		w.viewTicks.wrap("f3.build", w.extra.build.ApplyDelta),
 	); err != nil {
 		w.cancel()
 		w.wg.Wait()
@@ -746,7 +753,7 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 	if _, err := primeWhyScreen(whyViewServed, transport, w.router, primed, w.extra.whyCorrID, whyscreen.ViewSubscriptionName,
 		func() error { return w.extra.why.Subscribe(transport.SendCommand) },
 		w.extra.why.BindSubscription,
-		w.extra.why.ApplyDelta,
+		w.viewTicks.wrap("f5.why", w.extra.why.ApplyDelta),
 	); err != nil {
 		w.cancel()
 		w.wg.Wait()
@@ -775,7 +782,7 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 			w.mapSubID = id
 			w.mapScreen.BindSubscription(id)
 		},
-		w.mapScreen.ApplyDelta,
+		w.viewTicks.wrap("f1.viewport", w.mapScreen.ApplyDelta),
 	); err != nil {
 		w.cancel()
 		w.wg.Wait()
@@ -813,7 +820,7 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 			})
 		},
 		func(protocol.SubscriptionID) {},
-		w.statusBar.ApplyDelta,
+		w.viewTicks.wrap("engine.status", w.statusBar.ApplyDelta),
 	); err != nil {
 		w.cancel()
 		w.wg.Wait()
@@ -836,7 +843,7 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 	if err := primeScreenSubscription(transport, w.router, primed, chromeCorrID, chromescreen.ViewChrome,
 		func() error { return w.chromeUI.Subscribe(transport.SendCommand) },
 		chromeSink.Bind,
-		chromeSink.ApplyDelta,
+		w.viewTicks.wrap("chrome.topbar", chromeSink.ApplyDelta),
 	); err != nil {
 		w.cancel()
 		w.wg.Wait()
@@ -1023,10 +1030,14 @@ func bootCoreWithGameMode(correlationID string, reg *registry.Registry, gameMode
 	//
 	// secondsPerMonthAt1x is the SAME value handed to NewEngine above, from
 	// the same single data/pacing.json load.
+	driver := newTickDriver(w.engine.Clock, transport.SendCommand, secondsPerMonthAt1x)
+	w.driverReady = driver.Ready()
+	// BUG-1239: the engine's result for the boot Resume tells the driver it was applied.
+	w.router.RegisterResultHandler(driver.ResumeCorrelationID(), driver)
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		newTickDriver(w.engine.Clock, transport.SendCommand, secondsPerMonthAt1x).Run(ctx)
+		driver.Run(ctx)
 	}()
 
 	return w, nil

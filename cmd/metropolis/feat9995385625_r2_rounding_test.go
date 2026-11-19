@@ -73,8 +73,8 @@ func TestFEAT9995385625_R2_TopLineAndBalanceSheetTreasuryMatch(t *testing.T) {
 	r := rcNew(t)
 	sawHalfUp := false
 	for i := 0; i < 8; i++ {
-		plAdvance(t, r.w, 30)
-		f2 := r.snap("F2 money screen", tcell.KeyF2)
+		advanceAndSettle(t, r.w, 30)
+		f2 := r.snap(t, "F2 money screen", tcell.KeyF2)
 		top := strings.Split(f2, "\n")[0]
 		tm := r2TopMoneyRe.FindStringSubmatch(top)
 		bm := r2BSTreasury.FindStringSubmatch(f2)

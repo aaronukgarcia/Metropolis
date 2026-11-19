@@ -11,9 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 )
 
@@ -31,20 +29,11 @@ func smallFrame(w *skeletonWiring) string {
 }
 
 func TestBUG1222_F2At80x24ShowsNetAndHouseholdConsumption(t *testing.T) {
-	prev := bootSecondsPerMonthAt1x
-	bootSecondsPerMonthAt1x = func(string) (int64, error) { return 1000000, nil }
-	t.Cleanup(func() { bootSecondsPerMonthAt1x = prev })
-	w, err := bootCore("bug1222-f2", registry.NewRegistry())
-	if err != nil {
-		t.Fatalf("bootCore: %v", err)
-	}
-	t.Cleanup(w.shutdown)
-	pressKey(w, ' ')
-	waitForPaused(t, w, true, 5*time.Second)
+	w := bootPausedReady(t, "bug1222-f2")
 
 	var out strings.Builder
 	for i := 1; i <= 2; i++ {
-		plAdvance(t, w, 30)
+		advanceAndSettle(t, w, 30)
 		// plF2 switches to F2; the frame it returns is the 140x40 one, so
 		// take the 80x24 frame afterwards.
 		plF2(w)

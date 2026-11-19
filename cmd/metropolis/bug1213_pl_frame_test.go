@@ -11,12 +11,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
-	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 )
 
@@ -33,25 +30,6 @@ func plFrame(w *skeletonWiring) string {
 	return sb.String()
 }
 
-func plAdvance(t *testing.T, w *skeletonWiring, n int64) {
-	t.Helper()
-	want := w.engine.TicksCompleted() + uint64(n)
-	if err := w.transport.SendCommand(protocol.Command{
-		ProtocolVersion: protocol.ProtocolVersion,
-		CorrelationID:   protocol.NewCorrelationID(),
-		Kind:            protocol.KindAdvanceTicks,
-		Payload:         protocol.AdvanceTicksPayload{N: n},
-	}); err != nil {
-		t.Fatalf("SendCommand: %v", err)
-	}
-	waitForTicks(t, w, want, 60*time.Second)
-	needle := fmt.Sprintf("TICK %d ", want)
-	for i := 0; i < 100 && !strings.Contains(plFrame(w), needle); i++ {
-		time.Sleep(50 * time.Millisecond)
-	}
-	time.Sleep(300 * time.Millisecond)
-}
-
 var (
 	// Whole-pound figures with thousands commas and the minus before the pound
 	// sign: "-£530,161" (FEAT-9995385625).
@@ -62,7 +40,6 @@ var (
 func plF2(w *skeletonWiring) string {
 	ev := tcell.NewEventKey(tcell.KeyF2, 0, tcell.ModNone)
 	routeKeyInput(w, core.InputMsg{Kind: core.KeyInput, Key: tcell.KeyF2, Rune: 0, Raw: ev})
-	time.Sleep(100 * time.Millisecond)
 	return plFrame(w)
 }
 
@@ -70,21 +47,12 @@ func plF2(w *skeletonWiring) string {
 // City economy block carrying Household consumption; both lines change between
 // month closes, and the third close's previous-month columns are the second's.
 func TestBUG1213_F2ProfitAndLoss_NetAndConsumptionChangeBetweenMonthCloses(t *testing.T) {
-	prev := bootSecondsPerMonthAt1x
-	bootSecondsPerMonthAt1x = func(string) (int64, error) { return 1000000, nil }
-	t.Cleanup(func() { bootSecondsPerMonthAt1x = prev })
-	w, err := bootCore("bug1213-pl", registry.NewRegistry())
-	if err != nil {
-		t.Fatalf("bootCore: %v", err)
-	}
-	t.Cleanup(w.shutdown)
-	pressKey(w, ' ')
-	waitForPaused(t, w, true, 5*time.Second)
+	w := bootPausedReady(t, "bug1213-pl")
 
 	var out strings.Builder
 	var cons, net, consPrev, netPrev [3]string
 	for i := 0; i < 3; i++ {
-		plAdvance(t, w, 30)
+		advanceAndSettle(t, w, 30)
 		frame := plF2(w)
 		fmt.Fprintf(&out, "===== F2 after finance close %d | engine ticks completed %d =====\n%s\n", i+1, w.engine.TicksCompleted(), frame)
 		if !strings.Contains(frame, "City economy (not treasury money):") {

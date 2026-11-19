@@ -46,8 +46,8 @@ func TestBUG1220_HousingRow_FullCueBindsAndClears(t *testing.T) {
 	firstFull := -1
 	var last hsLine
 	for m := 1; m <= 8; m++ {
-		plAdvance(t, r.w, 30)
-		f := r.snap(fmt.Sprintf("CONTROL month %d", m), tcell.KeyF1)
+		advanceAndSettle(t, r.w, 30)
+		f := r.snap(t, fmt.Sprintf("CONTROL month %d", m), tcell.KeyF1)
 		last = hsParse(t, f)
 		tick := m * 30
 		if last.places != 120 {
@@ -76,17 +76,17 @@ func TestBUG1220_HousingRow_FullCueBindsAndClears(t *testing.T) {
 
 	// Build dwellings: buy cells and queue builds, then run until places rise.
 	for i := 0; i < 6; i++ {
-		rcKey(r.w, tcell.KeyF1, 0)
-		rcKey(r.w, tcell.KeyRune, 'y')
-		rcKey(r.w, tcell.KeyF3, 0)
-		rcKey(r.w, tcell.KeyRune, 'b')
-		rcKey(r.w, tcell.KeyF1, 0)
-		rcKey(r.w, tcell.KeyRight, 0)
+		rcKey(t, r.w, tcell.KeyF1, 0)
+		rcKey(t, r.w, tcell.KeyRune, 'y')
+		rcKey(t, r.w, tcell.KeyF3, 0)
+		rcKey(t, r.w, tcell.KeyRune, 'b')
+		rcKey(t, r.w, tcell.KeyF1, 0)
+		rcKey(t, r.w, tcell.KeyRight, 0)
 	}
 	cleared := false
 	for m := 9; m <= 20 && !cleared; m++ {
-		plAdvance(t, r.w, 30)
-		f := r.snap(fmt.Sprintf("AFTER BUILD month %d", m), tcell.KeyF1)
+		advanceAndSettle(t, r.w, 30)
+		f := r.snap(t, fmt.Sprintf("AFTER BUILD month %d", m), tcell.KeyF1)
 		h := hsParse(t, f)
 		if h.places > 120 {
 			if h.free <= 0 || h.full {
@@ -109,7 +109,7 @@ func TestBUG1220_HousingRow_FullCueBindsAndClears(t *testing.T) {
 func TestBUG1220_HousingCue_SurvivesAn80ColumnTerminal(t *testing.T) {
 	r := rcNew(t)
 	for m := 1; m <= 8; m++ {
-		plAdvance(t, r.w, 30)
+		advanceAndSettle(t, r.w, 30)
 		if !strings.Contains(plFrame(r.w), "HOMES FULL") {
 			continue
 		}

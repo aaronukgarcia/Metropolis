@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	enginecore "github.com/aaronukgarcia/Metropolis/internal/engine/core"
@@ -187,6 +189,27 @@ type tickDriver struct {
 	// changing the system clock) — a tick driver that could be fast-
 	// forwarded by an NTP correction would be a determinism hazard.
 	now func() time.Time
+
+	// ready is closed exactly once, when the boot-time Resume has been
+	// APPLIED by the engine (BUG-1239): the engine's CommandResult for the
+	// Resume arrived (ApplyResult), or the clock was observed running (or
+	// already past tick 0), or the Resume could not be sent, or Run returned
+	// before either (the driver has given up). It is the start-up signal a
+	// test waits on instead of guessing; it carries no game behaviour.
+	// Closed through readyOnce so every path may call markReady.
+	ready     chan struct{}
+	readyOnce sync.Once
+
+	// resumeID is the CorrelationID of the boot Resume, minted at
+	// construction so the composition root can register the driver as the
+	// result receiver for it BEFORE the send (router contract). The engine's
+	// CommandResult for that ID is the engine's own report that the Resume was
+	// applied, which holds even if the player pauses again before the next
+	// clock read. Immutable after construction.
+	resumeID protocol.CorrelationID
+
+	// refusal records a refused boot Resume (nil when it was not refused).
+	refusal atomic.Pointer[bootRefusal]
 }
 
 // newTickDriver builds a driver over an engine clock reader and a command
@@ -198,8 +221,57 @@ func newTickDriver(clock func() (enginecore.Clock, error), send func(protocol.Co
 		secondsPerMonthAt1x: secondsPerMonthAt1x,
 		pollInterval:        driverPollInterval,
 		now:                 time.Now,
+		ready:               make(chan struct{}),
+		resumeID:            protocol.NewCorrelationID(),
 	}
 }
+
+// ResumeCorrelationID is the CorrelationID the boot Resume is sent under.
+func (d *tickDriver) ResumeCorrelationID() protocol.CorrelationID { return d.resumeID }
+
+// ApplyResult is the router's result receiver for the boot Resume: the
+// engine's CommandResult for it means the Resume was handled (applied, or
+// refused and so never going to be), so Ready may fire whatever the clock
+// shows now. A result for any other CorrelationID is ignored.
+func (d *tickDriver) ApplyResult(res protocol.CommandResult) {
+	if res.CorrelationID != d.resumeID {
+		return
+	}
+	if !res.Accepted {
+		// A refused boot Resume leaves the world paused until the player presses
+		// Space. Nothing may write to stderr while tcell owns the screen, so the
+		// refusal is RECORDED (see BootResumeRefusal), not printed. The code and
+		// display come from the engine's registry-sourced ErrorRef; no new error
+		// code is needed because this reports the engine's own.
+		code, display := "", ""
+		if res.Error != nil {
+			code, display = res.Error.Code, res.Error.Display
+		}
+		d.refusal.Store(&bootRefusal{code: code, display: display})
+	}
+	d.markReady()
+}
+
+// bootRefusal is the recorded refusal of the boot Resume.
+type bootRefusal struct{ code, display string }
+
+// BootResumeRefusal reports whether the engine refused the boot Resume, with
+// the registry error's code and display text. Shown nowhere yet: BUG-1253
+// surfaces it as a status notice.
+func (d *tickDriver) BootResumeRefusal() (code, display string, refused bool) {
+	r := d.refusal.Load()
+	if r == nil {
+		return "", "", false
+	}
+	return r.code, r.display, true
+}
+
+// Ready returns a channel closed once the boot-time Resume has been applied
+// by the engine (or the driver has given up on it). See the ready field.
+func (d *tickDriver) Ready() <-chan struct{} { return d.ready }
+
+// markReady closes ready exactly once.
+func (d *tickDriver) markReady() { d.readyOnce.Do(func() { close(d.ready) }) }
 
 // Run drives the clock until ctx is cancelled, then returns. It is the
 // goroutine body bootCore starts; see the shutdown section of this file's
@@ -211,7 +283,16 @@ func newTickDriver(clock func() (enginecore.Clock, error), send func(protocol.Co
 // player presses Space, which is a visible, recoverable state now that the
 // status line reports it, rather than a reason to kill the process.
 func (d *tickDriver) Run(ctx context.Context) {
-	d.resume()
+	// BUG-1239: whatever happens, never leave a waiter hanging once Run is over.
+	defer d.markReady()
+	// The send is asynchronous: the engine applies the Resume on its own
+	// command loop. Ready is therefore not signalled by the send but by the
+	// first clock read that shows the Resume took effect (below). A send
+	// that failed will never be applied, so the driver gives up on it now.
+	bootPending := d.resume() == nil
+	if !bootPending {
+		d.markReady()
+	}
 
 	last := d.now()
 	var credit int64 // nanoseconds of real time owed to the simulation
@@ -246,6 +327,18 @@ func (d *tickDriver) Run(ctx context.Context) {
 			// has no stderr and no correlation channel — the same
 			// no-reporting-channel situation EngineStatusView documents).
 			return
+		}
+
+		// The Resume is applied once the clock reads running; a clock past
+		// tick 0 proves it was running even if a pause already followed.
+		// REVISIT when load lands (FEAT-9995385621): a RESTORED city is past
+		// tick 0 from the start, so the c.Tick() > 0 arm would fire Ready on
+		// the first poll, BEFORE the boot Resume has been applied. The result
+		// path (ApplyResult) is the reliable signal; this arm must then be
+		// dropped or made to compare against the restored starting tick.
+		if bootPending && (!c.Paused() || c.Tick() > 0) {
+			bootPending = false
+			d.markReady()
 		}
 
 		if c.Paused() || c.Speed() <= 0 {
@@ -356,10 +449,10 @@ func (d *tickDriver) advance(n int64) {
 }
 
 // resume issues the boot-time KindResume (design decision 4).
-func (d *tickDriver) resume() {
-	_ = d.send(protocol.Command{
+func (d *tickDriver) resume() error {
+	return d.send(protocol.Command{
 		ProtocolVersion: protocol.ProtocolVersion,
-		CorrelationID:   protocol.NewCorrelationID(),
+		CorrelationID:   d.resumeID,
 		Kind:            protocol.KindResume,
 		Payload:         protocol.ResumePayload{},
 	})

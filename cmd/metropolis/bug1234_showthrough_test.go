@@ -10,11 +10,9 @@ package main
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 )
 
@@ -23,104 +21,41 @@ func pressSpecial(w *skeletonWiring, k tcell.Key) {
 	routeKeyInput(w, core.InputMsg{Kind: core.KeyInput, Key: k, Rune: 0, Raw: ev})
 }
 
-func simRow(sim tcell.SimulationScreen, w, y int) string {
-	cells, cw, _ := sim.GetContents()
-	var sb strings.Builder
-	for x := 0; x < w; x++ {
-		c := cells[y*cw+x]
-		if len(c.Runes) == 0 || c.Runes[0] == 0 {
-			sb.WriteRune(' ')
-		} else {
-			sb.WriteRune(c.Runes[0])
-		}
-	}
-	return sb.String()
-}
-
 func cleanFrame(w *skeletonWiring, cols, rows int) *core.Buffer {
 	buf := core.NewBuffer(cols, rows)
 	composeDraw(w)(buf, nil)
 	return buf
 }
 
+// bootPausedForBlankTest boots the real game and returns with the clock
+// confirmed paused (BUG-1239: the boot Resume applied first, then Space, then
+// the clock and the status view both read paused). No settle loop.
 func bootPausedForBlankTest(t *testing.T, slug string) *skeletonWiring {
 	t.Helper()
-	prev := bootSecondsPerMonthAt1x
-	bootSecondsPerMonthAt1x = func(string) (int64, error) { return 1000000, nil }
-	t.Cleanup(func() { bootSecondsPerMonthAt1x = prev })
-	w, err := bootCore(slug, registry.NewRegistry())
-	if err != nil {
-		t.Fatalf("bootCore: %v", err)
-	}
-	t.Cleanup(w.shutdown)
-	// BUG-1239: the tick driver sends its boot-time Resume asynchronously. A
-	// Space pressed before that Resume is processed reads "paused", sends a
-	// second Resume, and the clock then keeps running (CI run 44406336316:
-	// the F1 status row changed during the "idle" window). Wait for the
-	// clock to be running before pausing it. Nothing tells a test when that
-	// boot Resume has been processed, so settle instead: the clock must read
-	// paused without a break for a full second; whenever it is found running
-	// it is paused again. No fixed number of presses, no fixed wait.
-	stop := time.Now().Add(60 * time.Second)
-	var pausedSince time.Time
-	var lastPress time.Time
-	for {
-		c, err := w.engine.Clock()
-		if err != nil {
-			t.Fatalf("Clock: %v", err)
-		}
-		now := time.Now()
-		if c.Paused() {
-			if pausedSince.IsZero() {
-				pausedSince = now
-			}
-			if now.Sub(pausedSince) >= time.Second {
-				return w
-			}
-		} else {
-			pausedSince = time.Time{}
-			if now.Sub(lastPress) >= 250*time.Millisecond {
-				pressKey(w, ' ')
-				lastPress = now
-			}
-		}
-		if now.After(stop) {
-			t.Fatalf("clock never settled paused (BUG-1239 start-up race)")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	return bootPausedReady(t, slug)
 }
 
 // liveLoop runs a real RenderLoop on a simulation screen of the given size.
+// All screen reads go through the lockedSim so they never overlap a draw.
 type liveLoop struct {
-	sim  tcell.SimulationScreen
-	rl   *core.RenderLoop
-	stop chan struct{}
-	done chan struct{}
+	sim *lockedSim
+	fl  *framedLoop
 }
 
 func startLiveLoop(t *testing.T, w *skeletonWiring, cols, rows int) *liveLoop {
 	t.Helper()
-	sim := tcell.NewSimulationScreen("")
-	if err := sim.Init(); err != nil {
-		t.Fatalf("sim.Init: %v", err)
-	}
-	sim.SetSize(cols, rows)
-	l := &liveLoop{sim: sim, rl: core.NewRenderLoop(sim, w.viewStore, composeDraw(w)), stop: make(chan struct{}), done: make(chan struct{})}
-	go func() { l.rl.Run(l.stop); close(l.done) }()
-	return l
+	sim := newLockedSim(t, cols, rows)
+	return &liveLoop{sim: sim, fl: startFramedLoop(t, w, sim, sim)}
 }
 
-func (l *liveLoop) settle() {
-	l.rl.TriggerRender()
-	time.Sleep(350 * time.Millisecond)
-}
+// settle returns once the real loop has drawn two complete frames that began
+// after the call (no sleep).
+func (l *liveLoop) settle(t *testing.T) { t.Helper(); l.fl.framesAfterNow(t, 2) }
 
-func (l *liveLoop) close() {
-	close(l.stop)
-	<-l.done
-	l.sim.Fini()
-}
+// row reads one screen row, race-free.
+func (l *liveLoop) row(cols, rows, y int) string { return l.sim.rows(cols, rows)[y] }
+
+func (l *liveLoop) close() { l.fl.close() }
 
 func TestBUG1234_EveryScreenStartsBlank_NoMapShowThrough(t *testing.T) {
 	w := bootPausedForBlankTest(t, "bug1234-blank")
@@ -138,10 +73,10 @@ func TestBUG1234_EveryScreenStartsBlank_NoMapShowThrough(t *testing.T) {
 		cols, rows := size[0], size[1]
 		l := startLiveLoop(t, w, cols, rows)
 		pressSpecial(w, tcell.KeyF1)
-		l.settle()
+		l.settle(t)
 		mapGlyphs := 0
 		for y := 1; y < rows-1; y++ {
-			mapGlyphs += len(strings.ReplaceAll(simRow(l.sim, cols, y), " ", ""))
+			mapGlyphs += len(strings.ReplaceAll(l.row(cols, rows, y), " ", ""))
 		}
 		if mapGlyphs < 50 {
 			l.close()
@@ -149,10 +84,10 @@ func TestBUG1234_EveryScreenStartsBlank_NoMapShowThrough(t *testing.T) {
 		}
 		for _, sc := range screens {
 			pressSpecial(w, sc.key)
-			l.settle()
+			l.settle(t)
 			want := cleanFrame(w, cols, rows)
 			for y := 0; y < rows; y++ {
-				got := simRow(l.sim, cols, y)
+				got := l.row(cols, rows, y)
 				exp := bufferRowString(want, cols, y)
 				if got != exp {
 					l.close()
@@ -161,7 +96,7 @@ func TestBUG1234_EveryScreenStartsBlank_NoMapShowThrough(t *testing.T) {
 			}
 			// back to the map so the next screen is switched to from a map frame
 			pressSpecial(w, tcell.KeyF1)
-			l.settle()
+			l.settle(t)
 		}
 		l.close()
 	}
@@ -172,12 +107,12 @@ func TestBUG1234_F3FrameEvidence(t *testing.T) {
 	cols, rows := 120, 30
 	l := startLiveLoop(t, w, cols, rows)
 	pressSpecial(w, tcell.KeyF1)
-	l.settle()
+	l.settle(t)
 	pressSpecial(w, tcell.KeyF3)
-	l.settle()
+	l.settle(t)
 	var sb strings.Builder
 	for y := 0; y < rows; y++ {
-		sb.WriteString(strings.TrimRight(simRow(l.sim, cols, y), " "))
+		sb.WriteString(strings.TrimRight(l.row(cols, rows, y), " "))
 		sb.WriteByte('\n')
 	}
 	l.close()

@@ -14,11 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 )
 
@@ -27,35 +26,34 @@ type rcRun struct {
 	out strings.Builder
 }
 
+// rcNew boots the real game and returns with the clock confirmed paused
+// (BUG-1239: boot Resume applied, then Space, then the clock and the status
+// view both read paused).
 func rcNew(t *testing.T) *rcRun {
 	t.Helper()
-	prev := bootSecondsPerMonthAt1x
-	bootSecondsPerMonthAt1x = func(string) (int64, error) { return 1000000, nil }
-	t.Cleanup(func() { bootSecondsPerMonthAt1x = prev })
-	w, err := bootCore("feat083-recapture", registry.NewRegistry())
-	if err != nil {
-		t.Fatalf("bootCore: %v", err)
-	}
-	t.Cleanup(w.shutdown)
-	pressKey(w, ' ')
-	waitForPaused(t, w, true, 5*time.Second)
-	return &rcRun{w: w}
+	return &rcRun{w: bootPausedReady(t, "feat083-recapture")}
 }
 
-func rcKey(w *skeletonWiring, k tcell.Key, r rune) {
+// rcKey routes one key through the real input router. Screen switches are
+// synchronous; a rune key (buy, build) sends an engine command, so the clock
+// being paused, a Pause barrier returns once the engine has handled it.
+func rcKey(t *testing.T, w *skeletonWiring, k tcell.Key, r rune) {
+	t.Helper()
 	ev := tcell.NewEventKey(k, r, tcell.ModNone)
 	routeKeyInput(w, core.InputMsg{Kind: core.KeyInput, Key: k, Rune: r, Raw: ev})
-	time.Sleep(60 * time.Millisecond)
+	if k == tcell.KeyRune {
+		commandBarrier(t, w, string(protocol.NewCorrelationID()))
+	}
 }
 
-func (r *rcRun) screen(fkey tcell.Key) string {
-	rcKey(r.w, fkey, 0)
-	time.Sleep(60 * time.Millisecond)
+func (r *rcRun) screen(t *testing.T, fkey tcell.Key) string {
+	t.Helper()
+	rcKey(t, r.w, fkey, 0)
 	return plFrame(r.w)
 }
 
-func (r *rcRun) snap(label string, fkey tcell.Key) string {
-	f := r.screen(fkey)
+func (r *rcRun) snap(t *testing.T, label string, fkey tcell.Key) string {
+	f := r.screen(t, fkey)
 	fmt.Fprintf(&r.out, "===== %s | engine ticks completed %d =====\n%s\n", label, r.w.engine.TicksCompleted(), f)
 	return f
 }
@@ -93,22 +91,25 @@ func TestFEAT083_Recapture_Legs2and3(t *testing.T) {
 	bld := rcNew(t)
 	var l2 strings.Builder
 
-	rcKey(bld.w, tcell.KeyF1, 0)
-	rcKey(bld.w, tcell.KeyRune, 'y')
-	bld.snap("BUILD F3 after F1 y (buy), before b", tcell.KeyF3)
-	rcKey(bld.w, tcell.KeyRune, 'b')
-	f3 := bld.snap("BUILD F3 after b (queued)", tcell.KeyF3)
+	rcKey(t, bld.w, tcell.KeyF1, 0)
+	rcKey(t, bld.w, tcell.KeyRune, 'y')
+	bld.snap(t, "BUILD F3 after F1 y (buy), before b", tcell.KeyF3)
+	rcKey(t, bld.w, tcell.KeyRune, 'b')
+	// The queue row reaches F3 through a delta-fed view: wait for it by its
+	// own condition (BUG-1239), the assertion below is unchanged.
+	waitFrame(t, bld.w, "F3 dwelling queue row after b", func(f string) bool { return rcDwellRe.MatchString(f) })
+	f3 := bld.snap(t, "BUILD F3 after b (queued)", tcell.KeyF3)
 	if !rcDwellRe.MatchString(f3) {
 		t.Fatalf("F3 shows no dwelling queue row after b:\n%s", f3)
 	}
 	var ctlTre, bldTre []string
 	var f3Last, f2Last string
 	for i := 0; i < 3; i++ {
-		plAdvance(t, ctl.w, 30)
-		plAdvance(t, bld.w, 30)
-		cf := ctl.snap(fmt.Sprintf("CONTROL F2 month %d", i+1), tcell.KeyF2)
-		f3Last = bld.snap(fmt.Sprintf("BUILD F3 month %d", i+1), tcell.KeyF3)
-		f2Last = bld.snap(fmt.Sprintf("BUILD F2 month %d", i+1), tcell.KeyF2)
+		advanceAndSettle(t, ctl.w, 30)
+		advanceAndSettle(t, bld.w, 30)
+		cf := ctl.snap(t, fmt.Sprintf("CONTROL F2 month %d", i+1), tcell.KeyF2)
+		f3Last = bld.snap(t, fmt.Sprintf("BUILD F3 month %d", i+1), tcell.KeyF3)
+		f2Last = bld.snap(t, fmt.Sprintf("BUILD F2 month %d", i+1), tcell.KeyF2)
 		if m := rcTreasuryRe.FindStringSubmatch(cf); m != nil {
 			ctlTre = append(ctlTre, m[1])
 		}
@@ -130,8 +131,8 @@ func TestFEAT083_Recapture_Legs2and3(t *testing.T) {
 	var cons []string
 	l3run := rcNew(t)
 	for i := 0; i < 3; i++ {
-		plAdvance(t, l3run.w, 30)
-		f := l3run.snap(fmt.Sprintf("LEG3 F2 close %d", i+1), tcell.KeyF2)
+		advanceAndSettle(t, l3run.w, 30)
+		f := l3run.snap(t, fmt.Sprintf("LEG3 F2 close %d", i+1), tcell.KeyF2)
 		if m := plConsumptionRe.FindStringSubmatch(f); m != nil {
 			cons = append(cons, m[1])
 		}
@@ -155,28 +156,28 @@ func TestFEAT083_Recapture_Leg4(t *testing.T) {
 	ctl := rcNew(t)
 	trt := rcNew(t)
 	for i := 0; i < 6; i++ {
-		rcKey(trt.w, tcell.KeyF1, 0)
-		rcKey(trt.w, tcell.KeyRune, 'y')
-		rcKey(trt.w, tcell.KeyF3, 0)
-		rcKey(trt.w, tcell.KeyRune, 'b')
-		rcKey(trt.w, tcell.KeyF1, 0)
-		rcKey(trt.w, tcell.KeyRight, 0)
+		rcKey(t, trt.w, tcell.KeyF1, 0)
+		rcKey(t, trt.w, tcell.KeyRune, 'y')
+		rcKey(t, trt.w, tcell.KeyF3, 0)
+		rcKey(t, trt.w, tcell.KeyRune, 'b')
+		rcKey(t, trt.w, tcell.KeyF1, 0)
+		rcKey(t, trt.w, tcell.KeyRight, 0)
 	}
-	trt.snap("TREATMENT F3 after six build attempts", tcell.KeyF3)
+	trt.snap(t, "TREATMENT F3 after six build attempts", tcell.KeyF3)
 	var cp, tp []int
 	var body strings.Builder
 	for m := 1; m <= 12; m++ {
-		plAdvance(t, ctl.w, 30)
-		plAdvance(t, trt.w, 30)
-		cf := ctl.snap(fmt.Sprintf("CONTROL F1 month %d", m), tcell.KeyF1)
-		tf := trt.snap(fmt.Sprintf("TREATMENT F1 month %d", m), tcell.KeyF1)
+		advanceAndSettle(t, ctl.w, 30)
+		advanceAndSettle(t, trt.w, 30)
+		cf := ctl.snap(t, fmt.Sprintf("CONTROL F1 month %d", m), tcell.KeyF1)
+		tf := trt.snap(t, fmt.Sprintf("TREATMENT F1 month %d", m), tcell.KeyF1)
 		cp = append(cp, rcPop(t, cf))
 		tp = append(tp, rcPop(t, tf))
 		fmt.Fprintf(&body, "month %2d tick %3d  population control %d  treatment %d\n", m, m*30, cp[m-1], tp[m-1])
 	}
 	for _, k := range []tcell.Key{tcell.KeyF2, tcell.KeyF3, tcell.KeyF4} {
-		ctl.snap(fmt.Sprintf("CONTROL screen %v month 12", k), k)
-		trt.snap(fmt.Sprintf("TREATMENT screen %v month 12", k), k)
+		ctl.snap(t, fmt.Sprintf("CONTROL screen %v month 12", k), k)
+		trt.snap(t, fmt.Sprintf("TREATMENT screen %v month 12", k), k)
 	}
 	head := "LEG 4 population by month (chrome figure)\n" + body.String() + "\n"
 	rcSave(t, "leg4.txt", head+"---- TREATMENT ----\n"+trt.out.String()+"\n---- CONTROL ----\n"+ctl.out.String())

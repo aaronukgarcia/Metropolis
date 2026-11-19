@@ -38,7 +38,7 @@ func unknownWhyViewCount() int {
 func TestRegression_FEAT9995385616_BootLogsNoUnknownWhyView(t *testing.T) {
 	before := unknownWhyViewCount()
 	r := rcNew(t)
-	f := r.snap("F5 after boot", tcell.KeyF5)
+	f := r.snap(t, "F5 after boot", tcell.KeyF5)
 	if !strings.Contains(f, "no month closed yet") {
 		t.Fatalf("F5 lost its honest no-data state:\n%s", f)
 	}

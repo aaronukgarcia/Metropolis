@@ -43,7 +43,7 @@ func TestBUG1220_Hints_StatusAndPerScreen(t *testing.T) {
 		{tcell.KeyF12, screenHintDebug, screenIDDebug},
 	}
 	for _, s := range screens {
-		f := r.snap(fmt.Sprintf("hints %s", s.id), s.key)
+		f := r.snap(t, fmt.Sprintf("hints %s", s.id), s.key)
 		if got := hintRow(f); !strings.HasPrefix(got, s.want) {
 			t.Fatalf("screen %s: hint row %q, want %q\n%s", s.id, got, s.want, f)
 		}
@@ -55,11 +55,11 @@ func TestBUG1220_Hints_StatusAndPerScreen(t *testing.T) {
 		}
 	}
 	// F3's own key line is no longer hidden under the status bar.
-	f3 := r.snap("F3 keys line", tcell.KeyF3)
+	f3 := r.snap(t, "F3 keys line", tcell.KeyF3)
 	if !strings.Contains(f3, "keys: n/p select, b build at map cursor") {
 		t.Fatalf("F3 keys line not visible:\n%s", f3)
 	}
-	rcSave(t, "hints_f1.txt", r.snap("F1", tcell.KeyF1))
+	rcSave(t, "hints_f1.txt", r.snap(t, "F1", tcell.KeyF1))
 	rcSave(t, "hints_f3.txt", f3)
 }
 
@@ -92,7 +92,7 @@ var catRowRe = regexp.MustCompile(`cost £\d{1,3}(?:,\d{3})*\s+cap \d+ homes, \d
 // Part C: the F3 catalogue's cost and cap columns show real values.
 func TestBUG1220_F3Catalogue_CostAndCapShowValues(t *testing.T) {
 	r := rcNew(t)
-	f := r.snap("F3 catalogue", tcell.KeyF3)
+	f := r.snap(t, "F3 catalogue", tcell.KeyF3)
 	n := 0
 	dwelling := ""
 	for _, ln := range strings.Split(f, "\n") {
@@ -119,18 +119,18 @@ func TestBUG1220_F3Catalogue_CostAndCapShowValues(t *testing.T) {
 // Part C: a refused buy's text clears on the next cursor key.
 func TestBUG1220_RefusalNoticeClearsOnNextKey(t *testing.T) {
 	r := rcNew(t)
-	rcKey(r.w, tcell.KeyF1, 0)
-	rcKey(r.w, tcell.KeyRune, 'y')
-	rcKey(r.w, tcell.KeyRune, 'y') // second buy of the same cell is refused
+	rcKey(t, r.w, tcell.KeyF1, 0)
+	rcKey(t, r.w, tcell.KeyRune, 'y')
+	rcKey(t, r.w, tcell.KeyRune, 'y') // second buy of the same cell is refused
 	shown := ""
 	for i := 0; i < 20 && !strings.Contains(shown, "Build rejected"); i++ {
-		shown = r.snap("F1 after refused y", tcell.KeyF1)
+		shown = r.snap(t, "F1 after refused y", tcell.KeyF1)
 	}
 	if !strings.Contains(shown, "Build rejected") {
 		t.Fatalf("a refused second buy shows no notice:\n%s", shown)
 	}
-	rcKey(r.w, tcell.KeyRight, 0)
-	after := r.snap("F1 after cursor key", tcell.KeyF1)
+	rcKey(t, r.w, tcell.KeyRight, 0)
+	after := r.snap(t, "F1 after cursor key", tcell.KeyF1)
 	if strings.Contains(after, "Build rejected") {
 		t.Fatalf("refusal text still on F1 after the next key:\n%s", after)
 	}

@@ -55,7 +55,21 @@ func bootFastPaced(t *testing.T) *skeletonWiring {
 		t.Fatalf("bootCore: %v", err)
 	}
 	t.Cleanup(w.shutdown)
+	waitDriverReady(t, w)
 	return w
+}
+
+// bootFastPaced returns with the boot Resume applied, so the clock reads running
+// before any barrier is sent (commandBarrier's precondition).
+func TestBUG1239_BootFastPaced_ClockReadsRunning(t *testing.T) {
+	w := bootFastPaced(t)
+	c, err := w.engine.Clock()
+	if err != nil {
+		t.Fatalf("Clock: %v", err)
+	}
+	if c.Paused() {
+		t.Fatal("bootFastPaced returned with the clock still paused: a barrier sent now could read paused and queue a Pause after the boot Resume")
+	}
 }
 
 // waitForTicks blocks until the engine has completed at least want ticks, or
@@ -150,13 +164,22 @@ func TestBUG322_SpacePausesAndResumes(t *testing.T) {
 	pressKey(w, ' ')
 	waitForPaused(t, w, true, 5*time.Second)
 
-	// Let any command already in flight land, then take the baseline.
-	time.Sleep(200 * time.Millisecond)
+	// The subject here IS the pause state, so no barrier command is sent (it
+	// would re-assert the very state under test and hide a stray late Resume).
+	// Wait on the clock and the published status view: the view shows paused
+	// and every bound view has applied the engine's current tick; then take
+	// the baseline.
+	pollUntil(t, "the status view to show paused", func() bool {
+		v, ok := w.statusBar.Snapshot()
+		return ok && v.Paused
+	})
+	settleViews(t, w)
 	frozen := w.engine.TicksCompleted()
 
 	// At this pacing an unpaused driver produces ~30 ticks/second, so if
 	// pause did not take, this window is worth ~15 ticks. Zero is the only
-	// passing answer.
+	// passing answer. This 500 ms is a deliberate NEGATIVE window: it proves
+	// something does not happen, so it can only be a stretch of wall time.
 	time.Sleep(500 * time.Millisecond)
 	if got := w.engine.TicksCompleted(); got != frozen {
 		t.Fatalf("clock advanced while paused: %d -> %d", frozen, got)
@@ -199,7 +222,10 @@ func TestBUG322_SpeedKeysStepTheLadder(t *testing.T) {
 
 	// Top of the ladder: another ']' must be a no-op, never a wrap to 1x.
 	pressKey(w, ']')
-	time.Sleep(200 * time.Millisecond)
+	// A clamped key produces no observable effect, so the barrier (option b: it
+	// re-asserts the running state, changing nothing) is the only way to know
+	// the extra key has been handled.
+	commandBarrier(t, w, string(protocol.NewCorrelationID()))
 	waitForSpeed(enginecore.Speed4x)
 
 	pressKey(w, '[')
@@ -207,7 +233,7 @@ func TestBUG322_SpeedKeysStepTheLadder(t *testing.T) {
 	pressKey(w, '[')
 	waitForSpeed(enginecore.Speed1x)
 	pressKey(w, '[')
-	time.Sleep(200 * time.Millisecond)
+	commandBarrier(t, w, string(protocol.NewCorrelationID())) // as above: the clamped key has been handled
 	waitForSpeed(enginecore.Speed1x)
 }
 
