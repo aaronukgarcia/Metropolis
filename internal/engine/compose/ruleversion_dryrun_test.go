@@ -117,7 +117,7 @@ func TestDryRunStore_RefusesEveryWrite(t *testing.T) {
 // in Wire and then refuses MET-G5611; the dry run must refuse too, not stop at
 // its own refused seed stamp and pass.
 func TestDryRun_NeverStampedSeedCity_RetiredGenesis_StillRefuses(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	src := persist.NewMemStore()
 	rc := newRuleCity(t, src, 0)
 	rc.sessionA(t)              // genesis city, no snapshot, frames at version 0
@@ -125,7 +125,7 @@ func TestDryRun_NeverStampedSeedCity_RetiredGenesis_StillRefuses(t *testing.T) {
 	if _, ok, _ := store.WorldSeed(context.Background(), ruleTestCity); ok {
 		t.Fatal("setup: the seed was recorded")
 	}
-	rules.SetOldestSupportedForTest(t, 1)
+	rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell)
 	ro := NewDryRunStore(store)
 	err := dryRun(t, ro, ruleTestSeed)
 	if codeOfErr(t, err) != rules.ErrSavedUnderRetiredRules {

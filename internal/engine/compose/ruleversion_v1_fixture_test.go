@@ -107,8 +107,7 @@ func copyDir(t *testing.T, src, dst string) {
 // write beside what it reads) and opens it.
 func openFixtureV1(t *testing.T) persist.Store {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "v1")
-	copyDir(t, fixtureV1Dir, dir)
+	dir := materializeRuleFixture(t, fixtureV1Dir)
 	st, err := persist.NewDiskStore(dir)
 	if err != nil {
 		t.Fatalf("open fixture: %v", err)
@@ -124,18 +123,17 @@ func TestRuleFixtureV1_Generate(t *testing.T) {
 	if os.Getenv("METROPOLIS_GEN_RULES_FIXTURE") != "1" {
 		t.Skip("set METROPOLIS_GEN_RULES_FIXTURE=1 to regenerate testdata/rules/v1")
 	}
-	if err := os.RemoveAll(fixtureV1Dir); err != nil {
-		t.Fatal(err)
-	}
-	store, err := persist.NewDiskStore(fixtureV1Dir)
+	real := t.TempDir()
+	store, err := persist.NewDiskStore(real)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rc := newRuleCity(t, store, 0)
 	rc.duplicateSession(t, store)
-	if err := CheckRuleFixture(fixtureV1Dir, 0); err != nil {
+	if err := CheckRuleFixture(real, 0); err != nil {
 		t.Fatalf("generated fixture does not pass its own check: %v", err)
 	}
+	writeShortRuleFixture(t, real, fixtureV1Dir)
 }
 
 // TestRuleFixtureV1_IsRecordedAtVersionZero is C2 for entry 1: the registry's
@@ -146,7 +144,7 @@ func TestRuleFixtureV1_IsRecordedAtVersionZero(t *testing.T) {
 	if !ok || e.Fixture != "internal/engine/compose/"+fixtureV1Dir {
 		t.Fatalf("registry fixture path %q does not match %q", e.Fixture, fixtureV1Dir)
 	}
-	if err := CheckRuleFixture(fixtureV1Dir, rules.RefuseOccupiedCell-1); err != nil {
+	if err := CheckRuleFixture(materializeRuleFixture(t, fixtureV1Dir), rules.RefuseOccupiedCell-1); err != nil {
 		t.Fatal(err)
 	}
 	frames, err := RestoreCommands(context.Background(), openFixtureV1(t), defaultPersistCity)

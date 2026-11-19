@@ -51,7 +51,7 @@ func r1Tear(t *testing.T, dir string) {
 func TestRoundR1Lane5_HostTornTailPlusRefusal_ByteIdentical(t *testing.T) {
 	dir := t.TempDir()
 	r1HostCity(t, dir, rtCommands())
-	appendFrame(t, dir, envelope(t, "2", 2)) // newer than this build (rules.Current+1)
+	appendFrame(t, dir, envelope(t, newerStamp(), 2)) // newer than this build (rules.Current+1)
 	r1Tear(t, dir)
 	before := dirDigest(t, dir)
 	h, logs := newFinalHost(t, dir, 0, time.Hour, nil)
@@ -68,7 +68,7 @@ func TestRoundR1Lane5_HostTornTailPlusRefusal_ByteIdentical(t *testing.T) {
 func TestRoundR1Lane5_BootTornTailPlusRefusal_ByteIdentical(t *testing.T) {
 	dir := t.TempDir()
 	makeV0City(t, dir)
-	appendFrame(t, dir, envelope(t, "2", 2))
+	appendFrame(t, dir, envelope(t, newerStamp(), 2))
 	r1Tear(t, dir)
 	before := dirDigest(t, dir)
 	out, err := wake(t, dir)
@@ -90,7 +90,7 @@ func TestRoundR1Lane5_PagingRefusal_NoClaimLeak(t *testing.T) {
 	} else {
 		r1HostCity(t, dir, rtCommands())
 	}
-	appendFrame(t, dir, envelope(t, "2", 2))
+	appendFrame(t, dir, envelope(t, newerStamp(), 2))
 	before := dirDigest(t, dir)
 	for i := 0; i < 2 && os.Getenv("R1_SKIP_BOOT") == ""; i++ {
 		var out bytes.Buffer
@@ -111,7 +111,7 @@ func TestRoundR1Lane5_PagingRefusal_NoClaimLeak(t *testing.T) {
 	if os.Getenv("R1_SKIP_BOOT") == "" {
 		dir = t.TempDir()
 		r1HostCity(t, dir, rtCommands())
-		appendFrame(t, dir, envelope(t, "2", 2))
+		appendFrame(t, dir, envelope(t, newerStamp(), 2))
 		before = dirDigest(t, dir)
 	}
 	h, _ := newFinalHost(t, dir, 0, time.Hour, func(h *CityHost) { WithCitizenPaging(true, 2, false)(h) })
@@ -363,7 +363,7 @@ func TestRoundR1Lane5_PagingRefusal_ExistingPagesDirUntouched(t *testing.T) {
 	if n := len(r1Files(filepath.Join(dir, "pages"))); n == 0 {
 		t.Fatal("precondition: the paged boot left no pages directory")
 	}
-	appendFrame(t, dir, envelope(t, "2", 2))
+	appendFrame(t, dir, envelope(t, newerStamp(), 2))
 	before := dirDigest(t, dir)
 	for i := 0; i < 3; i++ {
 		_, _, err := setUpPersistencePaging(newEngine(), dir, lane5City, &out, true, 2, false)

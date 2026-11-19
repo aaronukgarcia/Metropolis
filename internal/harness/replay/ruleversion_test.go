@@ -54,7 +54,7 @@ func TestFixtureWithoutRuleVersionIsZero(t *testing.T) {
 
 // A fixture with ruleVersion 1 loads as 1.
 func TestFixtureRuleVersionRoundTrips(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	dir := t.TempDir()
 	saveVersioned(t, dir, "v1", 1)
 	raw, _ := os.ReadFile(filepath.Join(dir, "v1.header.json"))
@@ -81,8 +81,8 @@ func TestFixtureRuleVersionRoundTrips(t *testing.T) {
 func TestFixtureFutureRuleVersionRefused(t *testing.T) {
 	dir := t.TempDir()
 	t.Run("written by a newer build", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 3)
-		saveVersioned(t, dir, "future", 3)
+		rules.SetCurrentForTest(t, rules.Current+1)
+		saveVersioned(t, dir, "future", rules.Current+1)
 	})
 	if _, err := Load(dir, "future"); !isCode(err, rules.ErrSavedUnderNewerRules) {
 		t.Fatalf("Load future fixture: want %s, got %v", rules.ErrSavedUnderNewerRules, err)
@@ -146,7 +146,7 @@ func replayWithVersionedTarget(t *testing.T, p *EnginePlayer, live *rules.Versio
 // accepted) must replay under version 0 even when the live build is at
 // version 1, and the live version is put back afterwards.
 func TestEnginePlayerReplaysAtFixtureVersionNotCurrent(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	p, err := NewEnginePlayer(fixtureWithCommandsAtVersion(t, 2, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestEnginePlayerReplaysAtFixtureVersionNotCurrent(t *testing.T) {
 
 // A fixture recorded at version 1 (second command refused) replays at 1.
 func TestEnginePlayerReplaysVersionOneFixtureAtOne(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	r := NewRecorder()
 	for i := 0; i < 2; i++ {
 		corr := protocol.NewCorrelationID()
@@ -199,11 +199,11 @@ func TestEnginePlayerUnpinnedMismatchRefusesBeforeSending(t *testing.T) {
 		live    rules.Version
 		fixture rules.Version
 	}{
-		{"older fixture", 1, 0},
-		{"newer fixture", 1, 2},
+		{"older fixture", rules.RefuseOccupiedCell, 0},
+		{"newer fixture", rules.RefuseOccupiedCell, rules.RefuseOccupiedCell + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rules.SetCurrentForTest(t, tc.live)
+			rules.SetLiveVersionForTest(t, tc.live)
 			p, err := NewEnginePlayer(fixtureWithCommands(t, 2))
 			if err != nil {
 				t.Fatal(err)
@@ -224,7 +224,7 @@ func TestEnginePlayerUnpinnedMismatchRefusesBeforeSending(t *testing.T) {
 
 // Equal versions with no pin stay allowed (every existing caller).
 func TestEnginePlayerUnpinnedEqualVersionStillReplays(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	r := NewRecorder()
 	corr := protocol.NewCorrelationID()
 	cmd := protocol.Command{ProtocolVersion: protocol.ProtocolVersion, CorrelationID: corr, Kind: protocol.KindPause, Payload: protocol.PausePayload{}}
@@ -259,7 +259,7 @@ func TestEnginePlayerUnpinnedEqualVersionStillReplays(t *testing.T) {
 
 // Fix 3: a failed restore after a matching replay is never silent.
 func TestEnginePlayerRestoreFailureIsReturned(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	p, err := NewEnginePlayer(fixtureWithCommands(t, 1))
 	if err != nil {
 		t.Fatal(err)

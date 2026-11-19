@@ -43,7 +43,9 @@ func codeOfErr(t *testing.T, err error) string {
 }
 
 func TestCheckRuleVersionHistory_Verdicts(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	// A build whose newest rule is RefuseOccupiedCell: in the table below 0 is
+	// history from before rule versions, 1 is that rule, 2 is a newer build's.
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	frames := func(vs ...rules.Version) []JournalFrame {
 		out := make([]JournalFrame, 0, len(vs))
 		for _, v := range vs {
@@ -113,7 +115,9 @@ func (r *recordingReader) read(i int) (SnapshotRuleInfo, error) {
 }
 
 func TestDecideRuleVersions_UnreadableSnapshotsFollowTheRestoresOrder(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	// A build whose newest rule is RefuseOccupiedCell (table: 0 before
+	// versions, 1 that rule, 2 a newer build's).
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	bad := errors.New("unreadable")
 	adv := func(vs ...rules.Version) []JournalFrame {
 		out := make([]JournalFrame, 0, len(vs))
@@ -246,7 +250,7 @@ func TestPrecheckRuleVersions_FutureFrameAndUnreadableSnapshot_AgreesWithRestore
 		t.Fatal(err)
 	}
 	fut := protocol.Command{ProtocolVersion: protocol.ProtocolVersion, CorrelationID: protocol.NewCorrelationID(), Kind: protocol.KindAdvanceTicks, Payload: protocol.AdvanceTicksPayload{N: 1}}
-	rec, err := encodeJournalFrame(fut, 2)
+	rec, err := encodeJournalFrame(fut, rules.Current+1) // a frame from a newer build
 	if err != nil {
 		t.Fatal(err)
 	}

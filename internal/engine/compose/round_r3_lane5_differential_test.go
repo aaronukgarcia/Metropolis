@@ -44,7 +44,7 @@ func buildLostAdvanceHistory(t *testing.T) persist.Store {
 	rc := newRuleCity(t, store, 0)
 	rc.sessionA(t)           // version 0, tick 65
 	rc.snapshot(t, store, 5) // S1: version 0, tick 65
-	if err := rc.c.PinRuleVersion(1); err != nil {
+	if err := rc.c.PinRuleVersion(rules.RefuseOccupiedCell); err != nil {
 		t.Fatal(err)
 	}
 	rc.guard.replaying.Store(true) // this append fails to land
@@ -76,7 +76,7 @@ func restoreErr(t *testing.T, store persist.Store) error {
 }
 
 func TestRoundR3Lane5_ControlWithoutRetirementWakes(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	store := buildLostAdvanceHistory(t)
 	if err := restoreErr(t, store); err != nil {
 		t.Fatalf("control: without retirement the city must wake from S1, got %v", err)
@@ -84,9 +84,9 @@ func TestRoundR3Lane5_ControlWithoutRetirementWakes(t *testing.T) {
 }
 
 func TestRoundR3Lane5_LostAdvanceThenRetirement_PrecheckMustAgreeWithRestore(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	store := buildLostAdvanceHistory(t)
-	rules.SetOldestSupportedForTest(t, 1)
+	rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell)
 
 	pre := precheckT(t, store, ruleTestCity, ruleTestSeed)
 	real := restoreErr(t, store)

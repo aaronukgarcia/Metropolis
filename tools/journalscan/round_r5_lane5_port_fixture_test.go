@@ -25,14 +25,36 @@ var fixtureKey = persist.CityKey{TenantID: "local", CityID: "default"}
 
 const fixtureSrc = "../../internal/engine/compose/testdata/rules/v1"
 
+// copyFixture materialises the short-layout fixture (BUG-1250: tenant/city
+// folders stored under short names, the real hashed names in names.txt) into
+// a temp dir under its real hashed folder names.
 func copyFixture(t *testing.T) string {
 	t.Helper()
-	dst := filepath.Join(t.TempDir(), "v1")
-	err := filepath.WalkDir(fixtureSrc, func(p string, d fs.DirEntry, err error) error {
+	raw, err := os.ReadFile(filepath.Join(fixtureSrc, "names.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tenant, city string
+	for _, line := range strings.Split(string(raw), "\n") {
+		k, v, _ := strings.Cut(strings.TrimSpace(line), "=")
+		switch k {
+		case "tenant":
+			tenant = v
+		case "city":
+			city = v
+		}
+	}
+	if tenant == "" || city == "" {
+		t.Fatal("names.txt does not name tenant and city")
+	}
+	src := filepath.Join(fixtureSrc, "tenant", "city")
+	root := t.TempDir()
+	dst := filepath.Join(root, tenant, city)
+	err = filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(fixtureSrc, p)
+		rel, _ := filepath.Rel(src, p)
 		if d.IsDir() {
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
 		}
@@ -45,7 +67,7 @@ func copyFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return dst
+	return root
 }
 
 func precheckCode(t *testing.T, dir string) string {
@@ -150,7 +172,7 @@ func TestRoundR5Lane5Port_RealFixture_NewerFrame_RefusedEverywhere_PrecheckWrite
 
 func TestRoundR5Lane5Port_RealFixture_RetiredVersionZero_RefusedEverywhere(t *testing.T) {
 	dir := copyFixture(t)
-	rules.SetOldestSupportedForTest(t, 1)
+	rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell)
 	before := dirDigest(t, dir)
 	if got := precheckCode(t, dir); got != "MET-G5611" {
 		t.Fatalf("precheck: %q want MET-G5611", got)

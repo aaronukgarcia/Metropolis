@@ -31,7 +31,7 @@ func finalSnapshotThenRestore(t *testing.T, rc *ruleCity, store persist.Store) {
 	}
 	<-res.Done
 	// Restore from the snapshot alone (the journal tail is empty).
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	src := cloneStore(t, store, 0)
 	back, rep := wake(t, src)
 	if !rep.UsedSnapshot {
@@ -43,9 +43,9 @@ func finalSnapshotThenRestore(t *testing.T, rc *ruleCity, store persist.Store) {
 }
 
 func TestBug1224R2_FinalSnapshot_VersionOneEnvelopes(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	store := persist.NewMemStore()
-	rc := newRuleCity(t, store, 1)
+	rc := newRuleCity(t, store, rules.RefuseOccupiedCell)
 	rc.sessionA(t)
 	rc.sessionB(t)
 	frames, err := store.ReadJournal(context.Background(), ruleTestCity)
@@ -61,11 +61,11 @@ func TestBug1224R2_FinalSnapshot_VersionOneEnvelopes(t *testing.T) {
 }
 
 func TestBug1224R2_FinalSnapshot_MixedVersionZeroAndOne(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	store := persist.NewMemStore()
 	rc := newRuleCity(t, store, 0)
 	rc.sessionA(t)
-	if err := rc.c.PinRuleVersion(1); err != nil {
+	if err := rc.c.PinRuleVersion(rules.RefuseOccupiedCell); err != nil {
 		t.Fatal(err)
 	}
 	rc.sessionB(t)

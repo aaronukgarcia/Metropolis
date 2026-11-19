@@ -71,7 +71,7 @@ func lane3Run(t *testing.T, pin bool, v rules.Version) (*ruleCity, error) {
 }
 
 func TestRoundR1Lane3_PinnedReplayRunsUnderFixtureVersion(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	rc, err := lane3Run(t, true, 0)
 	if err != nil {
 		t.Fatalf("Replay: %v", err)
@@ -93,7 +93,7 @@ func TestRoundR1Lane3_PinnedReplayRunsUnderFixtureVersion(t *testing.T) {
 // one must fail loudly (MET-H008), before any command reaches the engine, not
 // replay under the wrong rules.
 func TestRoundR1Lane3_UnpinnedMismatchedReplayMustRefuse(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	rc, err := lane3Run(t, false, 0)
 	if err == nil {
 		vs := map[rules.Version]int{}

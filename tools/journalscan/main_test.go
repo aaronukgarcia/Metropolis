@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -102,6 +103,13 @@ func appendRaw(t *testing.T, dir string, rec []byte) {
 	}
 }
 
+// newerStamp is a journal stamp one past this build's live rule version: a
+// frame from a newer build.
+func newerStamp() string { return strconv.Itoa(int(rules.Effective()) + 1) }
+
+// stampOf renders a named rule version as a journal stamp.
+func stampOf(v rules.Version) string { return strconv.Itoa(int(v)) }
+
 func envelope(t *testing.T, rv string) []byte {
 	t.Helper()
 	plain, err := protocol.EncodeCommand(cmd("scan-env", 2))
@@ -145,7 +153,7 @@ func TestScan_CleanCity_ReportShape(t *testing.T) {
 func TestScan_NeverWrites_AndIsStable(t *testing.T) {
 	dir := t.TempDir()
 	makeCity(t, dir)
-	appendRaw(t, dir, envelope(t, "2")) // a finding path too
+	appendRaw(t, dir, envelope(t, newerStamp())) // a finding path too
 	before := dirDigest(t, dir)
 	c1, o1, _ := scan(t, dir)
 	c2, o2, _ := scan(t, dir)
@@ -178,15 +186,15 @@ func TestScan_Findings_CarryRegisteredCodes(t *testing.T) {
 		code  string
 		setup func(t *testing.T, dir string)
 	}{
-		{"newer than this build", "MET-G5610", func(t *testing.T, dir string) { appendRaw(t, dir, envelope(t, "2")) }},
+		{"newer than this build", "MET-G5610", func(t *testing.T, dir string) { appendRaw(t, dir, envelope(t, newerStamp())) }},
 		{"malformed stamp", "MET-G5613", func(t *testing.T, dir string) { appendRaw(t, dir, envelope(t, "0")) }},
 		{"backwards", "MET-G5612", func(t *testing.T, dir string) {
-			appendRaw(t, dir, envelope(t, "1"))
+			appendRaw(t, dir, envelope(t, stampOf(rules.RefuseOccupiedCell)))
 			plain, _ := protocol.EncodeCommand(cmd("scan-back", 2))
 			appendRaw(t, dir, plain)
 		}},
 		{"retired", "MET-G5611", func(t *testing.T, dir string) {
-			rules.SetOldestSupportedForTest(t, 1)
+			rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell)
 		}},
 	}
 	for _, tc := range cases {
@@ -208,10 +216,10 @@ func TestScan_Findings_CarryRegisteredCodes(t *testing.T) {
 func TestScan_CrossesVersions_CountsPerRule(t *testing.T) {
 	dir := t.TempDir()
 	makeCity(t, dir) // version 0
-	appendRaw(t, dir, envelope(t, "1"))
-	appendRaw(t, dir, envelope(t, "1"))
+	appendRaw(t, dir, envelope(t, stampOf(rules.RefuseOccupiedCell)))
+	appendRaw(t, dir, envelope(t, stampOf(rules.RefuseOccupiedCell)))
 	code, out, _ := scan(t, dir)
-	if code != exitClean || !strings.Contains(out, "frames per rule version: v0=4 v1=2") {
+	if code != exitClean || !strings.Contains(out, "frames per rule version: v0=4 v"+stampOf(rules.RefuseOccupiedCell)+"=2") {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 }

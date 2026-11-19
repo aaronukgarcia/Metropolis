@@ -66,6 +66,11 @@ const (
 	// foreground rune, never the background terrain colour).
 	glyphRoad     = '+'
 	glyphBuilding = '#'
+	// glyphPlayerRoad is a road the player laid (FEAT-9995385628): the wire
+	// road label is roadLabelLaid. Any other non-empty road label is a
+	// base-map road and keeps glyphRoad.
+	glyphPlayerRoad = '='
+	roadLabelLaid   = "laid"
 
 	// cursorGlyph/staleGlyph are drawn over whatever terrain/overlay glyph
 	// would otherwise occupy that cell.
@@ -542,6 +547,8 @@ func cellStyleAndRune(c cellData, palette widgets.Palette) (tcell.Style, rune) {
 	switch {
 	case c.Building != "":
 		r = glyphBuilding
+	case c.Road == roadLabelLaid:
+		r = glyphPlayerRoad
 	case c.Road != "":
 		r = glyphRoad
 	}

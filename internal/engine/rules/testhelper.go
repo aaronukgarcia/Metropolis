@@ -37,3 +37,21 @@ func SetCurrentForTest(t TB, v Version) {
 	testCurrent.Store(int64(v))
 	t.Cleanup(func() { testCurrent.Store(old) })
 }
+
+// SetLiveVersionForTest makes [Effective] answer v for the duration of the
+// test, where v may be BELOW [Current]: it stands in for an older build whose
+// newest wired rule is v (for example rules.RefuseOccupiedCell, a build from
+// before a later rule shipped). It is the seam for tests of the form "history
+// recorded or judged at the version before rule X". v must be at least 1
+// (zero means "no override") and at most [Current]; use [SetCurrentForTest]
+// for a NEWER build. Production code never calls it (a registry test fails if
+// a non-test file does). Not for parallel tests.
+func SetLiveVersionForTest(t TB, v Version) {
+	t.Helper()
+	if v < 1 || v > Current {
+		panic("rules.SetLiveVersionForTest: v must be within 1..Current")
+	}
+	old := testCurrent.Load()
+	testCurrent.Store(int64(v))
+	t.Cleanup(func() { testCurrent.Store(old) })
+}

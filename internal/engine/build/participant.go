@@ -49,6 +49,9 @@ import (
 //     key, GR#21): the cell's world coordinates + the completing order id it
 //     references (a by-VALUE reference to a build.order id — no pointer
 //     graph to rebuild); and
+//   - one "build.road" record per completed player road cell (SORTED by cell
+//     key, GR#21; FEAT-9995385628): the cell's world coordinates. Absent
+//     from a save with no roads, so an older save loads as "no roads";
 //   - one "build.demand" record per demand entry (SORTED by zone type,
 //     GR#21): the zone + its constraint signals.
 //
@@ -75,6 +78,10 @@ const (
 	recBuildStructure  = "build.structure"
 	recBuildDemand     = "build.demand"
 	recBuildDemolition = "build.demolition"
+	// recBuildRoad is one completed player road cell (FEAT-9995385628). A
+	// save with no roads carries no such record, so a save written before
+	// roads existed loads as "no roads".
+	recBuildRoad = "build.road"
 )
 
 // buildMetaWire carries the BuildAPI's scalar runtime state — every mutable
@@ -179,6 +186,13 @@ type buildDemolitionWire struct {
 	Local         world.CellLocal `json:"local"`
 }
 
+// buildRoadWire is one completed road cell on the wire (FEAT-9995385628):
+// the cell's world coordinates, emitted SORTED by cell key (GR#21).
+type buildRoadWire struct {
+	Tile  world.TileCoord `json:"tile"`
+	Local world.CellLocal `json:"local"`
+}
+
 // buildSnapshot is a point-in-time, deterministically-ordered copy of the
 // mutable state, taken under the lock in one shot. Both map-backed
 // collections are flattened to slices SORTED by key (GR#21); the queue is
@@ -191,13 +205,14 @@ type buildSnapshot struct {
 	structures  []buildStructureWire  // sorted by cell key
 	demands     []buildDemandWire     // sorted by ZoneType
 	demolitions []buildDemolitionWire // slice (DemolitionSeq / append) order
+	roads       []buildRoadWire       // sorted by cell key
 }
 
 // total is the number of records the snapshot emits: one meta record plus
 // one per queue entry, zone entry, structure entry, demand entry, and
 // demolition entry.
 func (s *buildSnapshot) total() int {
-	return 1 + len(s.orders) + len(s.zones) + len(s.structures) + len(s.demands) + len(s.demolitions)
+	return 1 + len(s.orders) + len(s.zones) + len(s.structures) + len(s.demands) + len(s.demolitions) + len(s.roads)
 }
 
 // recordAt marshals exactly the i-th record of the deterministic emission
@@ -236,7 +251,11 @@ func (s *buildSnapshot) locate(i int) (string, any) {
 		return recBuildDemand, s.demands[i]
 	}
 	i -= len(s.demands)
-	return recBuildDemolition, s.demolitions[i]
+	if i < len(s.demolitions) {
+		return recBuildDemolition, s.demolitions[i]
+	}
+	i -= len(s.demolitions)
+	return recBuildRoad, s.roads[i]
 }
 
 // lessCellKey is the total order over cell keys used to sort the map-backed
@@ -351,6 +370,17 @@ func (b *BuildAPI) snapshotForSave() (buildSnapshot, error) {
 		snap.demolitions = append(snap.demolitions, buildDemolitionWire(d))
 	}
 
+	// Roads - sorted by cell key (GR#21), never in map order.
+	roadKeys := make([]cellKey, 0, len(b.roadCells))
+	for k := range b.roadCells {
+		roadKeys = append(roadKeys, k)
+	}
+	sort.Slice(roadKeys, func(i, j int) bool { return lessCellKey(roadKeys[i], roadKeys[j]) })
+	snap.roads = make([]buildRoadWire, 0, len(roadKeys))
+	for _, k := range roadKeys {
+		snap.roads = append(snap.roads, buildRoadWire{Tile: k.tile, Local: k.local})
+	}
+
 	return snap, nil
 }
 
@@ -379,6 +409,7 @@ func (b *BuildAPI) resetForLoad() error {
 	b.structEpoch++
 	b.demand = make(map[ZoneType]DemandInput)
 	b.demolitions = nil
+	b.roadCells = make(map[cellKey]struct{})
 	// serviceByOrder is NOT part of the save schema (out of scope per
 	// FEAT-build-services-bridge-2026-09-02's "Composition root wiring"
 	// note — engine.services registration is not itself persisted here),
@@ -476,6 +507,13 @@ func (b *BuildAPI) applyLoadRecord(rec serialize.Record) error {
 		// directly": buildDemolitionWire remains the distinct wire type
 		// with its own json tags, only the field copy uses a conversion.
 		b.demolitions = append(b.demolitions, Demolition(w))
+
+	case recBuildRoad:
+		var w buildRoadWire
+		if err := json.Unmarshal(rec.Data, &w); err != nil {
+			return fmt.Errorf("build: decoding %s record: %w", rec.Kind, err)
+		}
+		b.roadCells[cellKey{tile: w.Tile, local: w.Local}] = struct{}{}
 
 	default:
 		return fmt.Errorf("build: unknown build save record kind %q", rec.Kind)

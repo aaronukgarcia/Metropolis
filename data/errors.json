@@ -2406,6 +2406,12 @@
       "message": "cell (tile {tile}, local {local}) is already in use: it holds a queued build order or a standing structure",
       "remedy": "This cell already holds a queued order or a standing structure. Choose a different cell; to reuse this one, wait for a queued order to finish and demolish what stands there."
     },
+    "MET-G511": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "cell (tile {tile}, local {local}) already carries a road, built or queued",
+      "remedy": "A cell holds at most one road. Choose a cell without a road, or wait; a road does not need to be laid twice."
+    },
     "MET-G600": {
       "severity": "error",
       "module": "engine.households",

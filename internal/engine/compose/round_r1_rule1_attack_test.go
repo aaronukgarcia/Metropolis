@@ -197,7 +197,7 @@ func TestRoundR1Rule1_MixedJournalRestoresEveryWay(t *testing.T) {
 	for _, f := range frames {
 		seen[f.Version]++
 	}
-	if seen[0] == 0 || seen[1] == 0 {
+	if seen[0] == 0 || seen[rules.Effective()] == 0 {
 		t.Fatalf("journal does not mix versions: %v", seen)
 	}
 	for _, keep := range [][]int{nil, {0}, {1}, {2}, {0, 1, 2}} {

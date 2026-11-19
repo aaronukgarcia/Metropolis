@@ -115,6 +115,14 @@ func (st *simState) buildViewportPatch() (json.RawMessage, error) {
 		})
 	}
 
+	// One locked call for the whole publish, never one per cell.
+	roads := make(map[world.CellLocal]struct{})
+	if st.buildAPI != nil {
+		for _, rc := range st.buildAPI.RoadCells(coord) {
+			roads[rc] = struct{}{}
+		}
+	}
+
 	cells := make([]viewportCell, 0, side*side)
 	for row := 0; row < side; row++ {
 		for col := 0; col < side; col++ {
@@ -134,13 +142,12 @@ func (st *simState) buildViewportPatch() (json.RawMessage, error) {
 				// engine.world actually holds.
 				Terrain:   c.Surface.String(),
 				Elevation: elevationToWire(c.Elevation),
-				// Road is always omitted: no module composed by Wire
-				// writes a per-cell road today (engine.roads exists on
-				// this tree but is not in registrationOrder, and
-				// world.Cell carries no road field at all), so there is
-				// nothing real to publish. Fabricating one would be the
-				// exact "looks fine, means nothing" failure this item
-				// was raised against.
+				// Road: "laid" on a cell that carries a COMPLETED player road
+				// (engine.build's road set, FEAT-9995385628), read once per
+				// publish below; empty otherwise. The base-map road
+				// vocabulary stays free for the future OS Open Roads import:
+				// the map draws "laid" as '=' and any other label as '+'.
+				Road:     roadLabel(roads, row, col),
 				Building: structureLabel(c.StructureRef),
 			})
 		}
@@ -163,6 +170,17 @@ func (st *simState) buildViewportPatch() (json.RawMessage, error) {
 		return nil, errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{"module": "world", "accessor": "json.Marshal"})
 	}
 	return raw, nil
+}
+
+// roadLabelLaid is the wire label of a player-laid road cell.
+const roadLabelLaid = "laid"
+
+// roadLabel returns the wire road label for a cell, or "" when it has none.
+func roadLabel(roads map[world.CellLocal]struct{}, row, col int) string {
+	if _, ok := roads[world.CellLocal{Row: row, Col: col}]; ok {
+		return roadLabelLaid
+	}
+	return ""
 }
 
 // elevationToWire converts engine.world's float32 metres-AOD elevation

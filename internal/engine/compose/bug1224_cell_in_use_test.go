@@ -3,6 +3,7 @@ package compose
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/rules"
@@ -128,7 +129,7 @@ func TestBUG1224_C10_AfterRestoreNewPlayGetsTheFix(t *testing.T) {
 			}
 
 			// A Build on a different free cell is accepted and journaled at
-			// version 1.
+			// the live version (rules.Effective(), asserted below).
 			other := protocol.CellRef{X: 4, Y: 3}
 			rc.do(t, protocol.KindZone, protocol.ZonePayload{Cell: other, ZoneType: "dwelling"})
 			rc.do(t, protocol.KindBuild, protocol.BuildPayload{Cell: other, BuildingType: "dwelling"})
@@ -140,8 +141,8 @@ func TestBUG1224_C10_AfterRestoreNewPlayGetsTheFix(t *testing.T) {
 			if len(frames) != len(framesBefore)+3 {
 				t.Fatalf("journal holds %d frames, want %d", len(frames), len(framesBefore)+3)
 			}
-			if last := frames[len(frames)-2]; !bytes.HasPrefix(last, []byte(`{"rv":1,`)) {
-				t.Errorf("the accepted Build was not journaled at version 1: %s", last)
+			if last := frames[len(frames)-2]; !bytes.HasPrefix(last, []byte(fmt.Sprintf(`{"rv":%d,`, rules.Effective()))) {
+				t.Errorf("the accepted Build was not journaled at the live version: %s", last)
 			}
 			want := rc.outcome(t)
 

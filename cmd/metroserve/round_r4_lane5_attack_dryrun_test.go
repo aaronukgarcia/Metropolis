@@ -172,7 +172,7 @@ func TestRoundR4Lane5Attack_PrecheckErrorAndPass_ContentHashIdentical(t *testing
 
 func r4aWalkBackRetired(t *testing.T, paged bool) {
 	dir := r4aWalkBackCity(t)
-	rules.SetOldestSupportedForTest(t, 1)
+	rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell)
 	scratch := t.TempDir()
 	t.Setenv("TMP", scratch)
 	t.Setenv("TEMP", scratch)
@@ -211,7 +211,7 @@ func r4aWalkBackRetired(t *testing.T, paged bool) {
 func TestRoundR4Lane5Attack_OriginalR1Scenario_NoClaimLeak(t *testing.T) {
 	dir := t.TempDir()
 	makeV0City(t, dir)
-	appendFrame(t, dir, envelope(t, "2", 2))
+	appendFrame(t, dir, envelope(t, newerStamp(), 2))
 	h, _ := newFinalHost(t, dir, 0, time.Hour, func(h *CityHost) { WithCitizenPaging(true, 2, false)(h) })
 	check := func(label string, err error) {
 		t.Helper()

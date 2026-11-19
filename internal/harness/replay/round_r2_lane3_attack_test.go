@@ -15,8 +15,8 @@ import (
 // A Fixture literal whose header (not the player field) carries a version
 // differing from live, unpinned: refused before any send, older and newer.
 func TestRoundR2_UnpinnedFixtureLiteralHeaderMismatch(t *testing.T) {
-	for _, tc := range []struct{ live, fx int }{{1, 0}, {1, 5}, {2, 1}} {
-		rules.SetCurrentForTest(t, rules.Version(tc.live))
+	for _, tc := range []struct{ live, fx int }{{int(rules.RefuseOccupiedCell), 0}, {int(rules.RefuseOccupiedCell), 5}, {int(rules.LayRoad), int(rules.RefuseOccupiedCell)}} {
+		rules.SetLiveVersionForTest(t, rules.Version(tc.live))
 		f := fixtureWithCommands(t, 2)
 		f.Header.RuleVersion = tc.fx
 		p, err := NewEnginePlayer(f)
@@ -32,7 +32,7 @@ func TestRoundR2_UnpinnedFixtureLiteralHeaderMismatch(t *testing.T) {
 
 // PinWith(nil) after a real pin must fall back to the unpinned refusal.
 func TestRoundR2_PinWithNilReverts(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	p, _ := NewEnginePlayer(fixtureWithCommandsAtVersion(t, 1, 0))
 	called := 0
 	_ = p.PinWith(func(rules.Version) error { called++; return nil })

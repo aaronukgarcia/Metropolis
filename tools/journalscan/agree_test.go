@@ -214,11 +214,11 @@ func TestScan_AgreesWithRestore(t *testing.T) {
 		{"clean city", "", "", func(t *testing.T, dir string) { craftCity(t, dir, true) }},
 		{"journal frame newer than this build", "MET-G5610", "", func(t *testing.T, dir string) {
 			craftCity(t, dir, true)
-			appendRaw(t, dir, envelope(t, "2"))
+			appendRaw(t, dir, envelope(t, newerStamp()))
 		}},
 		{"torn tail after a newer frame", "MET-G5610", "", func(t *testing.T, dir string) {
 			craftCity(t, dir, true)
-			appendRaw(t, dir, envelope(t, "2"))
+			appendRaw(t, dir, envelope(t, newerStamp()))
 			f, err := os.OpenFile(journalFile(t, dir), os.O_APPEND|os.O_WRONLY, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -237,7 +237,7 @@ func TestScan_AgreesWithRestore(t *testing.T) {
 		}},
 		{"snapshot newer than this build", "MET-G5610", "", func(t *testing.T, dir string) {
 			craftCity(t, dir, true)
-			restampSnapshot(t, dir, 3)
+			restampSnapshot(t, dir, int(rules.Current)+1)
 		}},
 		{"malformed stamp", "MET-G5613", "", func(t *testing.T, dir string) {
 			craftCity(t, dir, true)
@@ -250,16 +250,16 @@ func TestScan_AgreesWithRestore(t *testing.T) {
 		}},
 		{"snapshot tail older than its snapshot", "MET-G5612", "", func(t *testing.T, dir string) {
 			craftCity(t, dir, true) // v0 frames, v0 snapshot, one v0 frame after it
-			restampSnapshot(t, dir, 1)
+			restampSnapshot(t, dir, int(rules.RefuseOccupiedCell))
 		}},
 		{"retired snapshot", "MET-G5611", "", func(t *testing.T, dir string) {
 			craftCity(t, dir, true)
-			rules.SetOldestSupportedForTest(t, 1)
+			rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell)
 		}},
 		{"retired frames before the snapshot are not replayed", "", "", func(t *testing.T, dir string) {
 			craftCity(t, dir, false) // v0 frames, v0 snapshot, no tail
-			restampSnapshot(t, dir, 1)
-			rules.SetOldestSupportedForTest(t, 1)
+			restampSnapshot(t, dir, int(rules.RefuseOccupiedCell))
+			rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell)
 		}},
 		// Round r3: an unreadable snapshot never hides a rule-version refusal the
 		// restore makes first (the whole-journal gate runs before any snapshot
@@ -267,12 +267,12 @@ func TestScan_AgreesWithRestore(t *testing.T) {
 		{"future frame plus an unreadable old snapshot", "MET-G5610", "", func(t *testing.T, dir string) {
 			putGarbageSnapshot(t, dir) // oldest
 			craftCity(t, dir, true)
-			appendRaw(t, dir, envelope(t, "2"))
+			appendRaw(t, dir, envelope(t, newerStamp()))
 		}},
 		{"future frame plus an unreadable newest snapshot", "MET-G5610", "", func(t *testing.T, dir string) {
 			craftCity(t, dir, true)
 			putGarbageSnapshot(t, dir) // newest
-			appendRaw(t, dir, envelope(t, "2"))
+			appendRaw(t, dir, envelope(t, newerStamp()))
 		}},
 		// The restore fails on an unreadable newest snapshot and does not walk
 		// back to the usable older one: not a rule question, so the tool
@@ -309,7 +309,7 @@ func TestScan_StoppedAtMalformedFrame_SaysSo(t *testing.T) {
 	dir := t.TempDir()
 	craftCity(t, dir, true)
 	appendRaw(t, dir, envelope(t, "0"))
-	appendRaw(t, dir, envelope(t, "1"))
+	appendRaw(t, dir, envelope(t, stampOf(rules.RefuseOccupiedCell)))
 	_, out, _ := scan(t, dir)
 	if !strings.Contains(out, "frames after this point were not checked") {
 		t.Fatalf("the report does not say it stopped:\n%s", out)
@@ -454,7 +454,7 @@ func craftLostAdvanceCity(t *testing.T, dir string) {
 	do(protocol.KindBuild, protocol.BuildPayload{Cell: c3, BuildingType: "dwelling"})
 	adv(60)
 	snap() // S1: version 0, tick 65
-	if err := c.PinRuleVersion(1); err != nil {
+	if err := c.PinRuleVersion(rules.RefuseOccupiedCell); err != nil {
 		t.Fatal(err)
 	}
 	store.lost.Store(true)
@@ -490,7 +490,7 @@ func TestScan_KnownDisagreement_SnapshotTailRejectedThenOlderSnapshotRetired(t *
 		t.Fatalf("control: restore refused with %q before any retirement", got)
 	}
 
-	rules.SetOldestSupportedForTest(t, 1)
+	rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell)
 	if got := restoreVerdict(t, dir); got != rules.ErrSavedUnderRetiredRules {
 		t.Fatalf("restore verdict %q, want MET-G5611", got)
 	}

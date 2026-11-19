@@ -17,6 +17,12 @@ const (
 	// with the cell-in-use error and not charged. Before this version it was accepted
 	// and charged.
 	RefuseOccupiedCell Version = 1
+
+	// LayRoad (version 2, FEAT-9995385628): a Build order whose building type
+	// is "road" is accepted, charged as materials, and on completion makes
+	// the cell a road cell. Before this version it was refused as an unknown
+	// zone type (MET-G501).
+	LayRoad Version = 2
 )
 
 // Current is the live rule version: the number of the highest WIRED registry
@@ -28,8 +34,8 @@ const (
 // once it is wired. Whoever wires a rule flips its entry to wired AND raises
 // Current in the same commit as the call site (the registry test enforces
 // Current == the highest wired entry, and that the first pending entry is
-// exactly Current+1). Rule 1 (BUG-1224, build module) is wired, so Current is 1.
-const Current Version = 1
+// exactly Current+1). Rule 2 (FEAT-9995385628, build module) is wired, so Current is 2.
+const Current Version = 2
 
 // testCurrent is the test-only override of [Effective] (see
 // SetCurrentForTest in testhelper.go). Zero means no override.

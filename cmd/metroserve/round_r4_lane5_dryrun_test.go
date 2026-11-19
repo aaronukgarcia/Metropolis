@@ -55,7 +55,7 @@ func treeListing(t *testing.T, dir string) string {
 
 func retireVersionZero(t *testing.T) {
 	t.Helper()
-	rules.SetOldestSupportedForTest(t, 1)
+	rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell)
 }
 
 // A pre-check that PASSES (an older-rules city is fine) changes nothing.

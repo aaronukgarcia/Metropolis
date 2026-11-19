@@ -20,7 +20,7 @@ import (
 )
 
 func TestRoundR2Rule1_FinalSnapshot_LegacyOnlyJournalUnderCurrentOne(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	store := persist.NewMemStore()
 	rc := newRuleCity(t, store, 0)
 	rc.sessionA(t)
@@ -52,10 +52,10 @@ func TestRoundR2Rule1_FinalSnapshot_MalformedEnvelopeTailFailsClosed(t *testing.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rules.SetCurrentForTest(t, 1)
+			rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 			ctx := context.Background()
 			store := persist.NewMemStore()
-			rc := newRuleCity(t, store, 1)
+			rc := newRuleCity(t, store, rules.RefuseOccupiedCell)
 			rc.sessionA(t)
 			rc.snapshot(t, store, 1) // the previous snapshot that must survive
 			before, err := store.ListSnapshots(ctx, ruleTestCity)

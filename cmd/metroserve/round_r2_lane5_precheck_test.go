@@ -29,7 +29,7 @@ func r2CityFutureFramePlusBadSnapshot(t *testing.T, dir string) {
 	if _, err := st.PutSnapshot(context.Background(), r1Key, []byte("not a zip archive")); err != nil {
 		t.Fatal(err)
 	}
-	appendFrame(t, dir, envelope(t, "2", 2)) // newer than this build (rules.Current+1)
+	appendFrame(t, dir, envelope(t, newerStamp(), 2)) // newer than this build (rules.Current+1)
 }
 
 // Host wake with a torn tail: the refusal is a rule-version one, so the
@@ -61,7 +61,7 @@ func TestRoundR2Lane5_PagedBootFutureFrameBadSnapshot_ByteIdentical(t *testing.T
 	if _, err := st.PutSnapshot(context.Background(), r1Key, []byte("not a zip archive")); err != nil {
 		t.Fatal(err)
 	}
-	appendFrame(t, dir, envelope(t, "2", 2))
+	appendFrame(t, dir, envelope(t, newerStamp(), 2))
 	before := dirDigest(t, dir)
 	var out bytes.Buffer
 	_, _, err = setUpPersistencePaging(newEngine(), dir, lane5City, &out, true, 2, false)

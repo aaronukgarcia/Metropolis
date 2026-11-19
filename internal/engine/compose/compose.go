@@ -4377,6 +4377,13 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		if err != nil {
 			return err
 		}
+		// FEAT-9995385628: BuildingType "road" lays one road cell (rule
+		// version 2, rules.LayRoad); below that version it is refused as an
+		// unknown zone, as before.
+		if p.BuildingType == string(build.ZoneRoad) {
+			_, err = st.buildAPI.SubmitRoadCommand(build.BuildCommand{Tile: tile, Local: local, OwnerID: playerOwnerID, Month: month})
+			return err
+		}
 		// Baseline-one seam note: the protocol's BuildingType maps onto the
 		// build module's zone catalogue (build builds zones, not a separate
 		// building catalogue yet).

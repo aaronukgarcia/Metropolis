@@ -209,7 +209,7 @@ func TestRuleVersion_V0_ByteIdenticalToGoldens(t *testing.T) {
 	// A build whose Current is higher, but whose city is still at version 0
 	// (an old city before its first new command), must write the same bytes.
 	t.Run("pinned_zero_under_higher_current", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		ctx := context.Background()
 		store := persist.NewMemStore()
 		rc := newRuleCity(t, store, 0)
@@ -227,8 +227,8 @@ func TestRuleVersion_V0_ByteIdenticalToGoldens(t *testing.T) {
 		}
 	})
 	t.Run("live_is_current_when_unpinned", func(t *testing.T) {
-		if rules.Current != 1 || rules.Effective() != 1 {
-			t.Fatalf("Current/Effective = %d/%d, want 1/1 (rule 1, BUG-1224, is wired)", rules.Current, rules.Effective())
+		if rules.Effective() != rules.Current {
+			t.Fatalf("Current/Effective = %d/%d, want them equal when unpinned", rules.Current, rules.Effective())
 		}
 		c := newRuleCity(t, nil, -1).c
 		if c.RuleVersion() != rules.Current {
@@ -327,12 +327,12 @@ type crossing struct {
 // control with no persistence.
 func buildCrossing(t *testing.T) crossing {
 	t.Helper()
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	store := persist.NewMemStore()
 	rc := newRuleCity(t, store, 0)
 	rc.sessionA(t)
 	rc.snapshot(t, store, 5) // before the boundary: version 0
-	if err := rc.c.PinRuleVersion(1); err != nil {
+	if err := rc.c.PinRuleVersion(rules.RefuseOccupiedCell); err != nil {
 		t.Fatal(err)
 	}
 	rc.snapshot(t, store, 5) // at the boundary: version 1, same tick
@@ -341,7 +341,7 @@ func buildCrossing(t *testing.T) crossing {
 
 	ctrl := newRuleCity(t, nil, 0)
 	ctrl.sessionA(t)
-	if err := ctrl.c.PinRuleVersion(1); err != nil {
+	if err := ctrl.c.PinRuleVersion(rules.RefuseOccupiedCell); err != nil {
 		t.Fatal(err)
 	}
 	ctrl.sessionB(t)
@@ -386,7 +386,7 @@ func TestRuleVersion_CrossingRestoresExactly(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			rules.SetCurrentForTest(t, 1)
+			rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 			src := cloneStore(t, cr.store, c.keep...)
 			rc, rep := wake(t, src)
 			if got := rc.outcome(t); got != cr.ctrl {
@@ -462,7 +462,7 @@ func warnCount() int {
 }
 
 func TestRuleVersion_OlderRulesWarningOnceAndNothingWritten(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	ctx := context.Background()
 	store := persist.NewMemStore()
 	rc := newRuleCity(t, store, 0)
@@ -569,51 +569,51 @@ func appendRaw(t *testing.T, store persist.Store, raw string) {
 
 func TestRuleVersion_FailsClosed(t *testing.T) {
 	t.Run("future snapshot, no walk-back to an older snapshot", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 2)
+		rules.SetLiveVersionForTest(t, rules.LayRoad)
 		store := persist.NewMemStore()
-		rc := newRuleCity(t, store, 1)
+		rc := newRuleCity(t, store, rules.RefuseOccupiedCell)
 		rc.sessionA(t)
 		rc.snapshot(t, store, 5) // old snapshot, version 1: restorable on its own
 		rc.sessionB(t)
-		if err := rc.c.PinRuleVersion(2); err != nil {
+		if err := rc.c.PinRuleVersion(rules.LayRoad); err != nil {
 			t.Fatal(err)
 		}
 		rc.snapshot(t, store, 5) // newest snapshot at version 2, journal all version 1
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		// The same store restores fine from the old snapshot alone, so the
 		// refusal below is proof that no walk-back happened.
 		ok := cloneStore(t, store, 0)
 		w, _ := wake(t, ok)
-		if w.c.RuleVersion() != 1 {
+		if w.c.RuleVersion() != rules.RefuseOccupiedCell {
 			t.Fatal("control restore from the old snapshot failed")
 		}
 		failClosed(t, store, rules.ErrSavedUnderNewerRules, nil)
 	})
 	t.Run("future frame", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 2)
+		rules.SetLiveVersionForTest(t, rules.LayRoad)
 		store := persist.NewMemStore()
-		rc := newRuleCity(t, store, 1)
+		rc := newRuleCity(t, store, rules.RefuseOccupiedCell)
 		rc.sessionA(t)
 		rc.snapshot(t, store, 5)
-		if err := rc.c.PinRuleVersion(2); err != nil {
+		if err := rc.c.PinRuleVersion(rules.LayRoad); err != nil {
 			t.Fatal(err)
 		}
 		rc.advance(t, 5)
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		failClosed(t, store, rules.ErrSavedUnderNewerRules, nil)
 	})
 	t.Run("future frame, genesis", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 2)
+		rules.SetLiveVersionForTest(t, rules.LayRoad)
 		store := persist.NewMemStore()
-		rc := newRuleCity(t, store, 2)
+		rc := newRuleCity(t, store, rules.LayRoad)
 		rc.sessionA(t)
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		failClosed(t, store, rules.ErrSavedUnderNewerRules, nil)
 	})
 	t.Run("frame version lower than the previous one", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		store := persist.NewMemStore()
-		rc := newRuleCity(t, store, 1)
+		rc := newRuleCity(t, store, rules.RefuseOccupiedCell)
 		rc.advance(t, 5)
 		if err := rc.c.PinRuleVersion(0); err != nil {
 			t.Fatal(err)
@@ -622,9 +622,9 @@ func TestRuleVersion_FailsClosed(t *testing.T) {
 		failClosed(t, store, rules.ErrRuleVersionWentBackwards, nil)
 	})
 	t.Run("a skipped Subscribe frame still takes part in the ordering check", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		store := persist.NewMemStore()
-		rc := newRuleCity(t, store, 1)
+		rc := newRuleCity(t, store, rules.RefuseOccupiedCell)
 		rc.advance(t, 5)
 		if err := rc.c.PinRuleVersion(0); err != nil {
 			t.Fatal(err)
@@ -642,7 +642,7 @@ func TestRuleVersion_FailsClosed(t *testing.T) {
 	for name, raw := range malformed {
 		name, raw := name, raw
 		t.Run("malformed stamp/"+name, func(t *testing.T) {
-			rules.SetCurrentForTest(t, 1)
+			rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 			store := persist.NewMemStore()
 			rc := newRuleCity(t, store, 0)
 			rc.sessionA(t)
@@ -652,7 +652,7 @@ func TestRuleVersion_FailsClosed(t *testing.T) {
 		})
 	}
 	t.Run("below OldestSupported, genesis", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		store := persist.NewMemStore()
 		rc := newRuleCity(t, store, 0)
 		rc.sessionA(t)
@@ -660,7 +660,7 @@ func TestRuleVersion_FailsClosed(t *testing.T) {
 		failClosed(t, store, rules.ErrSavedUnderRetiredRules, nil)
 	})
 	t.Run("below OldestSupported, snapshot", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		store := persist.NewMemStore()
 		rc := newRuleCity(t, store, 0)
 		rc.sessionA(t)
@@ -671,11 +671,11 @@ func TestRuleVersion_FailsClosed(t *testing.T) {
 	t.Run("a snapshot at a supported version restores although older frames precede it", func(t *testing.T) {
 		// Retirement is judged on what is replayed, not on frames the
 		// snapshot already covers.
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		store := persist.NewMemStore()
 		rc := newRuleCity(t, store, 0)
 		rc.sessionA(t)
-		if err := rc.c.PinRuleVersion(1); err != nil {
+		if err := rc.c.PinRuleVersion(rules.RefuseOccupiedCell); err != nil {
 			t.Fatal(err)
 		}
 		rc.snapshot(t, store, 5)
@@ -686,7 +686,7 @@ func TestRuleVersion_FailsClosed(t *testing.T) {
 		}
 	})
 	t.Run("negative or newer Meta stamp", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		if err := checkSnapshotVersion("c", -1); !isCode(err, rules.ErrMalformedRuleStamp) {
 			t.Errorf("negative: %v", err)
 		}
@@ -723,7 +723,7 @@ func TestRuleVersion_ModuleWithoutGetterRefused(t *testing.T) {
 		}
 	})
 	t.Run("at replay", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 1)
+		rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 		store := persist.NewMemStore()
 		rc := newRuleCity(t, store, 0)
 		rc.sessionA(t)
@@ -740,13 +740,13 @@ func TestRuleVersion_ModuleWithoutGetterRefused(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRuleVersion_SubscribeFramesStampedAndSkipped(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	ctx := context.Background()
 	store := persist.NewMemStore()
 	rc := newRuleCity(t, store, 0)
 	rc.advance(t, 5)
 	rc.do(t, protocol.KindSubscribe, protocol.SubscribePayload{ViewName: "engine.status"}) // version 0
-	if err := rc.c.PinRuleVersion(1); err != nil {
+	if err := rc.c.PinRuleVersion(rules.RefuseOccupiedCell); err != nil {
 		t.Fatal(err)
 	}
 	rc.do(t, protocol.KindSubscribe, protocol.SubscribePayload{ViewName: "engine.status"}) // version 1
@@ -769,7 +769,7 @@ func TestRuleVersion_SubscribeFramesStampedAndSkipped(t *testing.T) {
 	// and the ordering check, which counted all five frames, passes.
 	ref := newRuleCity(t, nil, 0)
 	ref.advance(t, 5)
-	if err := ref.c.PinRuleVersion(1); err != nil {
+	if err := ref.c.PinRuleVersion(rules.RefuseOccupiedCell); err != nil {
 		t.Fatal(err)
 	}
 	ref.advance(t, 5)
@@ -805,7 +805,7 @@ func recordFixture(t *testing.T, pinFrames rules.Version, snapAt rules.Version, 
 }
 
 func TestRuleVersion_CheckRuleFixture(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	t.Run("good at 0", func(t *testing.T) {
 		if err := CheckRuleFixture(recordFixture(t, 0, 0, true), 0); err != nil {
 			t.Fatal(err)

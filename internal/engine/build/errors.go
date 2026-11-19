@@ -75,4 +75,9 @@ const (
 	// submit, no order is created and nothing is ever drawn or charged for
 	// it. Not raised while replaying history recorded before version 1.
 	ErrCellInUse = "MET-G510"
+
+	// ErrRoadAlreadyLaid: SubmitRoadCommand against a cell that already carries
+	// a road, completed or queued (FEAT-9995385628, rule version 2). Refused
+	// before an order number is taken; nothing is charged.
+	ErrRoadAlreadyLaid = "MET-G511"
 )

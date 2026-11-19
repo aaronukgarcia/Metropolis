@@ -280,6 +280,15 @@ type BuildAPI struct {
 
 	zoneState  map[cellKey]ZoneType
 	structures map[cellKey]BuildOrderID
+	// roadCells is the set of cells that carry a COMPLETED player road
+	// (FEAT-9995385628, road.go). A road is a property of a cell, never a
+	// structure: it is not in structures or zoneState and holds no cell.
+	roadCells map[cellKey]struct{}
+	// roadLay is data/roadlay.json's economics; nil when the file was not
+	// found at Load, in which case roadLayErr holds that error and the
+	// first road order returns it. Immutable after Load.
+	roadLay    *roadEconomics
+	roadLayErr error
 	// structEpoch increments whenever b.structures gains or loses an entry
 	// (completion, demolition, restore) -- FEAT-2326609845's O(1) "did the
 	// standing set change" probe for the composition root's housing feed.
@@ -432,8 +441,19 @@ func Load(dir, correlationID string) (*BuildAPI, error) {
 		catalogueEntries[e.ID] = e
 	}
 
+	lay, layErr, fatal := loadRoadLay(dir, correlationID)
+	if fatal != nil {
+		return nil, errs.Wrap(ErrZoneDataInvalid, correlationID, fatal, map[string]any{
+			"dir":   dir,
+			"cause": fatal.Error(),
+		})
+	}
+
 	api := &BuildAPI{
 		correlationID:    correlationID,
+		roadLay:          lay,
+		roadLayErr:       layErr,
+		roadCells:        make(map[cellKey]struct{}),
 		catalogue:        catalogue,
 		catalogueEntries: catalogueEntries,
 		labourPerTick:    buildings.ZoneMeta.LabourPerTick,
@@ -764,7 +784,9 @@ func cellInUse(structures map[cellKey]BuildOrderID, queue []*buildOrder, key cel
 		return true
 	}
 	for _, o := range queue {
-		if !o.complete && o.tile == key.tile && o.local == key.local {
+		// A road never holds a cell (FEAT-9995385628): a queued road order
+		// does not count, so a home can be ordered on a cell with a queued road.
+		if !o.complete && o.zone != ZoneRoad && o.tile == key.tile && o.local == key.local {
 			return true
 		}
 	}
@@ -1088,6 +1110,12 @@ func (b *BuildAPI) Tick(month int64) error {
 				b.serviceByOrder[order.id] = registeredService
 			}
 			key := cellKey{tile: order.tile, local: order.local}
+			if order.zone == ZoneRoad {
+				// FEAT-9995385628: a road marks the cell and nothing else: no
+				// zone, no structure, no world structure reference.
+				b.roadCells[key] = struct{}{}
+				continue
+			}
 			b.zoneState[key] = order.zone
 			b.structures[key] = order.id
 			b.structEpoch++

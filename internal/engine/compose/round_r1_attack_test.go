@@ -3,6 +3,7 @@ package compose
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -61,16 +62,16 @@ func TestRoundR1_DecoderVariants(t *testing.T) {
 }
 
 func TestRoundR1_TwoBoundaries(t *testing.T) {
-	rules.SetCurrentForTest(t, 2)
+	rules.SetLiveVersionForTest(t, rules.LayRoad) // a build whose newest rule is the second boundary
 	store := persist.NewMemStore()
 	rc := newRuleCity(t, store, 0)
 	rc.sessionA(t) // v0, tick 65
-	if err := rc.c.PinRuleVersion(1); err != nil {
+	if err := rc.c.PinRuleVersion(rules.RefuseOccupiedCell); err != nil {
 		t.Fatal(err)
 	}
 	rc.sessionB(t)           // v1, tick 105
 	rc.snapshot(t, store, 5) // snapshot at v1
-	if err := rc.c.PinRuleVersion(2); err != nil {
+	if err := rc.c.PinRuleVersion(rules.LayRoad); err != nil {
 		t.Fatal(err)
 	}
 	cell := protocol.CellRef{X: 5, Y: 3}
@@ -81,9 +82,9 @@ func TestRoundR1_TwoBoundaries(t *testing.T) {
 
 	ctrl := newRuleCity(t, nil, 0)
 	ctrl.sessionA(t)
-	_ = ctrl.c.PinRuleVersion(1)
+	_ = ctrl.c.PinRuleVersion(rules.RefuseOccupiedCell)
 	ctrl.sessionB(t)
-	_ = ctrl.c.PinRuleVersion(2)
+	_ = ctrl.c.PinRuleVersion(rules.LayRoad)
 	ctrl.do(t, protocol.KindZone, protocol.ZonePayload{Cell: cell, ZoneType: "dwelling"})
 	ctrl.advance(t, 13)
 	if ctrl.outcome(t) != live || !reflect.DeepEqual(ctrl.probe.decisions, dec) {
@@ -105,7 +106,7 @@ func TestRoundR1_TwoBoundaries(t *testing.T) {
 			if got := w.probe.decisions; !reflect.DeepEqual(got, dec[len(dec)-c.n:]) {
 				t.Fatalf("decisions %+v want %+v", got, dec[len(dec)-c.n:])
 			}
-			if rep.OlderRules || w.c.RuleVersion() != 2 {
+			if rep.OlderRules || w.c.RuleVersion() != rules.LayRoad {
 				t.Fatalf("rep %+v live %d", rep, w.c.RuleVersion())
 			}
 			if fingerprint(t, src) != fp {
@@ -113,17 +114,17 @@ func TestRoundR1_TwoBoundaries(t *testing.T) {
 			}
 			w.advance(t, 1)
 			fr, _ := src.ReadJournal(context.Background(), ruleTestCity)
-			if !bytes.HasPrefix(fr[len(fr)-1], []byte(`{"rv":2,`)) {
-				t.Fatalf("post-wake frame not stamped 2: %s", fr[len(fr)-1])
+			if !bytes.HasPrefix(fr[len(fr)-1], []byte(fmt.Sprintf(`{"rv":%d,`, rules.LayRoad))) {
+				t.Fatalf("post-wake frame not stamped at the second boundary: %s", fr[len(fr)-1])
 			}
 		})
 	}
-	// Upgrade: same history (ends at v2) under a build at 3: older rules, snapshot after restore.
+	// Upgrade: same history (ends at the second boundary) under the next build: older rules, snapshot after restore.
 	t.Run("upgrade then snapshot", func(t *testing.T) {
-		rules.SetCurrentForTest(t, 3)
+		rules.SetCurrentForTest(t, rules.Current+1) // a newer build
 		src := cloneStore(t, store, 0)
 		w, rep := wake(t, src)
-		if !rep.OlderRules || rep.ReplayedVersion != 2 || w.c.RuleVersion() != 3 {
+		if !rep.OlderRules || rep.ReplayedVersion != rules.LayRoad || w.c.RuleVersion() != rules.Current+1 {
 			t.Fatalf("rep %+v", rep)
 		}
 		w.snapshot(t, src, 1)
@@ -141,7 +142,7 @@ func TestRoundR1_TwoBoundaries(t *testing.T) {
 
 // Future frame in the PREFIX (before the newest snapshot): must refuse, never walk back.
 func TestRoundR1_FutureFrameInPrefix(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	cr := buildCrossing(t)
 	ctx := context.Background()
 	fr, _ := cr.store.ReadJournal(ctx, ruleTestCity)
@@ -164,13 +165,13 @@ func TestRoundR1_FutureFrameInPrefix(t *testing.T) {
 
 // Torn tail mid-envelope on a real DiskStore: BUG-1197 truncation must win.
 func TestRoundR1_TornEnvelopeTail(t *testing.T) {
-	rules.SetCurrentForTest(t, 1)
+	rules.SetLiveVersionForTest(t, rules.RefuseOccupiedCell)
 	dir := t.TempDir()
 	ds, err := persist.NewDiskStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rc := newRuleCity(t, ds, 1)
+	rc := newRuleCity(t, ds, rules.RefuseOccupiedCell)
 	rc.sessionA(t)
 	rc.advance(t, 9)
 	var jpath string

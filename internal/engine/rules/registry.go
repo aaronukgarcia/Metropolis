@@ -63,6 +63,18 @@ var registry = []Rule{
 		Fixture: "internal/engine/compose/testdata/rules/v1",
 		Status:  StatusWired,
 	},
+	{
+		Number: LayRoad,
+		Const:  "LayRoad",
+		Date:   "2026-11-18",
+		Item:   "FEAT-9995385628",
+		Old:    "a Build whose building type is road is refused as an unknown zone type (MET-G501)",
+		New:    "a Build whose building type is road is accepted, charged as materials, and becomes a road cell on completion",
+		// Asserted against behaviour by TestRoad_* in
+		// internal/engine/build/road_test.go.
+		Fixture: "internal/engine/compose/testdata/rules/v2",
+		Status:  StatusWired,
+	},
 }
 
 // Registry returns a copy of every entry in ascending Number order.

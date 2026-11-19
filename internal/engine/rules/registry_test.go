@@ -285,7 +285,7 @@ func scanTree(root string, names map[string]bool) (scanResult, error) {
 					if isTest {
 						return true
 					}
-					if x.Sel.Name == "SetOldestSupportedForTest" || x.Sel.Name == "SetCurrentForTest" {
+					if x.Sel.Name == "SetOldestSupportedForTest" || x.Sel.Name == "SetCurrentForTest" || x.Sel.Name == "SetLiveVersionForTest" {
 						pos := fset.Position(x.Pos())
 						res.problems = append(res.problems, rel+":"+strconv.Itoa(pos.Line)+": rules."+x.Sel.Name+" is for tests only")
 					}

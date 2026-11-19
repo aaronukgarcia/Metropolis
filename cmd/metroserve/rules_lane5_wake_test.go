@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ import (
 // A restore refused by a rule-version check (MET-G5610 to MET-G5613) starts no
 // city, changes no byte on disk, and reaches the operator with its code.
 //
-// Rule 1 is wired (rules.Current is 1). "Older rules" is a city whose frames
+// Rules up to rules.Current are wired. "Older rules" is a city whose frames
 // are version 0 (legacy, unstamped), written by pinning a fresh composition to
 // version 0 (makeV0City), woken on today's build; "a newer build's frame" is
 // stamped rules.Current+1.
@@ -113,6 +114,13 @@ func appendFrame(t *testing.T, dir string, rec []byte) {
 	}
 }
 
+// newerStamp is a journal stamp one past this build's live rule version: a
+// frame from a newer build.
+func newerStamp() string { return strconv.Itoa(int(rules.Effective()) + 1) }
+
+// stampOf renders a named rule version as a journal stamp.
+func stampOf(v rules.Version) string { return strconv.Itoa(int(v)) }
+
 // envelope wraps a plain advance command as a version-n journal frame.
 func envelope(t *testing.T, rv string, n int64) []byte {
 	t.Helper()
@@ -164,7 +172,7 @@ func TestLane5_Wake_OlderRules_OneLineOneEvent(t *testing.T) {
 	captureEvents(t)
 	dir := t.TempDir()
 	makeV0City(t, dir)
-	entry, ok := rules.Entry(1)
+	entry, ok := rules.Entry(rules.RefuseOccupiedCell)
 	if !ok {
 		t.Fatal("rule 1 missing from the registry")
 	}
@@ -182,8 +190,8 @@ func TestLane5_Wake_OlderRules_OneLineOneEvent(t *testing.T) {
 			if !strings.Contains(ln, entry.Old) || !strings.Contains(ln, entry.New) || !strings.Contains(ln, entry.Item) || !strings.Contains(ln, entry.Date) {
 				t.Fatalf("operator line is not built from the registry text:\n%s", ln)
 			}
-			if !strings.Contains(ln, "version 0 through 1") {
-				t.Fatalf("operator line does not name version 0 to 1:\n%s", ln)
+			if want := "version 0 through " + strconv.Itoa(int(rules.Current)); !strings.Contains(ln, want) {
+				t.Fatalf("operator line does not name %q:\n%s", want, ln)
 			}
 		}
 	}
@@ -237,10 +245,10 @@ func TestLane5_Wake_Refusals_ByteIdentical(t *testing.T) {
 		setup func(t *testing.T, dir string)
 	}{
 		{"newer than this build", "MET-G5610", func(t *testing.T, dir string) {
-			appendFrame(t, dir, envelope(t, "2", 2)) // one past the build (rules.Current is 1)
+			appendFrame(t, dir, envelope(t, newerStamp(), 2)) // one past the build (rules.Current+1)
 		}},
 		{"version goes backwards", "MET-G5612", func(t *testing.T, dir string) {
-			appendFrame(t, dir, envelope(t, "1", 2))
+			appendFrame(t, dir, envelope(t, stampOf(rules.RefuseOccupiedCell), 2))
 			appendFrame(t, dir, plainFrame(t, 2)) // 1 then 0
 		}},
 		{"malformed stamp (rv 0)", "MET-G5613", func(t *testing.T, dir string) {
@@ -250,7 +258,7 @@ func TestLane5_Wake_Refusals_ByteIdentical(t *testing.T) {
 			appendFrame(t, dir, envelope(t, `"x"`, 2))
 		}},
 		{"retired version", "MET-G5611", func(t *testing.T, dir string) {
-			rules.SetOldestSupportedForTest(t, 1) // the version-0 history is retired
+			rules.SetOldestSupportedForTest(t, rules.RefuseOccupiedCell) // the version-0 history is retired
 		}},
 	}
 	for _, tc := range cases {
@@ -312,7 +320,7 @@ func TestLane5_Host_OlderRulesAndRefusal(t *testing.T) {
 	}
 
 	// A refusal: the stored city carries a frame from a build newer than this one.
-	appendFrame(t, dir, envelope(t, "2", 2))
+	appendFrame(t, dir, envelope(t, newerStamp(), 2))
 	before := dirDigest(t, dir)
 	h, logs := newFinalHost(t, dir, 0, time.Hour, nil)
 	for i := 0; i < 2; i++ { // twice: a refusal must not leave a half-registered city

@@ -1,0 +1,8 @@
+{
+  "$comment": "FEAT-9995385628: what laying one road cell costs. PLACEHOLDERS pending Aaron's balance pass (roads lane 1). materialsTonnes is priced by the construction price per tonne like any build (5 tonnes is about 750 pounds, matching the gravel class in roads.json); labourDays and leadDays are days. class names a row of roads.json.",
+  "version": 1,
+  "materialsTonnes": 5,
+  "labourDays": 5,
+  "leadDays": 5,
+  "class": "gravel"
+}
