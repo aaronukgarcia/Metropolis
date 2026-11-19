@@ -6,7 +6,25 @@ this file, the BOW comments on each item, `git log -10`, `gh run list
 --branch main --limit 3` and `git worktree list`, and carries on. It never
 redoes committed work and never trusts recall over those four sources.
 
-## STATE AT 02:50 on 2026-11-19 (newest; supersedes everything below)
+## STATE AT 06:35 on 2026-11-19 (newest; supersedes everything below)
+
+origin/main = d649413. CI on d649413 (run 44470880816) was in progress at 06:35: read it from `gh run list --branch main --limit 1`. The three runs before it failed only on BUG-1239-class frame tests.
+
+LANDED since 02:50: lane 5 ec4970c [FEAT-9995385620]; BUG-1243 switches 8b5871b (item stays open for Aaron's choice); BUG-1252 test fix 5e6d5e4; roads lane 1a + BUG-1250 0028ad4 (rules.Current is now 2); BUG-1239 start-up race fix d649413 (r1 and r2 REJECT, r3 ACCEPT; 19 of 19 landing gates).
+DONE on the BOW since 02:50: FEAT-9995385627, BUG-1224, FEAT-9995385622, BUG-1252, BUG-1250, FEAT-9995385625. To mark done once CI is green on d649413: BUG-1239, FEAT-9995385620, FEAT-9995385628.
+
+| Lane | State | Where | Next |
+|---|---|---|---|
+| Help/save/load/debug FEAT-9995385621 | Opus r2 ACCEPT on the old base; Sonnet port onto d649413 running (a load must rebuild the driver's Ready signal and the view-tick ledger; lane tests move to the shared frame helpers) | .claude/worktrees/hsport (SOURCE: agent-ab13ecb6178696f6c) | Opus port-delta round, land.sh, commit |
+| Roads lane 1b (the key and hint) | NOT dispatched | - | after help/save lands (same key and screen files) |
+| Menu L2 wiring, welcome screen, playtest driver | NOT dispatched | - | after help/save lands |
+| A2 publish f5.why | NOT dispatched; BUG-1243 has landed so it is unblocked in compose, but it flips whyViewServed in cmd/metropolis/boot.go | - | after help/save lands |
+| pix redeploy | lane 5 landed | - | run tools/journalscan on a COPY of the dogfood journal, then ask SAFE |
+
+NEW ITEMS since 02:50: BUG-1252 (done), BUG-1253 (a refused boot Resume is recorded but shown nowhere). Roads review follow-ups not yet filed: StateDigest does not cover road cells; roads criteria 7, 9, 15, 16 have no dedicated test; roads and homes are not refused on water; three bare version numbers remain in compose/ruleversion_test.go.
+GOTCHAS: see whats_next.md. BUG-1250 is fixed, so isolation worktrees should work again from d649413.
+
+## STATE AT 02:50 on 2026-11-19 (superseded by 06:35 above)
 
 origin/main = caaff08. **CI IS RED on caaff08** (run 44427281456): two cmd/metropolis frame tests fail under the race detector on the slow runner (BUG-1239 class: the idle-frame test, with data races in its own harness, and the money boot test reading a frame before the views caught up). Nothing lands until the fix is in and CI is green. Read CI from `gh run list`, never from a chained exit code.
 
